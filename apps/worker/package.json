@@ -1,15 +1,18 @@
 {
-  "name": "@repo/api",
+  "name": "@repo/worker",
+  "version": "1.0.0",
+  "private": true,
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc"
   },
   "dependencies": {
-    "@hono/node-server": "^1.18.3",
     "@repo/agent-runtime": "workspace:*",
     "@repo/shared": "workspace:*",
-    "hono": "^4.12.23"
+    "bullmq": "^5.34.11",
+    "dotenv": "^16.4.7",
+    "ioredis": "^5.4.2"
   },
   "devDependencies": {
     "@types/node": "^20.19.41",

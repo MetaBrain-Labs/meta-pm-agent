@@ -1,15 +1,19 @@
 {
-  "name": "@repo/api",
+  "name": "@repo/agent-runtime",
+  "version": "1.0.0",
+  "private": true,
   "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc"
   },
   "dependencies": {
-    "@hono/node-server": "^1.18.3",
-    "@repo/agent-runtime": "workspace:*",
+    "@langchain/core": "^0.3.29",
+    "@langchain/langgraph": "^0.2.48",
     "@repo/shared": "workspace:*",
-    "hono": "^4.12.23"
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^20.19.41",

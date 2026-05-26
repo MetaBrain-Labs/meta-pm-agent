@@ -9,7 +9,12 @@
     "resolveJsonModule": true,
     "baseUrl": ".",
     "paths": {
+      "@repo/shared": ["packages/shared/src/index.ts"],
       "@repo/shared/*": ["packages/shared/src/*"],
+      "@repo/database": ["packages/database/src/index.ts"],
+      "@repo/database/*": ["packages/database/src/*"],
+      "@repo/agent-runtime": ["apps/agent-runtime/src/index.ts"],
+      "@repo/agent-runtime/*": ["apps/agent-runtime/src/*"],
       "@repo/tools/*": ["packages/tools/src/*"],
       "@repo/agents/*": ["packages/agents/src/*"]
     }
