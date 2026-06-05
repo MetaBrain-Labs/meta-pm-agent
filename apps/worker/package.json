@@ -1,0 +1,22 @@
+{
+  "name": "@repo/worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@repo/agent-runtime": "workspace:*",
+    "@repo/shared": "workspace:*",
+    "bullmq": "^5.34.11",
+    "dotenv": "^16.4.7",
+    "ioredis": "^5.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.41",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
+  }
+}

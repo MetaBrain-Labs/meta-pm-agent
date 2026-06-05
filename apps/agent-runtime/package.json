@@ -1,0 +1,23 @@
+{
+  "name": "@repo/agent-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@langchain/core": "^0.3.29",
+    "@langchain/langgraph": "^0.2.48",
+    "@repo/shared": "workspace:*",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.41",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
+  }
+}
