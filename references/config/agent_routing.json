@@ -1,0 +1,42 @@
+{
+  "module_agents": [
+    {
+      "name": "战略商业 Agent",
+      "responsible_modules": ["M01-产品定义", "M02-市场判断", "M03-商业设计", "M04-目标指标"]
+    },
+    {
+      "name": "用户需求 Agent",
+      "responsible_modules": ["M05-用户研究", "M06-场景需求"]
+    },
+    {
+      "name": "产品方案 Agent",
+      "responsible_modules": ["M07-产品方案"]
+    },
+    {
+      "name": "体验设计 Agent",
+      "responsible_modules": ["M08-设计规范"]
+    },
+    {
+      "name": "技术数据 Agent",
+      "responsible_modules": ["M09-技术实现", "M10-数据验证"]
+    },
+    {
+      "name": "产品治理 Agent",
+      "responsible_modules": ["M11-上线运营", "M12-项目管理"]
+    }
+  ],
+  "system_agents": [
+    {
+      "name": "意图解析 Agent",
+      "responsibility": "解析用户意图"
+    },
+    {
+      "name": "质量门控 Agent",
+      "responsibility": "检查项目质量"
+    },
+    {
+      "name": "文档编写 Agent",
+      "responsibility": "组装产品文档"
+    }
+  ]
+}
