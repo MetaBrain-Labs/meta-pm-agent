@@ -1,4 +1,4 @@
-import type { ChatMessage } from "../types/chat";
+import { ChatMessage } from "../schemas/chat";
 
 export type EventType =
   | "message.created"

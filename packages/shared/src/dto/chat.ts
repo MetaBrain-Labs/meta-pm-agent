@@ -1,4 +1,4 @@
-import type { ChatMessage, ChatSession } from "../types/chat";
+import { ChatMessage, ChatSession } from "../schemas/chat";
 
 export interface CreateMessageDTO {
   content: string;

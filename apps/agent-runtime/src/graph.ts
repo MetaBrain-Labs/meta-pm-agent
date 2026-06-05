@@ -1,5 +1,5 @@
 import { StateGraph, END, START } from "@langchain/langgraph";
-import type { ChatMessage } from "@repo/shared";
+import { ChatMessage } from "@repo/shared";
 
 interface AgentState {
   messages: ChatMessage[];
@@ -146,5 +146,7 @@ export async function runAgent(
   message: ChatMessage,
 ): Promise<ChatMessage | null> {
   const state = await app.invoke({ messages: [message] });
-  return state.messages.find((m: ChatMessage) => m.role === "assistant") ?? null;
+  return (
+    state.messages.find((m: ChatMessage) => m.role === "assistant") ?? null
+  );
 }
