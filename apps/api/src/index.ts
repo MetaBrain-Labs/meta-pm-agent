@@ -5,9 +5,10 @@ import { stream } from "hono/streaming";
 import { z } from "zod";
 import { ChatMessage } from "@repo/shared";
 import {
-  runAgent,
-  generateQuestionForm,
   streamQuestionForm,
+  streamCompressConversation,
+  streamAgentResponse,
+  extractCompressedContext,
   isFormAnswer,
 } from "@repo/agent-runtime";
 
@@ -114,14 +115,51 @@ app.post("/api/chat", async (c) => {
 
     try {
       if (isFormAnswer(message)) {
-        console.log("[chat] Form answer detected, running LangGraph...");
-        const response = await runAgent(thread.messages);
-        if (response) {
-          thread.messages.push(response);
-          await writer.write(`data: ${JSON.stringify({ type: "text", content: response.content })}\n\n`);
-        } else {
-          await writer.write(`data: ${JSON.stringify({ type: "text", content: "I've processed your requirements. How can I help further?" })}\n\n`);
+        console.log("[chat] Form answer detected, streaming compression + response...");
+
+        let fullResponse = "";
+        let fullReasoning = "";
+        let compressedText = "";
+
+        for await (const chunk of streamCompressConversation(thread.messages)) {
+          if (chunk.type === "reasoning") {
+            fullReasoning += chunk.content;
+            await writer.write(
+              `data: ${JSON.stringify({ type: "thinking", content: chunk.content })}\n\n`,
+            );
+          } else {
+            compressedText += chunk.content;
+          }
         }
+
+        const compressedContext = extractCompressedContext(compressedText) ?? compressedText;
+        console.log("[chat] Compression done, context length:", compressedContext.length);
+
+        for await (const chunk of streamAgentResponse(compressedContext, thread.messages)) {
+          if (chunk.type === "reasoning") {
+            fullReasoning += chunk.content;
+            await writer.write(
+              `data: ${JSON.stringify({ type: "thinking", content: chunk.content })}\n\n`,
+            );
+          } else {
+            fullResponse += chunk.content;
+            await writer.write(
+              `data: ${JSON.stringify({ type: "text", content: chunk.content })}\n\n`,
+            );
+          }
+        }
+
+        console.log("[chat] Stream complete, response length:", fullResponse.length);
+
+        const assistantMsg: ChatMessage = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: fullResponse,
+          timestamp: new Date().toISOString(),
+          sessionId: threadId,
+          reasoningContent: fullReasoning || undefined,
+        };
+        thread.messages.push(assistantMsg);
       } else {
         console.log("[chat] New intent, streaming question form...");
 

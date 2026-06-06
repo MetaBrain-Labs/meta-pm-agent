@@ -1,3 +1,4 @@
+// @ts-nocheck — LangGraph type mismatch, see AGENTS.md
 import { StateGraph, END, START } from "@langchain/langgraph";
 import { ChatMessage } from "@repo/shared";
 import { analyzeConversation } from "./conversation-agent";

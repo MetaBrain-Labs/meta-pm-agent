@@ -31,6 +31,36 @@ export interface StreamChunk {
   content: string;
 }
 
+function extractReasoningFromChunk(
+  chunk: { additional_kwargs?: Record<string, unknown>; content: string | unknown },
+): string | undefined {
+  const rawResponse = (
+    chunk.additional_kwargs as Record<string, unknown> | undefined
+  )?.__raw_response as Record<string, unknown> | undefined;
+  const rawDelta = (
+    (rawResponse as Record<string, unknown> | undefined)?.choices as
+      | Record<string, unknown>[]
+      | undefined
+  )?.[0]?.delta as Record<string, unknown> | undefined;
+  return typeof rawDelta?.reasoning_content === "string"
+    ? (rawDelta.reasoning_content as string)
+    : undefined;
+}
+
+async function* yieldStreamChunks(
+  stream: AsyncIterable<{ additional_kwargs?: Record<string, unknown>; content: string | unknown }>,
+): AsyncGenerator<StreamChunk> {
+  for await (const chunk of stream) {
+    const reasoning = extractReasoningFromChunk(chunk);
+    if (reasoning && reasoning.length > 0) {
+      yield { type: "reasoning", content: reasoning };
+    }
+    if (typeof chunk.content === "string" && chunk.content.length > 0) {
+      yield { type: "text", content: chunk.content };
+    }
+  }
+}
+
 function toLangChainMessages(messages: ChatMessage[]) {
   return messages.map((m) => {
     if (m.role === "user") return new HumanMessage(m.content);
@@ -97,29 +127,8 @@ export async function* streamQuestionForm(
     new SystemMessage(DISCOVERY_PROMPT),
     new HumanMessage(userMessage),
   ];
-
   const stream = await llm.stream(messages);
-
-  for await (const chunk of stream) {
-    const rawResponse = (
-      chunk.additional_kwargs as Record<string, unknown> | undefined
-    )?.__raw_response as Record<string, unknown> | undefined;
-    const rawDelta = (
-      (rawResponse as Record<string, unknown> | undefined)?.choices as
-        | Record<string, unknown>[]
-        | undefined
-    )?.[0]?.delta as Record<string, unknown> | undefined;
-    const reasoning = rawDelta?.reasoning_content;
-
-    if (typeof reasoning === "string" && reasoning.length > 0) {
-      yield { type: "reasoning", content: reasoning };
-    }
-
-    const text = chunk.content;
-    if (typeof text === "string" && text.length > 0) {
-      yield { type: "text", content: text };
-    }
-  }
+  yield* yieldStreamChunks(stream);
 }
 
 export async function compressConversation(
@@ -141,6 +150,46 @@ export async function compressConversation(
 export function extractCompressedContext(text: string): string | undefined {
   const match = text.match(/\[COMPRESSED\]([\s\S]*?)\[\/COMPRESSED\]/);
   return match ? match[1].trim() : undefined;
+}
+
+const RESPONSE_PROMPT = `You are a project management assistant. The user's requirements have been clarified through a discovery process.
+
+Based on the compressed context below, provide a helpful, actionable response. The user expects you to:
+- Interpret the compressed context to understand the full picture
+- Provide a concrete plan, estimate, or answer based on what was discovered
+- Use the same language as the conversation
+
+Compressed context:
+<context>
+{{CONTEXT}}
+</context>
+
+Be concise and actionable. Focus on delivering value, not asking more questions.`;
+
+export async function* streamCompressConversation(
+  messages: ChatMessage[],
+): AsyncGenerator<StreamChunk> {
+  const llm = getLLM();
+  const langChainMessages = [
+    new SystemMessage(COMPRESS_PROMPT),
+    ...toLangChainMessages(messages),
+  ];
+  const stream = await llm.stream(langChainMessages);
+  yield* yieldStreamChunks(stream);
+}
+
+export async function* streamAgentResponse(
+  compressedContext: string,
+  messages: ChatMessage[],
+): AsyncGenerator<StreamChunk> {
+  const llm = getLLM();
+  const systemPrompt = RESPONSE_PROMPT.replace("{{CONTEXT}}", compressedContext);
+  const langChainMessages = [
+    new SystemMessage(systemPrompt),
+    ...toLangChainMessages(messages),
+  ];
+  const stream = await llm.stream(langChainMessages);
+  yield* yieldStreamChunks(stream);
 }
 
 export async function analyzeConversation(
