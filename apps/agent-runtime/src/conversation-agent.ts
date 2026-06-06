@@ -31,9 +31,10 @@ export interface StreamChunk {
   content: string;
 }
 
-function extractReasoningFromChunk(
-  chunk: { additional_kwargs?: Record<string, unknown>; content: string | unknown },
-): string | undefined {
+function extractReasoningFromChunk(chunk: {
+  additional_kwargs?: Record<string, unknown>;
+  content: string | unknown;
+}): string | undefined {
   const rawResponse = (
     chunk.additional_kwargs as Record<string, unknown> | undefined
   )?.__raw_response as Record<string, unknown> | undefined;
@@ -48,7 +49,10 @@ function extractReasoningFromChunk(
 }
 
 async function* yieldStreamChunks(
-  stream: AsyncIterable<{ additional_kwargs?: Record<string, unknown>; content: string | unknown }>,
+  stream: AsyncIterable<{
+    additional_kwargs?: Record<string, unknown>;
+    content: string | unknown;
+  }>,
 ): AsyncGenerator<StreamChunk> {
   for await (const chunk of stream) {
     const reasoning = extractReasoningFromChunk(chunk);
@@ -152,19 +156,14 @@ export function extractCompressedContext(text: string): string | undefined {
   return match ? match[1].trim() : undefined;
 }
 
-const RESPONSE_PROMPT = `You are a project management assistant. The user's requirements have been clarified through a discovery process.
-
-Based on the compressed context below, provide a helpful, actionable response. The user expects you to:
-- Interpret the compressed context to understand the full picture
-- Provide a concrete plan, estimate, or answer based on what was discovered
-- Use the same language as the conversation
-
+const RESPONSE_PROMPT =
+  COMPRESS_PROMPT +
+  `
 Compressed context:
 <context>
 {{CONTEXT}}
 </context>
-
-Be concise and actionable. Focus on delivering value, not asking more questions.`;
+`;
 
 export async function* streamCompressConversation(
   messages: ChatMessage[],
@@ -183,7 +182,10 @@ export async function* streamAgentResponse(
   messages: ChatMessage[],
 ): AsyncGenerator<StreamChunk> {
   const llm = getLLM();
-  const systemPrompt = RESPONSE_PROMPT.replace("{{CONTEXT}}", compressedContext);
+  const systemPrompt = RESPONSE_PROMPT.replace(
+    "{{CONTEXT}}",
+    compressedContext,
+  );
   const langChainMessages = [
     new SystemMessage(systemPrompt),
     ...toLangChainMessages(messages),
