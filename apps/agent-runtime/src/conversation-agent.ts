@@ -11,6 +11,7 @@ import { ChatMessage } from "@repo/shared";
 import { isFormAnswer, parseFormAnswers } from "./utils/form-parser";
 import { DISCOVERY_PROMPT } from "./prompts/discovery";
 import { COMPRESS_PROMPT } from "./prompts/compress";
+import { DISCOVERY } from "./prompts/discovery.origin";
 
 dotenv.config({
   path: path.resolve(
@@ -25,10 +26,20 @@ export interface ConversationResult {
   compressedContext?: string;
 }
 
+export interface StreamChunk {
+  type: "reasoning" | "text";
+  content: string;
+}
+
 function toLangChainMessages(messages: ChatMessage[]) {
   return messages.map((m) => {
     if (m.role === "user") return new HumanMessage(m.content);
-    return new AIMessage(m.content);
+    return new AIMessage({
+      content: m.content,
+      additional_kwargs: m.reasoningContent
+        ? { reasoning_content: m.reasoningContent }
+        : {},
+    });
   });
 }
 
@@ -43,13 +54,23 @@ function getLLM() {
     );
   }
 
+  const modelKwargs: Record<string, unknown> = {};
+
+  if (process.env.LLM_ENABLE_THINKING === "true") {
+    modelKwargs.thinking = { type: "enabled" };
+    modelKwargs.reasoning_effort = process.env.LLM_REASONING_EFFORT ?? "high";
+  }
+
   return new ChatOpenAI({
     model,
     apiKey,
+    streaming: true,
     temperature: 0.3,
     maxTokens: 2048,
     timeout: 30000,
     configuration: { baseURL },
+    modelKwargs: Object.keys(modelKwargs).length > 0 ? modelKwargs : undefined,
+    __includeRawResponse: true,
   });
 }
 
@@ -58,7 +79,7 @@ export async function generateQuestionForm(
 ): Promise<string> {
   const llm = getLLM();
   const messages = [
-    new SystemMessage(DISCOVERY_PROMPT),
+    new SystemMessage(DISCOVERY),
     new HumanMessage(userMessage),
   ];
 
@@ -70,69 +91,33 @@ export async function generateQuestionForm(
 
 export async function* streamQuestionForm(
   userMessage: string,
-): AsyncGenerator<string> {
-  const model = process.env.LLM_MODEL ?? "deepseek-chat";
-  const baseURL = process.env.LLM_BASE_URL ?? "https://api.deepseek.com";
-  const apiKey = process.env.OPENAI_API_KEY;
+): AsyncGenerator<StreamChunk> {
+  const llm = getLLM();
+  const messages = [
+    new SystemMessage(DISCOVERY_PROMPT),
+    new HumanMessage(userMessage),
+  ];
 
-  if (!apiKey) {
-    throw new Error(
-      "OPENAI_API_KEY is not set. Please add it to your .env file.",
-    );
-  }
+  const stream = await llm.stream(messages);
 
-  const url = `${baseURL.replace(/\/+$/, "")}/v1/chat/completions`;
+  for await (const chunk of stream) {
+    const rawResponse = (
+      chunk.additional_kwargs as Record<string, unknown> | undefined
+    )?.__raw_response as Record<string, unknown> | undefined;
+    const rawDelta = (
+      (rawResponse as Record<string, unknown> | undefined)?.choices as
+        | Record<string, unknown>[]
+        | undefined
+    )?.[0]?.delta as Record<string, unknown> | undefined;
+    const reasoning = rawDelta?.reasoning_content;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: DISCOVERY_PROMPT },
-        { role: "user", content: userMessage },
-      ],
-      temperature: 0.3,
-      max_tokens: 2048,
-      stream: true,
-    }),
-  });
+    if (typeof reasoning === "string" && reasoning.length > 0) {
+      yield { type: "reasoning", content: reasoning };
+    }
 
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`DeepSeek API error ${response.status}: ${err}`);
-  }
-
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error("No response body");
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || !trimmed.startsWith("data: ")) continue;
-      const data = trimmed.slice(6);
-      if (data === "[DONE]") continue;
-
-      try {
-        const parsed = JSON.parse(data);
-        const delta = parsed.choices?.[0]?.delta?.content;
-        if (delta) yield delta;
-      } catch {
-        // skip malformed lines
-      }
+    const text = chunk.content;
+    if (typeof text === "string" && text.length > 0) {
+      yield { type: "text", content: text };
     }
   }
 }
@@ -176,6 +161,7 @@ export async function analyzeConversation(
   }
 
   const questionForm = await generateQuestionForm(lastMsg.content);
+
   return {
     action: "question_form",
     content: questionForm,

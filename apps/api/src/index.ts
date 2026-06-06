@@ -132,6 +132,7 @@ app.post("/api/chat", async (c) => {
         );
 
         let fullResponse = "";
+        let fullReasoning = "";
         let qfState: "normal" | "collecting" = "normal";
         let qfBuffer = "";
         let pendingText = "";
@@ -141,8 +142,17 @@ app.post("/api/chat", async (c) => {
         }
 
         for await (const chunk of streamQuestionForm(message)) {
+          if (chunk.type === "reasoning") {
+            fullReasoning += chunk.content;
+            await writer.write(
+              `data: ${JSON.stringify({ type: "thinking", content: chunk.content })}\n\n`,
+            );
+            continue;
+          }
+
+          // text chunk
           if (qfState === "collecting") {
-            qfBuffer += chunk;
+            qfBuffer += chunk.content;
             const endIdx = qfBuffer.indexOf(QF_END);
             if (endIdx !== -1) {
               const formContent = qfBuffer.slice(0, endIdx + QF_END.length);
@@ -156,7 +166,7 @@ app.post("/api/chat", async (c) => {
               }
             }
           } else {
-            pendingText += chunk;
+            pendingText += chunk.content;
 
             const qfIdx = pendingText.indexOf(QF_START);
             if (qfIdx !== -1) {
@@ -211,6 +221,7 @@ app.post("/api/chat", async (c) => {
           content: fullResponse,
           timestamp: new Date().toISOString(),
           sessionId: threadId,
+          reasoningContent: fullReasoning || undefined,
         };
         thread.messages.push(assistantMsg);
       }

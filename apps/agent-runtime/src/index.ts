@@ -7,6 +7,7 @@ export {
   extractCompressedContext,
 } from "./conversation-agent";
 export type { ConversationResult } from "./conversation-agent";
+export type { StreamChunk } from "./conversation-agent";
 export {
   parseQuestionForm,
   hasQuestionForm,

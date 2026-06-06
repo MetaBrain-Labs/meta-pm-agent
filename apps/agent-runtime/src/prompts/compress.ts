@@ -1,5 +1,7 @@
 export const COMPRESS_PROMPT = `You are a project management assistant. The user has provided form answers.
 
+Detect the language of the conversation. Generate the compressed summary in the same language as the user's input.
+
 Based on ALL the conversation history (original request + form answers), produce a compressed summary in this exact format:
 
 [COMPRESSED]
