@@ -7,6 +7,9 @@ interface AgentState {
   plan: string;
 }
 
+/**
+ * 意图分类器
+ */
 function classifyIntent(state: AgentState): Partial<AgentState> {
   const last = state.messages.at(-1);
   const content = last?.content.toLowerCase() ?? "";
@@ -30,12 +33,20 @@ function classifyIntent(state: AgentState): Partial<AgentState> {
   return { intent: "general" };
 }
 
-function routeByIntent(state: AgentState): string {
+/**
+ * 根据意图进行路由
+ */
+function routeByIntent(
+  state: AgentState,
+): "generate_plan" | "estimate_effort" | "general_response" {
   if (state.intent === "plan") return "generate_plan";
   if (state.intent === "estimate") return "estimate_effort";
   return "general_response";
 }
 
+/**
+ * 生成计划
+ */
 function generatePlan(state: AgentState): Partial<AgentState> {
   const last = state.messages.at(-1)!;
   const plan = [
@@ -73,6 +84,9 @@ function generatePlan(state: AgentState): Partial<AgentState> {
   return { plan, messages: [response] };
 }
 
+/**
+ * 预计工作量
+ */
 function estimateEffort(state: AgentState): Partial<AgentState> {
   const last = state.messages.at(-1)!;
   const estimates = [
@@ -101,6 +115,9 @@ function estimateEffort(state: AgentState): Partial<AgentState> {
   return { messages: [response] };
 }
 
+/**
+ * 路由未命中保底响应
+ */
 function generalResponse(state: AgentState): Partial<AgentState> {
   const last = state.messages.at(-1)!;
   const response: ChatMessage = {
@@ -114,6 +131,11 @@ function generalResponse(state: AgentState): Partial<AgentState> {
   return { messages: [response] };
 }
 
+/**
+ * 创建一个状态图实例
+ *   value: 更新逻辑：当节点返回新值时，如何与旧值合并
+ *   default: 图启动时该字段的默认值
+ */
 const graph = new StateGraph<AgentState>({
   channels: {
     messages: {
@@ -125,23 +147,45 @@ const graph = new StateGraph<AgentState>({
   },
 });
 
+// 添加路由分类器节点
 graph.addNode("classify", classifyIntent);
+// 如果路由命中plan，则调用该节点
 graph.addNode("generate_plan", generatePlan);
+// 如果路由命中estimate，则调用该节点
 graph.addNode("estimate_effort", estimateEffort);
+// 保底措施，上述都未命中，则调用该节点
 graph.addNode("general_response", generalResponse);
 
+// 执行顺序：入口
 graph.addEdge(START, "classify");
+// 入口：条件路由
 graph.addConditionalEdges("classify", routeByIntent, {
   generate_plan: "generate_plan",
   estimate_effort: "estimate_effort",
   general_response: "general_response",
 });
+// plan分支处理
 graph.addEdge("generate_plan", END);
+// estimate分支处理
 graph.addEdge("estimate_effort", END);
+// 保底分支处理
 graph.addEdge("general_response", END);
 
+/**
+ * 把图结构编译成一个可运行的对象。此时 LangGraph 会检查：
+ *   所有节点是否可达
+ *   是否有死循环
+ *   状态类型是否匹配
+ */
 const app = graph.compile();
 
+/**
+ * 对外暴露的调用接口
+ *   app.invoke({ messages: [message] })	启动图执行，把用户消息作为初始状态传入
+ *   state.messages	执行结束后，从最终状态里取出所有消息
+ *   .find(m => m.role === "assistant")	过滤出 AI 的回复消息
+ *   ?? null	如果没找到 assistant 消息，返回 null
+ */
 export async function runAgent(
   message: ChatMessage,
 ): Promise<ChatMessage | null> {

@@ -3,7 +3,12 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { Queue, Worker, type Job } from "bullmq";
 
-dotenv.config({ path: path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../.env") });
+dotenv.config({
+  path: path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../../.env",
+  ),
+});
 
 const connection = {
   host: process.env.REDIS_HOST ?? "localhost",
@@ -20,8 +25,16 @@ const connection = {
   ...(process.env.REDIS_TLS === "true" ? { tls: {} } : {}),
 };
 
+/**
+ * 创建队列
+ *   生产者入口——其他服务可以往这个队列里丢任务
+ */
 const queue = new Queue("chat", { connection });
 
+/**
+ * 创建消费者
+ *   启动一个工作进程，专门监听 chat 队列里的任务：
+ */
 const worker = new Worker(
   "chat",
   async (job: Job<{ content: string; sessionId: string }>) => {
@@ -32,10 +45,16 @@ const worker = new Worker(
 
 let lastErrorTime = 0;
 
+/**
+ * 错误节流处理
+ *   Redis 断连时，错误事件会高频触发。这里用 lastErrorTime 做 30 秒节流，避免日志刷屏。
+ */
 worker.on("error", () => {
   const now = Date.now();
   if (now - lastErrorTime > 30000) {
-    console.warn(`Redis connection error (${connection.host}:${connection.port})`);
+    console.warn(
+      `Redis connection error (${connection.host}:${connection.port})`,
+    );
     lastErrorTime = now;
   }
 });
