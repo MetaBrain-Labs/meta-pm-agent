@@ -5,8 +5,8 @@
 ## 技术栈
 
 - **Agent 运行时**: LangGraph + LangChain (TypeScript)
-- **API**: Hono（端口 3001）
-- **前端**: Next.js 16 + Tailwind CSS 4（端口 3000）
+- **API**: Hono（端口 3001，支持 SSE 流式响应）
+- **前端**: Vite + React + Tailwind CSS 4（端口 3000）
 - **Worker**: BullMQ + Redis
 - **数据库**: PostgreSQL + Prisma
 - **Monorepo**: pnpm workspaces + Turborepo
@@ -50,20 +50,22 @@ pnpm dev
 ### API 接口
 
 ```
-GET  /     健康检查
-POST /chat 向 PM Agent 发送消息
+GET  /api/health               健康检查
+GET  /api/threads               获取所有会话列表
+GET  /api/threads/:id/messages  获取指定会话的消息历史
+POST /api/chat                  发送消息（SSE 流式响应）
 ```
 
 ### 项目结构
 
 ```
 apps/
-  api/             Hono HTTP API
-  web/             Next.js 前端
+  api/             Hono HTTP API（SSE 流式响应）
+  web/             Vite + React 前端
   worker/          BullMQ Redis 任务处理器
   agent-runtime/   LangGraph Agent 状态机
 packages/
-  shared/          共享类型、Zod schema、DTO
+  shared/          共享类型、Zod schema、DTO、Agent 类型
   database/        Prisma 客户端单例
 ```
 

@@ -5,8 +5,8 @@ AI-powered project management agent with LangGraph state machine orchestration.
 ## Stack
 
 - **Agent runtime**: LangGraph + LangChain (TypeScript)
-- **API**: Hono (port 3001)
-- **Frontend**: Next.js 16 + Tailwind CSS 4 (port 3000)
+- **API**: Hono (port 3001) with SSE streaming
+- **Frontend**: Vite + React + Tailwind CSS 4 (port 3000)
 - **Worker**: BullMQ + Redis
 - **Database**: PostgreSQL + Prisma
 - **Monorepo**: pnpm workspaces + Turborepo
@@ -50,20 +50,22 @@ pnpm dev
 ### API endpoints
 
 ```
-GET  /      health check
-POST /chat  send a chat message to the PM agent
+GET  /api/health               health check
+GET  /api/threads               list all threads
+GET  /api/threads/:id/messages  get messages for a thread
+POST /api/chat                  send a chat message (SSE streaming)
 ```
 
 ### Project structure
 
 ```
 apps/
-  api/             Hono HTTP API
-  web/             Next.js frontend
+  api/             Hono HTTP API (SSE streaming)
+  web/             Vite + React frontend
   worker/          BullMQ Redis worker
   agent-runtime/   LangGraph agent state machine
 packages/
-  shared/          Shared types, Zod schemas, DTOs
+  shared/          Shared types, Zod schemas, DTOs, agent types
   database/        Prisma client singleton
 ```
 
