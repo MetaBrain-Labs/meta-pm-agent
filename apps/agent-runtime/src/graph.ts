@@ -1,10 +1,49 @@
 import { StateGraph, END, START } from "@langchain/langgraph";
 import { ChatMessage } from "@repo/shared";
+import { analyzeConversation } from "./conversation-agent";
 
 interface AgentState {
   messages: ChatMessage[];
   intent: string;
   plan: string;
+  conversationPhase: string;
+  compressedContext: string;
+}
+
+/**
+ * 对话 Agent：分析用户需求，交互式获取补充信息，压缩对话上下文
+ */
+async function conversationNode(state: AgentState): Promise<Partial<AgentState>> {
+  const result = await analyzeConversation(state.messages);
+
+  if (result.action === "ask" && result.question) {
+    const question: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: result.question,
+      timestamp: new Date().toISOString(),
+      sessionId: state.messages[0]?.sessionId ?? "",
+    };
+    return {
+      messages: [question],
+      conversationPhase: "gathering",
+    };
+  }
+
+  return {
+    conversationPhase: "done",
+    compressedContext: result.summary ?? "",
+  };
+}
+
+/**
+ * 对话阶段路由：还需要补充信息则结束等待用户回复，否则进入下游意图分类
+ */
+function routeAfterConversation(
+  state: AgentState,
+): "classify" | typeof END {
+  if (state.conversationPhase === "done") return "classify";
+  return END;
 }
 
 /**
@@ -45,10 +84,9 @@ function routeByIntent(
 }
 
 /**
- * 生成计划
+ * 生成计划（使用压缩后的上下文）
  */
 function generatePlan(state: AgentState): Partial<AgentState> {
-  const last = state.messages.at(-1)!;
   const plan = [
     "Phase 1: Requirements & Discovery",
     "  - Define project scope and goals",
@@ -73,22 +111,25 @@ function generatePlan(state: AgentState): Partial<AgentState> {
     "  - Production release",
   ].join("\n");
 
+  const context = state.compressedContext
+    ? `\n\nContext:\n${state.compressedContext}`
+    : "";
+
   const response: ChatMessage = {
     id: crypto.randomUUID(),
     role: "assistant",
-    content: `Here is a project plan for "${last.content}":\n\n${plan}`,
+    content: `Here is a project plan:${context}\n\n${plan}`,
     timestamp: new Date().toISOString(),
-    sessionId: last.sessionId,
+    sessionId: state.messages.at(-1)!.sessionId,
   };
 
   return { plan, messages: [response] };
 }
 
 /**
- * 预计工作量
+ * 预计工作量（使用压缩后的上下文）
  */
 function estimateEffort(state: AgentState): Partial<AgentState> {
-  const last = state.messages.at(-1)!;
   const estimates = [
     "Task Breakdown & Estimates:",
     "",
@@ -104,12 +145,16 @@ function estimateEffort(state: AgentState): Partial<AgentState> {
     "Total estimated: ~28 days",
   ].join("\n");
 
+  const context = state.compressedContext
+    ? `\n\nContext:\n${state.compressedContext}`
+    : "";
+
   const response: ChatMessage = {
     id: crypto.randomUUID(),
     role: "assistant",
-    content: `Estimate for "${last.content}":\n\n${estimates}`,
+    content: `Estimate:${context}\n\n${estimates}`,
     timestamp: new Date().toISOString(),
-    sessionId: last.sessionId,
+    sessionId: state.messages.at(-1)!.sessionId,
   };
 
   return { messages: [response] };
@@ -120,10 +165,14 @@ function estimateEffort(state: AgentState): Partial<AgentState> {
  */
 function generalResponse(state: AgentState): Partial<AgentState> {
   const last = state.messages.at(-1)!;
+  const context = state.compressedContext
+    ? `\n\nContext:\n${state.compressedContext}`
+    : "";
+
   const response: ChatMessage = {
     id: crypto.randomUUID(),
     role: "assistant",
-    content: `I can help you with:\n- Plan a project: say "plan a website"\n- Estimate effort: say "estimate these features"\n\nYou said: "${last.content}"`,
+    content: `I can help you with:\n- Plan a project: say "plan a website"\n- Estimate effort: say "estimate these features"\n\nYou said: "${last.content}"${context}`,
     timestamp: new Date().toISOString(),
     sessionId: last.sessionId,
   };
@@ -131,11 +180,6 @@ function generalResponse(state: AgentState): Partial<AgentState> {
   return { messages: [response] };
 }
 
-/**
- * 创建一个状态图实例
- *   value: 更新逻辑：当节点返回新值时，如何与旧值合并
- *   default: 图启动时该字段的默认值
- */
 const graph = new StateGraph<AgentState>({
   channels: {
     messages: {
@@ -144,52 +188,42 @@ const graph = new StateGraph<AgentState>({
     },
     intent: { value: (_a: string, b: string) => b, default: () => "" },
     plan: { value: (_a: string, b: string) => b, default: () => "" },
+    conversationPhase: { value: (_a: string, b: string) => b, default: () => "" },
+    compressedContext: { value: (_a: string, b: string) => b, default: () => "" },
   },
 });
 
-// 添加路由分类器节点
+graph.addNode("conversation", conversationNode);
 graph.addNode("classify", classifyIntent);
-// 如果路由命中plan，则调用该节点
 graph.addNode("generate_plan", generatePlan);
-// 如果路由命中estimate，则调用该节点
 graph.addNode("estimate_effort", estimateEffort);
-// 保底措施，上述都未命中，则调用该节点
 graph.addNode("general_response", generalResponse);
 
-// 执行顺序：入口
-graph.addEdge(START, "classify");
-// 入口：条件路由
+graph.addEdge(START, "conversation");
+graph.addConditionalEdges("conversation", routeAfterConversation, {
+  classify: "classify",
+  [END]: END,
+});
 graph.addConditionalEdges("classify", routeByIntent, {
   generate_plan: "generate_plan",
   estimate_effort: "estimate_effort",
   general_response: "general_response",
 });
-// plan分支处理
 graph.addEdge("generate_plan", END);
-// estimate分支处理
 graph.addEdge("estimate_effort", END);
-// 保底分支处理
 graph.addEdge("general_response", END);
 
-/**
- * 把图结构编译成一个可运行的对象。此时 LangGraph 会检查：
- *   所有节点是否可达
- *   是否有死循环
- *   状态类型是否匹配
- */
 const app = graph.compile();
 
 /**
  * 对外暴露的调用接口
- *   app.invoke({ messages: [message] })	启动图执行，把用户消息作为初始状态传入
- *   state.messages	执行结束后，从最终状态里取出所有消息
- *   .find(m => m.role === "assistant")	过滤出 AI 的回复消息
- *   ?? null	如果没找到 assistant 消息，返回 null
+ * @param messages 完整的对话历史（包含最新用户消息）
+ * @returns assistant 的回复消息，如果没有则返回 null
  */
 export async function runAgent(
-  message: ChatMessage,
+  messages: ChatMessage[],
 ): Promise<ChatMessage | null> {
-  const state = await app.invoke({ messages: [message] });
+  const state = await app.invoke({ messages });
   return (
     state.messages.find((m: ChatMessage) => m.role === "assistant") ?? null
   );
