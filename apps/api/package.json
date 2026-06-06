@@ -9,7 +9,8 @@
     "@hono/node-server": "^1.18.3",
     "@repo/agent-runtime": "workspace:*",
     "@repo/shared": "workspace:*",
-    "hono": "^4.12.23"
+    "hono": "^4.12.23",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^20.19.41",

@@ -6,6 +6,7 @@ export const ChatMessageSchema = z.object({
   content: z.string(),
   timestamp: z.string().datetime(),
   sessionId: z.string(),
+  reasoningContent: z.string().optional(),
 });
 
 export const ChatSessionSchema = z.object({
