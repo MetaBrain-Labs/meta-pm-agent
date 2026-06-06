@@ -1,45 +1,226 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { serve } from "@hono/node-server";
+import { stream } from "hono/streaming";
 import { z } from "zod";
-import { runAgent } from "@repo/agent-runtime";
-import { ChatMessage, ChatMessageSchema } from "@repo/shared";
+import { ChatMessage } from "@repo/shared";
+import {
+  runAgent,
+  generateQuestionForm,
+  streamQuestionForm,
+  isFormAnswer,
+} from "@repo/agent-runtime";
 
 const app = new Hono();
 
 app.use("/*", cors());
 
-const ChatRequestSchema = z.object({
-  content: z.string().min(1),
-  sessionId: z.string(),
-  history: z.array(ChatMessageSchema).optional().default([]),
-});
+// ── In-memory conversation store ──
+interface Thread {
+  id: string;
+  title: string;
+  createdAt: string;
+  messages: ChatMessage[];
+}
+
+const threads = new Map<string, Thread>();
+
+function getOrCreateThread(threadId: string): Thread {
+  let thread = threads.get(threadId);
+  if (!thread) {
+    thread = {
+      id: threadId,
+      title: "New chat",
+      createdAt: new Date().toISOString(),
+      messages: [],
+    };
+    threads.set(threadId, thread);
+  }
+  return thread;
+}
+
+// ── Routes ──
 
 app.get("/", (c) => {
   return c.json({ status: "ok" });
 });
 
-app.post("/chat", async (c) => {
+app.get("/api/health", (c) => {
+  return c.json({ status: "ok", agents: ["conversation-agent"] });
+});
+
+app.get("/api/threads", (c) => {
+  const list = Array.from(threads.values())
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .map((t) => ({
+      id: t.id,
+      title: t.title,
+      createdAt: t.createdAt,
+      updatedAt: t.messages.at(-1)?.timestamp ?? t.createdAt,
+    }));
+  return c.json({ threads: list });
+});
+
+app.get("/api/threads/:threadId/messages", (c) => {
+  const { threadId } = c.req.param();
+  const thread = threads.get(threadId);
+  if (!thread) return c.json({ messages: [] });
+
+  const messages = thread.messages.map((m) => ({
+    id: m.id,
+    role: m.role === "assistant" ? "agent" : m.role,
+    content: m.content,
+    createdAt: m.timestamp,
+  }));
+  return c.json({ messages });
+});
+
+const ChatRequestSchema = z.object({
+  message: z.string().min(1),
+  threadId: z.string().optional().default("default"),
+});
+
+app.post("/api/chat", async (c) => {
   const body = await c.req.json();
   const parsed = ChatRequestSchema.safeParse(body);
-
   if (!parsed.success) {
     return c.json({ error: parsed.error.flatten() }, 400);
   }
 
-  const { content, sessionId, history } = parsed.data;
+  const { message, threadId } = parsed.data;
+  const thread = getOrCreateThread(threadId);
 
-  const userMessage: ChatMessage = {
+  if (thread.messages.length === 0) {
+    thread.title = message.slice(0, 50) + (message.length > 50 ? "..." : "");
+  }
+
+  const userMsg: ChatMessage = {
     id: crypto.randomUUID(),
     role: "user",
-    content,
+    content: message,
     timestamp: new Date().toISOString(),
-    sessionId,
+    sessionId: threadId,
   };
+  thread.messages.push(userMsg);
 
-  const messages = [...history, userMessage];
-  const response = await runAgent(messages);
-  return c.json(response ?? { content: "No response generated." });
+  // Set SSE headers before streaming
+  c.header("Content-Type", "text/event-stream");
+  c.header("Cache-Control", "no-cache");
+  c.header("Connection", "keep-alive");
+  c.header("X-Accel-Buffering", "no");
+
+  return stream(c, async (writer) => {
+    await writer.write(`data: ${JSON.stringify({ type: "start" })}\n\n`);
+
+    try {
+      if (isFormAnswer(message)) {
+        console.log("[chat] Form answer detected, running LangGraph...");
+        const response = await runAgent(thread.messages);
+        if (response) {
+          thread.messages.push(response);
+          await writer.write(`data: ${JSON.stringify({ type: "text", content: response.content })}\n\n`);
+        } else {
+          await writer.write(`data: ${JSON.stringify({ type: "text", content: "I've processed your requirements. How can I help further?" })}\n\n`);
+        }
+      } else {
+        console.log("[chat] New intent, streaming question form...");
+
+        const QF_START = "<question-form";
+        const QF_END = "</question-form>";
+        const QF_PREFIXES = Array.from({ length: QF_START.length }, (_, i) =>
+          QF_START.slice(0, i + 1),
+        );
+
+        let fullResponse = "";
+        let qfState: "normal" | "collecting" = "normal";
+        let qfBuffer = "";
+        let pendingText = "";
+
+        function mayBePrefix(text: string): boolean {
+          return QF_PREFIXES.some((p) => text.endsWith(p));
+        }
+
+        for await (const chunk of streamQuestionForm(message)) {
+          if (qfState === "collecting") {
+            qfBuffer += chunk;
+            const endIdx = qfBuffer.indexOf(QF_END);
+            if (endIdx !== -1) {
+              const formContent = qfBuffer.slice(0, endIdx + QF_END.length);
+              const rest = qfBuffer.slice(endIdx + QF_END.length);
+              fullResponse += formContent + rest;
+              await writer.write(`data: ${JSON.stringify({ type: "question-form-complete", content: formContent })}\n\n`);
+              qfState = "normal";
+              qfBuffer = "";
+              if (rest) {
+                pendingText = rest;
+              }
+            }
+          } else {
+            pendingText += chunk;
+
+            const qfIdx = pendingText.indexOf(QF_START);
+            if (qfIdx !== -1) {
+              const before = pendingText.slice(0, qfIdx);
+              if (before) {
+                fullResponse += before;
+                await writer.write(`data: ${JSON.stringify({ type: "text", content: before })}\n\n`);
+              }
+              qfState = "collecting";
+              qfBuffer = pendingText.slice(qfIdx);
+              pendingText = "";
+              await writer.write(`data: ${JSON.stringify({ type: "question-form-start" })}\n\n`);
+
+              // Check if complete form is already in qfBuffer
+              const endIdx = qfBuffer.indexOf(QF_END);
+              if (endIdx !== -1) {
+                const formContent = qfBuffer.slice(0, endIdx + QF_END.length);
+                const rest = qfBuffer.slice(endIdx + QF_END.length);
+                fullResponse += formContent + rest;
+                await writer.write(`data: ${JSON.stringify({ type: "question-form-complete", content: formContent })}\n\n`);
+                qfState = "normal";
+                qfBuffer = "";
+                if (rest) {
+                  pendingText = rest;
+                }
+              }
+            } else if (!mayBePrefix(pendingText)) {
+              // Safe to flush: pendingText cannot be a prefix of <question-form
+              fullResponse += pendingText;
+              await writer.write(`data: ${JSON.stringify({ type: "text", content: pendingText })}\n\n`);
+              pendingText = "";
+            }
+            // If mayBePrefix, keep buffering for next chunk
+          }
+        }
+
+        // Flush remaining buffers
+        if (qfState === "collecting" && qfBuffer) {
+          fullResponse += qfBuffer;
+          await writer.write(`data: ${JSON.stringify({ type: "text", content: qfBuffer })}\n\n`);
+        }
+        if (pendingText) {
+          fullResponse += pendingText;
+          await writer.write(`data: ${JSON.stringify({ type: "text", content: pendingText })}\n\n`);
+        }
+
+        console.log("[chat] Stream complete, response length:", fullResponse.length);
+
+        const assistantMsg: ChatMessage = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: fullResponse,
+          timestamp: new Date().toISOString(),
+          sessionId: threadId,
+        };
+        thread.messages.push(assistantMsg);
+      }
+    } catch (error) {
+      console.error("[chat] Error:", error);
+      await writer.write(`data: ${JSON.stringify({ type: "error", error: error instanceof Error ? error.message : String(error) })}\n\n`);
+    }
+
+    await writer.write(`data: [DONE]\n\n`);
+  });
 });
 
 serve({ fetch: app.fetch, port: 3001 });

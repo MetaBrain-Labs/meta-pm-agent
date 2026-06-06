@@ -11,28 +11,29 @@ interface AgentState {
 }
 
 /**
- * 对话 Agent：分析用户需求，交互式获取补充信息，压缩对话上下文
+ * 对话 Agent：检测意图 → 生成 Question-Form / 处理表单答案 → 压缩上下文
  */
 async function conversationNode(state: AgentState): Promise<Partial<AgentState>> {
   const result = await analyzeConversation(state.messages);
 
-  if (result.action === "ask" && result.question) {
-    const question: ChatMessage = {
+  if (result.action === "question_form") {
+    const response: ChatMessage = {
       id: crypto.randomUUID(),
       role: "assistant",
-      content: result.question,
+      content: result.content,
       timestamp: new Date().toISOString(),
       sessionId: state.messages[0]?.sessionId ?? "",
     };
     return {
-      messages: [question],
+      messages: [response],
       conversationPhase: "gathering",
     };
   }
 
+  // summarize: form answers received, compression done
   return {
     conversationPhase: "done",
-    compressedContext: result.summary ?? "",
+    compressedContext: result.compressedContext ?? "",
   };
 }
 
@@ -216,7 +217,6 @@ graph.addEdge("general_response", END);
 const app = graph.compile();
 
 /**
- * 对外暴露的调用接口
  * @param messages 完整的对话历史（包含最新用户消息）
  * @returns assistant 的回复消息，如果没有则返回 null
  */

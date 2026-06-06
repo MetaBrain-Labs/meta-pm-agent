@@ -2,8 +2,15 @@ import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
 import { ChatOpenAI } from "@langchain/openai";
-import { SystemMessage, HumanMessage, AIMessage } from "@langchain/core/messages";
+import {
+  SystemMessage,
+  HumanMessage,
+  AIMessage,
+} from "@langchain/core/messages";
 import { ChatMessage } from "@repo/shared";
+import { isFormAnswer, parseFormAnswers } from "./utils/form-parser";
+import { DISCOVERY_PROMPT } from "./prompts/discovery";
+import { COMPRESS_PROMPT } from "./prompts/compress";
 
 dotenv.config({
   path: path.resolve(
@@ -13,42 +20,11 @@ dotenv.config({
 });
 
 export interface ConversationResult {
-  action: "ask" | "summarize";
-  question?: string;
-  summary?: string;
+  action: "question_form" | "summarize" | "respond";
+  content: string;
+  compressedContext?: string;
 }
 
-const SYSTEM_PROMPT = `You are a project management requirement-gathering agent. Your job is to thoroughly understand what the user wants before passing to downstream agents (planner, estimator).
-
-For each user request, identify what information is MISSING or AMBIGUOUS. Ask ONE clear, focused question at a time to fill the gaps. Important areas to probe:
-- Core goal / problem being solved
-- Target users and their workflow
-- Must-have vs nice-to-have features
-- Technical constraints or preferences (platform, tech stack, integrations)
-- Timeline expectations
-- Team size and composition
-- Success criteria
-
-Only when the conversation has covered enough ground to form a clear, actionable understanding should you stop asking questions.
-
-OUTPUT FORMAT — You MUST respond with exactly one of these two formats:
-
-If more information is needed:
-  {"action": "ask", "question": "<your single follow-up question>"}
-
-If you have enough information:
-  {"action": "summarize", "summary": "<compressed summary covering: goal, key requirements, constraints, assumptions>"}
-
-Rules:
-- NEVER output anything other than the JSON above.
-- Ask only ONE question per response.
-- Be concise in your question — one or two sentences.
-- The summary should be self-contained and actionable for downstream agents.
-- If the initial message is very vague (e.g. just "help me"), ask what they want to build.`;
-
-/**
- * 将用户消息封装为LangChain可以识别的消息
- */
 function toLangChainMessages(messages: ChatMessage[]) {
   return messages.map((m) => {
     if (m.role === "user") return new HumanMessage(m.content);
@@ -56,46 +32,152 @@ function toLangChainMessages(messages: ChatMessage[]) {
   });
 }
 
-/**
- * 调用 LLM 解析对话
- */
-export async function analyzeConversation(
-  messages: ChatMessage[],
-): Promise<ConversationResult> {
+function getLLM() {
   const model = process.env.LLM_MODEL ?? "deepseek-chat";
   const baseURL = process.env.LLM_BASE_URL ?? "https://api.deepseek.com";
+  const apiKey = process.env.OPENAI_API_KEY;
 
-  const llm = new ChatOpenAI({
+  if (!apiKey) {
+    throw new Error(
+      "OPENAI_API_KEY is not set. Please add it to your .env file.",
+    );
+  }
+
+  return new ChatOpenAI({
     model,
+    apiKey,
     temperature: 0.3,
-    maxTokens: 1024,
+    maxTokens: 2048,
+    timeout: 30000,
     configuration: { baseURL },
   });
+}
+
+export async function generateQuestionForm(
+  userMessage: string,
+): Promise<string> {
+  const llm = getLLM();
+  const messages = [
+    new SystemMessage(DISCOVERY_PROMPT),
+    new HumanMessage(userMessage),
+  ];
+
+  const response = await llm.invoke(messages);
+  return typeof response.content === "string"
+    ? response.content
+    : JSON.stringify(response.content);
+}
+
+export async function* streamQuestionForm(
+  userMessage: string,
+): AsyncGenerator<string> {
+  const model = process.env.LLM_MODEL ?? "deepseek-chat";
+  const baseURL = process.env.LLM_BASE_URL ?? "https://api.deepseek.com";
+  const apiKey = process.env.OPENAI_API_KEY;
+
+  if (!apiKey) {
+    throw new Error(
+      "OPENAI_API_KEY is not set. Please add it to your .env file.",
+    );
+  }
+
+  const url = `${baseURL.replace(/\/+$/, "")}/v1/chat/completions`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: DISCOVERY_PROMPT },
+        { role: "user", content: userMessage },
+      ],
+      temperature: 0.3,
+      max_tokens: 2048,
+      stream: true,
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`DeepSeek API error ${response.status}: ${err}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("No response body");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || !trimmed.startsWith("data: ")) continue;
+      const data = trimmed.slice(6);
+      if (data === "[DONE]") continue;
+
+      try {
+        const parsed = JSON.parse(data);
+        const delta = parsed.choices?.[0]?.delta?.content;
+        if (delta) yield delta;
+      } catch {
+        // skip malformed lines
+      }
+    }
+  }
+}
+
+export async function compressConversation(
+  messages: ChatMessage[],
+): Promise<string> {
+  const llm = getLLM();
 
   const langChainMessages = [
-    new SystemMessage(SYSTEM_PROMPT),
+    new SystemMessage(COMPRESS_PROMPT),
     ...toLangChainMessages(messages),
   ];
 
   const response = await llm.invoke(langChainMessages);
-  const raw =
-    typeof response.content === "string"
-      ? response.content
-      : JSON.stringify(response.content);
+  return typeof response.content === "string"
+    ? response.content
+    : JSON.stringify(response.content);
+}
 
-  try {
-    const parsed = JSON.parse(raw.trim()) as ConversationResult;
+export function extractCompressedContext(text: string): string | undefined {
+  const match = text.match(/\[COMPRESSED\]([\s\S]*?)\[\/COMPRESSED\]/);
+  return match ? match[1].trim() : undefined;
+}
 
-    if (parsed.action === "ask" && parsed.question) {
-      return { action: "ask", question: parsed.question };
-    }
-
-    if (parsed.action === "summarize" && parsed.summary) {
-      return { action: "summarize", summary: parsed.summary };
-    }
-
-    return { action: "summarize", summary: raw.trim() };
-  } catch {
-    return { action: "summarize", summary: raw.trim() };
+export async function analyzeConversation(
+  messages: ChatMessage[],
+): Promise<ConversationResult> {
+  const lastMsg = messages.at(-1);
+  if (!lastMsg) {
+    return { action: "respond", content: "No message provided." };
   }
+
+  if (lastMsg.role === "user" && isFormAnswer(lastMsg.content)) {
+    const compressed = await compressConversation(messages);
+    return {
+      action: "summarize",
+      content: compressed,
+      compressedContext: extractCompressedContext(compressed),
+    };
+  }
+
+  const questionForm = await generateQuestionForm(lastMsg.content);
+  return {
+    action: "question_form",
+    content: questionForm,
+  };
 }
