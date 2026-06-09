@@ -6,20 +6,3 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
-
-model ChatSession {
-  id        String   @id @default(uuid())
-  title     String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  messages  ChatMessage[]
-}
-
-model ChatMessage {
-  id        String     @id @default(uuid())
-  role      String
-  content   String
-  timestamp DateTime  @default(now())
-  sessionId String
-  session   ChatSession @relation(fields: [sessionId], references: [id])
-}
