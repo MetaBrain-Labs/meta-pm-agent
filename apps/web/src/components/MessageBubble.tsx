@@ -1,8 +1,24 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import type { Message } from "../types";
-import { QuestionForm, splitOnQuestionForms } from "../utils/question-form";
 import { ProseBlock } from "./ProseBlock";
 import { TodoCard } from "./TodoCard";
+import { Icon } from "./Icon";
+
+const TOOL_NAME_LABELS: Record<string, string> = {
+  write_todos: "生成任务",
+  ask_user: "询问用户",
+  search_knowledge: "搜索知识库",
+  read_file: "读取文件",
+  write_file: "写入文件",
+  execute_command: "执行命令",
+  generate_artifact: "生成文档",
+  web_search: "网页搜索",
+  web_fetch: "抓取页面",
+};
+
+function mapToolName(name: string): string {
+  return TOOL_NAME_LABELS[name] ?? name;
+}
 
 interface Props {
   message: Message;
@@ -21,6 +37,7 @@ export function MessageBubble({
 }: Props) {
   const [thinkingOpen, setThinkingOpen] = useState(true);
   const [userScrolled, setUserScrolled] = useState(false);
+  const [usageOpen, setUsageOpen] = useState(false);
   const [locallySubmitted, setLocallySubmitted] = useState<Set<string>>(
     () => new Set(),
   );
@@ -59,7 +76,7 @@ export function MessageBubble({
             className="thinking-header"
             onClick={() => setThinkingOpen(!thinkingOpen)}
           >
-            <span className="chevron">▶</span> 思考过程
+            <span className="chevron"><Icon name="chevron-right" size={10} /></span> 思考过程
             {!message.content && <span className="loading-dots" />}
           </div>
           <div
@@ -88,14 +105,13 @@ export function MessageBubble({
                   : JSON.stringify(tc.args, null, 2)
               }
             >
-              {tc.result !== undefined ? `✓ ${tc.name}` : `⚙ ${tc.name}`}
+              {tc.result !== undefined ? `✓ ${mapToolName(tc.name)}` : `⚙ ${mapToolName(tc.name)}`}
             </span>
           ))}
         </div>
       )}
 
       {message.content && (
-        // <div className="message-bubble agent-bubble">{message.content}</div>
         <ProseBlock
           text={message.content || ""}
           isLastAssistant={!!isLast}
@@ -143,9 +159,20 @@ export function MessageBubble({
 
       {message.usage && (
         <div className="usage-line">
-          Tokens — input: {String(message.usage?.inputTokens ?? "-")}, output:{" "}
-          {String(message.usage?.outputTokens ?? "-")}, total:{" "}
-          {String(message.usage?.totalTokens ?? "-")}
+          <button
+            className="usage-line-toggle"
+            onClick={() => setUsageOpen(!usageOpen)}
+          >
+            <Icon name={usageOpen ? "chevron-down" : "chevron-right"} size={10} />
+            <span>Token 用量</span>
+          </button>
+          {usageOpen && (
+            <span className="usage-line-detail">
+              输入 {String(message.usage?.inputTokens ?? "-")} · 输出{" "}
+              {String(message.usage?.outputTokens ?? "-")} · 合计{" "}
+              {String(message.usage?.totalTokens ?? "-")}
+            </span>
+          )}
         </div>
       )}
     </div>

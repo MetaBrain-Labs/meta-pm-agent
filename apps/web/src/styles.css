@@ -17,6 +17,8 @@ body {
 
 #root {
   height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ── App Layout ── */
@@ -139,6 +141,7 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
 }
 
 /* ── Header ── */
@@ -195,10 +198,10 @@ header .dot {
   position: relative;
 }
 
-/* Scroll-to-bottom button */
+/* ── Scroll-to-bottom button ── */
 .scroll-bottom-btn {
   position: sticky;
-  bottom: 12px;
+  bottom: 16px;
   left: 50%;
   transform: translateX(-50%);
   width: 36px;
@@ -207,7 +210,6 @@ header .dot {
   background: #21262d;
   border: 1px solid #30363d;
   color: #8b949e;
-  font-size: 18px;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -355,6 +357,25 @@ header .dot {
   margin-top: 4px;
   padding-left: 4px;
 }
+.usage-line-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  color: #484f58;
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+  padding: 2px 0;
+}
+.usage-line-toggle:hover {
+  color: #8b949e;
+}
+.usage-line-detail {
+  margin-left: 6px;
+  color: #6e7681;
+}
 
 /* ── Input Area ── */
 .input-area {
@@ -412,6 +433,13 @@ header .dot {
   background: #21262d;
   color: #8b949e;
   cursor: not-allowed;
+}
+.input-area .stop-btn {
+  background: #f85149;
+  min-width: 56px;
+}
+.input-area .stop-btn:hover {
+  background: #d93a3a;
 }
 .clear-btn {
   background: #21262d !important;
@@ -662,6 +690,11 @@ header .dot {
   color: #3fb950;
   border: 1px solid #238636;
   white-space: nowrap;
+}
+.question-form-pill-live {
+  background: #0d1f3c;
+  color: #58a6ff;
+  border: 1px solid #1f6feb;
 }
 
 /* body */
@@ -1046,15 +1079,100 @@ header .dot {
   display: none;
 }
 
-/* ── Empty State / Error ── */
+/* ── Empty State ── */
 .empty-state {
   flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: #484f58;
-  font-size: 16px;
+  gap: 16px;
+  padding: 40px 20px;
 }
+.empty-state-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #e1e4e8;
+}
+.empty-state-desc {
+  color: #6e7681;
+  font-size: 14px;
+  text-align: center;
+  max-width: 400px;
+}
+.examples-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  width: 100%;
+  max-width: 360px;
+}
+.example-chip {
+  display: block;
+  width: 100%;
+  padding: 10px 16px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  color: #c9d1d9;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s;
+}
+.example-chip:hover {
+  border-color: #1f6feb;
+  background: #1a2233;
+  color: #e1e4e8;
+}
+.example-chip:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ── Undo Toast ── */
+.undo-toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  align-self: flex-end;
+  padding: 8px 14px;
+  background: #21262d;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #c9d1d9;
+  animation: toast-in 0.2s ease;
+}
+.undo-toast button {
+  background: none;
+  border: none;
+  color: #58a6ff;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+  padding: 0;
+}
+.undo-toast button:hover {
+  text-decoration: underline;
+}
+.undo-toast-close {
+  color: #8b949e !important;
+  display: flex;
+  align-items: center;
+}
+.undo-toast-close:hover {
+  color: #e1e4e8 !important;
+  text-decoration: none !important;
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Error Banner ── */
 .error-banner {
   background: #2d1518;
   border: 1px solid #f85149;
@@ -1068,11 +1186,21 @@ header .dot {
   gap: 10px;
   flex-shrink: 0;
 }
-.error-banner button {
-  background: none;
+.error-banner-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.error-banner-actions button {
+  background: #f85149;
   border: none;
-  color: #f85149;
+  color: #fff;
   cursor: pointer;
-  font-size: 16px;
-  padding: 0 4px;
+  font-size: 12px;
+  font-family: inherit;
+  padding: 4px 10px;
+  border-radius: 6px;
+}
+.error-banner-actions button:hover {
+  background: #d93a3a;
 }

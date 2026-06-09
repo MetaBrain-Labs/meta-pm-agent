@@ -1,58 +1,65 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef } from "react";
 import type { Message, StreamEvent } from "../types";
 
-const STORAGE_KEY = "chat_threads_state";
-
-function loadThreadId(): string | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const data = JSON.parse(raw);
-    return data?.threadId ?? null;
-  } catch { return null; }
+function toRequestMessages(msgs: Message[]) {
+  return msgs.map((m) => ({
+    id: m.id,
+    role: m.role === "agent" ? ("assistant" as const) : ("user" as const),
+    content: m.content,
+    timestamp: new Date(m.timestamp).toISOString(),
+    sessionId: "local",
+    ...(m.thinking ? { reasoningContent: m.thinking } : {}),
+  }));
 }
 
-function saveThreadId(threadId: string) {
-  try {
-    const existing = localStorage.getItem(STORAGE_KEY);
-    const data = existing ? JSON.parse(existing) : {};
-    data.threadId = threadId;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch { /* ignore */ }
-}
-
-function loadMessages(): Message[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const data = JSON.parse(raw);
-    return Array.isArray(data.messages) ? data.messages : [];
-  } catch { return []; }
-}
-
-function saveMessages(messages: Message[]) {
-  try {
-    const existing = localStorage.getItem(STORAGE_KEY);
-    const data = existing ? JSON.parse(existing) : {};
-    data.messages = messages;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch { /* ignore */ }
+function mapErrorToChinese(err: Error | string): string {
+  const message = typeof err === "string" ? err : err.message;
+  if (message.includes("Failed to fetch") || message.includes("NetworkError")) {
+    return "网络连接失败，请检查网络后重试";
+  }
+  if (message.includes("AbortError")) return "";
+  const statusMatch = message.match(/Server error: (\d+)/);
+  if (statusMatch) {
+    const code = parseInt(statusMatch[1]!);
+    if (code === 429) return "请求过于频繁，请稍后再试";
+    if (code >= 500) return "服务器繁忙，请稍后重试";
+    if (code === 401 || code === 403) return "鉴权失败，请检查 API Key 配置";
+  }
+  if (message.includes("No response body")) return "服务器未返回有效响应";
+  return "连接中断，请点击重试";
 }
 
 export function useChat() {
-  const [messages, setMessages] = useState<Message[]>(loadMessages);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [threadId, setThreadId] = useState<string>(() => loadThreadId() ?? crypto.randomUUID());
+  const [undoAvailable, setUndoAvailable] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const lastSentTextRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    saveThreadId(threadId);
-  }, [threadId]);
+  const stopGeneration = useCallback(() => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    setIsLoading(false);
+  }, []);
 
-  useEffect(() => {
-    saveMessages(messages);
-  }, [messages]);
+  const undoLastMessage = useCallback(() => {
+    setMessages((prev) => {
+      if (prev.length < 2) return prev;
+      const lastUserIdx = (() => {
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i]!.role === "user") return i;
+        }
+        return -1;
+      })();
+      if (lastUserIdx === -1) return prev;
+      return prev.slice(0, lastUserIdx);
+    });
+    setUndoAvailable(false);
+    lastSentTextRef.current = null;
+  }, []);
 
   const sendMessage = useCallback(
     async (text: string) => {
@@ -60,6 +67,8 @@ export function useChat() {
 
       setError(null);
       setIsLoading(true);
+      setUndoAvailable(true);
+      lastSentTextRef.current = text;
 
       const userMsg: Message = {
         id: crypto.randomUUID(),
@@ -67,7 +76,6 @@ export function useChat() {
         content: text,
         timestamp: Date.now(),
       };
-      setMessages((prev) => [...prev, userMsg]);
 
       const agentMsgId = crypto.randomUUID();
       const agentMsg: Message = {
@@ -76,7 +84,10 @@ export function useChat() {
         content: "",
         timestamp: Date.now(),
       };
-      setMessages((prev) => [...prev, agentMsg]);
+
+      const requestMessages = [...messages, userMsg];
+
+      setMessages((prev) => [...prev, userMsg, agentMsg]);
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -85,14 +96,26 @@ export function useChat() {
         const resp = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text, threadId }),
+          body: JSON.stringify({ messages: toRequestMessages(requestMessages) }),
           signal: controller.signal,
         });
 
-        if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+        if (!resp.ok) {
+          const errorMsg = `Server error: ${resp.status}`;
+          setError(mapErrorToChinese(new Error(errorMsg)));
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === agentMsgId ? { ...m, content: m.content + `\n[错误: ${errorMsg}]` } : m
+            )
+          );
+          return;
+        }
 
         const reader = resp.body?.getReader();
-        if (!reader) throw new Error("No response body");
+        if (!reader) {
+          setError(mapErrorToChinese(new Error("No response body")));
+          return;
+        }
 
         const decoder = new TextDecoder();
         let buffer = "";
@@ -153,11 +176,11 @@ export function useChat() {
         }
       } catch (err: any) {
         if (err.name === "AbortError") return;
-        const msg = err instanceof Error ? err.message : String(err);
-        setError(msg);
+        const friendly = mapErrorToChinese(err);
+        setError(friendly);
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === agentMsgId ? { ...m, content: m.content + `\n[错误: ${msg}]` } : m
+            m.id === agentMsgId ? { ...m, content: m.content + `\n[错误: ${err instanceof Error ? err.message : String(err)}]` } : m
           )
         );
       } finally {
@@ -165,41 +188,15 @@ export function useChat() {
         abortRef.current = null;
       }
     },
-    [isLoading, threadId]
+    [isLoading, messages]
   );
-
-  const loadThread = useCallback(async (tId: string) => {
-    setError(null);
-    setIsLoading(true);
-    try {
-      const resp = await fetch(`/api/threads/${tId}/messages`);
-      if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
-      const data = await resp.json();
-      const msgs: Message[] = (data.messages ?? []).map((m: any) => ({
-        id: m.id,
-        role: m.role === "agent" || m.role === "assistant" ? "agent" : "user",
-        content: m.content ?? "",
-        timestamp: new Date(m.createdAt).getTime(),
-      }));
-      setMessages(msgs);
-      setThreadId(tId);
-    } catch (err: any) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  const newThread = useCallback(() => {
-    setMessages([]);
-    setError(null);
-    setThreadId(crypto.randomUUID());
-  }, []);
 
   const clearMessages = useCallback(() => {
     setMessages([]);
     setError(null);
+    setUndoAvailable(false);
+    lastSentTextRef.current = null;
   }, []);
 
-  return { messages, isLoading, error, threadId, sendMessage, loadThread, newThread, clearMessages };
+  return { messages, isLoading, error, undoAvailable, sendMessage, stopGeneration, undoLastMessage, clearMessages };
 }

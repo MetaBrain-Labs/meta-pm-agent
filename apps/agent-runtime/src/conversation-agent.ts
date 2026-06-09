@@ -109,14 +109,13 @@ async function* streamAgentEvents(
   );
 
   for await (const msg of run.messages) {
-    if (msg.text) {
-      for await (const token of msg.text) {
-        yield { type: "text", content: token };
-      }
-    }
-    if (msg.reasoning) {
-      for await (const token of msg.reasoning) {
-        yield { type: "reasoning", content: token };
+    for await (const event of msg) {
+      if (event.event === "content-block-delta") {
+        if (event.delta.type === "text-delta") {
+          yield { type: "text", content: event.delta.text };
+        } else if (event.delta.type === "reasoning-delta") {
+          yield { type: "reasoning", content: event.delta.reasoning };
+        }
       }
     }
   }

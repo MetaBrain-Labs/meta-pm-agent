@@ -114,7 +114,9 @@ export function QuestionFormView({
           <span className="question-form-pill">
             {submittedAnswers ? "已提交" : "只读"}
           </span>
-        ) : null}
+        ) : (
+          <span className="question-form-pill question-form-pill-live">待填写</span>
+        )}
       </div>
       <div className="question-form-body">
         {form.questions.map((q) => {

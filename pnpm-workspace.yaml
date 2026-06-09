@@ -9,3 +9,5 @@ allowBuilds:
   prisma: true
   sharp: false
   unrs-resolver: false
+patchedDependencies:
+  '@langchain/core': patches/@langchain__core.patch

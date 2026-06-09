@@ -15,7 +15,7 @@ export function TodoCard({ todos }: Props) {
     <div className="todo-card">
       <div className="todo-card-head">
         <span className="todo-card-icon">📋</span>
-        <span className="todo-card-label">TodoWrite</span>
+        <span className="todo-card-label">任务列表</span>
         <span className="todo-card-count">
           {todos.filter((t) => t.status === "completed").length}/{todos.length}
         </span>
