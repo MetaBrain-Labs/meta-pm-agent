@@ -30,11 +30,7 @@ export interface StreamChunk {
 }
 
 // Conversation Agent的SYSTEM_PROMPT
-const SYSTEM_PROMPT = `${DISCOVERY_PROMPT}
-
----
-
-${COMPRESS_PROMPT}`;
+const SYSTEM_PROMPT = `${DISCOVERY_PROMPT}`;
 
 /**
  * LLM 基础配置
@@ -122,23 +118,11 @@ async function* streamAgentEvents(
 }
 
 /**
- * 根据用户的输入生成QuestionForm
+ * 仅提取压缩标签中的内容 - NEED
  */
-export async function generateQuestionForm(
-  userMessage: string,
-): Promise<string> {
-  const agent = createAgent();
-  const result = await agent.invoke({
-    messages: [new HumanMessage(userMessage)],
-  });
-
-  const lastMsg = result.messages?.at(-1);
-  if (lastMsg && lastMsg._getType && lastMsg._getType() === "ai") {
-    return typeof lastMsg.content === "string"
-      ? lastMsg.content
-      : JSON.stringify(lastMsg.content);
-  }
-  return "";
+export function extractCompressedContext(text: string): string | undefined {
+  const match = text.match(/\[COMPRESSED\]([\s\S]*?)\[\/COMPRESSED\]/);
+  return match ? match[1].trim() : undefined;
 }
 
 /**
@@ -148,34 +132,6 @@ export async function* streamQuestionForm(
   userMessage: string,
 ): AsyncGenerator<StreamChunk> {
   yield* streamAgentEvents([new HumanMessage(userMessage)]);
-}
-
-/**
- * 请求 Agent 根据上下文进行会话压缩
- */
-export async function compressConversation(
-  messages: ChatMessage[],
-): Promise<string> {
-  const agent = createAgent();
-  const result = await agent.invoke({
-    messages: toLangChainMessages(messages),
-  });
-
-  const lastMsg = result.messages?.at(-1);
-  if (lastMsg && lastMsg._getType && lastMsg._getType() === "ai") {
-    return typeof lastMsg.content === "string"
-      ? lastMsg.content
-      : JSON.stringify(lastMsg.content);
-  }
-  return "";
-}
-
-/**
- * 仅提取压缩标签中的内容
- */
-export function extractCompressedContext(text: string): string | undefined {
-  const match = text.match(/\[COMPRESSED\]([\s\S]*?)\[\/COMPRESSED\]/);
-  return match ? match[1].trim() : undefined;
 }
 
 /**
@@ -196,39 +152,10 @@ export async function* streamAgentResponse(
 ): AsyncGenerator<StreamChunk> {
   yield* streamAgentEvents([
     new HumanMessage(
-      `Compressed context:\n<context>\n${compressedContext}\n</context>\n\nBased on the compressed context above, respond to the user.`,
+      `Compressed context:\n<context>\n${compressedContext}\n</context>\n\nBased on the compressed context above, respond to the user.
+      ------
+      ${COMPRESS_PROMPT}`,
     ),
     ...toLangChainMessages(messages),
   ]);
-}
-
-/**
- * 对用户输入进行分析，检测用户输入是否为表单答案提交。
- *   - 是，则进行压缩会话流程
- *   - 不是，则进行QuestionForm生成流程
- *   - 目前限制的太死了，后续改进
- */
-export async function analyzeConversation(
-  messages: ChatMessage[],
-): Promise<ConversationResult> {
-  const lastMsg = messages.at(-1);
-  if (!lastMsg) {
-    return { action: "respond", content: "No message provided." };
-  }
-
-  if (lastMsg.role === "user" && isFormAnswer(lastMsg.content)) {
-    const compressed = await compressConversation(messages);
-    return {
-      action: "summarize",
-      content: compressed,
-      compressedContext: extractCompressedContext(compressed),
-    };
-  }
-
-  const questionForm = await generateQuestionForm(lastMsg.content);
-
-  return {
-    action: "question_form",
-    content: questionForm,
-  };
 }

@@ -1,12 +1,10 @@
 import { Fragment, useMemo, useState } from "react";
+import { Button, Space } from "antd";
+import { SettingOutlined, CaretRightOutlined, CaretDownOutlined } from "@ant-design/icons";
 import { parseSubmittedAnswers, QuestionFormView } from "./QuestionForm";
 import { QuestionForm, splitOnQuestionForms } from "../utils/question-form";
 import { renderMarkdown } from "../utils/markdown";
-import { Icon } from "./Icon";
 
-/**
- * 将Question Form的内容进行拆分
- */
 export function ProseBlock({
   text,
   isLastAssistant,
@@ -25,7 +23,6 @@ export function ProseBlock({
   const cleaned = useMemo(() => stripArtifact(text), [text]);
   const segments = useMemo(() => splitOnQuestionForms(cleaned), [cleaned]);
 
-  // 每个文本段落会进一步拆分为 `<system-reminder>` 块，因此这些块会以独立的可折叠卡片形式呈现，而非原始标记。
   const renderable = segments.flatMap(
     (
       seg,
@@ -75,9 +72,6 @@ export function ProseBlock({
   );
 }
 
-/**
- * 默认折叠显示 system reminder 的摘要，点击后展开完整内容
- */
 function SystemReminderBlock({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   const trimmed = text.trim();
@@ -89,16 +83,16 @@ function SystemReminderBlock({ text }: { text: string }) {
         onClick={() => setOpen((o) => !o)}
         type="button"
       >
-        <span className="system-reminder-icon" aria-hidden>
-          <Icon name="settings" size={12} />
+        <span className="system-reminder-icon">
+          <SettingOutlined />
         </span>
-        <span className="system-reminder-label">{"systemReminder"}</span>
+        <span className="system-reminder-label">systemReminder</span>
         <span className="system-reminder-preview">
           {open ? "" : preview}
           {!open && trimmed.length > preview.length ? "…" : ""}
         </span>
         <span className="system-reminder-chev">
-          <Icon name={open ? "chevron-down" : "chevron-right"} size={11} />
+          {open ? <CaretDownOutlined /> : <CaretRightOutlined />}
         </span>
       </button>
       {open ? <pre className="system-reminder-body">{trimmed}</pre> : null}
@@ -106,9 +100,6 @@ function SystemReminderBlock({ text }: { text: string }) {
   );
 }
 
-/**
- * 根据拆分内容进行构建Question Form相关样式
- */
 function FormBlock({
   form,
   isLastAssistant,
@@ -124,7 +115,6 @@ function FormBlock({
   locallySubmitted: Set<string>;
   onSubmitForm: (formId: string, text: string) => void;
 }) {
-  // 根据用户的后续消息重建之前的回答，以便滚动回溯时显示的较早表单能以已回答的状态呈现。
   const submittedFromHistory = useMemo(() => {
     if (!nextUserContent) return null;
     return parseSubmittedAnswers(form, nextUserContent);
@@ -146,9 +136,6 @@ function FormBlock({
   );
 }
 
-/**
- * 删除 <artifact>...</artifact> 标签块。
- */
 function stripArtifact(content: string): string {
   const open = content.indexOf("<artifact");
   if (open === -1) return content;
@@ -160,23 +147,8 @@ function stripArtifact(content: string): string {
   ).trim();
 }
 
-/**
- * 消息分段类型
- *
- * 普通文本
- *   {
- *     kind: "text"
- *   }
- * 系统提醒
- *   {
- *     kind: "reminder"
- *   }
- */
 type ProseSegment = { kind: "text" | "reminder"; text: string };
 
-/**
- * 把 <system-reminder> 从文本中拆出来
- */
 function splitSystemReminders(input: string): ProseSegment[] {
   const re = /<system-reminder>([\s\S]*?)<\/system-reminder>/g;
   const out: ProseSegment[] = [];
@@ -192,7 +164,6 @@ function splitSystemReminders(input: string): ProseSegment[] {
   if (lastIndex < input.length) {
     out.push({ kind: "text", text: input.slice(lastIndex) });
   }
-  // 删除所有残留的孤立标签（即未闭合的开始标签，或未开始的结束标签）并丢弃在去除后变为空的文本片段。
   return out
     .map((seg) =>
       seg.kind === "text"

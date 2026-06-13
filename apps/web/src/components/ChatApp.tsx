@@ -5,9 +5,13 @@ import {
   useCallback,
   type FormEvent,
 } from "react";
+import { Input, Button, Space } from "antd";
+import { SendOutlined, StopOutlined } from "@ant-design/icons";
 import type { Message } from "../types";
 import { MessageBubble } from "./MessageBubble";
 import { Icon } from "./Icon";
+
+const { TextArea } = Input;
 
 const EXAMPLE_QUERIES = [
   "帮我梳理一个电商 App 的需求",
@@ -41,7 +45,6 @@ export function ChatApp({
   const [showUndo, setShowUndo] = useState(false);
   const undoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isAtBottom = useCallback(() => {
     const el = containerRef.current;
@@ -84,8 +87,7 @@ export function ChatApp({
     return map;
   })();
 
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault();
+  const doSubmit = useCallback(() => {
     if (!input.trim() || isLoading) return;
     onSend(input.trim());
     setInput("");
@@ -93,9 +95,11 @@ export function ChatApp({
     setShowUndo(true);
     if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
     undoTimeoutRef.current = setTimeout(() => setShowUndo(false), 5000);
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-    }
+  }, [input, isLoading, onSend]);
+
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    doSubmit();
   };
 
   useEffect(() => {
@@ -113,14 +117,8 @@ export function ChatApp({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleSubmit(e as unknown as FormEvent);
+      doSubmit();
     }
-  };
-
-  const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInput(e.target.value);
-    e.target.style.height = "auto";
-    e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
   };
 
   const handleExampleClick = (query: string) => {
@@ -132,107 +130,115 @@ export function ChatApp({
   };
 
   return (
-    <div className="chat-main">
-      <header>
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "#f5f5f5" }}>
+      <div className="chat-header">
         <span className="dot" />
         项目管理助手
-      </header>
-
-      <div
-        className="chat-container"
-        ref={containerRef}
-        onScroll={handleScroll}
-      >
-        {userScrolled && (
-          <button
-            className="scroll-bottom-btn"
-            onClick={() => {
-              scrollToBottom();
-              setUserScrolled(false);
-            }}
-            title="滚动到底部"
-          >
-            <Icon name="chevron-down" size={18} />
-          </button>
-        )}
-
-        {showUndo && undoAvailable && (
-          <div className="undo-toast">
-            <span>消息已发送</span>
-            <button onClick={() => { onUndo(); setShowUndo(false); }}>撤销</button>
-            <button className="undo-toast-close" onClick={() => setShowUndo(false)}>
-              <Icon name="close" size={12} />
-            </button>
-          </div>
-        )}
-
-        {messages.length === 0 && (
-          <div className="empty-state">
-            <p className="empty-state-title">项目管理助手</p>
-            <p className="empty-state-desc">我能帮你梳理需求、规划任务、分析风险。试试下面的例子：</p>
-            <div className="examples-grid">
-              {EXAMPLE_QUERIES.map((q) => (
-                <button
-                  key={q}
-                  className="example-chip"
-                  onClick={() => handleExampleClick(q)}
-                  disabled={isLoading}
-                >
-                  {q}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {messages.map((msg, i) => (
-          <MessageBubble
-            key={msg.id}
-            message={msg}
-            isLast={i === lastAgentIdx}
-            streaming={
-              isLoading && i === messages.length - 1 && msg.role === "agent"
-            }
-            nextUserContent={nextUserContentByAssistantId.get(msg.id)}
-            onFormSubmit={onSend}
-          />
-        ))}
-
-        {error && (
-          <div className="error-banner">
-            <span>{error}</span>
-            <div className="error-banner-actions">
-              <button onClick={onClear}>清除</button>
-            </div>
-          </div>
-        )}
       </div>
 
-      <form className="input-area" onSubmit={handleSubmit}>
-        <textarea
-          ref={textareaRef}
-          value={input}
-          onChange={handleInput}
-          onKeyDown={handleKeyDown}
-          rows={1}
-          placeholder="输入消息... (Enter 发送, Shift+Enter 换行，/ 聚焦输入)"
-          disabled={isLoading}
-        />
-        {isLoading ? (
-          <button
-            type="button"
-            className="stop-btn"
-            onClick={onStop}
-            title="停止生成"
-          >
-            <Icon name="stop" size={16} />
-          </button>
-        ) : (
-          <button type="submit" disabled={!input.trim()} title="发送">
-            <Icon name="send" size={16} />
-          </button>
-        )}
-      </form>
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <div
+          className="chat-container"
+          ref={containerRef}
+          onScroll={handleScroll}
+        >
+          {userScrolled && (
+            <Button
+              className="scroll-bottom-btn"
+              shape="circle"
+              icon={<Icon name="chevron-down" size={16} />}
+              size="small"
+              onClick={() => {
+                scrollToBottom();
+                setUserScrolled(false);
+              }}
+            />
+          )}
+
+          {showUndo && undoAvailable && (
+            <div className="undo-toast">
+              <span>消息已发送</span>
+              <button onClick={() => { onUndo(); setShowUndo(false); }}>撤销</button>
+              <button className="undo-toast-close" onClick={() => setShowUndo(false)}>
+                <Icon name="close" size={12} />
+              </button>
+            </div>
+          )}
+
+          {messages.length === 0 && (
+            <div className="empty-state">
+              <p className="empty-state-title">项目管理助手</p>
+              <p className="empty-state-desc">我能帮你梳理需求、规划任务、分析风险。试试下面的例子：</p>
+              <div className="examples-grid">
+                {EXAMPLE_QUERIES.map((q) => (
+                  <button
+                    key={q}
+                    className="example-chip"
+                    onClick={() => handleExampleClick(q)}
+                    disabled={isLoading}
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {messages.map((msg, i) => (
+            <MessageBubble
+              key={msg.id}
+              message={msg}
+              isLast={i === lastAgentIdx}
+              streaming={
+                isLoading && i === messages.length - 1 && msg.role === "agent"
+              }
+              nextUserContent={nextUserContentByAssistantId.get(msg.id)}
+              onFormSubmit={onSend}
+            />
+          ))}
+
+          {error && (
+            <div className="error-banner">
+              <span>{error}</span>
+              <Button size="small" danger onClick={onClear}>清除</Button>
+            </div>
+          )}
+        </div>
+
+        <form className="input-area" onSubmit={handleSubmit}>
+          <TextArea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            rows={1}
+            placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
+            disabled={isLoading}
+            autoSize={{ minRows: 1, maxRows: 4 }}
+            style={{ flex: 1, borderRadius: 8 }}
+          />
+          <Space>
+            {isLoading ? (
+              <Button
+                type="primary"
+                danger
+                icon={<StopOutlined />}
+                onClick={onStop}
+              >
+                停止
+              </Button>
+            ) : (
+              <Button
+                type="primary"
+                htmlType="submit"
+                icon={<SendOutlined />}
+                disabled={!input.trim()}
+              >
+                发送
+              </Button>
+            )}
+          </Space>
+        </form>
+      </div>
     </div>
   );
 }

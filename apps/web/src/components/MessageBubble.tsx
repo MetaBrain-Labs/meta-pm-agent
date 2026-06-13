@@ -1,4 +1,11 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState } from "react";
+import { Collapse, Spin, Tag } from "antd";
+import {
+  LoadingOutlined,
+  CheckCircleOutlined,
+  ToolOutlined,
+  CaretRightOutlined,
+} from "@ant-design/icons";
 import type { Message } from "../types";
 import { ProseBlock } from "./ProseBlock";
 import { TodoCard } from "./TodoCard";
@@ -36,29 +43,8 @@ export function MessageBubble({
   onFormSubmit,
 }: Props) {
   const [thinkingOpen, setThinkingOpen] = useState(true);
-  const [userScrolled, setUserScrolled] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
-  const [locallySubmitted, setLocallySubmitted] = useState<Set<string>>(
-    () => new Set(),
-  );
-
-  const thinkingRef = useRef<HTMLDivElement>(null);
-
-  const isAtBottom = useCallback(() => {
-    const el = thinkingRef.current;
-    if (!el) return true;
-    return el.scrollHeight - el.scrollTop - el.clientHeight < 20;
-  }, []);
-
-  useEffect(() => {
-    if (!userScrolled && thinkingRef.current && thinkingOpen) {
-      thinkingRef.current.scrollTop = thinkingRef.current.scrollHeight;
-    }
-  }, [message.thinking, thinkingOpen, userScrolled]);
-
-  const handleScroll = useCallback(() => {
-    setUserScrolled(!isAtBottom());
-  }, [isAtBottom]);
+  const [locallySubmitted] = useState<Set<string>>(() => new Set());
 
   if (message.role === "user") {
     return (
@@ -71,22 +57,29 @@ export function MessageBubble({
   return (
     <div className="message-row agent">
       {message.thinking && (
-        <div className={`thinking-box${thinkingOpen ? " open" : ""}`}>
-          <div
-            className="thinking-header"
-            onClick={() => setThinkingOpen(!thinkingOpen)}
-          >
-            <span className="chevron"><Icon name="chevron-right" size={10} /></span> 思考过程
-            {!message.content && <span className="loading-dots" />}
-          </div>
-          <div
-            className="thinking-content"
-            ref={thinkingRef}
-            onScroll={handleScroll}
-          >
-            {message.thinking}
-          </div>
-        </div>
+        <Collapse
+          activeKey={thinkingOpen ? ["thinking"] : []}
+          onChange={() => setThinkingOpen(!thinkingOpen)}
+          expandIcon={({ isActive }) => <CaretRightOutlined rotate={isActive ? 90 : 0} />}
+          size="small"
+          items={[
+            {
+              key: "thinking",
+              label: (
+                <span style={{ color: "#888", fontSize: 13 }}>
+                  思考过程
+                  {!message.content && <span className="loading-dots" />}
+                </span>
+              ),
+              children: (
+                <div style={{ color: "#888", fontSize: 13, whiteSpace: "pre-wrap", maxHeight: 300, overflowY: "auto" }}>
+                  {message.thinking}
+                </div>
+              ),
+            },
+          ]}
+          style={{ background: "#fafafa", border: "1px solid #e8e8e8", borderRadius: 8, marginBottom: 8 }}
+        />
       )}
 
       {message.todos && message.todos.length > 0 && (
@@ -96,17 +89,18 @@ export function MessageBubble({
       {message.toolCalls && message.toolCalls.length > 0 && (
         <div className="tool-calls-row">
           {message.toolCalls.map((tc, i) => (
-            <span
+            <Tag
               key={i}
-              className={`tool-call-badge ${tc.result !== undefined ? "done" : ""}`}
+              color={tc.result !== undefined ? "success" : "orange"}
+              icon={tc.result !== undefined ? <CheckCircleOutlined /> : <ToolOutlined />}
               title={
                 tc.result !== undefined
                   ? JSON.stringify(tc.result, null, 2).slice(0, 500)
                   : JSON.stringify(tc.args, null, 2)
               }
             >
-              {tc.result !== undefined ? `✓ ${mapToolName(tc.name)}` : `⚙ ${mapToolName(tc.name)}`}
-            </span>
+              {mapToolName(tc.name)}
+            </Tag>
           ))}
         </div>
       )}
@@ -153,7 +147,8 @@ export function MessageBubble({
 
       {!message.content && !message.thinking && !message.questionForm && (
         <div className="message-bubble agent-bubble">
-          <span className="loading-dots-text">思考中</span>
+          <Spin indicator={<LoadingOutlined />} size="small" />
+          {" "}思考中
         </div>
       )}
 
