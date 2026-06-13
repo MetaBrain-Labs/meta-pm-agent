@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Collapse, Spin, Tag } from "antd";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { Spin, Tag } from "antd";
 import {
   LoadingOutlined,
   CheckCircleOutlined,
@@ -42,7 +42,6 @@ export function MessageBubble({
   nextUserContent,
   onFormSubmit,
 }: Props) {
-  const [thinkingOpen, setThinkingOpen] = useState(true);
   const [usageOpen, setUsageOpen] = useState(false);
   const [locallySubmitted] = useState<Set<string>>(() => new Set());
 
@@ -57,29 +56,7 @@ export function MessageBubble({
   return (
     <div className="message-row agent">
       {message.thinking && (
-        <Collapse
-          activeKey={thinkingOpen ? ["thinking"] : []}
-          onChange={() => setThinkingOpen(!thinkingOpen)}
-          expandIcon={({ isActive }) => <CaretRightOutlined rotate={isActive ? 90 : 0} />}
-          size="small"
-          items={[
-            {
-              key: "thinking",
-              label: (
-                <span style={{ color: "#888", fontSize: 13 }}>
-                  思考过程
-                  {!message.content && <span className="loading-dots" />}
-                </span>
-              ),
-              children: (
-                <div style={{ color: "#888", fontSize: 13, whiteSpace: "pre-wrap", maxHeight: 300, overflowY: "auto" }}>
-                  {message.thinking}
-                </div>
-              ),
-            },
-          ]}
-          style={{ background: "#fafafa", border: "1px solid #e8e8e8", borderRadius: 8, marginBottom: 8 }}
-        />
+        <ThinkingBox content={message.thinking} hasResponse={!!message.content} />
       )}
 
       {message.todos && message.todos.length > 0 && (
@@ -145,7 +122,34 @@ export function MessageBubble({
         </div>
       )}
 
-      {!message.content && !message.thinking && !message.questionForm && (
+      {message.compressBlock && (
+        <div>
+          {message.compressBlock.state === "generating" ? (
+            <div className="qf-generating">
+              <div className="qf-pulse-ring" />
+              <div className="qf-label">正在生成需求上下文</div>
+              <div className="qf-dots">
+                <span />
+                <span />
+                <span />
+              </div>
+            </div>
+          ) : (
+            <ProseBlock
+              text={message.compressBlock.content || ""}
+              isLastAssistant={!!isLast}
+              streaming={streaming}
+              nextUserContent={nextUserContent}
+              locallySubmitted={locallySubmitted}
+              onSubmitForm={(_formId, text) => {
+                onFormSubmit?.(text);
+              }}
+            />
+          )}
+        </div>
+      )}
+
+      {!message.content && !message.thinking && !message.questionForm && !message.compressBlock && (
         <div className="message-bubble agent-bubble">
           <Spin indicator={<LoadingOutlined />} size="small" />
           {" "}思考中
@@ -168,6 +172,79 @@ export function MessageBubble({
               {String(message.usage?.totalTokens ?? "-")}
             </span>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ThinkingBox({ content, hasResponse }: { content: string; hasResponse: boolean }) {
+  const [open, setOpen] = useState(true);
+  const [userScrolled, setUserScrolled] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  const isAtBottom = useCallback(() => {
+    const el = contentRef.current;
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+  }, []);
+
+  useEffect(() => {
+    if (!userScrolled && contentRef.current && open) {
+      contentRef.current.scrollTop = contentRef.current.scrollHeight;
+    }
+  }, [content, open, userScrolled]);
+
+  const handleScroll = useCallback(() => {
+    setUserScrolled(!isAtBottom());
+  }, [isAtBottom]);
+
+  return (
+    <div
+      style={{
+        background: "#fafafa",
+        border: "1px solid #e8e8e8",
+        borderRadius: 8,
+        marginBottom: 8,
+        overflow: "hidden",
+      }}
+    >
+      <div
+        onClick={() => setOpen(!open)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "6px 12px",
+          cursor: "pointer",
+          userSelect: "none",
+          fontSize: 13,
+          color: "#888",
+        }}
+      >
+        <CaretRightOutlined
+          style={{ fontSize: 10, transition: "transform 0.2s", transform: open ? "rotate(90deg)" : "rotate(0deg)" }}
+        />
+        <span>
+          思考过程
+          {!hasResponse && <span className="loading-dots" />}
+        </span>
+      </div>
+      {open && (
+        <div
+          ref={contentRef}
+          onScroll={handleScroll}
+          style={{
+            padding: "0 12px 8px",
+            color: "#888",
+            fontSize: 13,
+            whiteSpace: "pre-wrap",
+            maxHeight: 300,
+            overflowY: "auto",
+            lineHeight: 1.55,
+          }}
+        >
+          {content}
         </div>
       )}
     </div>

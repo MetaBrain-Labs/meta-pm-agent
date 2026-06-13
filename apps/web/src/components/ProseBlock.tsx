@@ -1,9 +1,10 @@
 import { Fragment, useMemo, useState } from "react";
-import { Button, Space } from "antd";
 import { SettingOutlined, CaretRightOutlined, CaretDownOutlined } from "@ant-design/icons";
 import { parseSubmittedAnswers, QuestionFormView } from "./QuestionForm";
 import { QuestionForm, splitOnQuestionForms } from "../utils/question-form";
+import { splitOnCompressed } from "../utils/compress";
 import { renderMarkdown } from "../utils/markdown";
+import { CompressedCard } from "./CompressedCard";
 
 export function ProseBlock({
   text,
@@ -23,27 +24,39 @@ export function ProseBlock({
   const cleaned = useMemo(() => stripArtifact(text), [text]);
   const segments = useMemo(() => splitOnQuestionForms(cleaned), [cleaned]);
 
-  const renderable = segments.flatMap(
-    (
-      seg,
-      idx,
-    ): Array<
-      | { key: string; kind: "text"; text: string }
-      | { key: string; kind: "reminder"; text: string }
-      | { key: string; kind: "form"; form: QuestionForm }
-    > => {
-      if (seg.kind === "form") {
-        return [{ key: `f-${idx}`, kind: "form", form: seg.form }];
+  type RenderableItem =
+    | { key: string; kind: "text"; text: string }
+    | { key: string; kind: "reminder"; text: string }
+    | { key: string; kind: "compress"; raw: string; title?: string }
+    | { key: string; kind: "form"; form: QuestionForm };
+
+  const renderable: RenderableItem[] = [];
+
+  for (let idx = 0; idx < segments.length; idx++) {
+    const seg = segments[idx]!;
+    if (seg.kind === "form") {
+      renderable.push({ key: `f-${idx}`, kind: "form", form: seg.form });
+      continue;
+    }
+    if (seg.text.trim().length === 0) continue;
+    const sub = splitSystemReminders(seg.text);
+    for (let j = 0; j < sub.length; j++) {
+      const s = sub[j]!;
+      if (s.kind === "reminder") {
+        renderable.push({ key: `t-${idx}-${j}`, kind: "reminder", text: s.text });
+        continue;
       }
-      if (seg.text.trim().length === 0) return [];
-      const sub = splitSystemReminders(seg.text);
-      return sub.map((s, j) => ({
-        key: `t-${idx}-${j}`,
-        kind: s.kind,
-        text: s.text,
-      }));
-    },
-  );
+      const compressed = splitOnCompressed(s.text);
+      for (let k = 0; k < compressed.length; k++) {
+        const c = compressed[k]!;
+        if (c.kind === "compress") {
+          renderable.push({ key: `t-${idx}-${j}-${k}`, kind: "compress", raw: c.raw, title: c.title });
+        } else {
+          renderable.push({ key: `t-${idx}-${j}-${k}`, kind: "text", text: c.text });
+        }
+      }
+    }
+  }
 
   if (renderable.length === 0) return null;
 
@@ -52,6 +65,9 @@ export function ProseBlock({
       {renderable.map((seg) => {
         if (seg.kind === "reminder") {
           return <SystemReminderBlock key={seg.key} text={seg.text} />;
+        }
+        if (seg.kind === "compress") {
+          return <CompressedCard key={seg.key} raw={seg.raw} title={seg.title} />;
         }
         if (seg.kind === "text") {
           return <Fragment key={seg.key}>{renderMarkdown(seg.text)}</Fragment>;

@@ -4,7 +4,6 @@ import { fileURLToPath } from "url";
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, AIMessage } from "langchain";
 import { ChatMessage } from "@repo/shared";
-import { isFormAnswer, parseFormAnswers } from "./utils/form-parser";
 import { DISCOVERY_PROMPT } from "./prompts/discovery";
 import { COMPRESS_PROMPT } from "./prompts/compress";
 import { createDeepAgent } from "deepagents";
@@ -118,14 +117,6 @@ async function* streamAgentEvents(
 }
 
 /**
- * 仅提取压缩标签中的内容 - NEED
- */
-export function extractCompressedContext(text: string): string | undefined {
-  const match = text.match(/\[COMPRESSED\]([\s\S]*?)\[\/COMPRESSED\]/);
-  return match ? match[1].trim() : undefined;
-}
-
-/**
  * 异步生成器函数：用于封装QuestionForm消息流并委托给另一个异步生成器 —— streamAgentEvents
  */
 export async function* streamQuestionForm(
@@ -140,22 +131,8 @@ export async function* streamQuestionForm(
 export async function* streamCompressConversation(
   messages: ChatMessage[],
 ): AsyncGenerator<StreamChunk> {
-  yield* streamAgentEvents(toLangChainMessages(messages));
-}
-
-/**
- * 异步生成器函数：用于封装Response消息流并委托给另一个异步生成器 —— streamAgentEvents
- */
-export async function* streamAgentResponse(
-  compressedContext: string,
-  messages: ChatMessage[],
-): AsyncGenerator<StreamChunk> {
   yield* streamAgentEvents([
-    new HumanMessage(
-      `Compressed context:\n<context>\n${compressedContext}\n</context>\n\nBased on the compressed context above, respond to the user.
-      ------
-      ${COMPRESS_PROMPT}`,
-    ),
+    new HumanMessage(COMPRESS_PROMPT),
     ...toLangChainMessages(messages),
   ]);
 }

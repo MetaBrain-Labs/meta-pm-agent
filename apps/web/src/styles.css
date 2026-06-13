@@ -460,6 +460,20 @@ body {
   background: #52c41a;
 }
 
+/* ── Compressed Card ── */
+.plum-blossom {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #f5a0c0, #e870a0);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+}
+
 /* ── Error banner ── */
 .error-banner {
   background: #fff2f0;

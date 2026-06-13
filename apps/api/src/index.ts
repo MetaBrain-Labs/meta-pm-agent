@@ -7,8 +7,6 @@ import { ChatMessage, ChatMessageSchema } from "@repo/shared";
 import {
   streamQuestionForm,
   streamCompressConversation,
-  streamAgentResponse,
-  extractCompressedContext,
   isFormAnswer,
 } from "@repo/agent-runtime";
 
@@ -52,48 +50,107 @@ app.post("/api/chat", async (c) => {
       // 如果是最后一条信息是用户发起，并且是表单答案提交
       if (lastMsg.role === "user" && isFormAnswer(lastMsg.content)) {
         console.log(
-          "[chat] Form answer detected, streaming compression + response...",
+          "[chat] Form answer detected, streaming compression...",
+        );
+
+        const CP_START = "<compress";
+        const CP_END = "</compress>";
+        const CP_PREFIXES = Array.from({ length: CP_START.length }, (_, i) =>
+          CP_START.slice(0, i + 1),
         );
 
         let fullResponse = "";
         let fullReasoning = "";
-        let compressedText = "";
+        let cpState: "normal" | "collecting" = "normal";
+        let cpBuffer = "";
+        let pendingText = "";
 
-        // 表单答案提交后正常步骤为：分析用户的回答以及初始输入，生成提供给后续Agent使用输入，可进行压缩
+        function mayBeCompressPrefix(text: string): boolean {
+          return CP_PREFIXES.some((p) => text.endsWith(p));
+        }
+
+        // 向上下文中补充COMPRESS_PROMPT，让LLM根据当前上下文进行压缩操作
         for await (const chunk of streamCompressConversation(messages)) {
           if (chunk.type === "reasoning") {
             fullReasoning += chunk.content;
             await writer.write(
               `data: ${JSON.stringify({ type: "thinking", content: chunk.content })}\n\n`,
             );
+            continue;
+          }
+
+          // 正在收集 compress 块
+          if (cpState === "collecting") {
+            cpBuffer += chunk.content;
+            const endIdx = cpBuffer.indexOf(CP_END);
+            if (endIdx !== -1) {
+              const blockContent = cpBuffer.slice(0, endIdx + CP_END.length);
+              const rest = cpBuffer.slice(endIdx + CP_END.length);
+              fullResponse += blockContent + rest;
+              await writer.write(
+                `data: ${JSON.stringify({ type: "compress-complete", content: blockContent })}\n\n`,
+              );
+              cpState = "normal";
+              cpBuffer = "";
+              if (rest) {
+                pendingText = rest;
+              }
+            }
           } else {
-            compressedText += chunk.content;
+            pendingText += chunk.content;
+
+            const cpIdx = pendingText.indexOf(CP_START);
+            if (cpIdx !== -1) {
+              const before = pendingText.slice(0, cpIdx);
+              if (before) {
+                fullResponse += before;
+                await writer.write(
+                  `data: ${JSON.stringify({ type: "text", content: before })}\n\n`,
+                );
+              }
+              cpState = "collecting";
+              cpBuffer = pendingText.slice(cpIdx);
+              pendingText = "";
+              await writer.write(
+                `data: ${JSON.stringify({ type: "compress-start" })}\n\n`,
+              );
+
+              const endIdx = cpBuffer.indexOf(CP_END);
+              if (endIdx !== -1) {
+                const blockContent = cpBuffer.slice(0, endIdx + CP_END.length);
+                const rest = cpBuffer.slice(endIdx + CP_END.length);
+                fullResponse += blockContent + rest;
+                await writer.write(
+                  `data: ${JSON.stringify({ type: "compress-complete", content: blockContent })}\n\n`,
+                );
+                cpState = "normal";
+                cpBuffer = "";
+                if (rest) {
+                  pendingText = rest;
+                }
+              }
+            } else if (!mayBeCompressPrefix(pendingText)) {
+              fullResponse += pendingText;
+              await writer.write(
+                `data: ${JSON.stringify({ type: "text", content: pendingText })}\n\n`,
+              );
+              pendingText = "";
+            }
           }
         }
 
-        // 正常情况下，LLM返回的应该是System Prompt要求结构的压缩标签和压缩内容，此时就显示压缩标签内容块，否则全部显示
-        const compressedContext =
-          extractCompressedContext(compressedText) ?? compressedText;
-        console.log(
-          "[chat] Compression done, context length:",
-          compressedContext.length,
-        );
-
-        for await (const chunk of streamAgentResponse(
-          compressedContext,
-          messages,
-        )) {
-          if (chunk.type === "reasoning") {
-            fullReasoning += chunk.content;
-            await writer.write(
-              `data: ${JSON.stringify({ type: "thinking", content: chunk.content })}\n\n`,
-            );
-          } else {
-            fullResponse += chunk.content;
-            await writer.write(
-              `data: ${JSON.stringify({ type: "text", content: chunk.content })}\n\n`,
-            );
-          }
+        // Flush remaining buffers
+        if (cpState === "collecting" && cpBuffer) {
+          fullResponse += cpBuffer;
+          await writer.write(
+            `data: ${JSON.stringify({ type: "text", content: cpBuffer })}\n\n`,
+          );
+        }
+        if (pendingText) {
+          fullResponse += pendingText;
+          await writer.write(
+            `data: ${JSON.stringify({ type: "text", content: pendingText })}\n\n`,
+          );
         }
 
         console.log(

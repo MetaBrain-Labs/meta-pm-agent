@@ -21,7 +21,7 @@
 apps/
   agent-runtime/   LangGraph-based PM agent (Node, composite ts)
   api/             Hono HTTP API server (port 3001, SSE streaming)
-  web/             Vite + React frontend (TS 5.8.3, Tailwind CSS 4)
+  web/             Vite + React + Ant Design 5 frontend (TS 5.8.3, light theme)
   worker/          BullMQ Redis worker
 packages/
   shared/          Shared types, Zod schemas, DTOs, agent state/graph/runtime types
@@ -39,8 +39,8 @@ packages/
 - `prisma generate` must run before building `@repo/database` (handled by `allowBuilds` in `pnpm-workspace.yaml`).
 
 ## API
-- The API uses **SSE streaming** for `/api/chat`. Responses are streamed as `text/event-stream` with typed events (`start`, `text`, `question-form-start`, `question-form-complete`, `error`, etc.).
-- Threads and messages are stored in-memory (no database persistence yet). Endpoints: `/api/threads`, `/api/threads/:threadId/messages`, `/api/health`.
+- The API uses **SSE streaming** for `/api/chat`. Responses are streamed as `text/event-stream` with typed events (`start`, `text`, `thinking`, `question-form-start`, `question-form-complete`, `compress-start`, `compress-complete`, `todo-update`, `tool-call`, `tool-result`, `finish`, `error`, etc.).
+- Threads and messages: API currently streams directly without server-side thread persistence. Threads are managed on the frontend via localStorage + sidebar.
 
 ## Linting
 - Only `apps/web` has eslint configured (`eslint-config-next`). No root-level lint or typecheck scripts are active (turbo tasks exist but are empty).

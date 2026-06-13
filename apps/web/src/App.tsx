@@ -261,6 +261,10 @@ function ThreadChatView({
                       return { ...m, questionForm: { state: "generating" as const } };
                     case "question-form-complete":
                       return { ...m, questionForm: { state: "complete" as const, content: event.content } };
+                    case "compress-start":
+                      return { ...m, compressBlock: { state: "generating" as const } };
+                    case "compress-complete":
+                      return { ...m, compressBlock: { state: "complete" as const, content: event.content } };
                     case "todo-update":
                       return {
                         ...m,

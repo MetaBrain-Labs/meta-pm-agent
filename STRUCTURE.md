@@ -10,7 +10,7 @@ AI 驱动的项目管理（PM）智能体，基于 LangGraph 状态机编排。�
 |------|------|------|
 | 智能体运行时 | LangGraph + LangChain | 状态图驱动的 PM 代理 |
 | API 服务 | Hono | 轻量 HTTP 框架 (port 3001)，支持 SSE 流式响应 |
-| 前端 | Vite + React + Tailwind CSS 4 | 聊天 UI (port 3000) |
+| 前端 | Vite + React + Ant Design 5 | 聊天 UI (port 3000)，浅色主题 |
 | 后台任务 | BullMQ + Redis | 消息队列异步处理 |
 | 数据持久化 | PostgreSQL + Prisma | ORM 管理数据模型 |
 | 构建工具 | Turborepo | monorepo 任务编排 |
@@ -45,27 +45,29 @@ meta-pm-agent/
 │   │   ├── tsconfig.json
 │   │   └── package.json           # @repo/api
 │   │
-│   ├── web/                       # Vite + React 前端
+│   ├── web/                       # Vite + React + Ant Design 5 前端
 │   │   ├── src/
 │   │   │   ├── main.tsx           # React 入口
-│   │   │   ├── App.tsx            # 根组件
-│   │   │   ├── types.ts           # 前端类型定义（Message, StreamEvent, TodoItem 等）
-│   │   │   ├── styles.css         # Tailwind CSS 入口 + 自定义全局样式
+│   │   │   ├── App.tsx            # 根组件（ConfigProvider + Layout + Sidebar + 聊天区）
+│   │   │   ├── types.ts           # 前端类型定义（Message, StreamEvent, TodoItem, ThreadInfo 等）
+│   │   │   ├── styles.css         # 自定义样式（消息气泡、Markdown 渲染、压缩卡片）
 │   │   │   ├── components/
-│   │   │   │   ├── ChatApp.tsx    # 聊天主界面（消息列表、输入框、侧边栏）
-│   │   │   │   ├── MessageBubble.tsx  # 消息气泡组件
-│   │   │   │   ├── Sidebar.tsx    # 侧边栏（会话列表）
-│   │   │   │   ├── QuestionForm.tsx   # Question-Form 渲染组件
-│   │   │   │   ├── ProseBlock.tsx # Markdown 渲染组件
-│   │   │   │   ├── TodoCard.tsx   # 待办事项卡片
-│   │   │   │   └── Icon.tsx       # 图标组件
+│   │   │   │   ├── ChatApp.tsx    # 聊天主界面（消息列表、输入框）
+│   │   │   │   ├── MessageBubble.tsx  # 消息气泡组件（思考过程、工具调用、压缩块、Question-Form）
+│   │   │   │   ├── Sidebar.tsx    # 侧边栏（会话列表，localStorage 持久化）
+│   │   │   │   ├── QuestionForm.tsx   # Question-Form 渲染组件（Radio/Checkbox/Select/Input）
+│   │   │   │   ├── CompressedCard.tsx # 压缩内容卡片（梅花样式，默认展开）
+│   │   │   │   ├── ProseBlock.tsx # 内容解析器（Markdown / 压缩块 / 系统提醒 / Question-Form）
+│   │   │   │   ├── TodoCard.tsx   # 待办事项卡片（List + Tag）
+│   │   │   │   └── Icon.tsx       # 图标组件（48 个 Feather 风格 SVG）
 │   │   │   ├── hooks/
-│   │   │   │   └── useChat.ts     # 聊天状态管理（消息、加载态、SSE 解析）
+│   │   │   │   └── useChat.ts     # 聊天状态管理（SSE 流解析、消息管理）
 │   │   │   └── utils/
-│   │   │       ├── markdown.tsx   # Markdown 转 JSX 工具
-│   │   │       └── question-form.ts   # Question-Form 解析工具
+│   │   │       ├── markdown.tsx   # Markdown → JSX 渲染器
+│   │   │       ├── question-form.ts   # <question-form> 解析器
+│   │   │       └── compress.ts    # <compress> 解析器
 │   │   ├── index.html             # HTML 入口
-│   │   ├── vite.config.ts         # Vite 配置（Tailwind 插件、/api 代理到 :3001）
+│   │   ├── vite.config.ts         # Vite 配置（/api 代理到 :3001）
 │   │   ├── eslint.config.mjs      # ESLint 配置（eslint-config-next）
 │   │   ├── tsconfig.json          # TS 5.8.3（独立配置，noEmit）
 │   │   └── package.json           # web
@@ -211,7 +213,7 @@ END
 - `generateQuestionForm(userMessage: string): Promise<string>` — 生成 Question-Form
 - `streamQuestionForm(userMessage: string): AsyncGenerator<string>` — 流式生成 Question-Form
 - `compressConversation(messages: ChatMessage[]): Promise<string>` — 压缩对话上下文
-- `extractCompressedContext(text: string): string | undefined` — 从压缩结果中提取 `[COMPRESSED]` 块
+- `extractCompressedContext(text: string): string | undefined` — 从文本中提取 `[COMPRESSED]` 或 `<compress>` 块内容
 - `parseQuestionForm(text: string): QuestionFormData | null` — 解析 HTML 格式的 Question-Form
 - `hasQuestionForm(text: string): boolean` — 检测是否包含 Question-Form
 - `isFormAnswer(text: string): boolean` — 检测用户消息是否为表单答案
@@ -253,9 +255,15 @@ END
 | 事件 | 说明 |
 |------|------|
 | `start` | 流式响应开始 |
+| `thinking` | 思考过程增量 |
 | `text` | 文本内容片段 |
 | `question-form-start` | Question-Form 开始生成 |
 | `question-form-complete` | Question-Form 生成完成（含完整内容） |
+| `compress-start` | 压缩上下文块开始生成 |
+| `compress-complete` | 压缩上下文块生成完成（含完整内容） |
+| `todo-update` | 任务列表更新 |
+| `tool-call` / `tool-result` | 工具调用及结果 |
+| `finish` | 流式完成 |
 | `error` | 错误信息 |
 | `[DONE]` | 流式响应结束 |
 
@@ -270,37 +278,34 @@ END
 
 ---
 
-### 3. apps/web — Vite + React 前端
+### 3. apps/web — Vite + React + Ant Design 5 前端
 
-**职责**：提供用户聊天界面，支持 SSE 流式渲染和 Question-Form 交互。
+**职责**：提供用户聊天界面，支持 SSE 流式渲染、Question-Form 交互、压缩内容卡片展示。
 
 **核心组件**：
 | 组件 | 文件 | 说明 |
 |------|------|------|
-| `ChatApp` | `ChatApp.tsx` | 聊天主界面，管理消息列表、输入区域、侧边栏 |
-| `MessageBubble` | `MessageBubble.tsx` | 消息气泡组件（支持 Markdown 渲染、Question-Form、思考过程展示） |
-| `Sidebar` | `Sidebar.tsx` | 侧边栏（会话列表、新建会话、切换会话） |
-| `QuestionForm` | `QuestionForm.tsx` | Question-Form 渲染与表单提交 |
-| `ProseBlock` | `ProseBlock.tsx` | Markdown 内容渲染组件 |
-| `TodoCard` | `TodoCard.tsx` | 待办事项卡片组件 |
-| `Icon` | `Icon.tsx` | SVG 图标组件 |
-
-**核心 Hook**：
-- `useChat()` — 聊天状态管理：消息列表、SSE 流解析、加载态、错误处理、localStorage 持久化、会话切换
+| `ChatApp` | `ChatApp.tsx` | 聊天主界面（消息列表、Input.TextArea 输入框、发送/停止按钮） |
+| `MessageBubble` | `MessageBubble.tsx` | 消息气泡（思考过程自动滚动、工具调用 Tag、压缩块/Question-Form 渲染） |
+| `Sidebar` | `Sidebar.tsx` | 侧边栏（antd Sider + Menu，会话新建/切换，localStorage 持久化） |
+| `CompressedCard` | `CompressedCard.tsx` | 压缩内容卡片（梅花 ❀ 样式，粉色渐变，默认展开） |
+| `QuestionForm` | `QuestionForm.tsx` | Question-Form 表单（Radio/Checkbox/Select/TextArea，antd Form 组件） |
+| `ProseBlock` | `ProseBlock.tsx` | 内容解析器（Markdown / `<compress>` / `<system-reminder>` / `<question-form>`） |
+| `TodoCard` | `TodoCard.tsx` | 待办事项卡片（antd Card + List + Tag，完成/进行中/待开始状态） |
+| `Icon` | `Icon.tsx` | 48 个 Feather 风格 SVG 图标 |
 
 **状态管理**（localStorage 持久化）：
-- 消息列表（`Message[]`）保存在 `localStorage` 的 `chat_threads_state` key 下
-- 当前 threadId 持久化，刷新页面后恢复
-- 支持多会话切换（通过 API `/api/threads` 获取列表）
+- 线程列表存储在 `localStorage` 的 `pm-agent-threads` key 下
+- 每个线程的消息存储在 `pm-msgs-{threadId}` key 下
+- 支持多会话切换，新建对话自动创建线程
 
 **Vite 配置**：
-- Tailwind CSS v4（通过 `@tailwindcss/vite` 插件）
 - React（通过 `@vitejs/plugin-react`）
 - `/api` 代理到 `http://localhost:3001`
 
 **样式**：
-- Tailwind CSS v4（`@import "tailwindcss"`）
-- 自定义全局样式（头像、消息气泡、侧边栏等）
+- Ant Design 5 浅色主题（`ConfigProvider` + `zhCN` locale）
+- 自定义样式：消息气泡、Markdown 渲染、压缩卡片梅花装饰
 
 ---
 
