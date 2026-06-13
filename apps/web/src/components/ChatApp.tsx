@@ -3,39 +3,48 @@ import {
   useRef,
   useEffect,
   useCallback,
-  useMemo,
   type FormEvent,
 } from "react";
+import { Input, Button, Space } from "antd";
+import { SendOutlined, StopOutlined } from "@ant-design/icons";
 import type { Message } from "../types";
 import { MessageBubble } from "./MessageBubble";
-import { Sidebar } from "./Sidebar";
+import { Icon } from "./Icon";
+
+const { TextArea } = Input;
+
+const EXAMPLE_QUERIES = [
+  "帮我梳理一个电商 App 的需求",
+  "规划一个 SaaS 产品的 MVP 阶段",
+  "分析一下这个项目的技术风险",
+];
 
 interface Props {
   messages: Message[];
   isLoading: boolean;
   error: string | null;
-  threadId: string;
+  undoAvailable: boolean;
   onSend: (text: string) => void;
+  onStop: () => void;
+  onUndo: () => void;
   onClear: () => void;
-  onLoadThread: (threadId: string) => void;
-  onNewThread: () => void;
 }
 
 export function ChatApp({
   messages,
   isLoading,
   error,
-  threadId,
+  undoAvailable,
   onSend,
+  onStop,
+  onUndo,
   onClear,
-  onLoadThread,
-  onNewThread,
 }: Props) {
   const [input, setInput] = useState("");
-  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [userScrolled, setUserScrolled] = useState(false);
+  const [showUndo, setShowUndo] = useState(false);
+  const undoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isAtBottom = useCallback(() => {
     const el = containerRef.current;
@@ -49,7 +58,6 @@ export function ChatApp({
     }
   }, []);
 
-  // Auto-follow bottom unless user has scrolled away
   useEffect(() => {
     if (!userScrolled) {
       scrollToBottom();
@@ -79,106 +87,101 @@ export function ChatApp({
     return map;
   })();
 
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault();
+  const doSubmit = useCallback(() => {
     if (!input.trim() || isLoading) return;
     onSend(input.trim());
     setInput("");
     setUserScrolled(false);
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-    }
+    setShowUndo(true);
+    if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
+    undoTimeoutRef.current = setTimeout(() => setShowUndo(false), 5000);
+  }, [input, isLoading, onSend]);
+
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    doSubmit();
   };
+
+  useEffect(() => {
+    return () => {
+      if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!undoAvailable && showUndo) {
+      setShowUndo(false);
+    }
+  }, [undoAvailable, showUndo]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleSubmit(e as unknown as FormEvent);
+      doSubmit();
     }
   };
 
-  const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInput(e.target.value);
-    e.target.style.height = "auto";
-    e.target.style.height = Math.min(e.target.scrollHeight, 120) + "px";
+  const handleExampleClick = (query: string) => {
+    onSend(query);
+    setUserScrolled(false);
+    setShowUndo(true);
+    if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
+    undoTimeoutRef.current = setTimeout(() => setShowUndo(false), 5000);
   };
 
-  // Increment when messages length changes → triggers sidebar refresh
-  const sidebarKey = useMemo(() => messages.length, [messages.length]);
-
   return (
-    <div className="app-layout">
-      <Sidebar
-        currentThreadId={threadId}
-        onSelectThread={(tid) => {
-          setUserScrolled(false);
-          onLoadThread(tid);
-        }}
-        onNewThread={() => {
-          setUserScrolled(false);
-          onNewThread();
-        }}
-        collapsed={!sidebarOpen}
-        onToggle={() => setSidebarOpen((v) => !v)}
-        refreshKey={sidebarKey}
-      />
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "#f5f5f5" }}>
+      <div className="chat-header">
+        <span className="dot" />
+        项目管理助手
+      </div>
 
-      <div className="chat-main">
-        <header>
-          {!sidebarOpen && (
-            <button
-              className="sidebar-toggle-btn"
-              onClick={() => setSidebarOpen(true)}
-            >
-              ☰
-            </button>
-          )}
-          <span className="dot" />
-          Question Form Agent
-        </header>
-
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <div
           className="chat-container"
           ref={containerRef}
           onScroll={handleScroll}
         >
           {userScrolled && (
-            <div className="sticky flex justify-center items-center top-5 right-5 z-10">
-              <button
-                className="
-                  w-12 h-12
-                  rounded-full
+            <Button
+              className="scroll-bottom-btn"
+              shape="circle"
+              icon={<Icon name="chevron-down" size={16} />}
+              size="small"
+              onClick={() => {
+                scrollToBottom();
+                setUserScrolled(false);
+              }}
+            />
+          )}
 
-                  bg-[#21262d]
-                  c-#e1e4e8
-
-                  border border-[#30363d]
-                  shadow-lg
-
-                  flex items-center justify-center
-
-                  transition-all duration-300 ease-out
-
-                  hover:bg-[#30363d]
-                  hover:c-[#8b949e]
-                  hover:scale-110
-                  hover:-translate-y-1
-                  hover:shadow-2xl
-
-                  active:scale-95
-                "
-                onClick={() => {
-                  scrollToBottom();
-                  setUserScrolled(false);
-                }}
-                title="滚动到底部"
-              >
-                ↓
+          {showUndo && undoAvailable && (
+            <div className="undo-toast">
+              <span>消息已发送</span>
+              <button onClick={() => { onUndo(); setShowUndo(false); }}>撤销</button>
+              <button className="undo-toast-close" onClick={() => setShowUndo(false)}>
+                <Icon name="close" size={12} />
               </button>
             </div>
           )}
+
           {messages.length === 0 && (
-            <div className="empty-state">输入消息，开始与 Agent 对话</div>
+            <div className="empty-state">
+              <p className="empty-state-title">项目管理助手</p>
+              <p className="empty-state-desc">我能帮你梳理需求、规划任务、分析风险。试试下面的例子：</p>
+              <div className="examples-grid">
+                {EXAMPLE_QUERIES.map((q) => (
+                  <button
+                    key={q}
+                    className="example-chip"
+                    onClick={() => handleExampleClick(q)}
+                    disabled={isLoading}
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
 
           {messages.map((msg, i) => (
@@ -196,25 +199,44 @@ export function ChatApp({
 
           {error && (
             <div className="error-banner">
-              {error}
-              <button onClick={onClear}>✕</button>
+              <span>{error}</span>
+              <Button size="small" danger onClick={onClear}>清除</Button>
             </div>
           )}
         </div>
 
         <form className="input-area" onSubmit={handleSubmit}>
-          <textarea
-            ref={textareaRef}
+          <TextArea
             value={input}
-            onChange={handleInput}
+            onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             rows={1}
-            placeholder="输入你的消息... (Enter 发送, Shift+Enter 换行)"
+            placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
             disabled={isLoading}
+            autoSize={{ minRows: 1, maxRows: 4 }}
+            style={{ flex: 1, borderRadius: 8 }}
           />
-          <button type="submit" disabled={isLoading || !input.trim()}>
-            {isLoading ? <span className="spinner" /> : <span>发送</span>}
-          </button>
+          <Space>
+            {isLoading ? (
+              <Button
+                type="primary"
+                danger
+                icon={<StopOutlined />}
+                onClick={onStop}
+              >
+                停止
+              </Button>
+            ) : (
+              <Button
+                type="primary"
+                htmlType="submit"
+                icon={<SendOutlined />}
+                disabled={!input.trim()}
+              >
+                发送
+              </Button>
+            )}
+          </Space>
         </form>
       </div>
     </div>

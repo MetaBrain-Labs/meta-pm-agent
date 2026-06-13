@@ -3,42 +3,16 @@ import { cors } from "hono/cors";
 import { serve } from "@hono/node-server";
 import { stream } from "hono/streaming";
 import { z } from "zod";
-import { ChatMessage } from "@repo/shared";
+import { ChatMessage, ChatMessageSchema } from "@repo/shared";
 import {
   streamQuestionForm,
   streamCompressConversation,
-  streamAgentResponse,
-  extractCompressedContext,
   isFormAnswer,
 } from "@repo/agent-runtime";
 
 const app = new Hono();
 
 app.use("/*", cors());
-
-// ── In-memory conversation store ──
-interface Thread {
-  id: string;
-  title: string;
-  createdAt: string;
-  messages: ChatMessage[];
-}
-
-const threads = new Map<string, Thread>();
-
-function getOrCreateThread(threadId: string): Thread {
-  let thread = threads.get(threadId);
-  if (!thread) {
-    thread = {
-      id: threadId,
-      title: "New chat",
-      createdAt: new Date().toISOString(),
-      messages: [],
-    };
-    threads.set(threadId, thread);
-  }
-  return thread;
-}
 
 // ── Routes ──
 
@@ -47,38 +21,11 @@ app.get("/", (c) => {
 });
 
 app.get("/api/health", (c) => {
-  return c.json({ status: "ok", agents: ["conversation-agent"] });
-});
-
-app.get("/api/threads", (c) => {
-  const list = Array.from(threads.values())
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-    .map((t) => ({
-      id: t.id,
-      title: t.title,
-      createdAt: t.createdAt,
-      updatedAt: t.messages.at(-1)?.timestamp ?? t.createdAt,
-    }));
-  return c.json({ threads: list });
-});
-
-app.get("/api/threads/:threadId/messages", (c) => {
-  const { threadId } = c.req.param();
-  const thread = threads.get(threadId);
-  if (!thread) return c.json({ messages: [] });
-
-  const messages = thread.messages.map((m) => ({
-    id: m.id,
-    role: m.role === "assistant" ? "agent" : m.role,
-    content: m.content,
-    createdAt: m.timestamp,
-  }));
-  return c.json({ messages });
+  return c.json({ status: "ok", agents: ["deepagents-pm-agent"] });
 });
 
 const ChatRequestSchema = z.object({
-  message: z.string().min(1),
-  threadId: z.string().optional().default("default"),
+  messages: z.array(ChatMessageSchema).min(1),
 });
 
 app.post("/api/chat", async (c) => {
@@ -88,23 +35,9 @@ app.post("/api/chat", async (c) => {
     return c.json({ error: parsed.error.flatten() }, 400);
   }
 
-  const { message, threadId } = parsed.data;
-  const thread = getOrCreateThread(threadId);
+  const { messages } = parsed.data;
+  const lastMsg = messages.at(-1)!;
 
-  if (thread.messages.length === 0) {
-    thread.title = message.slice(0, 50) + (message.length > 50 ? "..." : "");
-  }
-
-  const userMsg: ChatMessage = {
-    id: crypto.randomUUID(),
-    role: "user",
-    content: message,
-    timestamp: new Date().toISOString(),
-    sessionId: threadId,
-  };
-  thread.messages.push(userMsg);
-
-  // Set SSE headers before streaming
   c.header("Content-Type", "text/event-stream");
   c.header("Cache-Control", "no-cache");
   c.header("Connection", "keep-alive");
@@ -114,53 +47,118 @@ app.post("/api/chat", async (c) => {
     await writer.write(`data: ${JSON.stringify({ type: "start" })}\n\n`);
 
     try {
-      if (isFormAnswer(message)) {
-        console.log("[chat] Form answer detected, streaming compression + response...");
+      // 如果是最后一条信息是用户发起，并且是表单答案提交
+      if (lastMsg.role === "user" && isFormAnswer(lastMsg.content)) {
+        console.log(
+          "[chat] Form answer detected, streaming compression...",
+        );
+
+        const CP_START = "<compress";
+        const CP_END = "</compress>";
+        const CP_PREFIXES = Array.from({ length: CP_START.length }, (_, i) =>
+          CP_START.slice(0, i + 1),
+        );
 
         let fullResponse = "";
         let fullReasoning = "";
-        let compressedText = "";
+        let cpState: "normal" | "collecting" = "normal";
+        let cpBuffer = "";
+        let pendingText = "";
 
-        for await (const chunk of streamCompressConversation(thread.messages)) {
+        function mayBeCompressPrefix(text: string): boolean {
+          return CP_PREFIXES.some((p) => text.endsWith(p));
+        }
+
+        // 向上下文中补充COMPRESS_PROMPT，让LLM根据当前上下文进行压缩操作
+        for await (const chunk of streamCompressConversation(messages)) {
           if (chunk.type === "reasoning") {
             fullReasoning += chunk.content;
             await writer.write(
               `data: ${JSON.stringify({ type: "thinking", content: chunk.content })}\n\n`,
             );
+            continue;
+          }
+
+          // 正在收集 compress 块
+          if (cpState === "collecting") {
+            cpBuffer += chunk.content;
+            const endIdx = cpBuffer.indexOf(CP_END);
+            if (endIdx !== -1) {
+              const blockContent = cpBuffer.slice(0, endIdx + CP_END.length);
+              const rest = cpBuffer.slice(endIdx + CP_END.length);
+              fullResponse += blockContent + rest;
+              await writer.write(
+                `data: ${JSON.stringify({ type: "compress-complete", content: blockContent })}\n\n`,
+              );
+              cpState = "normal";
+              cpBuffer = "";
+              if (rest) {
+                pendingText = rest;
+              }
+            }
           } else {
-            compressedText += chunk.content;
+            pendingText += chunk.content;
+
+            const cpIdx = pendingText.indexOf(CP_START);
+            if (cpIdx !== -1) {
+              const before = pendingText.slice(0, cpIdx);
+              if (before) {
+                fullResponse += before;
+                await writer.write(
+                  `data: ${JSON.stringify({ type: "text", content: before })}\n\n`,
+                );
+              }
+              cpState = "collecting";
+              cpBuffer = pendingText.slice(cpIdx);
+              pendingText = "";
+              await writer.write(
+                `data: ${JSON.stringify({ type: "compress-start" })}\n\n`,
+              );
+
+              const endIdx = cpBuffer.indexOf(CP_END);
+              if (endIdx !== -1) {
+                const blockContent = cpBuffer.slice(0, endIdx + CP_END.length);
+                const rest = cpBuffer.slice(endIdx + CP_END.length);
+                fullResponse += blockContent + rest;
+                await writer.write(
+                  `data: ${JSON.stringify({ type: "compress-complete", content: blockContent })}\n\n`,
+                );
+                cpState = "normal";
+                cpBuffer = "";
+                if (rest) {
+                  pendingText = rest;
+                }
+              }
+            } else if (!mayBeCompressPrefix(pendingText)) {
+              fullResponse += pendingText;
+              await writer.write(
+                `data: ${JSON.stringify({ type: "text", content: pendingText })}\n\n`,
+              );
+              pendingText = "";
+            }
           }
         }
 
-        const compressedContext = extractCompressedContext(compressedText) ?? compressedText;
-        console.log("[chat] Compression done, context length:", compressedContext.length);
-
-        for await (const chunk of streamAgentResponse(compressedContext, thread.messages)) {
-          if (chunk.type === "reasoning") {
-            fullReasoning += chunk.content;
-            await writer.write(
-              `data: ${JSON.stringify({ type: "thinking", content: chunk.content })}\n\n`,
-            );
-          } else {
-            fullResponse += chunk.content;
-            await writer.write(
-              `data: ${JSON.stringify({ type: "text", content: chunk.content })}\n\n`,
-            );
-          }
+        // Flush remaining buffers
+        if (cpState === "collecting" && cpBuffer) {
+          fullResponse += cpBuffer;
+          await writer.write(
+            `data: ${JSON.stringify({ type: "text", content: cpBuffer })}\n\n`,
+          );
+        }
+        if (pendingText) {
+          fullResponse += pendingText;
+          await writer.write(
+            `data: ${JSON.stringify({ type: "text", content: pendingText })}\n\n`,
+          );
         }
 
-        console.log("[chat] Stream complete, response length:", fullResponse.length);
-
-        const assistantMsg: ChatMessage = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: fullResponse,
-          timestamp: new Date().toISOString(),
-          sessionId: threadId,
-          reasoningContent: fullReasoning || undefined,
-        };
-        thread.messages.push(assistantMsg);
+        console.log(
+          "[chat] Stream complete, response length:",
+          fullResponse.length,
+        );
       } else {
+        // 否则就是系统发起或者用户发起但是不是表单答案提交
         console.log("[chat] New intent, streaming question form...");
 
         const QF_START = "<question-form";
@@ -179,7 +177,8 @@ app.post("/api/chat", async (c) => {
           return QF_PREFIXES.some((p) => text.endsWith(p));
         }
 
-        for await (const chunk of streamQuestionForm(message)) {
+        // 生成 Question-Form 收集用户对需求的补充描述
+        for await (const chunk of streamQuestionForm(lastMsg.content)) {
           if (chunk.type === "reasoning") {
             fullReasoning += chunk.content;
             await writer.write(
@@ -188,7 +187,7 @@ app.post("/api/chat", async (c) => {
             continue;
           }
 
-          // text chunk
+          // 当没有收到</question-form>时，缓存LLM返回的内容
           if (qfState === "collecting") {
             qfBuffer += chunk.content;
             const endIdx = qfBuffer.indexOf(QF_END);
@@ -196,7 +195,9 @@ app.post("/api/chat", async (c) => {
               const formContent = qfBuffer.slice(0, endIdx + QF_END.length);
               const rest = qfBuffer.slice(endIdx + QF_END.length);
               fullResponse += formContent + rest;
-              await writer.write(`data: ${JSON.stringify({ type: "question-form-complete", content: formContent })}\n\n`);
+              await writer.write(
+                `data: ${JSON.stringify({ type: "question-form-complete", content: formContent })}\n\n`,
+              );
               qfState = "normal";
               qfBuffer = "";
               if (rest) {
@@ -204,6 +205,7 @@ app.post("/api/chat", async (c) => {
               }
             }
           } else {
+            // 当收到</question-form>后，前端根据缓存内容加载整个Form
             pendingText += chunk.content;
 
             const qfIdx = pendingText.indexOf(QF_START);
@@ -211,20 +213,25 @@ app.post("/api/chat", async (c) => {
               const before = pendingText.slice(0, qfIdx);
               if (before) {
                 fullResponse += before;
-                await writer.write(`data: ${JSON.stringify({ type: "text", content: before })}\n\n`);
+                await writer.write(
+                  `data: ${JSON.stringify({ type: "text", content: before })}\n\n`,
+                );
               }
               qfState = "collecting";
               qfBuffer = pendingText.slice(qfIdx);
               pendingText = "";
-              await writer.write(`data: ${JSON.stringify({ type: "question-form-start" })}\n\n`);
+              await writer.write(
+                `data: ${JSON.stringify({ type: "question-form-start" })}\n\n`,
+              );
 
-              // Check if complete form is already in qfBuffer
               const endIdx = qfBuffer.indexOf(QF_END);
               if (endIdx !== -1) {
                 const formContent = qfBuffer.slice(0, endIdx + QF_END.length);
                 const rest = qfBuffer.slice(endIdx + QF_END.length);
                 fullResponse += formContent + rest;
-                await writer.write(`data: ${JSON.stringify({ type: "question-form-complete", content: formContent })}\n\n`);
+                await writer.write(
+                  `data: ${JSON.stringify({ type: "question-form-complete", content: formContent })}\n\n`,
+                );
                 qfState = "normal";
                 qfBuffer = "";
                 if (rest) {
@@ -232,40 +239,39 @@ app.post("/api/chat", async (c) => {
                 }
               }
             } else if (!mayBePrefix(pendingText)) {
-              // Safe to flush: pendingText cannot be a prefix of <question-form
+              // 找不到 <question-form 的情况下
               fullResponse += pendingText;
-              await writer.write(`data: ${JSON.stringify({ type: "text", content: pendingText })}\n\n`);
+              await writer.write(
+                `data: ${JSON.stringify({ type: "text", content: pendingText })}\n\n`,
+              );
               pendingText = "";
             }
-            // If mayBePrefix, keep buffering for next chunk
           }
         }
 
-        // Flush remaining buffers
         if (qfState === "collecting" && qfBuffer) {
           fullResponse += qfBuffer;
-          await writer.write(`data: ${JSON.stringify({ type: "text", content: qfBuffer })}\n\n`);
+          await writer.write(
+            `data: ${JSON.stringify({ type: "text", content: qfBuffer })}\n\n`,
+          );
         }
         if (pendingText) {
           fullResponse += pendingText;
-          await writer.write(`data: ${JSON.stringify({ type: "text", content: pendingText })}\n\n`);
+          await writer.write(
+            `data: ${JSON.stringify({ type: "text", content: pendingText })}\n\n`,
+          );
         }
 
-        console.log("[chat] Stream complete, response length:", fullResponse.length);
-
-        const assistantMsg: ChatMessage = {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: fullResponse,
-          timestamp: new Date().toISOString(),
-          sessionId: threadId,
-          reasoningContent: fullReasoning || undefined,
-        };
-        thread.messages.push(assistantMsg);
+        console.log(
+          "[chat] Stream complete, response length:",
+          fullResponse.length,
+        );
       }
     } catch (error) {
       console.error("[chat] Error:", error);
-      await writer.write(`data: ${JSON.stringify({ type: "error", error: error instanceof Error ? error.message : String(error) })}\n\n`);
+      await writer.write(
+        `data: ${JSON.stringify({ type: "error", error: error instanceof Error ? error.message : String(error) })}\n\n`,
+      );
     }
 
     await writer.write(`data: [DONE]\n\n`);

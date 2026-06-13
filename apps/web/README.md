@@ -1,36 +1,58 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Web 前端
 
-## Getting Started
+Vite + React + Ant Design 5 聊天界面。
 
-First, run the development server:
+## 启动
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
 pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+前端默认运行在 `http://localhost:3000`，通过 Vite 代理将 `/api` 请求转发到 `localhost:3001`。
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 技术栈
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- React 19
+- Ant Design 5（浅色主题 + 中文 locale）
+- Vite 6
+- TypeScript 5.8.3
+- antd 组件：Layout、Menu、Input、Button、Tag、Collapse、Spin、Card、Form 等
 
-## Learn More
+## 目录结构
 
-To learn more about Next.js, take a look at the following resources:
+```
+src/
+├── App.tsx                  # 根组件（ConfigProvider + Layout + 侧边栏 + 聊天区）
+├── main.tsx                 # 入口
+├── types.ts                 # 前端类型（Message、StreamEvent、TodoItem、ThreadInfo）
+├── styles.css               # 自定义样式（消息气泡、Markdown 渲染、压缩卡片等）
+├── components/
+│   ├── ChatApp.tsx          # 聊天主界面
+│   ├── MessageBubble.tsx    # 消息气泡（支持思考过程、工具调用、压缩块、Question-Form）
+│   ├── Sidebar.tsx          # 侧边栏（对话列表 + 新建对话）
+│   ├── ProseBlock.tsx       # 内容解析器（Markdown / 压缩块 / 系统提醒 / Question-Form）
+│   ├── CompressedCard.tsx   # 压缩内容卡片（梅花样式）
+│   ├── QuestionForm.tsx     # Question-Form 表单组件
+│   ├── TodoCard.tsx         # 任务列表卡片
+│   └── Icon.tsx             # SVG 图标集
+├── hooks/
+│   └── useChat.ts           # 聊天状态 Hook（保留未使用）
+└── utils/
+    ├── markdown.tsx          # Markdown → JSX 渲染器
+    ├── question-form.ts     # <question-form> 解析器
+    └── compress.ts          # <compress> 解析器
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## SSE 事件流程
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| 事件 | 说明 |
+|------|------|
+| `start` | 流式开始 |
+| `thinking` | 思考过程增量 |
+| `text` | 文本内容 |
+| `question-form-start` / `question-form-complete` | Question-Form 生成 |
+| `compress-start` / `compress-complete` | 压缩上下文块生成 |
+| `todo-update` | 任务列表更新 |
+| `tool-call` / `tool-result` | 工具调用 |
+| `finish` | 流式结束 |
+| `error` | 错误 |

@@ -2,16 +2,11 @@ import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
 import { ChatOpenAI } from "@langchain/openai";
-import {
-  SystemMessage,
-  HumanMessage,
-  AIMessage,
-} from "@langchain/core/messages";
+import { HumanMessage, AIMessage } from "langchain";
 import { ChatMessage } from "@repo/shared";
-import { isFormAnswer, parseFormAnswers } from "./utils/form-parser";
 import { DISCOVERY_PROMPT } from "./prompts/discovery";
 import { COMPRESS_PROMPT } from "./prompts/compress";
-import { DISCOVERY } from "./prompts/discovery.origin";
+import { createDeepAgent } from "deepagents";
 
 dotenv.config({
   path: path.resolve(
@@ -20,63 +15,25 @@ dotenv.config({
   ),
 });
 
+// 交流结果
 export interface ConversationResult {
   action: "question_form" | "summarize" | "respond";
   content: string;
   compressedContext?: string;
 }
 
+// 对话流切片
 export interface StreamChunk {
   type: "reasoning" | "text";
   content: string;
 }
 
-function extractReasoningFromChunk(chunk: {
-  additional_kwargs?: Record<string, unknown>;
-  content: string | unknown;
-}): string | undefined {
-  const rawResponse = (
-    chunk.additional_kwargs as Record<string, unknown> | undefined
-  )?.__raw_response as Record<string, unknown> | undefined;
-  const rawDelta = (
-    (rawResponse as Record<string, unknown> | undefined)?.choices as
-      | Record<string, unknown>[]
-      | undefined
-  )?.[0]?.delta as Record<string, unknown> | undefined;
-  return typeof rawDelta?.reasoning_content === "string"
-    ? (rawDelta.reasoning_content as string)
-    : undefined;
-}
+// Conversation Agent的SYSTEM_PROMPT
+const SYSTEM_PROMPT = `${DISCOVERY_PROMPT}`;
 
-async function* yieldStreamChunks(
-  stream: AsyncIterable<{
-    additional_kwargs?: Record<string, unknown>;
-    content: string | unknown;
-  }>,
-): AsyncGenerator<StreamChunk> {
-  for await (const chunk of stream) {
-    const reasoning = extractReasoningFromChunk(chunk);
-    if (reasoning && reasoning.length > 0) {
-      yield { type: "reasoning", content: reasoning };
-    }
-    if (typeof chunk.content === "string" && chunk.content.length > 0) {
-      yield { type: "text", content: chunk.content };
-    }
-  }
-}
-
-function toLangChainMessages(messages: ChatMessage[]) {
-  return messages.map((m) => {
-    if (m.role === "user") return new HumanMessage(m.content);
-    return new AIMessage({
-      content: m.content,
-      additional_kwargs: m.reasoningContent
-        ? { reasoning_content: m.reasoningContent }
-        : {},
-    });
-  });
-}
-
+/**
+ * LLM 基础配置
+ */
 function getLLM() {
   const model = process.env.LLM_MODEL ?? "deepseek-chat";
   const baseURL = process.env.LLM_BASE_URL ?? "https://api.deepseek.com";
@@ -98,123 +55,84 @@ function getLLM() {
   return new ChatOpenAI({
     model,
     apiKey,
-    streaming: true,
     temperature: 0.3,
     maxTokens: 2048,
     timeout: 30000,
     configuration: { baseURL },
     modelKwargs: Object.keys(modelKwargs).length > 0 ? modelKwargs : undefined,
-    __includeRawResponse: true,
   });
 }
 
-export async function generateQuestionForm(
-  userMessage: string,
-): Promise<string> {
-  const llm = getLLM();
-  const messages = [
-    new SystemMessage(DISCOVERY),
-    new HumanMessage(userMessage),
-  ];
-
-  const response = await llm.invoke(messages);
-  return typeof response.content === "string"
-    ? response.content
-    : JSON.stringify(response.content);
+/**
+ * 创建Agent
+ */
+function createAgent() {
+  return createDeepAgent({
+    model: getLLM() as any,
+    systemPrompt: SYSTEM_PROMPT,
+    tools: [],
+    name: "conversation-agent",
+    skills: [],
+  });
 }
 
+/**
+ * 将用户输入转换为LangChain接受输入
+ */
+function toLangChainMessages(messages: ChatMessage[]) {
+  return messages.map((m) => {
+    if (m.role === "user") return new HumanMessage(m.content);
+    return new AIMessage({
+      content: m.content,
+      ...(m.reasoningContent
+        ? { additional_kwargs: { reasoning_content: m.reasoningContent } }
+        : {}),
+    });
+  });
+}
+
+/**
+ * 异步生成器函数：用于流式输出 AI Agent 的响应内容
+ */
+async function* streamAgentEvents(
+  messages: (HumanMessage | AIMessage)[],
+): AsyncGenerator<StreamChunk> {
+  const agent = createAgent();
+  const run = await agent.streamEvents(
+    { messages },
+    { version: "v3" as const },
+  );
+
+  for await (const msg of run.messages) {
+    for await (const event of msg) {
+      if (event.event === "content-block-delta") {
+        if (event.delta.type === "text-delta") {
+          yield { type: "text", content: event.delta.text };
+        } else if (event.delta.type === "reasoning-delta") {
+          yield { type: "reasoning", content: event.delta.reasoning };
+        }
+      }
+    }
+  }
+}
+
+/**
+ * 异步生成器函数：用于封装QuestionForm消息流并委托给另一个异步生成器 —— streamAgentEvents
+ */
 export async function* streamQuestionForm(
   userMessage: string,
 ): AsyncGenerator<StreamChunk> {
-  const llm = getLLM();
-  const messages = [
-    new SystemMessage(DISCOVERY_PROMPT),
-    new HumanMessage(userMessage),
-  ];
-  const stream = await llm.stream(messages);
-  yield* yieldStreamChunks(stream);
+  yield* streamAgentEvents([new HumanMessage(userMessage)]);
 }
 
-export async function compressConversation(
-  messages: ChatMessage[],
-): Promise<string> {
-  const llm = getLLM();
-
-  const langChainMessages = [
-    new SystemMessage(COMPRESS_PROMPT),
-    ...toLangChainMessages(messages),
-  ];
-
-  const response = await llm.invoke(langChainMessages);
-  return typeof response.content === "string"
-    ? response.content
-    : JSON.stringify(response.content);
-}
-
-export function extractCompressedContext(text: string): string | undefined {
-  const match = text.match(/\[COMPRESSED\]([\s\S]*?)\[\/COMPRESSED\]/);
-  return match ? match[1].trim() : undefined;
-}
-
-const RESPONSE_PROMPT =
-  COMPRESS_PROMPT +
-  `
-Compressed context:
-<context>
-{{CONTEXT}}
-</context>
-`;
-
+/**
+ * 异步生成器函数：用于封装Compress消息流并委托给另一个异步生成器 —— streamAgentEvents
+ */
 export async function* streamCompressConversation(
   messages: ChatMessage[],
 ): AsyncGenerator<StreamChunk> {
-  const llm = getLLM();
-  const langChainMessages = [
-    new SystemMessage(COMPRESS_PROMPT),
+  yield* streamAgentEvents([
+    new HumanMessage(COMPRESS_PROMPT),
     ...toLangChainMessages(messages),
-  ];
-  const stream = await llm.stream(langChainMessages);
-  yield* yieldStreamChunks(stream);
-}
-
-export async function* streamAgentResponse(
-  compressedContext: string,
-  messages: ChatMessage[],
-): AsyncGenerator<StreamChunk> {
-  const llm = getLLM();
-  const systemPrompt = RESPONSE_PROMPT.replace(
-    "{{CONTEXT}}",
-    compressedContext,
-  );
-  const langChainMessages = [
-    new SystemMessage(systemPrompt),
-    ...toLangChainMessages(messages),
-  ];
-  const stream = await llm.stream(langChainMessages);
-  yield* yieldStreamChunks(stream);
-}
-
-export async function analyzeConversation(
-  messages: ChatMessage[],
-): Promise<ConversationResult> {
-  const lastMsg = messages.at(-1);
-  if (!lastMsg) {
-    return { action: "respond", content: "No message provided." };
-  }
-
-  if (lastMsg.role === "user" && isFormAnswer(lastMsg.content)) {
-    const compressed = await compressConversation(messages);
-    return {
-      action: "summarize",
-      content: compressed,
-      compressedContext: extractCompressedContext(compressed),
-    };
-  }
-
-  const questionForm = await generateQuestionForm(lastMsg.content);
-
-  return {
-    action: "question_form",
-    content: questionForm,
-  };
+  ]);
 }

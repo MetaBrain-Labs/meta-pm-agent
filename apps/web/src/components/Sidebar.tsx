@@ -1,61 +1,84 @@
-import { useState, useEffect, useCallback } from "react";
+import { Layout, Menu, Button, Typography } from "antd";
+import {
+  PlusOutlined,
+  MessageOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
+} from "@ant-design/icons";
 import type { ThreadInfo } from "../types";
 
+const { Sider } = Layout;
+const { Text } = Typography;
+
 interface Props {
-  currentThreadId: string;
-  onSelectThread: (threadId: string) => void;
-  onNewThread: () => void;
+  threads: ThreadInfo[];
+  activeId: string | null;
   collapsed: boolean;
+  onSelect: (id: string) => void;
+  onNew: () => void;
   onToggle: () => void;
-  refreshKey: number;
 }
 
-export function Sidebar({ currentThreadId, onSelectThread, onNewThread, collapsed, onToggle, refreshKey }: Props) {
-  const [threads, setThreads] = useState<ThreadInfo[]>([]);
-
-  const fetchThreads = useCallback(async () => {
-    try {
-      const resp = await fetch("/api/threads");
-      if (!resp.ok) return;
-      const data = await resp.json();
-      setThreads(data.threads ?? []);
-    } catch { /* ignore */ }
-  }, []);
-
-  useEffect(() => {
-    fetchThreads();
-  }, [fetchThreads, refreshKey]);
+export function Sidebar({
+  threads,
+  activeId,
+  collapsed,
+  onSelect,
+  onNew,
+  onToggle,
+}: Props) {
+  const menuItems = threads.map((t) => ({
+    key: t.id,
+    icon: <MessageOutlined />,
+    label: (
+      <div style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+        {t.title || "新对话"}
+      </div>
+    ),
+  }));
 
   return (
-    <>
-      {!collapsed && <div className="sidebar-overlay" onClick={onToggle} />}
-      <aside className={`sidebar${collapsed ? " collapsed" : ""}`}>
-        <div className="sidebar-head">
-          <button className="sidebar-new-btn" onClick={onNewThread} title="新建对话">
-            + 新对话
-          </button>
-          <button className="sidebar-toggle" onClick={onToggle} title="收起侧边栏">
-            {collapsed ? "☰" : "✕"}
-          </button>
+    <Sider
+      collapsible
+      collapsed={collapsed}
+      onCollapse={onToggle}
+      trigger={null}
+      width={260}
+      style={{
+        background: "#fff",
+        borderRight: "1px solid #f0f0f0",
+        height: "100vh",
+      }}
+    >
+      <div className="sidebar-header">
+        {!collapsed && <Text strong>对话列表</Text>}
+        <Button
+          type="text"
+          icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+          onClick={onToggle}
+        />
+      </div>
+
+      {!collapsed && (
+        <div style={{ padding: "0 12px 8px" }}>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            block
+            onClick={onNew}
+          >
+            新建对话
+          </Button>
         </div>
-        <div className="sidebar-list">
-          {threads.map((t) => (
-            <button
-              key={t.id}
-              className={`sidebar-item${t.id === currentThreadId ? " active" : ""}`}
-              onClick={() => onSelectThread(t.id)}
-            >
-              <span className="sidebar-item-title">{t.title}</span>
-              <span className="sidebar-item-date">
-                {new Date(t.createdAt).toLocaleDateString()}
-              </span>
-            </button>
-          ))}
-          {threads.length === 0 && (
-            <div className="sidebar-empty">暂无历史对话</div>
-          )}
-        </div>
-      </aside>
-    </>
+      )}
+
+      <Menu
+        mode="inline"
+        selectedKeys={activeId ? [activeId] : []}
+        items={menuItems}
+        onClick={({ key }) => onSelect(key)}
+        style={{ borderInlineEnd: "none" }}
+      />
+    </Sider>
   );
 }

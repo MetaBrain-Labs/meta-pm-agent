@@ -143,3 +143,8 @@ vite.config.ts.timestamp-*
 .vite/
 
 .turbo/**
+
+.opencode
+.impeccable
+
+example/**

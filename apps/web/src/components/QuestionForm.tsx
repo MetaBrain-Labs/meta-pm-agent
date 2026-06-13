@@ -1,15 +1,14 @@
 import { useMemo, useState } from "react";
+import { Button, Form, Radio, Checkbox, Select, Input, Card, Tag, Typography } from "antd";
+import { QuestionCircleOutlined, CheckCircleOutlined, EditOutlined } from "@ant-design/icons";
 import { formatFormAnswers, QuestionForm } from "../utils/question-form";
+
+const { Text, Title } = Typography;
+const { TextArea } = Input;
 
 interface Props {
   form: QuestionForm;
-  // Whether the user can still submit answers. The owning AssistantMessage
-  // disables the form when the assistant turn is no longer the most recent
-  // one (i.e. the user has already moved past it).
   interactive: boolean;
-  // Pre-existing answers — when we detect a follow-up user message that
-  // begins with "[form answers — <id>]", we parse it back out and pass it
-  // here so the rendered form reflects what was sent.
   submittedAnswers?: Record<string, string | string[]>;
   onSubmit?: (text: string, answers: Record<string, string | string[]>) => void;
 }
@@ -33,210 +32,125 @@ export function QuestionFormView({
     setAnswers((prev) => ({ ...prev, [id]: value }));
   }
 
-  function toggleCheckbox(id: string, option: string, maxSelections?: number) {
-    if (locked) return;
-    setAnswers((prev) => {
-      const current = Array.isArray(prev[id]) ? (prev[id] as string[]) : [];
-      const has = current.includes(option);
-      if (
-        !has &&
-        maxSelections !== undefined &&
-        current.length >= maxSelections
-      ) {
-        return prev;
-      }
-      const next = has
-        ? current.filter((v) => v !== option)
-        : [...current, option];
-      return { ...prev, [id]: next };
-    });
-  }
-
-  function missingRequired(): string | null {
-    for (const q of form.questions) {
-      if (!q.required) continue;
-      const v = answers[q.id];
-      if (
-        Array.isArray(v)
-          ? v.length === 0
-          : !(typeof v === "string" && v.trim().length > 0)
-      ) {
-        return q.label;
-      }
-    }
-    return null;
-  }
-
   function handleSubmit() {
     if (locked || !onSubmit) return;
-    if (!withinSelectionLimits) return;
-    const missing = missingRequired();
-    if (missing) {
-      // Soft inline guard — surface via aria but don't alert; the disabled
-      // state of the submit button covers most cases.
-      return;
-    }
+    const missing = form.questions
+      .filter((q) => q.required)
+      .find((q) => {
+        const v = answers[q.id];
+        return Array.isArray(v) ? v.length === 0 : !(typeof v === "string" && v.trim().length > 0);
+      });
+    if (missing) return;
     onSubmit(formatFormAnswers(form, answers), answers);
   }
 
-  const required = form.questions.filter((q) => q.required);
-  const withinSelectionLimits = form.questions.every((q) => {
-    if (q.type !== "checkbox" || q.maxSelections === undefined) return true;
-    const v = answers[q.id];
-    return !Array.isArray(v) || v.length <= q.maxSelections;
-  });
-  const ready =
-    withinSelectionLimits &&
-    required.every((q) => {
+  const ready = form.questions
+    .filter((q) => q.required)
+    .every((q) => {
       const v = answers[q.id];
-      return Array.isArray(v)
-        ? v.length > 0
-        : typeof v === "string" && v.trim().length > 0;
+      return Array.isArray(v) ? v.length > 0 : typeof v === "string" && v.trim().length > 0;
     });
 
   return (
-    <div className={`question-form${locked ? " question-form-locked" : ""}`}>
-      <div className="question-form-head">
-        <span className="question-form-icon" aria-hidden>
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-            <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5" />
-            <path d="M6 6.5C6 5.67 6.67 5 7.5 5h.5a2 2 0 0 1 0 4h-.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-            <circle cx="8" cy="11" r="0.8" fill="currentColor" />
-          </svg>
-        </span>
-        <div className="question-form-titles">
-          <div className="question-form-title">{form.title}</div>
-          {form.description ? (
-            <div className="question-form-desc">{form.description}</div>
-          ) : null}
+    <Card
+      title={
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <QuestionCircleOutlined style={{ color: "#1677ff" }} />
+          <span>{form.title}</span>
+          <Tag color={locked ? (submittedAnswers ? "success" : "default") : "processing"}>
+            {locked ? (submittedAnswers ? "已提交" : "只读") : "待填写"}
+          </Tag>
         </div>
-        {locked ? (
-          <span className="question-form-pill">
-            {submittedAnswers ? "已提交" : "只读"}
-          </span>
-        ) : null}
-      </div>
-      <div className="question-form-body">
-        {form.questions.map((q) => {
-          const value = answers[q.id];
-          return (
-            <div key={q.id} className="qf-field">
-              <label className="qf-label">
-                <span>{q.label}</span>
-                {q.required ? <span className="qf-required">*</span> : null}
-              </label>
-              {q.help ? <div className="qf-help">{q.help}</div> : null}
-              {q.type === "radio" && q.options ? (
-                <div className="qf-options">
-                  {q.options.map((opt) => (
-                    <label
-                      key={opt}
-                      className={`qf-chip${value === opt ? " qf-chip-on" : ""}`}
-                    >
-                      <input
-                        type="radio"
-                        name={`${form.id}-${q.id}`}
-                        value={opt}
-                        checked={value === opt}
-                        disabled={locked}
-                        onChange={() => update(q.id, opt)}
-                      />
-                      <span>{opt}</span>
-                    </label>
-                  ))}
-                </div>
-              ) : null}
-              {q.type === "checkbox" && q.options ? (
-                <div className="qf-options">
-                  {q.options.map((opt) => {
-                    const arr = Array.isArray(value) ? value : [];
-                    const on = arr.includes(opt);
-                    const maxed =
-                      q.maxSelections !== undefined &&
-                      !on &&
-                      arr.length >= q.maxSelections;
-                    return (
-                      <label
-                        key={opt}
-                        className={`qf-chip${on ? " qf-chip-on" : ""}${maxed ? " qf-chip-disabled" : ""}`}
-                      >
-                        <input
-                          type="checkbox"
-                          value={opt}
-                          checked={on}
-                          disabled={locked || maxed}
-                          onChange={() =>
-                            toggleCheckbox(q.id, opt, q.maxSelections)
-                          }
-                        />
-                        <span>{opt}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-              ) : null}
-              {q.type === "select" && q.options ? (
-                <select
-                  className="qf-select"
-                  value={typeof value === "string" ? value : ""}
+      }
+      size="small"
+      style={{ marginBottom: 8 }}
+      extra={form.description && <Text type="secondary" style={{ fontSize: 12 }}>{form.description}</Text>}
+    >
+      {form.questions.map((q) => {
+        const value = answers[q.id];
+        return (
+          <div key={q.id} style={{ marginBottom: 12 }}>
+            <Form.Item
+              label={
+                <span>
+                  {q.label}
+                  {q.required && <span style={{ color: "#ff4d4f" }}> *</span>}
+                </span>
+              }
+              help={q.help}
+              style={{ marginBottom: 0 }}
+            >
+              {q.type === "radio" && q.options && (
+                <Radio.Group
+                  value={typeof value === "string" ? value : undefined}
                   disabled={locked}
                   onChange={(e) => update(q.id, e.target.value)}
                 >
-                  <option value="" disabled>
-                    请选择
-                  </option>
                   {q.options.map((opt) => (
-                    <option key={opt} value={opt}>
-                      {opt}
-                    </option>
+                    <Radio.Button key={opt} value={opt}>{opt}</Radio.Button>
                   ))}
-                </select>
-              ) : null}
-              {q.type === "text" ? (
-                <input
-                  type="text"
-                  className="qf-input"
+                </Radio.Group>
+              )}
+
+              {q.type === "checkbox" && q.options && (
+                <Checkbox.Group
+                  value={Array.isArray(value) ? value : []}
+                  disabled={locked}
+                  onChange={(vals) => update(q.id, vals as string[])}
+                  options={q.options}
+                />
+              )}
+
+              {q.type === "select" && q.options && (
+                <Select
+                  value={typeof value === "string" && value ? value : undefined}
+                  disabled={locked}
+                  onChange={(val) => update(q.id, val)}
+                  placeholder="请选择"
+                  style={{ width: "100%" }}
+                  options={q.options.map((opt) => ({ value: opt, label: opt }))}
+                />
+              )}
+
+              {q.type === "text" && (
+                <Input
                   value={typeof value === "string" ? value : ""}
                   placeholder={q.placeholder}
                   disabled={locked}
                   onChange={(e) => update(q.id, e.target.value)}
                 />
-              ) : null}
-              {q.type === "textarea" ? (
-                <textarea
-                  className="qf-textarea"
+              )}
+
+              {q.type === "textarea" && (
+                <TextArea
                   value={typeof value === "string" ? value : ""}
                   placeholder={q.placeholder}
                   disabled={locked}
                   rows={3}
                   onChange={(e) => update(q.id, e.target.value)}
                 />
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
-      <div className="question-form-foot">
-        {locked ? (
-          <span className="qf-locked-note">
-            {submittedAnswers ? "表单已提交" : "历史记录（只读）"}
-          </span>
-        ) : (
-          <span className="qf-hint">请填写以上信息</span>
-        )}
-        {!locked ? (
-          <button
-            type="button"
-            className="primary"
-            onClick={handleSubmit}
-            disabled={!ready}
-            title={ready ? "提交表单" : "请完成必填项"}
-          >
+              )}
+            </Form.Item>
+          </div>
+        );
+      })}
+
+      {!locked && (
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+          <Button type="primary" onClick={handleSubmit} disabled={!ready}>
             {form.submitLabel ?? "提交"}
-          </button>
-        ) : null}
-      </div>
-    </div>
+          </Button>
+        </div>
+      )}
+
+      {locked && (
+        <div style={{ textAlign: "right", marginTop: 8 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {submittedAnswers ? "表单已提交" : "历史记录（只读）"}
+          </Text>
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -263,13 +177,6 @@ function buildInitialState(
   return out;
 }
 
-/**
- * Reverse of formatFormAnswers — when we render an old assistant message
- * that contained a form, look at the next user message in the conversation
- * to see if the form was already answered. If so, return the answers map
- * so the form renders in the locked "answered" state with the user's
- * picks visible.
- */
 export function parseSubmittedAnswers(
   form: QuestionForm,
   userMessageContent: string,
@@ -277,7 +184,6 @@ export function parseSubmittedAnswers(
   const lines = userMessageContent.split("\n").map((l) => l.trim());
   if (lines.length === 0) return null;
   const header = lines[0] ?? "";
-  // We accept any "form answers" header so the agent can paraphrase.
   if (!/^\[form answers/i.test(header)) return null;
   const answers: Record<string, string | string[]> = {};
   const labelToId = new Map<string, string>();
