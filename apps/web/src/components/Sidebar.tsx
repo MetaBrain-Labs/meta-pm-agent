@@ -31,7 +31,7 @@ export function Sidebar({
     key: t.id,
     icon: <MessageOutlined />,
     label: (
-      <div style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+      <div className="overflow-hidden text-ellipsis">
         {t.title || "新对话"}
       </div>
     ),
@@ -44,14 +44,15 @@ export function Sidebar({
       onCollapse={onToggle}
       trigger={null}
       width={260}
-      style={{
-        background: "#fff",
-        borderRight: "1px solid #f0f0f0",
-        height: "100vh",
-      }}
+      className="!bg-[var(--paper)] h-screen"
+      style={{ position: 'relative', zIndex: 2, borderRight: '1px solid var(--line)', borderRightStyle: 'dashed' }}
     >
-      <div className="sidebar-header">
-        {!collapsed && <Text strong>对话列表</Text>}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--line-soft)]">
+        {!collapsed && (
+          <Text strong style={{ fontFamily: "'Inter Tight', sans-serif", color: 'var(--ink-mute)', fontSize: 11, fontWeight: 600, letterSpacing: '0.16em', textTransform: 'uppercase' }}>
+            对话列表
+          </Text>
+        )}
         <Button
           type="text"
           icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
@@ -60,16 +61,22 @@ export function Sidebar({
       </div>
 
       {!collapsed && (
-        <div style={{ padding: "0 12px 8px" }}>
+        <div className="px-3 pt-2.5 pb-1">
           <Button
             type="primary"
             icon={<PlusOutlined />}
             block
             onClick={onNew}
+            style={{ fontFamily: "'Inter Tight', sans-serif", fontWeight: 500, fontSize: 13, borderRadius: 10 }}
           >
             新建对话
           </Button>
         </div>
+      )}
+
+      {/* dotted rule divider */}
+      {!collapsed && (
+        <div className="mx-4 my-2" style={{ borderTop: '1px dashed var(--line)', height: 0 }} />
       )}
 
       <Menu
@@ -77,7 +84,8 @@ export function Sidebar({
         selectedKeys={activeId ? [activeId] : []}
         items={menuItems}
         onClick={({ key }) => onSelect(key)}
-        style={{ borderInlineEnd: "none" }}
+        className="!border-e-0"
+        style={{ background: 'transparent' }}
       />
     </Sider>
   );

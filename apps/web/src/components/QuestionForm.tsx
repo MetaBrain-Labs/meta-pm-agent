@@ -54,31 +54,59 @@ export function QuestionFormView({
   return (
     <Card
       title={
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <QuestionCircleOutlined style={{ color: "#1677ff" }} />
-          <span>{form.title}</span>
-          <Tag color={locked ? (submittedAnswers ? "success" : "default") : "processing"}>
+        <div className="flex items-center gap-2">
+          <QuestionCircleOutlined style={{ color: 'var(--coral)' }} />
+          <span style={{ fontFamily: 'var(--sans)', color: 'var(--ink)', fontWeight: 600 }}>
+            {form.title}
+          </span>
+          <Tag
+            style={{
+              fontFamily: 'var(--sans)',
+              fontSize: 11,
+              borderRadius: 6,
+              border: 'none',
+              background: locked
+                ? (submittedAnswers ? 'rgba(110, 116, 72, 0.1)' : 'rgba(21, 20, 15, 0.06)')
+                : 'rgba(237, 111, 92, 0.1)',
+              color: locked
+                ? (submittedAnswers ? 'var(--olive)' : 'var(--ink-faint)')
+                : 'var(--coral)',
+            }}
+          >
             {locked ? (submittedAnswers ? "已提交" : "只读") : "待填写"}
           </Tag>
         </div>
       }
       size="small"
-      style={{ marginBottom: 8 }}
-      extra={form.description && <Text type="secondary" style={{ fontSize: 12 }}>{form.description}</Text>}
+      className="mb-2"
+      style={{
+        background: 'var(--bone)',
+        borderColor: 'var(--line)',
+        borderRadius: 12,
+        borderLeft: interactive && !submittedAnswers ? '3px solid var(--coral)' : undefined,
+        boxShadow: '0 2px 12px rgba(21, 20, 15, 0.05)',
+      }}
+      extra={form.description && (
+        <Text style={{ color: 'var(--ink-faint)', fontSize: 12, fontFamily: 'var(--body)' }}>
+          {form.description}
+        </Text>
+      )}
     >
       {form.questions.map((q) => {
         const value = answers[q.id];
         return (
-          <div key={q.id} style={{ marginBottom: 12 }}>
+          <div key={q.id} className="mb-3">
             <Form.Item
               label={
-                <span>
+                <span style={{ fontFamily: 'var(--sans)', color: 'var(--ink)', fontWeight: 500, fontSize: 13 }}>
                   {q.label}
-                  {q.required && <span style={{ color: "#ff4d4f" }}> *</span>}
+                  {q.required && (
+                    <span style={{ color: 'var(--coral)' }}> *</span>
+                  )}
                 </span>
               }
               help={q.help}
-              style={{ marginBottom: 0 }}
+              className="mb-0"
             >
               {q.type === "radio" && q.options && (
                 <Radio.Group
@@ -107,7 +135,7 @@ export function QuestionFormView({
                   disabled={locked}
                   onChange={(val) => update(q.id, val)}
                   placeholder="请选择"
-                  style={{ width: "100%" }}
+                  className="w-full"
                   options={q.options.map((opt) => ({ value: opt, label: opt }))}
                 />
               )}
@@ -136,7 +164,7 @@ export function QuestionFormView({
       })}
 
       {!locked && (
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+        <div className="flex justify-end mt-2">
           <Button type="primary" onClick={handleSubmit} disabled={!ready}>
             {form.submitLabel ?? "提交"}
           </Button>
@@ -144,8 +172,8 @@ export function QuestionFormView({
       )}
 
       {locked && (
-        <div style={{ textAlign: "right", marginTop: 8 }}>
-          <Text type="secondary" style={{ fontSize: 12 }}>
+        <div className="text-right mt-2">
+          <Text style={{ color: 'var(--ink-faint)', fontSize: 12, fontFamily: 'var(--body)' }}>
             {submittedAnswers ? "表单已提交" : "历史记录（只读）"}
           </Text>
         </div>

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Card, Typography } from "antd";
+import { Card, Typography, Flex } from "antd";
 import { CaretDownOutlined, CaretRightOutlined } from "@ant-design/icons";
 
 const { Text } = Typography;
@@ -15,56 +15,66 @@ export function CompressedCard({ raw, title }: Props) {
   return (
     <Card
       size="small"
+      className="mb-2"
       style={{
-        marginBottom: 8,
-        borderLeft: "3px solid #f0a0c0",
-        background: "linear-gradient(135deg, #fff5f9 0%, #fdf2f8 100%)",
+        background: 'var(--bone)',
+        borderColor: 'var(--line)',
+        borderLeft: '3px solid var(--coral)',
+        borderRadius: 12,
+        boxShadow: '0 2px 12px rgba(21, 20, 15, 0.05)',
       }}
       title={
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span className="plum-blossom" aria-hidden>❀</span>
-          <span style={{ fontWeight: 600, fontSize: 13, color: "#8b5e7a" }}>
+        <Flex align="center" gap={8}>
+          <span
+            className="inline-flex items-center justify-center w-[22px] h-[22px] rounded-full text-white text-[13px] leading-none"
+            style={{
+              background: 'var(--coral)',
+              fontFamily: 'var(--serif)',
+              fontStyle: 'italic',
+              fontSize: 13,
+            }}
+          >
+            +
+          </span>
+          <span
+            className="font-semibold text-[13px]"
+            style={{
+              fontFamily: 'var(--sans)',
+              color: 'var(--ink)',
+              letterSpacing: '-0.005em',
+            }}
+          >
             {title ?? "压缩内容"}
           </span>
-        </div>
+        </Flex>
       }
       extra={
-        <span
+        <Flex
+          align="center"
+          gap={4}
+          className="cursor-pointer text-xs"
+          style={{ color: 'var(--ink-faint)', fontFamily: 'var(--sans)' }}
           onClick={() => setExpanded(!expanded)}
-          style={{
-            cursor: "pointer",
-            color: "#b07a9e",
-            fontSize: 12,
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-          }}
         >
           {expanded ? "收起" : "展开"}
           {expanded ? <CaretDownOutlined /> : <CaretRightOutlined />}
-        </span>
+        </Flex>
       }
     >
       {expanded ? (
         <div
+          className="max-h-[400px] overflow-y-auto rounded-md p-2.5"
           style={{
-            maxHeight: 400,
-            overflowY: "auto",
-            background: "#faf5f8",
-            border: "1px solid #f0d0e0",
-            borderRadius: 6,
-            padding: "10px 14px",
+            background: 'var(--paper)',
+            border: '1px solid var(--line-soft)',
           }}
         >
           <pre
+            className="m-0 text-xs whitespace-pre-wrap wrap-break-word leading-relaxed"
             style={{
-              margin: 0,
+              fontFamily: 'var(--mono)',
+              color: 'var(--ink-soft)',
               fontSize: 12,
-              fontFamily: "'SF Mono', 'Fira Code', 'Fira Mono', monospace",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              color: "#5c3d4e",
-              lineHeight: 1.55,
             }}
           >
             {raw}
@@ -72,8 +82,8 @@ export function CompressedCard({ raw, title }: Props) {
         </div>
       ) : (
         <Text
-          type="secondary"
-          style={{ fontSize: 12, color: "#b08ca0" }}
+          className="text-xs"
+          style={{ color: 'var(--ink-faint)', fontFamily: 'var(--body)' }}
         >
           {raw.slice(0, 200)}
           {raw.length > 200 ? "…" : ""}

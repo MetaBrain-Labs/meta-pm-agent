@@ -61,13 +61,25 @@ export default function App() {
     <ConfigProvider
       theme={{
         token: {
-          colorPrimary: "#1677ff",
-          borderRadius: 8,
+          colorPrimary: "#ed6f5c",
+          borderRadius: 6,
+          colorBgContainer: "#f7f1de",
+          colorBgLayout: "#efe7d2",
+          colorBgElevated: "#f7f1de",
+          colorText: "#15140f",
+          colorTextSecondary: "#5a5448",
+          colorTextTertiary: "#8b8676",
+          colorBorder: "rgba(21, 20, 15, 0.16)",
+          colorBorderSecondary: "rgba(21, 20, 15, 0.08)",
+          fontFamily: "'Inter', -apple-system, system-ui, sans-serif",
+          fontSize: 14,
+          controlHeight: 36,
+          lineHeight: 1.55,
         },
       }}
       locale={zhCN}
     >
-      <Layout style={{ height: "100vh" }}>
+      <Layout className="h-screen" style={{ gap: 0 }}>
         <Sidebar
           threads={threads}
           activeId={activeThreadId}
@@ -76,7 +88,8 @@ export default function App() {
           onNew={handleNewChat}
           onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
         />
-        <Layout>
+        <div style={{ width: 1, flexShrink: 0, background: 'var(--line-soft)', opacity: 0.6, margin: '16px 0' }} />
+        <Layout style={{ background: 'transparent' }}>
           <ThreadChatView
             threadId={activeThreadId}
             onNewThread={handleNewThread}
@@ -97,20 +110,16 @@ function ThreadChatView({
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [undoAvailable, setUndoAvailable] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const threadIdRef = useRef<string | null>(threadId);
   const messagesRef = useRef<Message[]>(messages);
   const creatingRef = useRef(false);
 
-  // Keep ref in sync
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
 
-  // Reload messages when thread changes (but not during auto-creation)
   useEffect(() => {
-    // Skip reload if this threadId change was triggered by auto-creation
     if (creatingRef.current) {
       creatingRef.current = false;
       threadIdRef.current = threadId;
@@ -123,13 +132,7 @@ function ThreadChatView({
       setMessages([]);
     }
     setError(null);
-    setUndoAvailable(false);
   }, [threadId]);
-
-  // Persist messages to localStorage
-  const persist = useCallback((msgs: Message[], tid: string) => {
-    saveMessages(tid, msgs);
-  }, []);
 
   const stopGeneration = useCallback(() => {
     if (abortRef.current) {
@@ -139,29 +142,10 @@ function ThreadChatView({
     setIsLoading(false);
   }, []);
 
-  const undoLastMessage = useCallback(() => {
-    setMessages((prev) => {
-      if (prev.length < 2) return prev;
-      const lastUserIdx = (() => {
-        for (let i = prev.length - 1; i >= 0; i--) {
-          if (prev[i]!.role === "user") return i;
-        }
-        return -1;
-      })();
-      if (lastUserIdx === -1) return prev;
-      const next = prev.slice(0, lastUserIdx);
-      const tid = threadIdRef.current;
-      if (tid) saveMessages(tid, next);
-      return next;
-    });
-    setUndoAvailable(false);
-  }, []);
-
   const sendMessage = useCallback(
     async (text: string) => {
       if (!text.trim() || isLoading) return;
 
-      // Auto-create thread if needed
       let tid = threadIdRef.current;
       if (!tid) {
         tid = crypto.randomUUID();
@@ -172,7 +156,6 @@ function ThreadChatView({
 
       setError(null);
       setIsLoading(true);
-      setUndoAvailable(true);
 
       const userMsg: Message = {
         id: crypto.randomUUID(),
@@ -191,7 +174,6 @@ function ThreadChatView({
 
       setMessages((prev) => {
         const next = [...prev, userMsg, agentMsg];
-        // Immediately persist to localStorage so the useEffect reload doesn't lose data
         const currentTid = threadIdRef.current;
         if (currentTid) saveMessages(currentTid, next);
         return next;
@@ -201,7 +183,6 @@ function ThreadChatView({
       abortRef.current = controller;
 
       try {
-        // Build request from the current messages in localStorage plus new user message
         const priorMessages = tid ? loadMessages(tid).filter((m) => m.id !== userMsg.id && m.id !== agentMsgId) : [];
         const requestMessages = [...priorMessages, userMsg].map((m) => ({
           id: m.id,
@@ -310,7 +291,6 @@ function ThreadChatView({
   const clearMessages = useCallback(() => {
     setMessages([]);
     setError(null);
-    setUndoAvailable(false);
     const tid = threadIdRef.current;
     if (tid) saveMessages(tid, []);
   }, []);
@@ -320,10 +300,8 @@ function ThreadChatView({
       messages={messages}
       isLoading={isLoading}
       error={error}
-      undoAvailable={undoAvailable}
       onSend={sendMessage}
       onStop={stopGeneration}
-      onUndo={undoLastMessage}
       onClear={clearMessages}
     />
   );
