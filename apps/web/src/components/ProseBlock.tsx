@@ -1,4 +1,5 @@
 import { Fragment, useMemo, useState } from "react";
+import { Button } from "antd";
 import { SettingOutlined, CaretRightOutlined, CaretDownOutlined } from "@ant-design/icons";
 import { parseSubmittedAnswers, QuestionFormView } from "./QuestionForm";
 import { QuestionForm, splitOnQuestionForms } from "../utils/question-form";
@@ -61,7 +62,15 @@ export function ProseBlock({
   if (renderable.length === 0) return null;
 
   return (
-    <div className="prose-block">
+    <div
+      className="flex flex-col gap-2"
+      style={{
+        fontFamily: 'var(--body)',
+        fontSize: 14,
+        color: 'var(--ink-soft)',
+        lineHeight: 1.6,
+      }}
+    >
       {renderable.map((seg) => {
         if (seg.kind === "reminder") {
           return <SystemReminderBlock key={seg.key} text={seg.text} />;
@@ -93,25 +102,65 @@ function SystemReminderBlock({ text }: { text: string }) {
   const trimmed = text.trim();
   const preview = trimmed.split("\n")[0]?.slice(0, 120) ?? "";
   return (
-    <div className="system-reminder-block">
-      <button
-        className="system-reminder-toggle"
+    <div
+      className="rounded-lg overflow-hidden my-1"
+      style={{
+        border: '1px solid var(--line-soft)',
+        background: 'var(--surface-muted)',
+      }}
+    >
+      <Button
+        type="text"
+        block
         onClick={() => setOpen((o) => !o)}
-        type="button"
+        className="flex items-center gap-2 px-3 py-2 h-auto text-xs text-left"
+        style={{
+          height: "auto",
+          minHeight: 38,
+          whiteSpace: "normal",
+          color: 'var(--ink-faint)',
+          fontFamily: 'var(--body)',
+        }}
       >
-        <span className="system-reminder-icon">
+        <span className="shrink-0" style={{ color: 'var(--primary)' }}>
           <SettingOutlined />
         </span>
-        <span className="system-reminder-label">systemReminder</span>
-        <span className="system-reminder-preview">
-          {open ? "" : preview}
-          {!open && trimmed.length > preview.length ? "…" : ""}
+        <span
+          className="uppercase tracking-wide whitespace-nowrap"
+          style={{
+            fontFamily: 'var(--sans)',
+            fontSize: 11,
+            fontWeight: 600,
+            color: 'var(--ink-mute)',
+            letterSpacing: '0.12em',
+          }}
+        >
+          systemReminder
         </span>
-        <span className="system-reminder-chev">
+        <span
+          className="flex-1 overflow-hidden text-ellipsis whitespace-nowrap"
+          style={{ color: 'var(--ink-faint)' }}
+        >
+          {open ? "" : preview}
+          {!open && trimmed.length > preview.length ? "..." : ""}
+        </span>
+        <span className="shrink-0" style={{ color: 'var(--primary)' }}>
           {open ? <CaretDownOutlined /> : <CaretRightOutlined />}
         </span>
-      </button>
-      {open ? <pre className="system-reminder-body">{trimmed}</pre> : null}
+      </Button>
+      {open && (
+        <pre
+          className="px-3 pb-2.5 m-0 text-xs leading-relaxed whitespace-pre-wrap max-h-[260px] overflow-y-auto scrollbar-none-thin"
+          style={{
+            fontFamily: 'var(--mono)',
+            color: 'var(--ink-mute)',
+            borderTop: '1px solid var(--line-soft)',
+            fontSize: 12,
+          }}
+        >
+          {trimmed}
+        </pre>
+      )}
     </div>
   );
 }

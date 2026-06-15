@@ -12,6 +12,8 @@
  * so untrusted text can't smuggle markup through.
  */
 import { Fragment, useState, useCallback, type ReactNode } from "react";
+import { Button } from "antd";
+import { CopyOutlined } from "@ant-design/icons";
 
 export function renderMarkdown(input: string): ReactNode {
   const blocks = parseBlocks(input);
@@ -106,7 +108,7 @@ function parseBlocks(input: string): Block[] {
 function renderBlock(block: Block, key: number): ReactNode {
   if (block.kind === "p") {
     return (
-      <p key={key} className="md-p">
+      <p key={key} className="my-0.5">
         {renderInline(block.text)}
       </p>
     );
@@ -114,25 +116,38 @@ function renderBlock(block: Block, key: number): ReactNode {
   if (block.kind === "h") {
     const Tag = `h${block.level}` as "h1" | "h2" | "h3" | "h4";
     return (
-      <Tag key={key} className={`md-h md-h${block.level}`}>
+      <Tag
+        key={key}
+        className="my-1.5 leading-tight"
+        style={{
+          fontFamily: 'var(--sans)',
+          fontWeight: block.level <= 2 ? 700 : 600,
+          fontSize: block.level === 1 ? 20 : block.level === 2 ? 17 : block.level === 3 ? 15 : 13,
+          color: 'var(--ink)',
+          letterSpacing: '-0.014em',
+          borderBottom: block.level === 1 ? '1px solid var(--line-soft)' : undefined,
+          paddingBottom: block.level === 1 ? 6 : undefined,
+          lineHeight: 1.2,
+        }}
+      >
         {renderInline(block.text)}
       </Tag>
     );
   }
   if (block.kind === "ul") {
     return (
-      <ul key={key} className="md-ul">
+      <ul key={key} className="my-0.5 pl-5">
         {block.items.map((item, i) => (
-          <li key={i}>{renderInline(item)}</li>
+          <li key={i} className="my-0.5">{renderInline(item)}</li>
         ))}
       </ul>
     );
   }
   if (block.kind === "ol") {
     return (
-      <ol key={key} className="md-ol">
+      <ol key={key} className="my-0.5 pl-5">
         {block.items.map((item, i) => (
-          <li key={i}>{renderInline(item)}</li>
+          <li key={i} className="my-0.5">{renderInline(item)}</li>
         ))}
       </ol>
     );
@@ -270,9 +285,21 @@ function CodeBlock({ lang, body }: { lang: string | null; body: string }) {
     <div className="md-code-block">
       <div className="md-code-head">
         <span className="md-code-lang">{lang ?? "text"}</span>
-        <button className="md-code-copy" onClick={handleCopy} type="button">
+        <Button
+          type="text"
+          size="small"
+          icon={<CopyOutlined />}
+          onClick={handleCopy}
+          style={{
+            fontSize: 11,
+            color: 'var(--ink-faint)',
+            height: 'auto',
+            padding: '0 6px',
+            fontFamily: 'var(--sans)',
+          }}
+        >
           {copied ? "已复制" : "复制"}
-        </button>
+        </Button>
       </div>
       <pre className="md-code">
         <code>{body}</code>
