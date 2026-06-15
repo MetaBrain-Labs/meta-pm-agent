@@ -2,7 +2,7 @@ import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
 import { ChatOpenAI } from "@langchain/openai";
-import { HumanMessage, AIMessage } from "langchain";
+import { HumanMessage, AIMessage, type BaseMessage } from "langchain";
 import { ChatMessage } from "@repo/shared";
 import { DISCOVERY_PROMPT } from "./prompts/discovery";
 import { COMPRESS_PROMPT } from "./prompts/compress";
@@ -98,22 +98,45 @@ async function* streamAgentEvents(
   messages: (HumanMessage | AIMessage)[],
 ): AsyncGenerator<StreamChunk> {
   const agent = createAgent();
-  const run = await agent.streamEvents(
+  const run = await agent.stream(
     { messages },
-    { version: "v3" as const },
+    { streamMode: "messages" },
   );
 
-  for await (const msg of run.messages) {
-    for await (const event of msg) {
-      if (event.event === "content-block-delta") {
-        if (event.delta.type === "text-delta") {
-          yield { type: "text", content: event.delta.text };
-        } else if (event.delta.type === "reasoning-delta") {
-          yield { type: "reasoning", content: event.delta.reasoning };
-        }
-      }
+  for await (const [message] of run) {
+    const reasoning = getReasoningContent(message);
+    if (reasoning) {
+      yield { type: "reasoning", content: reasoning };
+    }
+
+    const text = getTextContent(message);
+    if (text) {
+      yield { type: "text", content: text };
     }
   }
+}
+
+function getReasoningContent(message: BaseMessage): string {
+  const reasoning = message.additional_kwargs?.reasoning_content;
+  return typeof reasoning === "string" ? reasoning : "";
+}
+
+function getTextContent(message: BaseMessage): string {
+  if (typeof message.content === "string") {
+    return message.content;
+  }
+
+  return message.content
+    .filter(
+      (block): block is { type: "text"; text: string } =>
+        typeof block === "object" &&
+        block !== null &&
+        block.type === "text" &&
+        "text" in block &&
+        typeof block.text === "string",
+    )
+    .map((block) => block.text)
+    .join("");
 }
 
 /**
