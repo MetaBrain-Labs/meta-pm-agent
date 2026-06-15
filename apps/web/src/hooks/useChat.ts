@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from "react";
 import type { Message, StreamEvent } from "../types";
+import { applyStreamEvent } from "../utils/apply-stream-event";
 
 function toRequestMessages(msgs: Message[]) {
   return msgs.map((m) => ({
@@ -138,37 +139,7 @@ export function useChat() {
               setMessages((prev) =>
                 prev.map((m) => {
                   if (m.id !== agentMsgId) return m;
-                  switch (event.type) {
-                    case "thinking":
-                      return { ...m, thinking: (m.thinking ?? "") + (event.content ?? "") };
-                    case "text":
-                      return { ...m, content: m.content + (event.content ?? "") };
-                    case "question-form-start":
-                      return { ...m, questionForm: { state: "generating" } };
-                    case "question-form-complete":
-                      return { ...m, questionForm: { state: "complete", content: event.content } };
-                    case "todo-update":
-                      return {
-                        ...m,
-                        todos: (event.todos ?? []).map((t) => ({
-                          index: t.index,
-                          content: t.content,
-                          status: t.status as "pending" | "in_progress" | "completed",
-                        })),
-                      };
-                    case "tool-call":
-                      return { ...m, toolCalls: [...(m.toolCalls ?? []), { name: event.toolName ?? "unknown", args: event.toolArgs }] };
-                    case "tool-result":
-                      return { ...m, toolCalls: (m.toolCalls ?? []).map((tc, i) =>
-                        i === (m.toolCalls?.length ?? 1) - 1 ? { ...tc, result: event.toolResult } : tc
-                      ) };
-                    case "finish":
-                      return { ...m, usage: event.usage };
-                    case "error":
-                      return { ...m, content: m.content + `\n[Error: ${JSON.stringify(event.error)}]` };
-                    default:
-                      return m;
-                  }
+                  return applyStreamEvent(m, event);
                 })
               );
             } catch { /* ignore */ }
