@@ -17,20 +17,20 @@ export function CompressedCard({ raw, title }: Props) {
       size="small"
       className="mb-2"
       style={{
-        background: 'var(--bone)',
-        borderColor: 'var(--line)',
-        borderLeft: '3px solid var(--coral)',
-        borderRadius: 12,
-        boxShadow: '0 2px 12px rgba(21, 20, 15, 0.05)',
+        background: "var(--surface)",
+        borderColor: "var(--line-soft)",
+        borderLeft: "3px solid var(--violet)",
+        borderRadius: 8,
+        boxShadow: "var(--shadow-card)",
       }}
       title={
         <Flex align="center" gap={8}>
           <span
             className="inline-flex items-center justify-center w-[22px] h-[22px] rounded-full text-white text-[13px] leading-none"
             style={{
-              background: 'var(--coral)',
-              fontFamily: 'var(--serif)',
-              fontStyle: 'italic',
+              background: "var(--violet)",
+              fontFamily: "var(--sans)",
+              fontWeight: 800,
               fontSize: 13,
             }}
           >
@@ -41,7 +41,6 @@ export function CompressedCard({ raw, title }: Props) {
             style={{
               fontFamily: 'var(--sans)',
               color: 'var(--ink)',
-              letterSpacing: '-0.005em',
             }}
           >
             {title ?? "压缩内容"}
@@ -65,7 +64,8 @@ export function CompressedCard({ raw, title }: Props) {
         <div
           className="max-h-[400px] overflow-y-auto rounded-md p-2.5"
           style={{
-            background: 'var(--paper)',
+            background: 'var(--surface-muted)',
+            color: 'var(--ink-soft)',
             border: '1px solid var(--line-soft)',
           }}
         >
@@ -86,7 +86,7 @@ export function CompressedCard({ raw, title }: Props) {
           style={{ color: 'var(--ink-faint)', fontFamily: 'var(--body)' }}
         >
           {raw.slice(0, 200)}
-          {raw.length > 200 ? "…" : ""}
+          {raw.length > 200 ? "..." : ""}
         </Text>
       )}
     </Card>

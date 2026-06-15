@@ -106,7 +106,7 @@ function SystemReminderBlock({ text }: { text: string }) {
       className="rounded-lg overflow-hidden my-1"
       style={{
         border: '1px solid var(--line-soft)',
-        background: 'var(--paper)',
+        background: 'var(--surface-muted)',
       }}
     >
       <Button
@@ -115,11 +115,14 @@ function SystemReminderBlock({ text }: { text: string }) {
         onClick={() => setOpen((o) => !o)}
         className="flex items-center gap-2 px-3 py-2 h-auto text-xs text-left"
         style={{
+          height: "auto",
+          minHeight: 38,
+          whiteSpace: "normal",
           color: 'var(--ink-faint)',
           fontFamily: 'var(--body)',
         }}
       >
-        <span className="shrink-0" style={{ color: 'var(--coral)' }}>
+        <span className="shrink-0" style={{ color: 'var(--primary)' }}>
           <SettingOutlined />
         </span>
         <span
@@ -139,9 +142,9 @@ function SystemReminderBlock({ text }: { text: string }) {
           style={{ color: 'var(--ink-faint)' }}
         >
           {open ? "" : preview}
-          {!open && trimmed.length > preview.length ? "…" : ""}
+          {!open && trimmed.length > preview.length ? "..." : ""}
         </span>
-        <span className="shrink-0" style={{ color: 'var(--coral)' }}>
+        <span className="shrink-0" style={{ color: 'var(--primary)' }}>
           {open ? <CaretDownOutlined /> : <CaretRightOutlined />}
         </span>
       </Button>

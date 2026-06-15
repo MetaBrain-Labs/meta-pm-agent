@@ -55,22 +55,22 @@ export function QuestionFormView({
     <Card
       title={
         <div className="flex items-center gap-2">
-          <QuestionCircleOutlined style={{ color: 'var(--coral)' }} />
-          <span style={{ fontFamily: 'var(--sans)', color: 'var(--ink)', fontWeight: 600 }}>
+          <QuestionCircleOutlined style={{ color: "var(--primary)" }} />
+          <span style={{ fontFamily: "var(--sans)", color: "var(--ink)", fontWeight: 800 }}>
             {form.title}
           </span>
           <Tag
             style={{
-              fontFamily: 'var(--sans)',
+              fontFamily: "var(--sans)",
               fontSize: 11,
               borderRadius: 6,
-              border: 'none',
+              border: "none",
               background: locked
-                ? (submittedAnswers ? 'rgba(110, 116, 72, 0.1)' : 'rgba(21, 20, 15, 0.06)')
-                : 'rgba(237, 111, 92, 0.1)',
+                ? (submittedAnswers ? "var(--success-soft)" : "var(--line-faint)")
+                : "var(--primary-soft)",
               color: locked
-                ? (submittedAnswers ? 'var(--olive)' : 'var(--ink-faint)')
-                : 'var(--coral)',
+                ? (submittedAnswers ? "var(--success)" : "var(--ink-faint)")
+                : "var(--primary)",
             }}
           >
             {locked ? (submittedAnswers ? "已提交" : "只读") : "待填写"}
@@ -80,14 +80,14 @@ export function QuestionFormView({
       size="small"
       className="mb-2"
       style={{
-        background: 'var(--bone)',
-        borderColor: 'var(--line)',
-        borderRadius: 12,
-        borderLeft: interactive && !submittedAnswers ? '3px solid var(--coral)' : undefined,
-        boxShadow: '0 2px 12px rgba(21, 20, 15, 0.05)',
+        background: "var(--surface)",
+        borderColor: "var(--line-soft)",
+        borderRadius: 8,
+        borderLeft: interactive && !submittedAnswers ? "3px solid var(--primary)" : undefined,
+        boxShadow: "var(--shadow-card)",
       }}
       extra={form.description && (
-        <Text style={{ color: 'var(--ink-faint)', fontSize: 12, fontFamily: 'var(--body)' }}>
+        <Text style={{ color: "var(--ink-faint)", fontSize: 12, fontFamily: "var(--body)" }}>
           {form.description}
         </Text>
       )}
@@ -101,7 +101,7 @@ export function QuestionFormView({
                 <span style={{ fontFamily: 'var(--sans)', color: 'var(--ink)', fontWeight: 500, fontSize: 13 }}>
                   {q.label}
                   {q.required && (
-                    <span style={{ color: 'var(--coral)' }}> *</span>
+                    <span style={{ color: "var(--danger)" }}> *</span>
                   )}
                 </span>
               }

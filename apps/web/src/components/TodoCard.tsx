@@ -7,9 +7,9 @@ interface Props {
 }
 
 const STATUS_CONFIG: Record<TodoItem["status"], { icon: React.ReactNode; color: string; label: string }> = {
-  pending: { icon: <MinusCircleOutlined />, color: "#8b8676", label: "待开始" },
-  in_progress: { icon: <ClockCircleOutlined />, color: "#ed6f5c", label: "进行中" },
-  completed: { icon: <CheckCircleOutlined />, color: "#6e7448", label: "完成" },
+  pending: { icon: <MinusCircleOutlined />, color: "var(--ink-faint)", label: "待开始" },
+  in_progress: { icon: <ClockCircleOutlined />, color: "var(--primary)", label: "进行中" },
+  completed: { icon: <CheckCircleOutlined />, color: "var(--success)", label: "完成" },
 };
 
 export function TodoCard({ todos }: Props) {
@@ -20,24 +20,24 @@ export function TodoCard({ todos }: Props) {
       size="small"
       className="mb-2"
       style={{
-        background: 'var(--bone)',
-        borderColor: 'var(--line)',
-        borderRadius: 12,
-        boxShadow: '0 2px 12px rgba(21, 20, 15, 0.05)',
+        background: "var(--surface)",
+        borderColor: "var(--line-soft)",
+        borderRadius: 8,
+        boxShadow: "var(--shadow-card)",
       }}
       title={
-        <span style={{ fontFamily: 'var(--sans)', color: 'var(--ink)', fontWeight: 600, fontSize: 14 }}>
-          📋 任务列表
+        <span style={{ fontFamily: "var(--sans)", color: "var(--ink)", fontWeight: 800, fontSize: 14 }}>
+          任务列表
           <Tag
             className="ml-2"
             style={{
-              fontFamily: 'var(--sans)',
+              fontFamily: "var(--sans)",
               fontWeight: 600,
               fontSize: 11,
               borderRadius: 6,
-              background: 'rgba(110, 116, 72, 0.12)',
-              border: '1px solid rgba(110, 116, 72, 0.3)',
-              color: 'var(--olive)',
+              background: "var(--success-soft)",
+              border: "1px solid rgba(5, 150, 105, 0.22)",
+              color: "var(--success)",
             }}
           >
             {completedCount}/{todos.length}
@@ -53,28 +53,28 @@ export function TodoCard({ todos }: Props) {
           return (
             <List.Item
               style={{
-                fontFamily: 'var(--body)',
-                color: 'var(--ink-soft)',
+                fontFamily: "var(--body)",
+                color: "var(--ink-soft)",
                 opacity: t.status === "completed" ? 0.5 : 1,
                 textDecoration: t.status === "completed" ? "line-through" : "none",
                 fontWeight: t.status === "in_progress" ? 600 : 400,
-                borderBottom: '1px solid var(--line-soft)',
+                borderBottom: "1px solid var(--line-soft)",
               }}
             >
               <Tag
                 icon={cfg.icon}
                 className="mr-2"
                 style={{
-                  fontFamily: 'var(--sans)',
+                  fontFamily: "var(--sans)",
                   fontSize: 11,
-                  fontWeight: 500,
+                  fontWeight: 700,
                   borderRadius: 6,
-                  border: 'none',
+                  border: "none",
                   background: t.status === "in_progress"
-                    ? 'rgba(237, 111, 92, 0.1)'
+                    ? "var(--primary-soft)"
                     : t.status === "completed"
-                      ? 'rgba(110, 116, 72, 0.1)'
-                      : 'rgba(21, 20, 15, 0.06)',
+                      ? "var(--success-soft)"
+                      : "var(--line-faint)",
                   color: cfg.color,
                 }}
               >
@@ -84,7 +84,7 @@ export function TodoCard({ todos }: Props) {
             </List.Item>
           );
         }}
-        style={{ background: 'transparent' }}
+        style={{ background: "transparent" }}
       />
     </Card>
   );

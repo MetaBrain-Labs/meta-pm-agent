@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { Spin, Tag, Flex } from "antd";
+import { useState, useEffect, useRef, useCallback, type CSSProperties } from "react";
+import { Spin, Tag } from "antd";
 import {
   LoadingOutlined,
   CheckCircleOutlined,
@@ -34,13 +34,11 @@ interface Props {
   onFormSubmit?: (text: string) => void;
 }
 
-const TAG_STYLE: React.CSSProperties = {
+const TAG_STYLE: CSSProperties = {
   fontFamily: "var(--sans)",
   fontSize: 11,
   borderRadius: 6,
-  border: "none",
-  letterSpacing: "0.04em",
-  fontWeight: 500,
+  fontWeight: 700,
 };
 
 export function MessageBubble({
@@ -55,13 +53,13 @@ export function MessageBubble({
 
   if (message.role === "user") {
     return (
-      <div className="flex flex-col max-w-[85%] self-end">
+      <div className="flex max-w-[min(760px,88%)] flex-col self-end">
         <div
-          className="px-5 py-3 rounded-2xl rounded-br-md! text-white whitespace-pre-wrap wrap-break-word"
+          className="whitespace-pre-wrap wrap-break-word rounded-2xl rounded-br-md px-4 py-3 text-white"
           style={{
-            background: "var(--coral)",
-            boxShadow: "0 8px 20px -8px rgba(237, 111, 92, 0.45)",
-            fontFamily: "'Inter', sans-serif",
+            background: "linear-gradient(135deg, var(--primary), #3b82f6)",
+            boxShadow: "0 16px 30px -24px rgba(37, 99, 235, 0.8)",
+            fontFamily: "var(--body)",
             fontSize: 14,
             lineHeight: 1.6,
           }}
@@ -73,7 +71,7 @@ export function MessageBubble({
   }
 
   return (
-    <div className="flex flex-col max-w-[85%] self-start">
+    <div className="flex max-w-[min(860px,92%)] flex-col self-start">
       {message.thinking && (
         <ThinkingBox
           content={message.thinking}
@@ -96,12 +94,12 @@ export function MessageBubble({
                 style={{
                   ...TAG_STYLE,
                   background: completed
-                    ? "rgba(110, 116, 72, 0.1)"
-                    : "rgba(237, 111, 92, 0.08)",
-                  color: completed ? "var(--olive)" : "var(--coral)",
+                    ? "var(--success-soft)"
+                    : "var(--primary-soft)",
+                  color: completed ? "var(--success)" : "var(--primary)",
                   borderColor: completed
-                    ? "rgba(110, 116, 72, 0.25)"
-                    : "rgba(237, 111, 92, 0.2)",
+                    ? "rgba(5, 150, 105, 0.22)"
+                    : "rgba(37, 99, 235, 0.22)",
                 }}
                 title={
                   tc.result !== undefined
@@ -118,12 +116,12 @@ export function MessageBubble({
 
       {message.content && (
         <div
-          className="px-5 py-4 rounded-2xl !rounded-bl-md"
+          className="rounded-2xl !rounded-bl-md px-4 py-4"
           style={{
-            background: "var(--bone)",
+            background: "var(--surface)",
             border: "1px solid var(--line-soft)",
-            boxShadow: "0 4px 16px rgba(21, 20, 15, 0.08)",
-            fontFamily: "'Inter', sans-serif",
+            boxShadow: "var(--shadow-card)",
+            fontFamily: "var(--body)",
             fontSize: 14,
             lineHeight: 1.65,
           }}
@@ -144,7 +142,7 @@ export function MessageBubble({
       {message.questionForm && (
         <div>
           {message.questionForm.state === "generating" ? (
-            <QFGenerating label="正在生成 Question Form" />
+            <QFGenerating label="正在生成问题表单" />
           ) : (
             <ProseBlock
               text={message.questionForm.content || ""}
@@ -184,17 +182,17 @@ export function MessageBubble({
         !message.questionForm &&
         !message.compressBlock && (
           <div
-            className="px-5 py-3.5 rounded-2xl !rounded-bl-md"
+            className="rounded-2xl !rounded-bl-md px-4 py-3.5"
             style={{
-              background: "var(--bone)",
+              background: "var(--surface)",
               border: "1px solid var(--line-soft)",
-              boxShadow: "0 4px 16px rgba(21, 20, 15, 0.08)",
+              boxShadow: "var(--shadow-card)",
               color: "var(--ink-mute)",
-              fontFamily: "'Inter', sans-serif",
+              fontFamily: "var(--body)",
             }}
           >
             <Spin
-              indicator={<LoadingOutlined style={{ color: "var(--coral)" }} />}
+              indicator={<LoadingOutlined style={{ color: "var(--primary)" }} />}
               size="small"
             />{" "}
             思考中
@@ -236,20 +234,18 @@ export function MessageBubble({
 
 function QFGenerating({ label }: { label: string }) {
   return (
-    <Flex
-      align="center"
-      gap={12}
-      className="!p-5 rounded-lg !mb-2"
+    <div
+      className="mb-2 flex items-center gap-3 rounded-lg p-5"
       style={{
-        background: "var(--bone)",
-        border: "1px solid var(--line)",
-        fontFamily: "'Inter', sans-serif",
+        background: "var(--surface)",
+        border: "1px solid var(--line-soft)",
+        fontFamily: "var(--body)",
       }}
     >
       <div
         className="w-5 h-5 rounded-full border-2"
         style={{
-          borderColor: "var(--coral)",
+          borderColor: "var(--primary)",
           animation: "qf-pulse 1.4s ease-out infinite",
         }}
       />
@@ -257,8 +253,8 @@ function QFGenerating({ label }: { label: string }) {
         className="text-[13px]"
         style={{
           color: "var(--ink-faint)",
-          fontFamily: "'Inter Tight', sans-serif",
-          fontWeight: 500,
+          fontFamily: "var(--sans)",
+          fontWeight: 700,
         }}
       >
         {label}
@@ -269,14 +265,14 @@ function QFGenerating({ label }: { label: string }) {
             key={i}
             className="w-1.5 h-1.5 rounded-full"
             style={{
-              background: "var(--coral)",
+              background: "var(--primary)",
               animation: `qf-bounce 1.2s ease-in-out infinite`,
               animationDelay: `${i * 0.2}s`,
             }}
           />
         ))}
       </div>
-    </Flex>
+    </div>
   );
 }
 
@@ -311,19 +307,18 @@ function ThinkingBox({
     <div
       className="rounded-lg mb-2 overflow-hidden"
       style={{
-        background: "var(--bone)",
+        background: "var(--surface)",
         border: "1px solid var(--line-soft)",
+        boxShadow: "var(--shadow-card)",
       }}
     >
-      <Flex
-        align="center"
-        gap={6}
-        className="!px-4 !py-2 cursor-pointer select-none"
+      <div
+        className="flex cursor-pointer select-none items-center gap-1.5 px-4 py-2"
         style={{
           color: "var(--ink-faint)",
-          fontFamily: "'Inter Tight', sans-serif",
+          fontFamily: "var(--sans)",
           fontSize: 13,
-          fontWeight: 500,
+          fontWeight: 700,
         }}
         onClick={() => setOpen(!open)}
       >
@@ -332,23 +327,23 @@ function ThinkingBox({
             fontSize: 10,
             transition: "transform 0.2s",
             transform: open ? "rotate(90deg)" : "rotate(0deg)",
-            color: "var(--coral)",
+            color: "var(--primary)",
           }}
         />
-        <span>
+        <span className="thinking-label">
           思考过程
           {!hasResponse && <span className="loading-dots" />}
         </span>
-      </Flex>
+      </div>
       {open && (
         <div
           ref={contentRef}
           onScroll={handleScroll}
-          className="px-4 pb-3 text-[13px] whitespace-pre-wrap max-h-[300px] overflow-y-auto leading-relaxed scrollbar-none-thin"
+          className="themed-scrollbar px-4 pb-3 text-[13px] whitespace-pre-wrap max-h-[300px] overflow-y-auto leading-relaxed"
           style={{
             color: "var(--ink-mute)",
             borderTop: "1px solid var(--line-soft)",
-            fontFamily: "'Inter', sans-serif",
+            fontFamily: "var(--body)",
             fontSize: 13,
             lineHeight: 1.6,
           }}

@@ -61,25 +61,42 @@ export default function App() {
     <ConfigProvider
       theme={{
         token: {
-          colorPrimary: "#ed6f5c",
-          borderRadius: 6,
-          colorBgContainer: "#f7f1de",
-          colorBgLayout: "#efe7d2",
-          colorBgElevated: "#f7f1de",
-          colorText: "#15140f",
-          colorTextSecondary: "#5a5448",
-          colorTextTertiary: "#8b8676",
-          colorBorder: "rgba(21, 20, 15, 0.16)",
-          colorBorderSecondary: "rgba(21, 20, 15, 0.08)",
+          colorPrimary: "#2563eb",
+          colorSuccess: "#059669",
+          colorWarning: "#d97706",
+          colorError: "#dc2626",
+          borderRadius: 8,
+          colorBgContainer: "#ffffff",
+          colorBgLayout: "#f4f7fb",
+          colorBgElevated: "#ffffff",
+          colorText: "#111827",
+          colorTextSecondary: "#4b5563",
+          colorTextTertiary: "#6b7280",
+          colorBorder: "#d9e1ec",
+          colorBorderSecondary: "#e8edf5",
           fontFamily: "'Inter', -apple-system, system-ui, sans-serif",
           fontSize: 14,
-          controlHeight: 36,
+          controlHeight: 38,
           lineHeight: 1.55,
+        },
+        components: {
+          Button: {
+            fontWeight: 600,
+            primaryShadow: "0 10px 22px -12px rgba(37, 99, 235, 0.75)",
+          },
+          Input: {
+            activeBorderColor: "#2563eb",
+            hoverBorderColor: "#9bb5da",
+          },
+          Layout: {
+            bodyBg: "#f4f7fb",
+            siderBg: "#ffffff",
+          },
         },
       }}
       locale={zhCN}
     >
-      <Layout className="h-screen" style={{ gap: 0 }}>
+      <Layout className="h-screen app-shell" style={{ gap: 0 }}>
         <Sidebar
           threads={threads}
           activeId={activeThreadId}
@@ -88,7 +105,6 @@ export default function App() {
           onNew={handleNewChat}
           onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
         />
-        <div style={{ width: 1, flexShrink: 0, background: 'var(--line-soft)', opacity: 0.6, margin: '16px 0' }} />
         <Layout style={{ background: 'transparent' }}>
           <ThreadChatView
             threadId={activeThreadId}
