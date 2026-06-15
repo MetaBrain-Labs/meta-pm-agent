@@ -1,9 +1,12 @@
 export {
+  streamConversation,
   streamQuestionForm,
   streamCompressConversation,
 } from "./conversation-agent";
-export type { ConversationResult } from "./conversation-agent";
-export type { StreamChunk } from "./conversation-agent";
+export type {
+  ConversationStreamEvent,
+  StreamChunk,
+} from "./types";
 export {
   parseQuestionForm,
   hasQuestionForm,

@@ -4,6 +4,7 @@ import zhCN from "antd/locale/zh_CN";
 import { ChatApp } from "./components/ChatApp";
 import { Sidebar } from "./components/Sidebar";
 import type { ThreadInfo, Message, StreamEvent } from "./types";
+import { applyStreamEvent } from "./utils/apply-stream-event";
 
 const STORAGE_KEY = "pm-agent-threads";
 
@@ -249,41 +250,7 @@ function ThreadChatView({
               setMessages((prev) => {
                 const next = prev.map((m) => {
                   if (m.id !== agentMsgId) return m;
-                  switch (event.type) {
-                    case "thinking":
-                      return { ...m, thinking: (m.thinking ?? "") + (event.content ?? "") };
-                    case "text":
-                      return { ...m, content: m.content + (event.content ?? "") };
-                    case "question-form-start":
-                      return { ...m, questionForm: { state: "generating" as const } };
-                    case "question-form-complete":
-                      return { ...m, questionForm: { state: "complete" as const, content: event.content } };
-                    case "compress-start":
-                      return { ...m, compressBlock: { state: "generating" as const } };
-                    case "compress-complete":
-                      return { ...m, compressBlock: { state: "complete" as const, content: event.content } };
-                    case "todo-update":
-                      return {
-                        ...m,
-                        todos: (event.todos ?? []).map((t: { index: number; content: string; status: string }) => ({
-                          index: t.index,
-                          content: t.content,
-                          status: t.status as "pending" | "in_progress" | "completed",
-                        })),
-                      };
-                    case "tool-call":
-                      return { ...m, toolCalls: [...(m.toolCalls ?? []), { name: event.toolName ?? "unknown", args: event.toolArgs }] };
-                    case "tool-result":
-                      return { ...m, toolCalls: (m.toolCalls ?? []).map((tc, i) =>
-                        i === (m.toolCalls?.length ?? 1) - 1 ? { ...tc, result: event.toolResult } : tc
-                      ) };
-                    case "finish":
-                      return { ...m, usage: event.usage };
-                    case "error":
-                      return { ...m, content: m.content + `\n[Error: ${JSON.stringify(event.error)}]` };
-                    default:
-                      return m;
-                  }
+                  return applyStreamEvent(m, event);
                 });
                 const currentTid = threadIdRef.current;
                 if (currentTid) saveMessages(currentTid, next);
