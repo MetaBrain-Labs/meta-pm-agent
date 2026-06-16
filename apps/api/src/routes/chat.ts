@@ -4,6 +4,8 @@ import { streamConversation } from "@repo/agent-runtime";
 import {
   ChatRequestSchema,
   CreateChatRequestSchema,
+  CreateWorkspaceRequestSchema,
+  ListChatsQuerySchema,
 } from "../schemas/chat";
 import { toApiEvent } from "../services/agent-stream-service";
 import {
@@ -12,14 +14,48 @@ import {
   persistConversationResult,
   persistConversationStart,
 } from "../services/chat-service";
+import {
+  createWorkspace,
+  listWorkspaces,
+} from "../services/workspace-service";
 import { writeSse, writeSseDone } from "../utils/sse";
 
 export function createChatRoutes() {
   const routes = new Hono();
 
-  routes.get("/chats", async (c) => {
+  routes.get("/workspaces", async (c) => {
     return c.json({
-      chats: await listChats(),
+      workspaces: await listWorkspaces(),
+    });
+  });
+
+  routes.post("/workspaces", async (c) => {
+    const body = await readJsonBody(c.req.raw);
+    const parsed = CreateWorkspaceRequestSchema.safeParse(body ?? {});
+
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.flatten() }, 400);
+    }
+
+    return c.json(
+      {
+        workspace: await createWorkspace(parsed.data.name),
+      },
+      201,
+    );
+  });
+
+  routes.get("/chats", async (c) => {
+    const parsed = ListChatsQuerySchema.safeParse({
+      workspaceId: c.req.query("workspaceId"),
+    });
+
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.flatten() }, 400);
+    }
+
+    return c.json({
+      chats: await listChats(parsed.data.workspaceId),
     });
   });
 
@@ -31,7 +67,10 @@ export function createChatRoutes() {
       return c.json({ error: parsed.error.flatten() }, 400);
     }
 
-    const { chat, requestForm } = await createChat(parsed.data.title);
+    const { chat, requestForm } = await createChat(
+      parsed.data.workspaceId,
+      parsed.data.title,
+    );
 
     return c.json({ chat, requestForm }, 201);
   });
@@ -75,8 +114,7 @@ export function createChatRoutes() {
         }
 
         await persistConversationResult({
-          chatId: parsed.data.chatId,
-          requestFormId: parsed.data.requestFormId,
+          conversationId: parsed.data.chatId,
           assistantText,
         });
 

@@ -31,3 +31,19 @@ test("returns 400 for malformed JSON", async () => {
 
   assert.equal(response.status, 400);
 });
+
+test("requires a workspace id when listing chats", async () => {
+  const response = await createApp().request("/api/chats");
+
+  assert.equal(response.status, 400);
+});
+
+test("requires a workspace id when creating a chat", async () => {
+  const response = await createApp().request("/api/chats", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: "conversation" }),
+  });
+
+  assert.equal(response.status, 400);
+});

@@ -1,10 +1,16 @@
-import { useState, useEffect, useRef, useCallback, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { Spin, Tag } from "antd";
 import {
-  LoadingOutlined,
-  CheckCircleOutlined,
-  ToolOutlined,
   CaretRightOutlined,
+  CheckCircleOutlined,
+  LoadingOutlined,
+  ToolOutlined,
 } from "@ant-design/icons";
 import type { Message } from "../types";
 import { ProseBlock } from "./ProseBlock";
@@ -23,9 +29,12 @@ const TOOL_NAME_LABELS: Record<string, string> = {
   web_fetch: "抓取页面",
 };
 
-function mapToolName(name: string): string {
-  return TOOL_NAME_LABELS[name] ?? name;
-}
+const TAG_STYLE: CSSProperties = {
+  fontFamily: "var(--sans)",
+  fontSize: 11,
+  borderRadius: 6,
+  fontWeight: 700,
+};
 
 interface Props {
   message: Message;
@@ -35,12 +44,9 @@ interface Props {
   onFormSubmit?: (text: string) => void;
 }
 
-const TAG_STYLE: CSSProperties = {
-  fontFamily: "var(--sans)",
-  fontSize: 11,
-  borderRadius: 6,
-  fontWeight: 700,
-};
+function mapToolName(name: string): string {
+  return TOOL_NAME_LABELS[name] ?? name;
+}
 
 export function MessageBubble({
   message,
@@ -56,10 +62,9 @@ export function MessageBubble({
     return (
       <div className="flex max-w-[min(760px,88%)] flex-col self-end">
         <div
-          className="whitespace-pre-wrap wrap-break-word rounded-2xl rounded-br-md px-4 py-3 text-white"
+          className="whitespace-pre-wrap wrap-break-word rounded-[18px] rounded-br-md px-4 py-3 text-white"
           style={{
-            background: "linear-gradient(135deg, var(--primary), #3b82f6)",
-            boxShadow: "0 16px 30px -24px rgba(37, 99, 235, 0.8)",
+            background: "var(--primary)",
             fontFamily: "var(--body)",
             fontSize: 14,
             lineHeight: 1.6,
@@ -76,7 +81,7 @@ export function MessageBubble({
       {message.thinking && (
         <ThinkingBox
           content={message.thinking}
-          hasResponse={!!message.content}
+          hasResponse={Boolean(message.content)}
         />
       )}
 
@@ -85,12 +90,12 @@ export function MessageBubble({
       )}
 
       {message.toolCalls && message.toolCalls.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mb-1.5">
-          {message.toolCalls.map((tc, i) => {
-            const completed = tc.result !== undefined;
+        <div className="mb-1.5 flex flex-wrap gap-1.5">
+          {message.toolCalls.map((toolCall, index) => {
+            const completed = toolCall.result !== undefined;
             return (
               <Tag
-                key={i}
+                key={index}
                 icon={completed ? <CheckCircleOutlined /> : <ToolOutlined />}
                 style={{
                   ...TAG_STYLE,
@@ -100,15 +105,15 @@ export function MessageBubble({
                   color: completed ? "var(--success)" : "var(--primary)",
                   borderColor: completed
                     ? "rgba(5, 150, 105, 0.22)"
-                    : "rgba(37, 99, 235, 0.22)",
+                    : "rgba(17, 94, 171, 0.22)",
                 }}
                 title={
-                  tc.result !== undefined
-                    ? JSON.stringify(tc.result, null, 2).slice(0, 500)
-                    : JSON.stringify(tc.args, null, 2)
+                  toolCall.result !== undefined
+                    ? JSON.stringify(toolCall.result, null, 2).slice(0, 500)
+                    : JSON.stringify(toolCall.args, null, 2)
                 }
               >
-                {mapToolName(tc.name)}
+                {mapToolName(toolCall.name)}
               </Tag>
             );
           })}
@@ -116,20 +121,10 @@ export function MessageBubble({
       )}
 
       {message.content && (
-        <div
-          className="rounded-2xl !rounded-bl-md px-4 py-4"
-          style={{
-            background: "var(--surface)",
-            border: "1px solid var(--line-soft)",
-            boxShadow: "var(--shadow-card)",
-            fontFamily: "var(--body)",
-            fontSize: 14,
-            lineHeight: 1.65,
-          }}
-        >
+        <div className="assistant-bubble">
           <ProseBlock
-            text={message.content || ""}
-            isLastAssistant={!!isLast}
+            text={message.content}
+            isLastAssistant={isLast}
             streaming={streaming}
             nextUserContent={nextUserContent}
             locallySubmitted={locallySubmitted}
@@ -147,7 +142,7 @@ export function MessageBubble({
           ) : (
             <ProseBlock
               text={message.questionForm.content || ""}
-              isLastAssistant={!!isLast}
+              isLastAssistant={isLast}
               streaming={streaming}
               nextUserContent={nextUserContent}
               locallySubmitted={locallySubmitted}
@@ -173,16 +168,7 @@ export function MessageBubble({
         !message.thinking &&
         !message.questionForm &&
         !message.userInput && (
-          <div
-            className="rounded-2xl !rounded-bl-md px-4 py-3.5"
-            style={{
-              background: "var(--surface)",
-              border: "1px solid var(--line-soft)",
-              boxShadow: "var(--shadow-card)",
-              color: "var(--ink-mute)",
-              fontFamily: "var(--body)",
-            }}
-          >
+          <div className="assistant-bubble is-loading">
             <Spin
               indicator={<LoadingOutlined style={{ color: "var(--primary)" }} />}
               size="small"
@@ -192,14 +178,10 @@ export function MessageBubble({
         )}
 
       {message.usage && (
-        <div
-          className="text-[11px] mt-1 pl-1"
-          style={{ color: "var(--ink-faint)" }}
-        >
+        <div className="mt-1 pl-1 text-[11px] text-[var(--ink-faint)]">
           <button
             type="button"
-            className="inline-flex items-center gap-1 bg-transparent border-none cursor-pointer text-[11px] p-0.5"
-            style={{ color: "var(--ink-faint)" }}
+            className="inline-flex cursor-pointer items-center gap-1 border-none bg-transparent p-0.5 text-[11px] text-[var(--ink-faint)]"
             onClick={() => setUsageOpen(!usageOpen)}
           >
             <CaretRightOutlined
@@ -212,7 +194,7 @@ export function MessageBubble({
             <span>Token 用量</span>
           </button>
           {usageOpen && (
-            <span className="ml-1.5" style={{ color: "var(--ink-mute)" }}>
+            <span className="ml-1.5 text-[var(--ink-mute)]">
               输入 {String(message.usage?.inputTokens ?? "-")} · 输出{" "}
               {String(message.usage?.outputTokens ?? "-")} · 合计{" "}
               {String(message.usage?.totalTokens ?? "-")}
@@ -226,40 +208,25 @@ export function MessageBubble({
 
 function QFGenerating({ label }: { label: string }) {
   return (
-    <div
-      className="mb-2 flex items-center gap-3 rounded-lg p-5"
-      style={{
-        background: "var(--surface)",
-        border: "1px solid var(--line-soft)",
-        fontFamily: "var(--body)",
-      }}
-    >
+    <div className="mb-2 flex items-center gap-3 rounded-lg border border-[var(--line-soft)] bg-white p-5">
       <div
-        className="w-5 h-5 rounded-full border-2"
+        className="h-5 w-5 rounded-full border-2"
         style={{
           borderColor: "var(--primary)",
           animation: "qf-pulse 1.4s ease-out infinite",
         }}
       />
-      <span
-        className="text-[13px]"
-        style={{
-          color: "var(--ink-faint)",
-          fontFamily: "var(--sans)",
-          fontWeight: 700,
-        }}
-      >
+      <span className="text-[13px] font-bold text-[var(--ink-faint)]">
         {label}
       </span>
-      <div className="flex gap-1 ml-auto">
-        {[0, 1, 2].map((i) => (
+      <div className="ml-auto flex gap-1">
+        {[0, 1, 2].map((index) => (
           <span
-            key={i}
-            className="w-1.5 h-1.5 rounded-full"
+            key={index}
+            className="h-1.5 w-1.5 rounded-full bg-[var(--primary)]"
             style={{
-              background: "var(--primary)",
-              animation: `qf-bounce 1.2s ease-in-out infinite`,
-              animationDelay: `${i * 0.2}s`,
+              animation: "qf-bounce 1.2s ease-in-out infinite",
+              animationDelay: `${index * 0.2}s`,
             }}
           />
         ))}
@@ -296,22 +263,10 @@ function ThinkingBox({
   }, [isAtBottom]);
 
   return (
-    <div
-      className="rounded-lg mb-2 overflow-hidden"
-      style={{
-        background: "var(--surface)",
-        border: "1px solid var(--line-soft)",
-        boxShadow: "var(--shadow-card)",
-      }}
-    >
-      <div
-        className="flex cursor-pointer select-none items-center gap-1.5 px-4 py-2"
-        style={{
-          color: "var(--ink-faint)",
-          fontFamily: "var(--sans)",
-          fontSize: 13,
-          fontWeight: 700,
-        }}
+    <div className="mb-2 overflow-hidden rounded-lg border border-[var(--line-soft)] bg-white">
+      <button
+        type="button"
+        className="flex w-full cursor-pointer select-none items-center gap-1.5 border-none bg-white px-4 py-2 text-left text-[13px] font-bold text-[var(--ink-faint)]"
         onClick={() => setOpen(!open)}
       >
         <CaretRightOutlined
@@ -326,19 +281,12 @@ function ThinkingBox({
           思考过程
           {!hasResponse && <span className="loading-dots" />}
         </span>
-      </div>
+      </button>
       {open && (
         <div
           ref={contentRef}
           onScroll={handleScroll}
-          className="themed-scrollbar px-4 pb-3 text-[13px] whitespace-pre-wrap max-h-[300px] overflow-y-auto leading-relaxed"
-          style={{
-            color: "var(--ink-mute)",
-            borderTop: "1px solid var(--line-soft)",
-            fontFamily: "var(--body)",
-            fontSize: 13,
-            lineHeight: 1.6,
-          }}
+          className="themed-scrollbar max-h-[300px] overflow-y-auto whitespace-pre-wrap border-t border-[var(--line-soft)] px-4 pb-3 text-[13px] leading-relaxed text-[var(--ink-mute)]"
         >
           {content}
         </div>

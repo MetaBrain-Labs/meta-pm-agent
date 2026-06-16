@@ -4,27 +4,48 @@ import { prisma } from "@repo/database";
 import { createApp } from "../src/app";
 
 test(
-  "creates a chat and initial request form in PostgreSQL",
+  "creates a workspace conversation and initial request form in PostgreSQL",
   { skip: process.env.RUN_DB_INTEGRATION !== "1" },
   async () => {
-    const title = `联通验证-${Date.now()}`;
+    const workspaceName = `workspace-${Date.now()}`;
+    const workspaceResponse = await createApp().request("/api/workspaces", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: workspaceName }),
+    });
+
+    assert.equal(workspaceResponse.status, 201);
+    const workspaceBody = (await workspaceResponse.json()) as {
+      workspace: { id: string; name: string };
+    };
+
+    const title = `conversation-${Date.now()}`;
     const response = await createApp().request("/api/chats", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({
+        workspaceId: workspaceBody.workspace.id,
+        title,
+      }),
     });
 
     assert.equal(response.status, 201);
-    const body = await response.json() as {
-      chat: { id: string; title: string };
+    const body = (await response.json()) as {
+      chat: { id: string; title: string; workspaceId: string };
       requestForm: { id: string; chatId: string };
     };
 
-    const chatRows = await prisma.$queryRaw<
-      Array<{ id: string; title: string | null; status: string | null }>
+    const conversationRows = await prisma.$queryRaw<
+      Array<{
+        id: string;
+        workspace_id: string;
+        user_id: string;
+        title: string | null;
+        status: string | null;
+      }>
     >`
-      SELECT id, title, status
-      FROM "chat"
+      SELECT id, workspace_id, user_id, title, status
+      FROM "conversation"
       WHERE id = ${body.chat.id}
     `;
     const formRows = await prisma.$queryRaw<
@@ -36,8 +57,14 @@ test(
     `;
 
     try {
-      assert.deepEqual(chatRows, [
-        { id: body.chat.id, title, status: "active" },
+      assert.deepEqual(conversationRows, [
+        {
+          id: body.chat.id,
+          workspace_id: workspaceBody.workspace.id,
+          user_id: "local",
+          title,
+          status: "active",
+        },
       ]);
       assert.deepEqual(formRows, [
         {
@@ -52,8 +79,12 @@ test(
         WHERE id = ${body.requestForm.id}
       `;
       await prisma.$executeRaw`
-        DELETE FROM "chat"
+        DELETE FROM "conversation"
         WHERE id = ${body.chat.id}
+      `;
+      await prisma.$executeRaw`
+        DELETE FROM "workspace"
+        WHERE id = ${workspaceBody.workspace.id}
       `;
       await prisma.$disconnect();
     }
