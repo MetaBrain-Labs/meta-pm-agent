@@ -6,6 +6,4 @@ export interface StreamChunk {
 export type ConversationStreamEvent =
   | StreamChunk
   | { type: "question-form-start" }
-  | { type: "question-form-complete"; content: string }
-  | { type: "compress-start" }
-  | { type: "compress-complete"; content: string };
+  | { type: "question-form-complete"; content: string };

@@ -5,8 +5,6 @@ export type StreamEventType =
   | "text"
   | "question-form-start"
   | "question-form-complete"
-  | "compress-start"
-  | "compress-complete"
   | "todo-update"
   | "tool-call"
   | "tool-result"
@@ -38,7 +36,6 @@ export interface Message {
   content: string;
   thinking?: string;
   questionForm?: { state: "generating" | "complete"; content?: string };
-  compressBlock?: { state: "generating" | "complete"; content?: string };
   todos?: TodoItem[];
   toolCalls?: Array<{ name: string; args?: Record<string, unknown>; result?: unknown }>;
   usage?: Record<string, unknown>;

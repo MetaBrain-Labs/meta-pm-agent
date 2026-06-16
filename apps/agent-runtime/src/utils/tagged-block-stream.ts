@@ -6,10 +6,8 @@ import type {
 interface TaggedBlockOptions {
   startMarker: string;
   endMarker: string;
-  startEvent: "question-form-start" | "compress-start";
-  completeEvent:
-    | "question-form-complete"
-    | "compress-complete";
+  startEvent: "question-form-start";
+  completeEvent: "question-form-complete";
 }
 
 export async function* streamTaggedBlock(

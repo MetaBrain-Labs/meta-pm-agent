@@ -31,24 +31,6 @@ export function applyStreamEvent(
           content: event.content,
         },
       };
-    case "compress-start":
-      return {
-        ...message,
-        compressBlock: { state: "generating" },
-      };
-    case "compress-complete":
-      return {
-        ...message,
-        content: removeTaggedBlock(
-          message.content,
-          "<compress",
-          "</compress>",
-        ),
-        compressBlock: {
-          state: "complete",
-          content: event.content,
-        },
-      };
     case "todo-update":
       return {
         ...message,
@@ -113,23 +95,6 @@ function applyTextChunk(
       questionForm: {
         state: "complete",
         content: questionForm.block,
-      },
-    };
-  }
-
-  const compressBlock = extractTaggedBlock(
-    content,
-    "<compress",
-    "</compress>",
-  );
-
-  if (compressBlock) {
-    return {
-      ...message,
-      content: compressBlock.remainingText,
-      compressBlock: {
-        state: "complete",
-        content: compressBlock.block,
       },
     };
   }

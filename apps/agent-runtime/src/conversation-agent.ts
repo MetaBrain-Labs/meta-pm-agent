@@ -7,8 +7,6 @@ import {
   toLangChainMessages,
 } from "./utils/message-adapter";
 import { streamTaggedBlock } from "./utils/tagged-block-stream";
-import { isFormAnswer } from "./utils/form-parser";
-import { COMPRESS_PROMPT } from "./prompts/compress";
 import type { ConversationStreamEvent, StreamChunk } from "./types";
 
 async function* streamAgentEvents(
@@ -39,15 +37,6 @@ export async function* streamQuestionForm(
   yield* streamAgentEvents([new HumanMessage(userMessage)]);
 }
 
-export async function* streamCompressConversation(
-  messages: ChatMessage[],
-): AsyncGenerator<StreamChunk> {
-  yield* streamAgentEvents([
-    new HumanMessage(COMPRESS_PROMPT),
-    ...toLangChainMessages(messages),
-  ]);
-}
-
 export async function* streamConversation(
   messages: ChatMessage[],
 ): AsyncGenerator<ConversationStreamEvent> {
@@ -56,24 +45,8 @@ export async function* streamConversation(
     throw new Error("At least one chat message is required.");
   }
 
-  if (
-    lastMessage.role === "user" &&
-    isFormAnswer(lastMessage.content)
-  ) {
-    yield* streamTaggedBlock(
-      streamCompressConversation(messages),
-      {
-        startMarker: "<compress",
-        endMarker: "</compress>",
-        startEvent: "compress-start",
-        completeEvent: "compress-complete",
-      },
-    );
-    return;
-  }
-
   yield* streamTaggedBlock(
-    streamQuestionForm(lastMessage.content),
+    streamAgentEvents(toLangChainMessages(messages)),
     {
       startMarker: "<question-form",
       endMarker: "</question-form>",

@@ -158,29 +158,9 @@ export function MessageBubble({
         </div>
       )}
 
-      {message.compressBlock && (
-        <div>
-          {message.compressBlock.state === "generating" ? (
-            <QFGenerating label="正在生成需求上下文" />
-          ) : (
-            <ProseBlock
-              text={message.compressBlock?.content || ""}
-              isLastAssistant={!!isLast}
-              streaming={streaming}
-              nextUserContent={nextUserContent}
-              locallySubmitted={locallySubmitted}
-              onSubmitForm={(_formId, text) => {
-                onFormSubmit?.(text);
-              }}
-            />
-          )}
-        </div>
-      )}
-
       {!message.content &&
         !message.thinking &&
-        !message.questionForm &&
-        !message.compressBlock && (
+        !message.questionForm && (
           <div
             className="rounded-2xl !rounded-bl-md px-4 py-3.5"
             style={{
