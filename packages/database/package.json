@@ -11,10 +11,10 @@
   },
   "scripts": {
     "build": "tsc",
-    "db:generate": "prisma generate",
-    "db:push": "prisma db push",
-    "db:migrate": "prisma migrate dev",
-    "db:studio": "prisma studio"
+    "db:generate": "node scripts/with-database-url.mjs prisma generate",
+    "db:push": "node scripts/with-database-url.mjs prisma db push",
+    "db:migrate": "node scripts/with-database-url.mjs prisma migrate dev",
+    "db:studio": "node scripts/with-database-url.mjs prisma studio"
   },
   "dependencies": {
     "@prisma/client": "^6.2.1"

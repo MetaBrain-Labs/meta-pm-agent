@@ -50,6 +50,7 @@ export interface ChatState {
 
 export interface ThreadInfo {
   id: string;
+  requestFormId?: string;
   title: string;
   createdAt: string;
   updatedAt: string;

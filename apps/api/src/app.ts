@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import "./env";
 import { createChatRoutes } from "./routes/chat";
 
 export function createApp() {

@@ -263,9 +263,15 @@ importers:
       '@repo/agent-runtime':
         specifier: workspace:*
         version: link:../agent-runtime
+      '@repo/database':
+        specifier: workspace:*
+        version: link:../../packages/database
       '@repo/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      dotenv:
+        specifier: ^16.6.1
+        version: 16.6.1
       hono:
         specifier: ^4.12.23
         version: 4.12.23
