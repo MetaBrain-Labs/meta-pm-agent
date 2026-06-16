@@ -19,8 +19,8 @@ Deliver correct, maintainable changes that integrate with the current pnpm works
 - `apps/web` uses TypeScript 5.8.3 with its own `baseUrl`, `paths`, and `noEmit: true`. Do not upgrade its TypeScript version.
 - `packages/shared`, `packages/database`, and `apps/agent-runtime` use TypeScript project references and `composite: true`. Follow this pattern when adding an importable shared package.
 - Keep `"types": ["node"]` in `packages/database/tsconfig.json`; pnpm strict isolation does not expose `@types/node` automatically.
-- `apps/agent-runtime/src/graph.ts` currently has LangGraph typed-state API errors caused by an `@langchain/langgraph` version mismatch. Package-level `tsc` may fail there, while `tsx` development mode ignores those errors.
-- Only `apps/web` has ESLint configured (`eslint-config-next`). Root Turbo lint and typecheck tasks currently have no active scripts.
+- `apps/agent-runtime/src/graph.ts` has historically had LangGraph typed-state API errors caused by an `@langchain/langgraph` version mismatch. Account for this when interpreting package-level TypeScript failures.
+- `apps/web` has ESLint configured through `eslint-config-next`; local lint may fail if Next's compiled parser package is unavailable. Root Turbo lint and typecheck tasks currently have no active scripts.
 
 ## Constraint
 
@@ -43,8 +43,12 @@ packages/
   - LLM runtime: `OPENAI_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL`
 - Run Prisma commands from `packages/database`: `pnpm db:generate`, `pnpm db:push`, or `pnpm db:migrate`.
 - Ensure `prisma generate` runs before building `@repo/database`; `allowBuilds` in `pnpm-workspace.yaml` handles this installation requirement.
-- Preserve the `/api/chat` SSE contract. It returns `text/event-stream` and typed events such as `start`, `text`, `thinking`, `question-form-start`, `question-form-complete`, `compress-start`, `compress-complete`, `todo-update`, `tool-call`, `tool-result`, `finish`, and `error`.
-- Do not assume server-side thread persistence. The API currently streams directly, while the frontend manages threads and messages with `localStorage` and the sidebar.
+- Preserve the `/api/chat` SSE contract. It returns `text/event-stream` and typed events such as `start`, `text`, `thinking`, `question-form-start`, `question-form-complete`, `user-input-start`, `user-input-complete`, `todo-update`, `tool-call`, `tool-result`, `step-finish`, `finish`, and `error`.
+- Preserve the workspace/chat routes and their current split: `/workplace` for the workspace homepage, `/chat/:workspaceId` for workspace detail, and `/chat/:workspaceId/:threadId` for a specific conversation.
+- The API persists account, workspace, conversation, message, and request-form data through Prisma/PostgreSQL. The frontend may keep localStorage caches for responsiveness, but persisted data should be loaded through the API (`/api/account`, `/api/workspaces`, `/api/chats`, `/api/chats/:id/messages`).
+- When changing persisted chat/workspace contracts, update the API schemas, repositories, services, routes, and the frontend types together.
+- Browser directory selection cannot reliably expose a full absolute path in standard web contexts. Preserve editable path fields and host-provided `file.path` handling where available.
+- `apps/agent-runtime` filters internal DeepAgent/environment noise such as `No files found in /` before emitting user-visible `text`. Do not reintroduce internal tool/environment noise into normal assistant output.
 - Do not change dependency versions, generated files, unrelated modules, or repository-wide configuration unless the task requires it.
 
 ## Workflow

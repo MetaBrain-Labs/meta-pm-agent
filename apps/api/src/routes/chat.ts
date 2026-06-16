@@ -10,18 +10,26 @@ import {
 import { toApiEvent } from "../services/agent-stream-service";
 import {
   createChat,
+  listMessages,
   listChats,
   persistConversationResult,
   persistConversationStart,
 } from "../services/chat-service";
 import {
   createWorkspace,
+  getAccount,
   listWorkspaces,
 } from "../services/workspace-service";
 import { writeSse, writeSseDone } from "../utils/sse";
 
 export function createChatRoutes() {
   const routes = new Hono();
+
+  routes.get("/account", async (c) => {
+    return c.json({
+      account: await getAccount(),
+    });
+  });
 
   routes.get("/workspaces", async (c) => {
     return c.json({
@@ -39,7 +47,10 @@ export function createChatRoutes() {
 
     return c.json(
       {
-        workspace: await createWorkspace(parsed.data.name),
+        workspace: await createWorkspace(
+          parsed.data.name,
+          parsed.data.localPath,
+        ),
       },
       201,
     );
@@ -56,6 +67,12 @@ export function createChatRoutes() {
 
     return c.json({
       chats: await listChats(parsed.data.workspaceId),
+    });
+  });
+
+  routes.get("/chats/:id/messages", async (c) => {
+    return c.json({
+      messages: await listMessages(c.req.param("id")),
     });
   });
 
@@ -93,6 +110,7 @@ export function createChatRoutes() {
 
       let responseLength = 0;
       let assistantText = "";
+      let reasoningContent = "";
 
       try {
         await persistConversationStart(
@@ -103,6 +121,9 @@ export function createChatRoutes() {
         for await (const event of streamConversation(
           parsed.data.messages,
         )) {
+          if ("content" in event && event.type === "reasoning") {
+            reasoningContent += event.content;
+          }
           if (
             "content" in event &&
             event.type !== "reasoning"
@@ -116,6 +137,7 @@ export function createChatRoutes() {
         await persistConversationResult({
           conversationId: parsed.data.chatId,
           assistantText,
+          reasoningContent,
         });
 
         console.log(

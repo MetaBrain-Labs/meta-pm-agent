@@ -4,6 +4,7 @@ import {
   listActiveConversations,
 } from "../repositories/chat-repository";
 import {
+  listConversationMessages,
   persistAssistantMessage,
   persistConversationMessages,
 } from "../repositories/message-repository";
@@ -13,6 +14,10 @@ const DEFAULT_CHAT_TITLE = "\u65b0\u5bf9\u8bdd";
 
 export function listChats(workspaceId: string) {
   return listActiveConversations(workspaceId);
+}
+
+export function listMessages(conversationId: string) {
+  return listConversationMessages(conversationId);
 }
 
 export async function createChat(
@@ -43,12 +48,19 @@ export async function persistConversationStart(
 export async function persistConversationResult({
   conversationId,
   assistantText,
+  reasoningContent,
 }: {
   conversationId?: string;
   assistantText: string;
+  reasoningContent?: string;
 }): Promise<void> {
   if (!conversationId || assistantText.trim().length === 0) return;
 
   const items = parseUserInputPayload(assistantText);
-  await persistAssistantMessage(conversationId, assistantText, items);
+  await persistAssistantMessage(
+    conversationId,
+    assistantText,
+    items,
+    reasoningContent,
+  );
 }

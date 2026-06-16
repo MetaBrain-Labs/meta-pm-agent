@@ -5,10 +5,12 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import { Button, FloatButton, Input, Tooltip } from "antd";
+import { Button, Dropdown, FloatButton, Input, Tooltip } from "antd";
 import {
   ArrowDownOutlined,
+  ArrowLeftOutlined,
   ClearOutlined,
+  DownOutlined,
   PaperClipOutlined,
   SendOutlined,
   StopOutlined,
@@ -25,7 +27,10 @@ const EXAMPLE_QUERIES = [
   "把今天的讨论整理成待办事项",
 ];
 
+const ACTIVE_MODEL = "DeepSeek V4 Pro";
+
 interface Props {
+  workspaceName: string;
   messages: Message[];
   isLoading: boolean;
   error: string | null;
@@ -33,9 +38,11 @@ interface Props {
   onSend: (text: string) => void;
   onStop: () => void;
   onClear: () => void;
+  onBack: () => void;
 }
 
 export function ChatApp({
+  workspaceName,
   messages,
   isLoading,
   error,
@@ -43,6 +50,7 @@ export function ChatApp({
   onSend,
   onStop,
   onClear,
+  onBack,
 }: Props) {
   const [input, setInput] = useState("");
   const [userScrolled, setUserScrolled] = useState(false);
@@ -117,9 +125,16 @@ export function ChatApp({
   return (
     <div className="chat-workspace">
       <div className="chat-topbar">
-        <div className="chat-topbar-lock" aria-hidden="true">
-          <span />
-          <i>⌄</i>
+        <div className="chat-topbar-title">
+          <Tooltip title="返回工作区">
+            <Button
+              type="text"
+              shape="circle"
+              icon={<ArrowLeftOutlined />}
+              onClick={onBack}
+            />
+          </Tooltip>
+          <span>{workspaceName}</span>
         </div>
       </div>
 
@@ -196,7 +211,19 @@ export function ChatApp({
             <Tooltip title="添加附件">
               <Button type="text" shape="circle" icon={<PaperClipOutlined />} />
             </Tooltip>
-            <span>问渠 PM</span>
+            <Dropdown
+              trigger={["click"]}
+              menu={{
+                selectable: true,
+                selectedKeys: [ACTIVE_MODEL],
+                items: [{ key: ACTIVE_MODEL, label: ACTIVE_MODEL }],
+              }}
+            >
+              <button type="button" className="model-selector">
+                <span>{ACTIVE_MODEL}</span>
+                <DownOutlined />
+              </button>
+            </Dropdown>
             <div className="chat-composer-actions">
               {isLoading ? (
                 <Tooltip title="停止生成">
