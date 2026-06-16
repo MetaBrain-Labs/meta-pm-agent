@@ -9,7 +9,9 @@
   "dependencies": {
     "@hono/node-server": "^1.18.3",
     "@repo/agent-runtime": "workspace:*",
+    "@repo/database": "workspace:*",
     "@repo/shared": "workspace:*",
+    "dotenv": "^16.6.1",
     "hono": "^4.12.23",
     "zod": "^3.23.8"
   },

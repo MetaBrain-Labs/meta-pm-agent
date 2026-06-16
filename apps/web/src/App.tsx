@@ -34,29 +34,107 @@ function saveMessages(threadId: string, messages: Message[]) {
   localStorage.setItem(`pm-msgs-${threadId}`, JSON.stringify(messages));
 }
 
+async function createChatRecord(title: string): Promise<ThreadInfo> {
+  const response = await fetch("/api/chats", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Server error: ${response.status}`);
+  }
+
+  const data = await response.json() as {
+    chat: {
+      id: string;
+      title: string;
+      createdAt: string;
+      updatedAt: string;
+    };
+    requestForm: {
+      id: string;
+    };
+  };
+
+  return {
+    id: data.chat.id,
+    requestFormId: data.requestForm.id,
+    title: data.chat.title,
+    createdAt: data.chat.createdAt,
+    updatedAt: data.chat.updatedAt,
+  };
+}
+
+async function fetchChatRecords(): Promise<ThreadInfo[]> {
+  const response = await fetch("/api/chats");
+
+  if (!response.ok) {
+    throw new Error(`Server error: ${response.status}`);
+  }
+
+  const data = await response.json() as {
+    chats: ThreadInfo[];
+  };
+
+  return data.chats;
+}
+
 export default function App() {
   const [threads, setThreads] = useState<ThreadInfo[]>(() => loadThreads());
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [creationError, setCreationError] = useState<string | null>(null);
+  const [isCreatingChat, setIsCreatingChat] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
-  const handleNewThread = useCallback((id: string, title: string) => {
-    const now = new Date().toISOString();
-    const newThread: ThreadInfo = { id, title, createdAt: now, updatedAt: now };
+  useEffect(() => {
+    let cancelled = false;
+
+    fetchChatRecords()
+      .then((serverThreads) => {
+        if (cancelled) return;
+        setThreads(serverThreads);
+        saveThreads(serverThreads);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error("[chat] Failed to load chats:", error);
+        setCreationError(mapErrorToChinese(error as Error));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleNewThread = useCallback((newThread: ThreadInfo) => {
+    setCreationError(null);
     setThreads((prev) => {
       const updated = [newThread, ...prev];
       saveThreads(updated);
       return updated;
     });
-    setActiveThreadId(id);
+    setActiveThreadId(newThread.id);
   }, []);
 
   const handleSelectThread = useCallback((id: string) => {
     setActiveThreadId(id);
   }, []);
 
-  const handleNewChat = useCallback(() => {
-    setActiveThreadId(null);
-  }, []);
+  const handleNewChat = useCallback(async () => {
+    if (isCreatingChat) return;
+    setIsCreatingChat(true);
+    try {
+      const newThread = await createChatRecord("新对话");
+      handleNewThread(newThread);
+      saveMessages(newThread.id, []);
+    } catch (error) {
+      console.error("[chat] Failed to create chat:", error);
+      setCreationError(mapErrorToChinese(error as Error));
+    } finally {
+      setIsCreatingChat(false);
+    }
+  }, [handleNewThread, isCreatingChat]);
 
   return (
     <ConfigProvider
@@ -102,13 +180,15 @@ export default function App() {
           threads={threads}
           activeId={activeThreadId}
           collapsed={sidebarCollapsed}
+          creating={isCreatingChat}
           onSelect={handleSelectThread}
           onNew={handleNewChat}
           onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
         />
         <Layout style={{ background: 'transparent' }}>
           <ThreadChatView
-            threadId={activeThreadId}
+            thread={threads.find((thread) => thread.id === activeThreadId) ?? null}
+            creationError={creationError}
             onNewThread={handleNewThread}
           />
         </Layout>
@@ -118,17 +198,20 @@ export default function App() {
 }
 
 function ThreadChatView({
-  threadId,
+  thread,
+  creationError,
   onNewThread,
 }: {
-  threadId: string | null;
-  onNewThread: (id: string, title: string) => void;
+  thread: ThreadInfo | null;
+  creationError: string | null;
+  onNewThread: (thread: ThreadInfo) => void;
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const threadIdRef = useRef<string | null>(threadId);
+  const threadIdRef = useRef<string | null>(thread?.id ?? null);
+  const requestFormIdRef = useRef<string | undefined>(thread?.requestFormId);
   const messagesRef = useRef<Message[]>(messages);
   const creatingRef = useRef(false);
 
@@ -137,19 +220,27 @@ function ThreadChatView({
   }, [messages]);
 
   useEffect(() => {
+    if (creationError) {
+      setError(creationError);
+    }
+  }, [creationError]);
+
+  useEffect(() => {
     if (creatingRef.current) {
       creatingRef.current = false;
-      threadIdRef.current = threadId;
+      threadIdRef.current = thread?.id ?? null;
+      requestFormIdRef.current = thread?.requestFormId;
       return;
     }
-    threadIdRef.current = threadId;
-    if (threadId) {
-      setMessages(loadMessages(threadId));
+    threadIdRef.current = thread?.id ?? null;
+    requestFormIdRef.current = thread?.requestFormId;
+    if (thread?.id) {
+      setMessages(loadMessages(thread.id));
     } else {
       setMessages([]);
     }
     setError(null);
-  }, [threadId]);
+  }, [thread]);
 
   const stopGeneration = useCallback(() => {
     if (abortRef.current) {
@@ -165,10 +256,17 @@ function ThreadChatView({
 
       let tid = threadIdRef.current;
       if (!tid) {
-        tid = crypto.randomUUID();
-        creatingRef.current = true;
-        threadIdRef.current = tid;
-        onNewThread(tid, text.slice(0, 30));
+        try {
+          const newThread = await createChatRecord(text.slice(0, 30) || "新对话");
+          tid = newThread.id;
+          creatingRef.current = true;
+          threadIdRef.current = tid;
+          requestFormIdRef.current = newThread.requestFormId;
+          onNewThread(newThread);
+        } catch (err: any) {
+          setError(mapErrorToChinese(err));
+          return;
+        }
       }
 
       setError(null);
@@ -204,7 +302,7 @@ function ThreadChatView({
         const requestMessages = [...priorMessages, userMsg].map((m) => ({
           id: m.id,
           role: m.role === "agent" ? ("assistant" as const) : ("user" as const),
-          content: m.content,
+          content: m.content || m.userInput?.content || "",
           timestamp: new Date(m.timestamp).toISOString(),
           sessionId: "local",
           ...(m.thinking ? { reasoningContent: m.thinking } : {}),
@@ -213,7 +311,11 @@ function ThreadChatView({
         const resp = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: requestMessages }),
+          body: JSON.stringify({
+            chatId: tid,
+            requestFormId: requestFormIdRef.current,
+            messages: requestMessages,
+          }),
           signal: controller.signal,
         });
 

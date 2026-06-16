@@ -1,19 +1,40 @@
 import { Hono } from "hono";
 import { stream } from "hono/streaming";
-import { z } from "zod";
-import { ChatMessageSchema } from "@repo/shared";
+import { streamConversation } from "@repo/agent-runtime";
 import {
-  streamConversation,
-  type ConversationStreamEvent,
-} from "@repo/agent-runtime";
+  ChatRequestSchema,
+  CreateChatRequestSchema,
+} from "../schemas/chat";
+import { toApiEvent } from "../services/agent-stream-service";
+import {
+  createChat,
+  listChats,
+  persistConversationResult,
+  persistConversationStart,
+} from "../services/chat-service";
 import { writeSse, writeSseDone } from "../utils/sse";
-
-const ChatRequestSchema = z.object({
-  messages: z.array(ChatMessageSchema).min(1),
-});
 
 export function createChatRoutes() {
   const routes = new Hono();
+
+  routes.get("/chats", async (c) => {
+    return c.json({
+      chats: await listChats(),
+    });
+  });
+
+  routes.post("/chats", async (c) => {
+    const body = await readJsonBody(c.req.raw);
+    const parsed = CreateChatRequestSchema.safeParse(body ?? {});
+
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.flatten() }, 400);
+    }
+
+    const { chat, requestForm } = await createChat(parsed.data.title);
+
+    return c.json({ chat, requestForm }, 201);
+  });
 
   routes.post("/chat", async (c) => {
     const body = await readJsonBody(c.req.raw);
@@ -32,8 +53,14 @@ export function createChatRoutes() {
       await writeSse(writer, { type: "start" });
 
       let responseLength = 0;
+      let assistantText = "";
 
       try {
+        await persistConversationStart(
+          parsed.data.chatId,
+          parsed.data.messages,
+        );
+
         for await (const event of streamConversation(
           parsed.data.messages,
         )) {
@@ -42,9 +69,16 @@ export function createChatRoutes() {
             event.type !== "reasoning"
           ) {
             responseLength += event.content.length;
+            assistantText += event.content;
           }
           await writeSse(writer, toApiEvent(event));
         }
+
+        await persistConversationResult({
+          chatId: parsed.data.chatId,
+          requestFormId: parsed.data.requestFormId,
+          assistantText,
+        });
 
         console.log(
           `[chat] Stream complete, response length: ${responseLength}`,
@@ -62,17 +96,6 @@ export function createChatRoutes() {
   });
 
   return routes;
-}
-
-function toApiEvent(event: ConversationStreamEvent) {
-  if (event.type === "reasoning") {
-    return {
-      type: "thinking" as const,
-      content: event.content,
-    };
-  }
-
-  return event;
 }
 
 async function readJsonBody(request: Request): Promise<unknown> {

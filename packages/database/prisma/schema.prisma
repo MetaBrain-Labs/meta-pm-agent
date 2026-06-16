@@ -6,3 +6,70 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+model Chat {
+  id           String        @id @db.VarChar(36)
+  title        String?       @db.VarChar(255)
+  status       String?       @default("active") @db.VarChar(32)
+  createdAt    DateTime?     @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt    DateTime?     @default(now()) @map("updated_at") @db.Timestamp(6)
+  messages     Message[]
+  requestForms RequestForm[]
+
+  @@map("chat")
+}
+
+model EventOutbox {
+  id        String    @id @db.VarChar(36)
+  eventType String    @map("event_type") @db.VarChar(64)
+  payload   Json      @db.Json
+  status    String?   @default("pending") @db.VarChar(32)
+  createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+
+  @@map("event_outbox")
+}
+
+model Message {
+  id        String    @id @db.VarChar(36)
+  chatId    String    @map("chat_id") @db.VarChar(36)
+  role      String    @db.VarChar(32)
+  content   String
+  meta      Json?     @db.Json
+  createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  chat      Chat      @relation(fields: [chatId], references: [id])
+
+  @@index([chatId])
+  @@map("message")
+}
+
+model RequestForm {
+  id        String            @id @db.VarChar(36)
+  chatId    String            @map("chat_id") @db.VarChar(36)
+  version   Int               @default(1)
+  status    String            @db.VarChar(32)
+  summary   String?
+  createdAt DateTime?         @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt DateTime?         @default(now()) @map("updated_at") @db.Timestamp(6)
+  chat      Chat              @relation(fields: [chatId], references: [id])
+  items     RequestFormItem[]
+
+  @@index([chatId])
+  @@map("request_form")
+}
+
+model RequestFormItem {
+  id           String       @id @db.VarChar(36)
+  formId       String       @map("form_id") @db.VarChar(36)
+  type         String       @db.VarChar(32)
+  status       String       @db.VarChar(32)
+  agent        String?      @db.VarChar(32)
+  priority     Int?         @default(0)
+  payload      Json         @db.Json
+  parentItemId String?      @map("parent_item_id") @db.VarChar(36)
+  createdAt    DateTime?    @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt    DateTime?    @default(now()) @map("updated_at") @db.Timestamp(6)
+  requestForm  RequestForm  @relation(fields: [formId], references: [id])
+
+  @@index([formId])
+  @@map("request_form_item")
+}

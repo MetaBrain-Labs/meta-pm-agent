@@ -53,6 +53,40 @@ test("flushes an unclosed tagged block as text", async () => {
   ]);
 });
 
+test("parses user-input blocks with multiple tag options", async () => {
+  const events = await Array.fromAsync(
+    streamTaggedBlock(toAsyncIterable([
+      text("Before <user"),
+      text('-input>{"user_input":[]}'),
+      text("</user-input>After"),
+    ]), [
+      {
+        startMarker: "<question-form",
+        endMarker: "</question-form>",
+        startEvent: "question-form-start",
+        completeEvent: "question-form-complete",
+      },
+      {
+        startMarker: "<user-input",
+        endMarker: "</user-input>",
+        startEvent: "user-input-start",
+        completeEvent: "user-input-complete",
+      },
+    ]),
+  );
+
+  assert.deepEqual(events, [
+    { type: "text", content: "Before " },
+    { type: "user-input-start" },
+    {
+      type: "user-input-complete",
+      content:
+        '<user-input>{"user_input":[]}</user-input>',
+    },
+    { type: "text", content: "After" },
+  ]);
+});
+
 async function collect(chunks: StreamChunk[]) {
   return Array.fromAsync(
     streamTaggedBlock(toAsyncIterable(chunks), {

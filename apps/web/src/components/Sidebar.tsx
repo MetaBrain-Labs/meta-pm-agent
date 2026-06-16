@@ -15,8 +15,9 @@ interface Props {
   threads: ThreadInfo[];
   activeId: string | null;
   collapsed: boolean;
+  creating: boolean;
   onSelect: (id: string) => void;
-  onNew: () => void;
+  onNew: () => void | Promise<void>;
   onToggle: () => void;
 }
 
@@ -24,6 +25,7 @@ export function Sidebar({
   threads,
   activeId,
   collapsed,
+  creating,
   onSelect,
   onNew,
   onToggle,
@@ -87,13 +89,22 @@ export function Sidebar({
       <div className={collapsed ? "flex justify-center px-0 py-3" : "px-3 py-3"}>
         {collapsed ? (
           <Tooltip title="新建对话" placement="right">
-            <Button className="sidebar-create" type="primary" icon={<PlusOutlined />} onClick={onNew} />
+            <Button
+              className="sidebar-create"
+              type="primary"
+              icon={<PlusOutlined />}
+              loading={creating}
+              disabled={creating}
+              onClick={onNew}
+            />
           </Tooltip>
         ) : (
           <Button
             type="primary"
             icon={<PlusOutlined />}
             block
+            loading={creating}
+            disabled={creating}
             onClick={onNew}
           >
             新建对话

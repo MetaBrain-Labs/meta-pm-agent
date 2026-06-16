@@ -25,14 +25,14 @@ src/
 ├── App.tsx                  # 根组件（ConfigProvider + Layout + 侧边栏 + 聊天区）
 ├── main.tsx                 # 入口
 ├── types.ts                 # 前端类型（Message、StreamEvent、TodoItem、ThreadInfo）
-├── styles.css               # 自定义样式（消息气泡、Markdown 渲染、压缩卡片等）
+├── styles.css               # 自定义样式（消息气泡、Markdown 渲染等）
 ├── components/
 │   ├── ChatApp.tsx          # 聊天主界面
-│   ├── MessageBubble.tsx    # 消息气泡（支持思考过程、工具调用、压缩块、Question-Form）
+│   ├── MessageBubble.tsx    # 消息气泡（支持思考过程、工具调用、Question-Form、User-Input）
 │   ├── Sidebar.tsx          # 侧边栏（对话列表 + 新建对话）
-│   ├── ProseBlock.tsx       # 内容解析器（Markdown / 压缩块 / 系统提醒 / Question-Form）
-│   ├── CompressedCard.tsx   # 压缩内容卡片（梅花样式）
+│   ├── ProseBlock.tsx       # 内容解析器（Markdown / 系统提醒 / Question-Form）
 │   ├── QuestionForm.tsx     # Question-Form 表单组件
+│   ├── UserInputCard.tsx    # User-Input 整理结果卡片
 │   ├── TodoCard.tsx         # 任务列表卡片
 │   └── Icon.tsx             # SVG 图标集
 ├── hooks/
@@ -40,7 +40,7 @@ src/
 └── utils/
     ├── markdown.tsx          # Markdown → JSX 渲染器
     ├── question-form.ts     # <question-form> 解析器
-    └── compress.ts          # <compress> 解析器
+    └── user-input.ts        # <user-input> 解析器
 ```
 
 ## SSE 事件流程
@@ -51,7 +51,7 @@ src/
 | `thinking` | 思考过程增量 |
 | `text` | 文本内容 |
 | `question-form-start` / `question-form-complete` | Question-Form 生成 |
-| `compress-start` / `compress-complete` | 压缩上下文块生成 |
+| `user-input-start` / `user-input-complete` | User-Input 整理结果生成 |
 | `todo-update` | 任务列表更新 |
 | `tool-call` / `tool-result` | 工具调用 |
 | `finish` | 流式结束 |

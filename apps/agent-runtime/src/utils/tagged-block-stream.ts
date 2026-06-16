@@ -6,19 +6,19 @@ import type {
 interface TaggedBlockOptions {
   startMarker: string;
   endMarker: string;
-  startEvent: "question-form-start" | "compress-start";
-  completeEvent:
-    | "question-form-complete"
-    | "compress-complete";
+  startEvent: "question-form-start" | "user-input-start";
+  completeEvent: "question-form-complete" | "user-input-complete";
 }
 
 export async function* streamTaggedBlock(
   source: AsyncIterable<StreamChunk>,
-  options: TaggedBlockOptions,
+  options: TaggedBlockOptions | TaggedBlockOptions[],
 ): AsyncGenerator<ConversationStreamEvent> {
+  const tagOptions = Array.isArray(options) ? options : [options];
   let blockBuffer = "";
   let pendingText = "";
   let collecting = false;
+  let activeOptions: TaggedBlockOptions | null = null;
 
   for await (const chunk of source) {
     if (chunk.type === "reasoning") {
@@ -34,39 +34,42 @@ export async function* streamTaggedBlock(
 
     while (true) {
       if (collecting) {
-        const endIndex = blockBuffer.indexOf(options.endMarker);
+        if (!activeOptions) {
+          throw new Error("Tagged block collector missing active options.");
+        }
+
+        const endIndex = blockBuffer.indexOf(activeOptions.endMarker);
         if (endIndex === -1) {
           break;
         }
 
-        const blockEnd = endIndex + options.endMarker.length;
+        const blockEnd = endIndex + activeOptions.endMarker.length;
         const content = blockBuffer.slice(0, blockEnd);
         pendingText = blockBuffer.slice(blockEnd);
         blockBuffer = "";
         collecting = false;
 
-        yield { type: options.completeEvent, content };
+        yield { type: activeOptions.completeEvent, content };
+        activeOptions = null;
         continue;
       }
 
-      const startIndex = pendingText.indexOf(options.startMarker);
-      if (startIndex !== -1) {
-        const textBeforeBlock = pendingText.slice(0, startIndex);
+      const match = findFirstMarker(pendingText, tagOptions);
+      if (match) {
+        const textBeforeBlock = pendingText.slice(0, match.startIndex);
         if (textBeforeBlock) {
           yield { type: "text", content: textBeforeBlock };
         }
 
-        blockBuffer = pendingText.slice(startIndex);
+        blockBuffer = pendingText.slice(match.startIndex);
         pendingText = "";
         collecting = true;
-        yield { type: options.startEvent };
+        activeOptions = match.options;
+        yield { type: match.options.startEvent };
         continue;
       }
 
-      if (!couldEndWithMarkerPrefix(
-        pendingText,
-        options.startMarker,
-      )) {
+      if (!couldEndWithAnyMarkerPrefix(pendingText, tagOptions)) {
         if (pendingText) {
           yield { type: "text", content: pendingText };
           pendingText = "";
@@ -95,4 +98,31 @@ function couldEndWithMarkerPrefix(
     }
   }
   return false;
+}
+
+function couldEndWithAnyMarkerPrefix(
+  text: string,
+  options: TaggedBlockOptions[],
+): boolean {
+  return options.some((option) =>
+    couldEndWithMarkerPrefix(text, option.startMarker),
+  );
+}
+
+function findFirstMarker(
+  text: string,
+  options: TaggedBlockOptions[],
+): { startIndex: number; options: TaggedBlockOptions } | null {
+  let first: { startIndex: number; options: TaggedBlockOptions } | null =
+    null;
+
+  for (const option of options) {
+    const startIndex = text.indexOf(option.startMarker);
+    if (startIndex === -1) continue;
+    if (!first || startIndex < first.startIndex) {
+      first = { startIndex, options: option };
+    }
+  }
+
+  return first;
 }

@@ -31,20 +31,20 @@ export function applyStreamEvent(
           content: event.content,
         },
       };
-    case "compress-start":
+    case "user-input-start":
       return {
         ...message,
-        compressBlock: { state: "generating" },
+        userInput: { state: "generating" },
       };
-    case "compress-complete":
+    case "user-input-complete":
       return {
         ...message,
         content: removeTaggedBlock(
           message.content,
-          "<compress",
-          "</compress>",
+          "<user-input",
+          "</user-input>",
         ),
-        compressBlock: {
+        userInput: {
           state: "complete",
           content: event.content,
         },
@@ -117,19 +117,19 @@ function applyTextChunk(
     };
   }
 
-  const compressBlock = extractTaggedBlock(
+  const userInput = extractTaggedBlock(
     content,
-    "<compress",
-    "</compress>",
+    "<user-input",
+    "</user-input>",
   );
 
-  if (compressBlock) {
+  if (userInput) {
     return {
       ...message,
-      content: compressBlock.remainingText,
-      compressBlock: {
+      content: userInput.remainingText,
+      userInput: {
         state: "complete",
-        content: compressBlock.block,
+        content: userInput.block,
       },
     };
   }

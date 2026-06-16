@@ -3,9 +3,7 @@ import { Button } from "antd";
 import { SettingOutlined, CaretRightOutlined, CaretDownOutlined } from "@ant-design/icons";
 import { parseSubmittedAnswers, QuestionFormView } from "./QuestionForm";
 import { QuestionForm, splitOnQuestionForms } from "../utils/question-form";
-import { splitOnCompressed } from "../utils/compress";
 import { renderMarkdown } from "../utils/markdown";
-import { CompressedCard } from "./CompressedCard";
 
 export function ProseBlock({
   text,
@@ -28,7 +26,6 @@ export function ProseBlock({
   type RenderableItem =
     | { key: string; kind: "text"; text: string }
     | { key: string; kind: "reminder"; text: string }
-    | { key: string; kind: "compress"; raw: string; title?: string }
     | { key: string; kind: "form"; form: QuestionForm };
 
   const renderable: RenderableItem[] = [];
@@ -47,15 +44,7 @@ export function ProseBlock({
         renderable.push({ key: `t-${idx}-${j}`, kind: "reminder", text: s.text });
         continue;
       }
-      const compressed = splitOnCompressed(s.text);
-      for (let k = 0; k < compressed.length; k++) {
-        const c = compressed[k]!;
-        if (c.kind === "compress") {
-          renderable.push({ key: `t-${idx}-${j}-${k}`, kind: "compress", raw: c.raw, title: c.title });
-        } else {
-          renderable.push({ key: `t-${idx}-${j}-${k}`, kind: "text", text: c.text });
-        }
-      }
+      renderable.push({ key: `t-${idx}-${j}`, kind: "text", text: s.text });
     }
   }
 
@@ -74,9 +63,6 @@ export function ProseBlock({
       {renderable.map((seg) => {
         if (seg.kind === "reminder") {
           return <SystemReminderBlock key={seg.key} text={seg.text} />;
-        }
-        if (seg.kind === "compress") {
-          return <CompressedCard key={seg.key} raw={seg.raw} title={seg.title} />;
         }
         if (seg.kind === "text") {
           return <Fragment key={seg.key}>{renderMarkdown(seg.text)}</Fragment>;

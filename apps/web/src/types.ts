@@ -5,8 +5,8 @@ export type StreamEventType =
   | "text"
   | "question-form-start"
   | "question-form-complete"
-  | "compress-start"
-  | "compress-complete"
+  | "user-input-start"
+  | "user-input-complete"
   | "todo-update"
   | "tool-call"
   | "tool-result"
@@ -32,13 +32,19 @@ export interface TodoItem {
   status: "pending" | "in_progress" | "completed";
 }
 
+export interface UserInputItem {
+  index: number;
+  content: string;
+  type: "陈述" | "提问" | "补充" | "请求";
+}
+
 export interface Message {
   id: string;
   role: "user" | "agent";
   content: string;
   thinking?: string;
   questionForm?: { state: "generating" | "complete"; content?: string };
-  compressBlock?: { state: "generating" | "complete"; content?: string };
+  userInput?: { state: "generating" | "complete"; content?: string };
   todos?: TodoItem[];
   toolCalls?: Array<{ name: string; args?: Record<string, unknown>; result?: unknown }>;
   usage?: Record<string, unknown>;
@@ -53,6 +59,7 @@ export interface ChatState {
 
 export interface ThreadInfo {
   id: string;
+  requestFormId?: string;
   title: string;
   createdAt: string;
   updatedAt: string;

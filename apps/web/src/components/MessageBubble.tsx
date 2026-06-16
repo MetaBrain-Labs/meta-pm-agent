@@ -9,6 +9,7 @@ import {
 import type { Message } from "../types";
 import { ProseBlock } from "./ProseBlock";
 import { TodoCard } from "./TodoCard";
+import { UserInputCard } from "./UserInputCard";
 
 const TOOL_NAME_LABELS: Record<string, string> = {
   write_todos: "生成任务",
@@ -158,21 +159,12 @@ export function MessageBubble({
         </div>
       )}
 
-      {message.compressBlock && (
+      {message.userInput && (
         <div>
-          {message.compressBlock.state === "generating" ? (
-            <QFGenerating label="正在生成需求上下文" />
+          {message.userInput.state === "generating" ? (
+            <QFGenerating label="正在整理用户输入" />
           ) : (
-            <ProseBlock
-              text={message.compressBlock?.content || ""}
-              isLastAssistant={!!isLast}
-              streaming={streaming}
-              nextUserContent={nextUserContent}
-              locallySubmitted={locallySubmitted}
-              onSubmitForm={(_formId, text) => {
-                onFormSubmit?.(text);
-              }}
-            />
+            <UserInputCard raw={message.userInput.content || ""} />
           )}
         </div>
       )}
@@ -180,7 +172,7 @@ export function MessageBubble({
       {!message.content &&
         !message.thinking &&
         !message.questionForm &&
-        !message.compressBlock && (
+        !message.userInput && (
           <div
             className="rounded-2xl !rounded-bl-md px-4 py-3.5"
             style={{
