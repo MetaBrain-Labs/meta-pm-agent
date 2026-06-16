@@ -39,7 +39,9 @@ Each \`user_input\` record must contain:
 - \`content\`: a complete sentence. You may make light additions only to make the sentence semantically complete and grammatical.
 - \`type\`: one of \`陈述\`, \`提问\`, \`补充\`, \`请求\`.
 
-When you output the result of form-answer integration, output a valid JSON object and put \`user_input\` first so downstream agents can reliably parse the user's original independent statements.
+When you reason about form-answer integration, focus on \`user_input\`: identify the user's independent statements first, then classify them. Do not spend effort expanding goals, requirements, constraints, or assumptions unless another prompt explicitly asks for them.
+
+When you output the result of form-answer integration, output only \`user_input\` as a valid JSON object inside a \`<user-input>\` block so downstream agents and the UI can reliably parse the user's original independent statements.
 
 ## When to ask a Question Form
 
@@ -127,30 +129,26 @@ Confirmation form shape:
 
 ## Integrating form answers
 
-When the latest user message starts with \`[form answers — ...]\`, output only one valid JSON object containing the integrated request-form content. Do not emit a \`<question-form>\` block, Markdown code fence, prose, or wrapper tags.
+When the latest user message starts with \`[form answers — ...]\`, output exactly one \`<user-input>\` block containing one valid JSON object. Do not emit a \`<question-form>\` block, Markdown code fence, prose, or any content outside the \`<user-input>\` block.
 
 The integration output must:
 
 - Preserve all relevant facts from the original request, form questions, and form answers.
 - Include \`user_input\` as a JSON array of independent records with \`index\`, \`content\`, and \`type\`.
-- Mark lifecycle status when inferable: \`初始表单已归档\`, \`新请求表单待执行\`, \`设计确认完成\`, \`设计退回\`, or \`确认但补充：需新建请求表单\`.
-- Stay concise and useful for an Executor Agent.
+- Do not include \`form_type\`, \`lifecycle\`, \`goal\`, \`requirements\`, \`constraints\`, or \`assumptions\`.
+- Stay concise and useful for downstream agents that read \`user_input\`.
 
 Use this JSON format exactly:
 
 \`\`\`
+<user-input>
 {
   "user_input": [
     { "index": 1, "content": "<complete sentence>", "type": "请求" },
     { "index": 2, "content": "<complete sentence>", "type": "补充" }
-  ],
-  "form_type": "request",
-  "lifecycle": "<status>",
-  "goal": "<one sentence describing what the user wants>",
-  "requirements": ["<key requirement>"],
-  "constraints": ["<constraint or preference>"],
-  "assumptions": ["<reasonable assumption>"]
+  ]
 }
+</user-input>
 \`\`\`
 
 ## Default behavior summary
@@ -158,4 +156,4 @@ Use this JSON format exactly:
 - Chit-chat: maintain chit-chat form internally and directly reply.
 - New or empty project request: create a request form and use Question Form to collect necessary information.
 - Completed product design task: ask for confirmation by form.
-- Form answers: output a valid JSON object with \`user_input\` and no wrapper tags.`;
+- Form answers: output a \`<user-input>\` block containing only a valid JSON object with \`user_input\`.`;

@@ -31,6 +31,24 @@ export function applyStreamEvent(
           content: event.content,
         },
       };
+    case "user-input-start":
+      return {
+        ...message,
+        userInput: { state: "generating" },
+      };
+    case "user-input-complete":
+      return {
+        ...message,
+        content: removeTaggedBlock(
+          message.content,
+          "<user-input",
+          "</user-input>",
+        ),
+        userInput: {
+          state: "complete",
+          content: event.content,
+        },
+      };
     case "todo-update":
       return {
         ...message,
@@ -95,6 +113,23 @@ function applyTextChunk(
       questionForm: {
         state: "complete",
         content: questionForm.block,
+      },
+    };
+  }
+
+  const userInput = extractTaggedBlock(
+    content,
+    "<user-input",
+    "</user-input>",
+  );
+
+  if (userInput) {
+    return {
+      ...message,
+      content: userInput.remainingText,
+      userInput: {
+        state: "complete",
+        content: userInput.block,
       },
     };
   }

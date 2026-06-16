@@ -17,6 +17,20 @@ test("parses user_input JSON records", () => {
   ]);
 });
 
+test("parses user_input from tagged blocks", () => {
+  const records = parseUserInputPayload(`<user-input>
+  {
+    "user_input": [
+      { "index": 1, "content": "用户需要整理输入。", "type": "请求" }
+    ]
+  }
+  </user-input>`);
+
+  assert.deepEqual(records, [
+    { index: 1, content: "用户需要整理输入。", type: "请求" },
+  ]);
+});
+
 test("rejects non-JSON user_input payloads", () => {
   const records = parseUserInputPayload("user_input: not json");
 

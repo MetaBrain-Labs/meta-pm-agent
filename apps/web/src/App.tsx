@@ -302,7 +302,7 @@ function ThreadChatView({
         const requestMessages = [...priorMessages, userMsg].map((m) => ({
           id: m.id,
           role: m.role === "agent" ? ("assistant" as const) : ("user" as const),
-          content: m.content,
+          content: m.content || m.userInput?.content || "",
           timestamp: new Date(m.timestamp).toISOString(),
           sessionId: "local",
           ...(m.thinking ? { reasoningContent: m.thinking } : {}),

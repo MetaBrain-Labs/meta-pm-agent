@@ -9,6 +9,7 @@ import {
 import type { Message } from "../types";
 import { ProseBlock } from "./ProseBlock";
 import { TodoCard } from "./TodoCard";
+import { UserInputCard } from "./UserInputCard";
 
 const TOOL_NAME_LABELS: Record<string, string> = {
   write_todos: "生成任务",
@@ -158,9 +159,20 @@ export function MessageBubble({
         </div>
       )}
 
+      {message.userInput && (
+        <div>
+          {message.userInput.state === "generating" ? (
+            <QFGenerating label="正在整理用户输入" />
+          ) : (
+            <UserInputCard raw={message.userInput.content || ""} />
+          )}
+        </div>
+      )}
+
       {!message.content &&
         !message.thinking &&
-        !message.questionForm && (
+        !message.questionForm &&
+        !message.userInput && (
           <div
             className="rounded-2xl !rounded-bl-md px-4 py-3.5"
             style={{
