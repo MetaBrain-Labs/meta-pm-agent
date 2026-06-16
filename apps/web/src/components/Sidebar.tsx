@@ -1,8 +1,7 @@
-import { Layout, Button, Tooltip, Dropdown } from "antd";
+import { Layout, Button, Tooltip } from "antd";
 import {
   ApartmentOutlined,
   DeleteOutlined,
-  DownOutlined,
   EditOutlined,
   FolderOpenOutlined,
   MenuFoldOutlined,
@@ -34,9 +33,7 @@ interface Props {
   activeId: string | null;
   collapsed: boolean;
   creating: boolean;
-  creatingWorkspace: boolean;
-  onSelectWorkspace: (id: string) => void;
-  onNewWorkspace: () => void | Promise<void>;
+  onWorkspaceInfo: () => void;
   onSelect: (id: string) => void;
   onNew: () => void | Promise<void>;
   onToggle: () => void;
@@ -49,9 +46,7 @@ export function Sidebar({
   activeId,
   collapsed,
   creating,
-  creatingWorkspace,
-  onSelectWorkspace,
-  onNewWorkspace,
+  onWorkspaceInfo,
   onSelect,
   onNew,
   onToggle,
@@ -66,7 +61,7 @@ export function Sidebar({
       collapsed={collapsed}
       onCollapse={onToggle}
       trigger={null}
-      width={400}
+      width={304}
       collapsedWidth={72}
       className={`app-sidebar chat-sidebar h-screen !bg-white ${
         collapsed ? "is-collapsed" : "is-expanded"
@@ -160,30 +155,15 @@ export function Sidebar({
       </div>
 
       {!collapsed && (
-        <Dropdown
-          trigger={["click"]}
-          menu={{
-            items: [
-              ...workspaces.map((workspace) => ({
-                key: workspace.id,
-                label: workspace.name,
-                onClick: () => onSelectWorkspace(workspace.id),
-              })),
-              {
-                key: "new-workspace",
-                label: creatingWorkspace ? "创建中..." : "新建项目",
-                disabled: creatingWorkspace,
-                onClick: () => onNewWorkspace(),
-              },
-            ],
-          }}
+        <button
+          type="button"
+          className="chat-account"
+          onClick={onWorkspaceInfo}
         >
-          <button type="button" className="chat-account">
-            <span />
-            <strong>{activeWorkspace?.name || TEXT.account}</strong>
-            <DownOutlined />
-          </button>
-        </Dropdown>
+          <span />
+          <strong>{activeWorkspace?.name || TEXT.account}</strong>
+          <i aria-hidden="true">⌄</i>
+        </button>
       )}
     </Sider>
   );

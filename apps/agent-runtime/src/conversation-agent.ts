@@ -26,8 +26,9 @@ async function* streamAgentEvents(
     }
 
     const text = getTextContent(message);
-    if (text) {
-      yield { type: "text", content: text };
+    const cleanText = stripInternalNoise(text);
+    if (cleanText) {
+      yield { type: "text", content: cleanText };
     }
   }
 }
@@ -104,4 +105,10 @@ function ensureUserInputBlock(content: string): string {
   }
 
   return `<user-input>\n${trimmed}\n</user-input>`;
+}
+
+function stripInternalNoise(content: string): string {
+  return content
+    .replace(/(^|\n)No files found in\s+\/\s*/g, "$1")
+    .replace(/(^|\n)No files found in\s+\.\s*/g, "$1");
 }

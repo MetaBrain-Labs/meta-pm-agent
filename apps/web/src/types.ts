@@ -77,3 +77,21 @@ export interface WorkspaceInfo {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface AccountInfo {
+  id: string;
+  email?: string | null;
+  username?: string | null;
+  avatar?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface PersistedMessageInfo {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  timestamp: string;
+  reasoningContent?: string;
+  userInput?: Array<{ index: number; content: string; type: string }> | null;
+}

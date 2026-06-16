@@ -1,4 +1,10 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import {
+  useState,
+  useCallback,
+  useRef,
+  useEffect,
+  type ChangeEvent,
+} from "react";
 import { Layout, ConfigProvider, Modal, Form, Input, Button } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import { ChatApp } from "./components/ChatApp";
@@ -8,6 +14,8 @@ import type {
   Message,
   StreamEvent,
   WorkspaceInfo,
+  AccountInfo,
+  PersistedMessageInfo,
 } from "./types";
 import { applyStreamEvent } from "./utils/apply-stream-event";
 
@@ -16,6 +24,41 @@ const DEFAULT_CHAT_TITLE = "\u65b0\u5bf9\u8bdd";
 const DEFAULT_WORKSPACE_NAME = "\u672c\u5730\u5de5\u4f5c\u533a";
 const NO_WORKSPACE_MESSAGE =
   "\u8bf7\u5148\u65b0\u5efa\u6216\u9009\u62e9\u5de5\u4f5c\u533a";
+
+type AppRoute =
+  | { name: "workspace" }
+  | { name: "chat"; workspaceId: string; threadId: string | null };
+
+function parseAppRoute(pathname = window.location.pathname): AppRoute {
+  const parts = pathname.split("/").filter(Boolean);
+  if (parts[0] === "chat" && parts[1]) {
+    return {
+      name: "chat",
+      workspaceId: decodeURIComponent(parts[1]),
+      threadId: parts[2] ? decodeURIComponent(parts[2]) : null,
+    };
+  }
+
+  return { name: "workspace" };
+}
+
+function buildChatPath(workspaceId: string, threadId?: string | null): string {
+  const base = `/chat/${encodeURIComponent(workspaceId)}`;
+  return threadId ? `${base}/${encodeURIComponent(threadId)}` : base;
+}
+
+function replacePath(path: string) {
+  if (window.location.pathname !== path) {
+    window.history.replaceState(null, "", path);
+  }
+}
+
+function pushPath(path: string) {
+  if (window.location.pathname !== path) {
+    window.history.pushState(null, "", path);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }
+}
 
 function loadMessages(threadId: string): Message[] {
   try {
@@ -28,6 +71,20 @@ function loadMessages(threadId: string): Message[] {
 
 function saveMessages(threadId: string, messages: Message[]) {
   localStorage.setItem(`pm-msgs-${threadId}`, JSON.stringify(messages));
+}
+
+async function fetchAccount(): Promise<AccountInfo> {
+  const response = await fetch("/api/account");
+
+  if (!response.ok) {
+    throw new Error(`Server error: ${response.status}`);
+  }
+
+  const data = (await response.json()) as {
+    account: AccountInfo;
+  };
+
+  return data.account;
 }
 
 async function fetchWorkspaces(): Promise<WorkspaceInfo[]> {
@@ -44,11 +101,14 @@ async function fetchWorkspaces(): Promise<WorkspaceInfo[]> {
   return data.workspaces;
 }
 
-async function createWorkspaceRecord(name: string): Promise<WorkspaceInfo> {
+async function createWorkspaceRecord(
+  name: string,
+  localPath: string,
+): Promise<WorkspaceInfo> {
   const response = await fetch("/api/workspaces", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, localPath }),
   });
 
   if (!response.ok) {
@@ -106,8 +166,44 @@ async function fetchChatRecords(
   return data.chats;
 }
 
+async function fetchChatMessages(threadId: string): Promise<Message[]> {
+  const response = await fetch(`/api/chats/${threadId}/messages`);
+
+  if (!response.ok) {
+    throw new Error(`Server error: ${response.status}`);
+  }
+
+  const data = (await response.json()) as {
+    messages: PersistedMessageInfo[];
+  };
+
+  return data.messages.map((message) => ({
+    id: message.id,
+    role: message.role === "assistant" ? "agent" : "user",
+    content: message.content,
+    timestamp: new Date(message.timestamp).getTime(),
+    ...(message.reasoningContent
+      ? { thinking: message.reasoningContent }
+      : {}),
+    ...(message.userInput
+      ? {
+          userInput: {
+            state: "complete" as const,
+            content: JSON.stringify(
+              { user_input: message.userInput },
+              null,
+              2,
+            ),
+          },
+        }
+      : {}),
+  }));
+}
+
 export default function App() {
   const [projectForm] = Form.useForm<{ name: string; location?: string }>();
+  const directoryInputRef = useRef<HTMLInputElement | null>(null);
+  const [account, setAccount] = useState<AccountInfo | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(
     () => localStorage.getItem(ACTIVE_WORKSPACE_KEY),
@@ -118,11 +214,56 @@ export default function App() {
   const [isCreatingChat, setIsCreatingChat] = useState(false);
   const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
+  const [configModalOpen, setConfigModalOpen] = useState(false);
+  const [configTab, setConfigTab] = useState<"account" | "workspace">(
+    "account",
+  );
+  const [configWorkspaceVisible, setConfigWorkspaceVisible] = useState(false);
   const [projectLocationHint, setProjectLocationHint] = useState(false);
+  const [workspaceDetailOpen, setWorkspaceDetailOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [route, setRoute] = useState<AppRoute>(() => parseAppRoute());
+
+  useEffect(() => {
+    if (window.location.pathname === "/") {
+      replacePath("/workplace");
+    }
+
+    const handlePopState = () => {
+      setRoute(parseAppRoute());
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (route.name === "workspace") {
+      setWorkspaceDetailOpen(false);
+      setActiveThreadId(null);
+      return;
+    }
+
+    setWorkspaceDetailOpen(true);
+    setActiveWorkspaceId(route.workspaceId);
+    setActiveThreadId(route.threadId);
+    localStorage.setItem(ACTIVE_WORKSPACE_KEY, route.workspaceId);
+  }, [route]);
 
   useEffect(() => {
     let cancelled = false;
+
+    fetchAccount()
+      .then((serverAccount) => {
+        if (cancelled) return;
+        setAccount(serverAccount);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error("[account] Failed to load account:", error);
+      });
 
     fetchWorkspaces()
       .then((serverWorkspaces) => {
@@ -166,7 +307,11 @@ export default function App() {
       .then((serverThreads) => {
         if (cancelled) return;
         setThreads(serverThreads);
-        setActiveThreadId(null);
+        const routeThreadId =
+          route.name === "chat" && route.workspaceId === activeWorkspaceId
+            ? route.threadId
+            : null;
+        setActiveThreadId(routeThreadId);
         setCreationError(null);
       })
       .catch((error) => {
@@ -178,21 +323,43 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceId]);
+  }, [activeWorkspaceId, route]);
 
   const handleNewThread = useCallback((newThread: ThreadInfo) => {
     setCreationError(null);
+    setWorkspaceDetailOpen(true);
     setThreads((prev) => [newThread, ...prev]);
     setActiveThreadId(newThread.id);
+    pushPath(buildChatPath(newThread.workspaceId, newThread.id));
   }, []);
 
   const handleSelectThread = useCallback((id: string) => {
+    const workspaceId = activeWorkspaceId;
+    if (workspaceId) {
+      pushPath(buildChatPath(workspaceId, id));
+    }
+    setWorkspaceDetailOpen(true);
     setActiveThreadId(id);
+  }, [activeWorkspaceId]);
+
+  const handleOpenWorkspace = useCallback((id: string) => {
+    pushPath(buildChatPath(id));
+    setActiveWorkspaceId(id);
+    setActiveThreadId(null);
+    setWorkspaceDetailOpen(true);
+    localStorage.setItem(ACTIVE_WORKSPACE_KEY, id);
   }, []);
 
-  const handleSelectWorkspace = useCallback((id: string) => {
-    setActiveWorkspaceId(id);
-    localStorage.setItem(ACTIVE_WORKSPACE_KEY, id);
+  const handleBackToWorkspaceList = useCallback(() => {
+    pushPath("/workplace");
+    setWorkspaceDetailOpen(false);
+    setActiveThreadId(null);
+  }, []);
+
+  const openConfigModal = useCallback((tab: "account" | "workspace") => {
+    setConfigWorkspaceVisible(tab === "workspace");
+    setConfigTab(tab);
+    setConfigModalOpen(true);
   }, []);
 
   const openProjectModal = useCallback(() => {
@@ -203,6 +370,47 @@ export default function App() {
     });
     setProjectModalOpen(true);
   }, [projectForm, workspaces.length]);
+
+  const handleBrowseDirectory = useCallback(async () => {
+    type DirectoryPickerWindow = Window & {
+      showDirectoryPicker?: () => Promise<{ name: string }>;
+    };
+    const picker = (window as DirectoryPickerWindow).showDirectoryPicker;
+
+    if (picker) {
+      try {
+        const handle = await picker.call(window);
+        const maybePath = (handle as { path?: string }).path;
+        projectForm.setFieldValue("location", maybePath || handle.name);
+        setProjectLocationHint(false);
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+      }
+    }
+
+    directoryInputRef.current?.click();
+  }, [projectForm]);
+
+  const handleDirectoryInputChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.currentTarget.files?.[0];
+      const relativePath = file?.webkitRelativePath;
+      const nativePath = (file as (File & { path?: string }) | undefined)?.path;
+      const directoryName = relativePath?.split("/")[0] || file?.name || "";
+      const selectedPath = nativePath || directoryName;
+
+      if (selectedPath) {
+        projectForm.setFieldValue("location", selectedPath);
+        setProjectLocationHint(false);
+      }
+
+      event.currentTarget.value = "";
+    },
+    [projectForm],
+  );
 
   const handleNewWorkspace = useCallback(async () => {
     if (isCreatingWorkspace) return;
@@ -221,10 +429,15 @@ export default function App() {
     setIsCreatingWorkspace(true);
 
     try {
-      const newWorkspace = await createWorkspaceRecord(values.name.trim());
+      const newWorkspace = await createWorkspaceRecord(
+        values.name.trim(),
+        values.location.trim(),
+      );
       setWorkspaces((prev) => [newWorkspace, ...prev]);
       setActiveWorkspaceId(newWorkspace.id);
       setActiveThreadId(null);
+      setWorkspaceDetailOpen(true);
+      pushPath(buildChatPath(newWorkspace.id));
       localStorage.setItem(ACTIVE_WORKSPACE_KEY, newWorkspace.id);
       setCreationError(null);
       setProjectModalOpen(false);
@@ -279,10 +492,7 @@ export default function App() {
           lineHeight: 1.55,
         },
         components: {
-          Button: {
-            fontWeight: 600,
-            primaryShadow: "0 10px 22px -12px rgba(37, 99, 235, 0.75)",
-          },
+          Button: { fontWeight: 600, primaryShadow: "none" },
           Input: {
             activeBorderColor: "#115eab",
             hoverBorderColor: "#9bb5da",
@@ -296,7 +506,7 @@ export default function App() {
       locale={zhCN}
     >
       <Layout className="h-screen app-shell" style={{ gap: 0 }}>
-        {activeThreadId ? (
+        {workspaceDetailOpen && activeWorkspaceId ? (
           <>
             <Sidebar
               workspaces={workspaces}
@@ -305,9 +515,7 @@ export default function App() {
               activeId={activeThreadId}
               collapsed={sidebarCollapsed}
               creating={isCreatingChat}
-              creatingWorkspace={isCreatingWorkspace}
-              onSelectWorkspace={handleSelectWorkspace}
-              onNewWorkspace={openProjectModal}
+              onWorkspaceInfo={() => openConfigModal("workspace")}
               onSelect={handleSelectThread}
               onNew={handleNewChat}
               onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
@@ -315,11 +523,17 @@ export default function App() {
             <Layout style={{ background: "transparent" }}>
               <ThreadChatView
                 workspaceId={activeWorkspaceId}
+                workspaceName={
+                  workspaces.find(
+                    (workspace) => workspace.id === activeWorkspaceId,
+                  )?.name ?? DEFAULT_WORKSPACE_NAME
+                }
                 thread={
                   threads.find((thread) => thread.id === activeThreadId) ?? null
                 }
                 creationError={creationError}
                 onNewThread={handleNewThread}
+                onBack={handleBackToWorkspaceList}
               />
             </Layout>
           </>
@@ -328,14 +542,16 @@ export default function App() {
             workspaces={workspaces}
             activeWorkspaceId={activeWorkspaceId}
             threads={threads}
+            account={account}
             error={creationError}
             creating={isCreatingChat}
             creatingWorkspace={isCreatingWorkspace}
-            onSelectWorkspace={handleSelectWorkspace}
+            onOpenWorkspace={handleOpenWorkspace}
             onNewWorkspace={openProjectModal}
+            onAccountInfo={() => openConfigModal("account")}
             onOpenProject={() => {
-              if (threads[0]) {
-                handleSelectThread(threads[0].id);
+              if (activeWorkspaceId) {
+                handleOpenWorkspace(activeWorkspaceId);
                 return;
               }
               void handleNewChat();
@@ -373,7 +589,7 @@ export default function App() {
                 addonAfter={
                   <Button
                     type="link"
-                    onClick={() => setProjectLocationHint(true)}
+                    onClick={() => void handleBrowseDirectory()}
                   >
                     浏览
                   </Button>
@@ -382,7 +598,7 @@ export default function App() {
             </Form.Item>
             <div className="project-location-note">
               指定项目在本地的存放位置：
-              <button type="button" onClick={() => setProjectLocationHint(true)}>
+              <button type="button" onClick={() => void handleBrowseDirectory()}>
                 选择后的位置
               </button>
             </div>
@@ -401,7 +617,40 @@ export default function App() {
             </Button>
           </div>
         </Form>
+        <input
+          ref={directoryInputRef}
+          type="file"
+          className="hidden-file-input"
+          onChange={handleDirectoryInputChange}
+          {...{ webkitdirectory: "", directory: "" }}
+        />
       </Modal>
+      <ConfigModal
+        open={configModalOpen}
+        activeTab={configTab}
+        showWorkspace={configWorkspaceVisible}
+        accountRows={[
+          ["账号 ID", account?.id ?? "-"],
+          ["用户名", account?.username ?? "Local User"],
+          ["邮箱", account?.email ?? "-"],
+          ["头像", account?.avatar ?? "默认头像"],
+        ]}
+        workspaceRows={(() => {
+          const workspace =
+            workspaces.find(
+              (item) => item.id === activeWorkspaceId,
+            ) ?? null;
+          return [
+            ["工作区 ID", workspace?.id ?? "-"],
+            ["名称", workspace?.name ?? "-"],
+            ["本地路径", workspace?.localPath ?? "-"],
+            ["存储类型", workspace?.storageType ?? "-"],
+            ["同步状态", workspace?.syncStatus ?? "-"],
+          ];
+        })()}
+        onTabChange={setConfigTab}
+        onClose={() => setConfigModalOpen(false)}
+      />
     </ConfigProvider>
   );
 }
@@ -410,21 +659,25 @@ function WorkspaceDashboard({
   workspaces,
   activeWorkspaceId,
   threads,
+  account,
   error,
   creating,
   creatingWorkspace,
-  onSelectWorkspace,
+  onOpenWorkspace,
   onNewWorkspace,
+  onAccountInfo,
   onOpenProject,
 }: {
   workspaces: WorkspaceInfo[];
   activeWorkspaceId: string | null;
   threads: ThreadInfo[];
+  account: AccountInfo | null;
   error: string | null;
   creating: boolean;
   creatingWorkspace: boolean;
-  onSelectWorkspace: (id: string) => void;
+  onOpenWorkspace: (id: string) => void;
   onNewWorkspace: () => void;
+  onAccountInfo: () => void;
   onOpenProject: () => void;
 }) {
   const activeWorkspace =
@@ -444,7 +697,7 @@ function WorkspaceDashboard({
                 className={`workspace-project-item ${
                   workspace.id === activeWorkspaceId ? "is-active" : ""
                 }`}
-                onClick={() => onSelectWorkspace(workspace.id)}
+                onClick={() => onOpenWorkspace(workspace.id)}
               >
                 <span>
                   <strong>{workspace.name || "项目名称"}</strong>
@@ -465,11 +718,15 @@ function WorkspaceDashboard({
             </div>
           )}
         </div>
-        <div className="workspace-account">
-          <span />
-          <b>账号</b>
+        <button
+          type="button"
+          className="workspace-account"
+          onClick={onAccountInfo}
+        >
+          <AvatarMark src={account?.avatar} />
+          <b>{account?.username || "Local User"}</b>
           <i aria-hidden="true">⌄</i>
-        </div>
+        </button>
       </aside>
 
       <main className="workspace-main">
@@ -522,6 +779,80 @@ function WorkspaceDashboard({
   );
 }
 
+function AvatarMark({ src }: { src?: string | null }) {
+  return src ? (
+    <img src={src} alt="" className="avatar-mark" />
+  ) : (
+    <span className="avatar-mark" aria-hidden="true">
+      账
+    </span>
+  );
+}
+
+function ConfigModal({
+  open,
+  activeTab,
+  showWorkspace,
+  accountRows,
+  workspaceRows,
+  onTabChange,
+  onClose,
+}: {
+  open: boolean;
+  activeTab: "account" | "workspace";
+  showWorkspace: boolean;
+  accountRows: Array<[string, string]>;
+  workspaceRows: Array<[string, string]>;
+  onTabChange: (tab: "account" | "workspace") => void;
+  onClose: () => void;
+}) {
+  const title = activeTab === "account" ? "账号信息" : "工作区信息";
+  const rows = activeTab === "account" ? accountRows : workspaceRows;
+
+  return (
+    <Modal
+      centered
+      width={680}
+      open={open}
+      title="配置"
+      footer={<Button onClick={onClose}>关闭</Button>}
+      onCancel={onClose}
+      className="info-modal"
+    >
+      <div className="settings-modal-body">
+        <aside className="settings-modal-nav">
+          <button
+            type="button"
+            className={activeTab === "account" ? "is-active" : ""}
+            onClick={() => onTabChange("account")}
+          >
+            账号信息
+          </button>
+          <button
+            type="button"
+            className={activeTab === "workspace" ? "is-active" : ""}
+            onClick={() => onTabChange("workspace")}
+            hidden={!showWorkspace}
+          >
+            工作区信息
+          </button>
+        </aside>
+        <section className="settings-modal-content">
+          <h3>{title}</h3>
+          <div className="info-modal-body">
+            {rows.map(([label, value]) => (
+              <div key={label} className="info-row">
+                <span>{label}</span>
+                <strong>{value}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </Modal>
+  );
+}
+
 function ActionRow({
   title,
   description,
@@ -556,14 +887,18 @@ function ActionRow({
 
 function ThreadChatView({
   workspaceId,
+  workspaceName,
   thread,
   creationError,
   onNewThread,
+  onBack,
 }: {
   workspaceId: string | null;
+  workspaceName: string;
   thread: ThreadInfo | null;
   creationError: string | null;
   onNewThread: (thread: ThreadInfo) => void;
+  onBack: () => void;
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -600,7 +935,29 @@ function ThreadChatView({
     threadIdRef.current = thread?.id ?? null;
     requestFormIdRef.current = thread?.requestFormId;
     if (thread?.id) {
-      setMessages(loadMessages(thread.id));
+      const cachedMessages = loadMessages(thread.id);
+      setMessages(cachedMessages);
+      let cancelled = false;
+
+      fetchChatMessages(thread.id)
+        .then((serverMessages) => {
+          if (cancelled || serverMessages.length === 0) return;
+          const mergedMessages = serverMessages.map((message) => {
+            const cached = cachedMessages.find((item) => item.id === message.id);
+            return message.thinking || !cached?.thinking
+              ? message
+              : { ...message, thinking: cached.thinking };
+          });
+          setMessages(mergedMessages);
+          saveMessages(thread.id, mergedMessages);
+        })
+        .catch((error) => {
+          console.error("[chat] Failed to load messages:", error);
+        });
+
+      return () => {
+        cancelled = true;
+      };
     } else {
       setMessages([]);
     }
@@ -768,6 +1125,7 @@ function ThreadChatView({
 
   return (
     <ChatApp
+      workspaceName={workspaceName}
       messages={messages}
       isLoading={isLoading}
       error={error}
@@ -775,6 +1133,7 @@ function ThreadChatView({
       onSend={sendMessage}
       onStop={stopGeneration}
       onClear={clearMessages}
+      onBack={onBack}
     />
   );
 }

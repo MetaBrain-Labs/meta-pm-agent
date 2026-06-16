@@ -16,6 +16,15 @@ interface WorkspaceRow {
   updated_at: Date;
 }
 
+interface UserRow {
+  id: string;
+  email: string | null;
+  username: string | null;
+  avatar: string | null;
+  created_at: Date | null;
+  updated_at: Date | null;
+}
+
 export interface WorkspaceDto {
   id: string;
   userId: string;
@@ -26,6 +35,39 @@ export interface WorkspaceDto {
   syncStatus: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AccountDto {
+  id: string;
+  email: string | null;
+  username: string | null;
+  avatar: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export async function getLocalUserAccount(): Promise<AccountDto> {
+  await ensureLocalUser();
+
+  const rows = await prisma.$queryRaw<UserRow[]>`
+    SELECT
+      "id",
+      "email",
+      "username",
+      "avatar",
+      "created_at",
+      "updated_at"
+    FROM "user"
+    WHERE "id" = ${LOCAL_USER_ID}
+    LIMIT 1
+  `;
+
+  const user = rows[0];
+  if (!user) {
+    throw new Error("Failed to load local user.");
+  }
+
+  return mapUserRow(user);
 }
 
 export async function listLocalUserWorkspaces(): Promise<WorkspaceDto[]> {
@@ -52,6 +94,7 @@ export async function listLocalUserWorkspaces(): Promise<WorkspaceDto[]> {
 
 export async function createLocalUserWorkspace(
   name = DEFAULT_WORKSPACE_NAME,
+  localPath?: string,
 ): Promise<WorkspaceDto> {
   await ensureLocalUser();
 
@@ -61,9 +104,10 @@ export async function createLocalUserWorkspace(
       "user_id",
       "name",
       "storage_type",
+      "local_path",
       "sync_status"
     )
-    VALUES (${randomUUID()}, ${LOCAL_USER_ID}, ${name}, 'local', 'idle')
+    VALUES (${randomUUID()}, ${LOCAL_USER_ID}, ${name}, 'local', ${localPath ?? null}, 'idle')
     RETURNING
       "id",
       "user_id",
@@ -102,5 +146,16 @@ function mapWorkspaceRow(row: WorkspaceRow): WorkspaceDto {
     syncStatus: row.sync_status,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+function mapUserRow(row: UserRow): AccountDto {
+  return {
+    id: row.id,
+    email: row.email,
+    username: row.username,
+    avatar: row.avatar,
+    createdAt: row.created_at?.toISOString() ?? null,
+    updatedAt: row.updated_at?.toISOString() ?? null,
   };
 }

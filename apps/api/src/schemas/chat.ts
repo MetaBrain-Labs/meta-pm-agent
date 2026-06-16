@@ -18,6 +18,7 @@ export const ListChatsQuerySchema = z.object({
 
 export const CreateWorkspaceRequestSchema = z.object({
   name: z.string().trim().min(1).max(255).optional(),
+  localPath: z.string().trim().min(1).max(2048).optional(),
 });
 
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
