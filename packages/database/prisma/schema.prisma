@@ -7,38 +7,79 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Chat {
-  id           String        @id @db.VarChar(36)
-  title        String?       @db.VarChar(255)
-  status       String?       @default("active") @db.VarChar(32)
-  createdAt    DateTime?     @default(now()) @map("created_at") @db.Timestamp(6)
-  updatedAt    DateTime?     @default(now()) @map("updated_at") @db.Timestamp(6)
-  messages     Message[]
-  requestForms RequestForm[]
+model ActivityLog {
+  id          String    @id @db.Uuid
+  userId      String?   @map("user_id") @db.VarChar(36)
+  workspaceId String?   @map("workspace_id") @db.VarChar(36)
+  entityType  String?   @map("entity_type") @db.VarChar(50)
+  entityId    String?   @map("entity_id") @db.VarChar(36)
+  action      String?   @db.VarChar(50)
+  detail      Json?     @db.JsonB
+  createdAt   DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  @@map("chat")
+  @@map("activity_log")
 }
 
-model EventOutbox {
-  id        String    @id @db.VarChar(36)
-  eventType String    @map("event_type") @db.VarChar(64)
-  payload   Json      @db.Json
-  status    String?   @default("pending") @db.VarChar(32)
-  createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+model AgentRun {
+  id             String    @id @db.VarChar(36)
+  taskId         String    @map("task_id") @db.VarChar(36)
+  workspaceId    String    @map("workspace_id") @db.VarChar(36)
+  conversationId String?   @map("conversation_id") @db.VarChar(36)
+  agentType      String    @map("agent_type") @db.VarChar(50)
+  status         String?   @default("pending") @db.VarChar(30)
+  input          Json?     @db.JsonB
+  output         Json?     @db.JsonB
+  errorMessage   String?   @map("error_message")
+  startedAt      DateTime? @map("started_at") @db.Timestamptz(6)
+  finishedAt     DateTime? @map("finished_at") @db.Timestamptz(6)
+  createdAt      DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
+  task           Task      @relation(fields: [taskId], references: [id])
 
-  @@map("event_outbox")
+  @@map("agent_run")
+}
+
+model Artifact {
+  id          String    @id @db.VarChar(36)
+  taskId      String    @map("task_id") @db.VarChar(36)
+  workspaceId String    @map("workspace_id") @db.VarChar(36)
+  type        String    @db.VarChar(50)
+  title       String?   @db.VarChar(255)
+  content     Json?     @db.JsonB
+  version     Int?      @default(1)
+  createdAt   DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
+  task        Task      @relation(fields: [taskId], references: [id])
+
+  @@map("artifact")
+}
+
+model Conversation {
+  id            String    @id @db.VarChar(36)
+  workspaceId   String    @map("workspace_id") @db.VarChar(36)
+  userId        String    @map("user_id") @db.VarChar(36)
+  title         String?   @db.VarChar(255)
+  type          String?   @default("chat") @db.VarChar(30)
+  status        String?   @default("active") @db.VarChar(20)
+  lastMessageAt DateTime? @map("last_message_at") @db.Timestamptz(6)
+  createdAt     DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
+  user          User      @relation(fields: [userId], references: [id])
+  workspace     Workspace @relation(fields: [workspaceId], references: [id])
+  messages      Message[]
+  tasks         Task[]
+
+  @@map("conversation")
 }
 
 model Message {
-  id        String    @id @db.VarChar(36)
-  chatId    String    @map("chat_id") @db.VarChar(36)
-  role      String    @db.VarChar(32)
-  content   String
-  meta      Json?     @db.Json
-  createdAt DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
-  chat      Chat      @relation(fields: [chatId], references: [id])
+  id             String       @id @db.VarChar(36)
+  conversationId String       @map("conversation_id") @db.VarChar(36)
+  role           String       @db.VarChar(20)
+  content        String
+  meta           Json?        @db.JsonB
+  createdAt      DateTime?    @default(now()) @map("created_at") @db.Timestamptz(6)
+  userInput      Json?        @map("user_input") @db.JsonB
+  type           String?      @db.VarChar(20)
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
 
-  @@index([chatId])
   @@map("message")
 }
 
@@ -48,28 +89,74 @@ model RequestForm {
   version   Int               @default(1)
   status    String            @db.VarChar(32)
   summary   String?
-  createdAt DateTime?         @default(now()) @map("created_at") @db.Timestamp(6)
-  updatedAt DateTime?         @default(now()) @map("updated_at") @db.Timestamp(6)
-  chat      Chat              @relation(fields: [chatId], references: [id])
+  createdAt DateTime?         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime?         @default(now()) @map("updated_at") @db.Timestamptz(6)
   items     RequestFormItem[]
 
-  @@index([chatId])
   @@map("request_form")
 }
 
 model RequestFormItem {
-  id           String       @id @db.VarChar(36)
-  formId       String       @map("form_id") @db.VarChar(36)
-  type         String       @db.VarChar(32)
-  status       String       @db.VarChar(32)
-  agent        String?      @db.VarChar(32)
-  priority     Int?         @default(0)
-  payload      Json         @db.Json
-  parentItemId String?      @map("parent_item_id") @db.VarChar(36)
-  createdAt    DateTime?    @default(now()) @map("created_at") @db.Timestamp(6)
-  updatedAt    DateTime?    @default(now()) @map("updated_at") @db.Timestamp(6)
-  requestForm  RequestForm  @relation(fields: [formId], references: [id])
+  id           String      @id @db.VarChar(36)
+  formId       String      @map("form_id") @db.VarChar(36)
+  type         String      @db.VarChar(32)
+  status       String      @db.VarChar(32)
+  agent        String?     @db.VarChar(32)
+  priority     Int?        @default(0)
+  payload      Json        @db.JsonB
+  parentItemId String?     @map("parent_item_id") @db.VarChar(36)
+  createdAt    DateTime?   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime?   @default(now()) @map("updated_at") @db.Timestamptz(6)
+  requestForm  RequestForm @relation(fields: [formId], references: [id])
 
-  @@index([formId])
   @@map("request_form_item")
+}
+
+model Task {
+  id             String        @id @db.VarChar(36)
+  conversationId String?       @map("conversation_id") @db.VarChar(36)
+  workspaceId    String        @map("workspace_id") @db.VarChar(36)
+  userId         String        @map("user_id") @db.VarChar(36)
+  type           String        @db.VarChar(50)
+  status         String?       @default("pending") @db.VarChar(30)
+  input          Json?         @db.JsonB
+  output         Json?         @db.JsonB
+  createdAt      DateTime?     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime?     @default(now()) @map("updated_at") @db.Timestamptz(6)
+  conversation   Conversation? @relation(fields: [conversationId], references: [id])
+  workspace      Workspace     @relation(fields: [workspaceId], references: [id])
+  agentRuns      AgentRun[]
+  artifacts      Artifact[]
+
+  @@map("task")
+}
+
+model User {
+  id            String         @id @db.VarChar(36)
+  email         String?        @unique @db.VarChar(255)
+  username      String?        @db.VarChar(100)
+  avatar        String?
+  createdAt     DateTime?      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime?      @default(now()) @map("updated_at") @db.Timestamptz(6)
+  conversations Conversation[]
+  workspaces    Workspace[]
+
+  @@map("user")
+}
+
+model Workspace {
+  id            String         @id @db.VarChar(36)
+  userId        String         @map("user_id") @db.VarChar(36)
+  name          String         @db.VarChar(255)
+  storageType   String?        @default("local") @map("storage_type") @db.VarChar(20)
+  localPath     String?        @map("local_path")
+  cloudPath     String?        @map("cloud_path")
+  syncStatus    String?        @default("idle") @map("sync_status") @db.VarChar(20)
+  createdAt     DateTime?      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime?      @default(now()) @map("updated_at") @db.Timestamptz(6)
+  user          User           @relation(fields: [userId], references: [id])
+  conversations Conversation[]
+  tasks         Task[]
+
+  @@map("workspace")
 }

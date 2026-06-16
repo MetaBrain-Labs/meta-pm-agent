@@ -59,8 +59,21 @@ export interface ChatState {
 
 export interface ThreadInfo {
   id: string;
+  workspaceId: string;
   requestFormId?: string;
   title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkspaceInfo {
+  id: string;
+  userId: string;
+  name: string;
+  storageType?: string | null;
+  localPath?: string | null;
+  cloudPath?: string | null;
+  syncStatus?: string | null;
   createdAt: string;
   updatedAt: string;
 }

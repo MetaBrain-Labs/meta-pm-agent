@@ -2,13 +2,17 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "@repo/database";
 
 const DEFAULT_CHAT_TITLE = "\u65b0\u5bf9\u8bdd";
+const LOCAL_USER_ID = "local";
 
-interface ChatRow {
+interface ConversationRow {
   id: string;
+  workspace_id: string;
+  user_id: string;
   title: string | null;
+  type: string | null;
   status: string | null;
+  last_message_at: Date | null;
   created_at: Date;
-  updated_at: Date;
 }
 
 interface RequestFormRow {
@@ -21,19 +25,22 @@ interface RequestFormRow {
   updated_at: Date;
 }
 
-interface ChatListRow extends ChatRow {
+interface ConversationListRow extends ConversationRow {
   request_form_id: string | null;
 }
 
-export interface ChatDto {
+export interface ConversationDto {
   id: string;
+  workspaceId: string;
+  userId: string;
   title: string;
+  type: string | null;
   status: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface ChatListItemDto extends ChatDto {
+export interface ConversationListItemDto extends ConversationDto {
   requestFormId?: string;
 }
 
@@ -47,16 +54,21 @@ export interface RequestFormDto {
   updatedAt: string;
 }
 
-export async function listActiveChats(): Promise<ChatListItemDto[]> {
-  const rows = await prisma.$queryRaw<ChatListRow[]>`
+export async function listActiveConversations(
+  workspaceId: string,
+): Promise<ConversationListItemDto[]> {
+  const rows = await prisma.$queryRaw<ConversationListRow[]>`
     SELECT
       c."id",
+      c."workspace_id",
+      c."user_id",
       c."title",
+      c."type",
       c."status",
+      c."last_message_at",
       c."created_at",
-      c."updated_at",
       rf."id" AS "request_form_id"
-    FROM "chat" c
+    FROM "conversation" c
     LEFT JOIN LATERAL (
       SELECT "id"
       FROM "request_form"
@@ -65,32 +77,63 @@ export async function listActiveChats(): Promise<ChatListItemDto[]> {
       LIMIT 1
     ) rf ON true
     WHERE c."status" = 'active'
-    ORDER BY c."updated_at" DESC
+      AND c."workspace_id" = ${workspaceId}
+      AND c."user_id" = ${LOCAL_USER_ID}
+    ORDER BY COALESCE(c."last_message_at", c."created_at") DESC
   `;
 
   return rows.map((row) => ({
-    ...mapChatRow(row),
+    ...mapConversationRow(row),
     requestFormId: row.request_form_id ?? undefined,
   }));
 }
 
-export async function createChatWithInitialRequestForm(
+export async function createConversationWithInitialRequestForm(
+  workspaceId: string,
   title: string,
-): Promise<{ chat: ChatDto; requestForm: RequestFormDto }> {
-  const { chat, requestForm } = await prisma.$transaction(async (tx) => {
-    const chats = await tx.$queryRaw<ChatRow[]>`
-      INSERT INTO "chat" ("id", "title", "status")
-      VALUES (${randomUUID()}, ${title}, 'active')
-      RETURNING "id", "title", "status", "created_at", "updated_at"
+): Promise<{ conversation: ConversationDto; requestForm: RequestFormDto }> {
+  const { conversation, requestForm } = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`
+      INSERT INTO "user" ("id", "username")
+      VALUES (${LOCAL_USER_ID}, 'Local User')
+      ON CONFLICT ("id") DO NOTHING
     `;
-    const chat = chats[0];
-    if (!chat) {
-      throw new Error("Failed to create chat.");
+
+    const conversations = await tx.$queryRaw<ConversationRow[]>`
+      INSERT INTO "conversation" (
+        "id",
+        "workspace_id",
+        "user_id",
+        "title",
+        "type",
+        "status"
+      )
+      VALUES (
+        ${randomUUID()},
+        ${workspaceId},
+        ${LOCAL_USER_ID},
+        ${title},
+        'chat',
+        'active'
+      )
+      RETURNING
+        "id",
+        "workspace_id",
+        "user_id",
+        "title",
+        "type",
+        "status",
+        "last_message_at",
+        "created_at"
+    `;
+    const conversation = conversations[0];
+    if (!conversation) {
+      throw new Error("Failed to create conversation.");
     }
 
     const requestForms = await tx.$queryRaw<RequestFormRow[]>`
       INSERT INTO "request_form" ("id", "chat_id", "version", "status")
-      VALUES (${randomUUID()}, ${chat.id}, 1, 'active')
+      VALUES (${randomUUID()}, ${conversation.id}, 1, 'active')
       RETURNING "id", "chat_id", "version", "status", "summary", "created_at", "updated_at"
     `;
     const requestForm = requestForms[0];
@@ -98,22 +141,27 @@ export async function createChatWithInitialRequestForm(
       throw new Error("Failed to create request form.");
     }
 
-    return { chat, requestForm };
+    return { conversation, requestForm };
   });
 
   return {
-    chat: mapChatRow(chat),
+    conversation: mapConversationRow(conversation),
     requestForm: mapRequestFormRow(requestForm),
   };
 }
 
-function mapChatRow(row: ChatRow): ChatDto {
+function mapConversationRow(row: ConversationRow): ConversationDto {
+  const updatedAt = row.last_message_at ?? row.created_at;
+
   return {
     id: row.id,
+    workspaceId: row.workspace_id,
+    userId: row.user_id,
     title: row.title ?? DEFAULT_CHAT_TITLE,
+    type: row.type,
     status: row.status,
     createdAt: row.created_at.toISOString(),
-    updatedAt: row.updated_at.toISOString(),
+    updatedAt: updatedAt.toISOString(),
   };
 }
 

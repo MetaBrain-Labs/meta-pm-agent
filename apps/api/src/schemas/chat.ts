@@ -8,8 +8,21 @@ export const ChatRequestSchema = z.object({
 });
 
 export const CreateChatRequestSchema = z.object({
+  workspaceId: z.string().uuid(),
   title: z.string().trim().min(1).max(120).optional(),
+});
+
+export const ListChatsQuerySchema = z.object({
+  workspaceId: z.string().uuid(),
+});
+
+export const CreateWorkspaceRequestSchema = z.object({
+  name: z.string().trim().min(1).max(255).optional(),
 });
 
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
 export type CreateChatRequest = z.infer<typeof CreateChatRequestSchema>;
+export type ListChatsQuery = z.infer<typeof ListChatsQuerySchema>;
+export type CreateWorkspaceRequest = z.infer<
+  typeof CreateWorkspaceRequestSchema
+>;

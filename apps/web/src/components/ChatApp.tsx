@@ -1,36 +1,35 @@
 import {
-  useState,
-  useRef,
-  useEffect,
   useCallback,
+  useEffect,
+  useRef,
+  useState,
   type FormEvent,
 } from "react";
-import { Input, Button, Typography, Tooltip, Badge, FloatButton } from "antd";
+import { Button, FloatButton, Input, Tooltip } from "antd";
 import {
-  SendOutlined,
-  StopOutlined,
   ArrowDownOutlined,
   ClearOutlined,
-  BulbOutlined,
-  ProjectOutlined,
+  PaperClipOutlined,
+  SendOutlined,
+  StopOutlined,
 } from "@ant-design/icons";
 import type { Message } from "../types";
 import { MessageBubble } from "./MessageBubble";
 
 const { TextArea } = Input;
-const { Text } = Typography;
 
 const EXAMPLE_QUERIES = [
-  "帮我梳理一个电商 App 的需求",
-  "规划一个 SaaS 产品的 MVP 阶段",
-  "分析一下这个项目的技术风险",
-  "新增了一个需求，帮我评估对现有计划的影响",
+  "帮我梳理这个产品的核心需求",
+  "为当前项目拆一版 MVP 计划",
+  "生成一份迭代风险清单",
+  "把今天的讨论整理成待办事项",
 ];
 
 interface Props {
   messages: Message[];
   isLoading: boolean;
   error: string | null;
+  disabledReason?: string | null;
   onSend: (text: string) => void;
   onStop: () => void;
   onClear: () => void;
@@ -40,6 +39,7 @@ export function ChatApp({
   messages,
   isLoading,
   error,
+  disabledReason,
   onSend,
   onStop,
   onClear,
@@ -80,130 +80,93 @@ export function ChatApp({
   const nextUserContentByAssistantId = (() => {
     const map = new Map<string, string>();
     for (let i = 0; i < messages.length - 1; i++) {
-      const m = messages[i]!;
+      const message = messages[i]!;
       const next = messages[i + 1]!;
-      if (m.role === "agent" && next.role === "user") {
-        map.set(m.id, next.content);
+      if (message.role === "agent" && next.role === "user") {
+        map.set(message.id, next.content);
       }
     }
     return map;
   })();
 
   const doSubmit = useCallback(() => {
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || disabledReason) return;
     onSend(input.trim());
     setInput("");
     setUserScrolled(false);
-  }, [input, isLoading, onSend]);
+  }, [disabledReason, input, isLoading, onSend]);
 
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = (event: FormEvent) => {
+    event.preventDefault();
     doSubmit();
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
       doSubmit();
     }
   };
 
   const handleExampleClick = (query: string) => {
+    if (disabledReason || isLoading) return;
     onSend(query);
     setUserScrolled(false);
   };
 
   return (
-    <div className="relative z-[1] flex h-full flex-col bg-transparent">
-      <header className="flex shrink-0 items-center gap-3 border-b border-[var(--line-soft)] bg-white/85 px-6 py-4 backdrop-blur md:px-8">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--primary-soft)] text-[var(--primary)]">
-          <ProjectOutlined />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="truncate font-[var(--sans)] text-[15px] font-bold text-[var(--ink)]">
-            项目管理助手
-          </div>
-          <Text className="block truncate text-xs text-[var(--ink-faint)]">
-            需求拆解、计划推进、风险分析
-          </Text>
+    <div className="chat-workspace">
+      <div className="chat-topbar">
+        <div className="chat-topbar-lock" aria-hidden="true">
+          <span />
+          <i>⌄</i>
         </div>
-        <Badge
-          className="ml-auto shrink-0"
-          status={isLoading ? "processing" : "success"}
-          text={
-            <span className="font-[var(--sans)] text-xs font-semibold text-[var(--ink-mute)]">
-              {isLoading ? "生成中" : "就绪"}
-            </span>
-          }
-        />
-      </header>
+      </div>
 
-      <div className="relative flex min-h-0 flex-1 flex-col">
+      <div className="chat-canvas">
         <div
           ref={containerRef}
           onScroll={handleScroll}
-          className="scrollbar-none flex flex-1 flex-col gap-4 overflow-y-auto px-4 pb-6 pt-5 md:px-8"
+          className="chat-scroll scrollbar-none"
         >
           {messages.length === 0 && (
-            <div className="grid min-h-full flex-1 place-items-center py-10">
-              <div className="flex w-full max-w-3xl flex-col items-center gap-[18px] px-4 text-center">
-                <div className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--primary)] text-xl text-white shadow-[0_18px_34px_-22px_rgba(37,99,235,0.9)]">
-                  <BulbOutlined />
-                </div>
-                <div>
-                  <h1 className="m-0 font-[var(--sans)] text-2xl font-extrabold text-[var(--ink)] md:text-3xl">
-                    把模糊想法整理成可执行计划
-                  </h1>
-                  <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-[var(--ink-mute)]">
-                    适合做需求澄清、任务拆分、里程碑规划和风险复盘。选择一个起点，或直接输入当前问题。
-                  </p>
-                </div>
-                <div className="grid w-full gap-2 text-left md:grid-cols-2">
-                  {EXAMPLE_QUERIES.map((q) => (
-                    <Button
-                      key={q}
-                      disabled={isLoading}
-                      onClick={() => handleExampleClick(q)}
-                      className="justify-start px-4 py-3 text-left text-sm"
-                      style={{
-                        height: "auto",
-                        minHeight: 48,
-                        whiteSpace: "normal",
-                        lineHeight: 1.5,
-                        textAlign: "left",
-                        justifyContent: "flex-start",
-                      }}
-                    >
-                      {q}
-                    </Button>
-                  ))}
-                </div>
+            <div className="chat-empty">
+              <h1>今天想推进什么？</h1>
+              <p>围绕需求、计划、文档和风险继续推进项目。</p>
+              <div className="chat-suggestions">
+                {EXAMPLE_QUERIES.map((query) => (
+                  <button
+                    key={query}
+                    type="button"
+                    disabled={isLoading || Boolean(disabledReason)}
+                    onClick={() => handleExampleClick(query)}
+                  >
+                    {query}
+                  </button>
+                ))}
               </div>
             </div>
           )}
 
-          {messages.map((msg, i) => (
+          {messages.map((message, index) => (
             <MessageBubble
-              key={msg.id}
-              message={msg}
-              isLast={i === lastAgentIdx}
+              key={message.id}
+              message={message}
+              isLast={index === lastAgentIdx}
               streaming={
-                isLoading && i === messages.length - 1 && msg.role === "agent"
+                isLoading &&
+                index === messages.length - 1 &&
+                message.role === "agent"
               }
-              nextUserContent={nextUserContentByAssistantId.get(msg.id)}
+              nextUserContent={nextUserContentByAssistantId.get(message.id)}
               onFormSubmit={onSend}
             />
           ))}
 
           {error && (
-            <div className="flex shrink-0 items-center justify-between gap-2.5 rounded-lg border border-red-200 bg-red-50 p-3 text-[13px] text-red-700">
+            <div className="chat-error">
               <span>{error}</span>
-              <Button
-                size="small"
-                danger
-                icon={<ClearOutlined />}
-                onClick={onClear}
-              >
+              <Button size="small" danger icon={<ClearOutlined />} onClick={onClear}>
                 清除
               </Button>
             </div>
@@ -219,40 +182,44 @@ export function ChatApp({
           }}
         />
 
-        <form
-          onSubmit={handleSubmit}
-          className="shrink-0 border-t border-[var(--line-soft)] bg-white px-4 py-3 md:px-8"
-        >
-          <div className="mx-auto flex w-full max-w-4xl items-end gap-2">
-            <TextArea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              rows={1}
-              placeholder="输入消息"
-              disabled={isLoading}
-              autoSize={{ minRows: 1, maxRows: 5 }}
-              className="flex-1"
-            />
-            {isLoading ? (
-              <Tooltip title="停止生成">
-                <Button
-                  type="primary"
-                  danger
-                  icon={<StopOutlined />}
-                  onClick={onStop}
-                />
-              </Tooltip>
-            ) : (
-              <Tooltip title="发送">
-                <Button
-                  type="primary"
-                  htmlType="submit"
-                  icon={<SendOutlined />}
-                  disabled={!input.trim()}
-                />
-              </Tooltip>
-            )}
+        <form onSubmit={handleSubmit} className="chat-composer">
+          <TextArea
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={handleKeyDown}
+            rows={1}
+            placeholder={disabledReason || "输入消息"}
+            disabled={isLoading || Boolean(disabledReason)}
+            autoSize={{ minRows: 3, maxRows: 7 }}
+          />
+          <div className="chat-composer-bar">
+            <Tooltip title="添加附件">
+              <Button type="text" shape="circle" icon={<PaperClipOutlined />} />
+            </Tooltip>
+            <span>问渠 PM</span>
+            <div className="chat-composer-actions">
+              {isLoading ? (
+                <Tooltip title="停止生成">
+                  <Button
+                    type="primary"
+                    shape="circle"
+                    danger
+                    icon={<StopOutlined />}
+                    onClick={onStop}
+                  />
+                </Tooltip>
+              ) : (
+                <Tooltip title="发送">
+                  <Button
+                    type="primary"
+                    shape="circle"
+                    htmlType="submit"
+                    icon={<SendOutlined />}
+                    disabled={!input.trim() || Boolean(disabledReason)}
+                  />
+                </Tooltip>
+              )}
+            </div>
           </div>
         </form>
       </div>
