@@ -15,6 +15,7 @@ import {
   persistConversationResult,
   persistConversationStart,
 } from "../services/chat-service";
+import { loadProductContextForConversation } from "../services/product-context-service";
 import {
   createWorkspace,
   getAccount,
@@ -118,8 +119,14 @@ export function createChatRoutes() {
           parsed.data.messages,
         );
 
+        // Request Agent 需要产品概述上下文；这里在进入 agent-runtime 前按会话加载。
+        const productContext = await loadProductContextForConversation(
+          parsed.data.chatId,
+        );
+
         for await (const event of streamConversation(
           parsed.data.messages,
+          { productContext },
         )) {
           if ("content" in event && event.type === "reasoning") {
             reasoningContent += event.content;
@@ -136,6 +143,7 @@ export function createChatRoutes() {
 
         await persistConversationResult({
           conversationId: parsed.data.chatId,
+          requestFormId: parsed.data.requestFormId,
           assistantText,
           reasoningContent,
         });

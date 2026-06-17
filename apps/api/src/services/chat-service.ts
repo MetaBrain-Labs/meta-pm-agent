@@ -8,6 +8,8 @@ import {
   persistAssistantMessage,
   persistConversationMessages,
 } from "../repositories/message-repository";
+import { persistRequestAnalysisItems } from "../repositories/request-form-repository";
+import { parseRequestAnalysisPayload } from "../utils/request-analysis";
 import { parseUserInputPayload } from "../utils/user-input";
 
 const DEFAULT_CHAT_TITLE = "\u65b0\u5bf9\u8bdd";
@@ -47,20 +49,26 @@ export async function persistConversationStart(
 
 export async function persistConversationResult({
   conversationId,
+  requestFormId,
   assistantText,
   reasoningContent,
 }: {
   conversationId?: string;
+  requestFormId?: string;
   assistantText: string;
   reasoningContent?: string;
 }): Promise<void> {
   if (!conversationId || assistantText.trim().length === 0) return;
 
+  // 同一条 assistant 消息里会同时携带 user-input 与 request-analysis，
+  // 这里分别解析并写入对应的消息表字段与请求表单条目。
   const items = parseUserInputPayload(assistantText);
+  const requestAnalysis = parseRequestAnalysisPayload(assistantText);
   await persistAssistantMessage(
     conversationId,
     assistantText,
     items,
     reasoningContent,
   );
+  await persistRequestAnalysisItems(requestFormId, requestAnalysis);
 }

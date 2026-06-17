@@ -3,7 +3,7 @@ import { z } from "zod";
 const UserInputRecordSchema = z.object({
   index: z.number().int().positive(),
   content: z.string().min(1),
-  type: z.enum(["陈述", "提问", "补充", "请求"]),
+  type: z.string().min(1),
 });
 
 const UserInputPayloadSchema = z.object({
@@ -39,6 +39,15 @@ function extractJsonObject(text: string): string | null {
   const trimmed = text.trim();
   if (!trimmed) return null;
 
+  const userInputBlock = extractTaggedBlock(
+    trimmed,
+    "<user-input",
+    "</user-input>",
+  );
+  if (userInputBlock) {
+    return userInputBlock;
+  }
+
   const withoutFence = trimmed
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/```\s*$/i, "")
@@ -55,4 +64,25 @@ function extractJsonObject(text: string): string | null {
   }
 
   return withoutFence.slice(start, end + 1);
+}
+
+function extractTaggedBlock(
+  text: string,
+  startMarker: string,
+  endMarker: string,
+): string | null {
+  const startIndex = text.search(new RegExp(escapeRegExp(startMarker), "i"));
+  if (startIndex === -1) return null;
+
+  const openEnd = text.indexOf(">", startIndex);
+  if (openEnd === -1) return null;
+
+  const endIndex = text.indexOf(endMarker, openEnd + 1);
+  if (endIndex === -1) return null;
+
+  return text.slice(openEnd + 1, endIndex).trim();
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

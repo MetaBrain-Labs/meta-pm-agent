@@ -31,6 +31,27 @@ test("parses user_input from tagged blocks", () => {
   ]);
 });
 
+test("parses user_input when downstream blocks are present", () => {
+  const records = parseUserInputPayload(`<user-input>
+  {
+    "user_input": [
+      { "index": 1, "content": "Need a team workspace.", "type": "璇锋眰" }
+    ]
+  }
+  </user-input>
+  <request-analysis>
+  {
+    "business_model": [],
+    "questions": [],
+    "chitchat": []
+  }
+  </request-analysis>`);
+
+  assert.deepEqual(records, [
+    { index: 1, content: "Need a team workspace.", type: "璇锋眰" },
+  ]);
+});
+
 test("rejects non-JSON user_input payloads", () => {
   const records = parseUserInputPayload("user_input: not json");
 

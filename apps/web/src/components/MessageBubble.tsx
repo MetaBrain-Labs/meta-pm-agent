@@ -14,6 +14,7 @@ import {
 } from "@ant-design/icons";
 import type { Message } from "../types";
 import { ProseBlock } from "./ProseBlock";
+import { RequestAnalysisCard } from "./RequestAnalysisCard";
 import { TodoCard } from "./TodoCard";
 import { UserInputCard } from "./UserInputCard";
 
@@ -164,10 +165,24 @@ export function MessageBubble({
         </div>
       )}
 
+      {message.requestAnalysis && (
+        <div>
+          {message.requestAnalysis.state === "generating" ? (
+            <QFGenerating label="Request Agent 正在分析请求" />
+          ) : (
+            <RequestAnalysisCard
+              raw={message.requestAnalysis.content}
+              analysis={message.requestAnalysis.analysis}
+            />
+          )}
+        </div>
+      )}
+
       {!message.content &&
         !message.thinking &&
         !message.questionForm &&
-        !message.userInput && (
+        !message.userInput &&
+        !message.requestAnalysis && (
           <div className="assistant-bubble is-loading">
             <Spin
               indicator={<LoadingOutlined style={{ color: "var(--primary)" }} />}
