@@ -1,9 +1,6 @@
 import { HumanMessage } from "langchain";
 import { createDeepAgent } from "deepagents";
-import {
-  RequestAnalysisSchema,
-  type RequestAnalysis,
-} from "@repo/shared";
+import { RequestAnalysisSchema, type RequestAnalysis } from "@repo/shared";
 import { createChatModel } from "../common/model";
 import { REQUEST_AGENT_PROMPT } from "./prompt";
 import { getTextContent } from "../../utils/message-adapter";
@@ -39,11 +36,13 @@ export async function runRequestAgent(
   const run = await agent.stream(
     {
       messages: [
-        new HumanMessage(JSON.stringify({
-          product_context: input.productContext?.trim() ||
-            "No product context provided.",
-          user_input: input.userInput,
-        })),
+        new HumanMessage(
+          JSON.stringify({
+            product_context:
+              input.productContext?.trim() || "No product context provided.",
+            user_input: input.userInput,
+          }),
+        ),
       ],
     },
     { streamMode: "messages" },
@@ -58,22 +57,29 @@ export async function runRequestAgent(
   const parsed = parseJsonObject(responseText);
   const result = RequestAnalysisSchema.safeParse(parsed);
   if (!result.success) {
-    throw new Error("Request Agent did not produce a valid request analysis payload.");
+    throw new Error(
+      "Request Agent did not produce a valid request analysis payload.",
+    );
   }
 
-  // 每条 user_input 必须且只能归类一次，用来发现漏分类或跨分类重复覆盖。
   assertEveryUserInputCovered(result.data, input.userInput);
   return result.data;
 }
 
-export function formatRequestAnalysisBlock(
-  analysis: RequestAnalysis,
-): string {
-  // 使用 tagged block 延续 question-form 和 user-input 的 SSE 内容约定，
-  // 同时保留可解析的结构化 JSON。
+/**
+ * 格式化 Request Analysis 块
+ */
+export function formatRequestAnalysisBlock(analysis: RequestAnalysis): string {
+  // 保留可解析的结构化 JSON。
   return `<request-analysis>\n${JSON.stringify(analysis, null, 2)}\n</request-analysis>`;
 }
 
+/**
+ * 验证 Request Agent 的分析结果是否合理覆盖了输入的 user_input 记录：
+ * - 没有遗漏：每条 user_input 都被 request agent 以某种方式覆盖了（业务模型、问答、闲聊至少一种）。
+ * - 没有重复：每条 user_input 在 request agent 的分析结果中只被覆盖了一次，避免出现分类不清或过度覆盖。
+ * - 没有越界：request agent 的分析结果中没有覆盖任何不存在的 user_input 记录（比如 index 超出范围）。
+ */
 function assertEveryUserInputCovered(
   analysis: RequestAnalysis,
   userInput: UserInputRecord[],

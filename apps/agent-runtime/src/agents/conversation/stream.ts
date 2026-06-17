@@ -17,6 +17,9 @@ import type {
 
 /**
  * 流式获取 Conversation Agent 的原始消息事件。
+ *  注：此处拼接最底层的文本内容，yield { type: "reasoning/text", content: reasoning };
+ *        后续如果遇到需要标签块的场景，重新封装并抛出，例如：yield { type: "question-form-start" }
+ *        否则可以直接使用 yield chunk 的形式抛出原始内容，而无需再次封装
  */
 async function* streamAgentEvents(
   messages: (HumanMessage | AIMessage)[],
@@ -36,15 +39,6 @@ async function* streamAgentEvents(
       yield { type: "text", content: cleanText };
     }
   }
-}
-
-/**
- * 专门处理 Question Form 生成阶段的流式输出。
- */
-export async function* streamQuestionForm(
-  userMessage: string,
-): AsyncGenerator<StreamChunk> {
-  yield* streamAgentEvents([new HumanMessage(userMessage)]);
 }
 
 /**
@@ -94,7 +88,9 @@ async function* streamUserInputIntegration(
       continue;
     }
 
+    // 保存非推理内容。
     textBuffer += chunk.content;
+    // 第一次收到非推理内容时，触发 user-input-start 事件，表示用户输入的整理开始。
     if (!started) {
       started = true;
       yield { type: "user-input-start" };
@@ -122,6 +118,9 @@ async function* streamUserInputIntegration(
   }
 }
 
+/**
+ * 格式化为 <user-input> 块，如果已经是该块则直接返回。
+ */
 function ensureUserInputBlock(content: string): string {
   const trimmed = content.trim();
   if (/^<user-input\b/i.test(trimmed)) {
@@ -131,6 +130,9 @@ function ensureUserInputBlock(content: string): string {
   return `<user-input>\n${trimmed}\n</user-input>`;
 }
 
+/**
+ * 剪切内部噪声
+ */
 function stripInternalNoise(content: string): string {
   return content
     .replace(/(^|\n)No files found in\s+\/\s*/g, "$1")

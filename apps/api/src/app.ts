@@ -1,8 +1,11 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import "./env";
-import { createChatRoutes } from "./routes/chat";
+import { createChatRoutes } from "./controllers/chat";
 
+/**
+ * 创建并配置 Hono 应用实例，挂载 CORS、健康检查和聊天路由。
+ */
 export function createApp() {
   const app = new Hono();
 

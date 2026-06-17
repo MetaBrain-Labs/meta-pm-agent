@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "@repo/database";
 import type { RequestAnalysis } from "@repo/shared";
 
+/**
+ * 将 Request Agent 的分析结果写入请求表单条目表。
+ * 业务建模项标记为 pending 待后续 Agent 处理，闲聊项直接标记为 completed。
+ */
 export async function persistRequestAnalysisItems(
   requestFormId: string | undefined,
   analysis: RequestAnalysis | null,
@@ -82,6 +86,9 @@ export async function persistRequestAnalysisItems(
   });
 }
 
+/**
+ * 将缺失信息的重要度压缩为 0-100 的优先级分值，用于后续调度排序。
+ */
 function toPriority(
   missingInformation: RequestAnalysis["business_model"][number]["missing_information"],
 ): number {

@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@repo/database";
 
-const DEFAULT_CHAT_TITLE = "\u65b0\u5bf9\u8bdd";
+const DEFAULT_CHAT_TITLE = "New Chat";
 const LOCAL_USER_ID = "local";
 
+/**
+ * 数据库 conversation 表原始行结构。
+ */
 interface ConversationRow {
   id: string;
   workspace_id: string;
@@ -15,6 +18,9 @@ interface ConversationRow {
   created_at: Date;
 }
 
+/**
+ * 数据库 request_form 表原始行结构。
+ */
 interface RequestFormRow {
   id: string;
   chat_id: string;
@@ -25,10 +31,16 @@ interface RequestFormRow {
   updated_at: Date;
 }
 
+/**
+ * 带关联 request_form_id 的会话列表查询结果行。
+ */
 interface ConversationListRow extends ConversationRow {
   request_form_id: string | null;
 }
 
+/**
+ * 会话关联工作区信息的查询结果行。
+ */
 interface ConversationWorkspaceRow {
   id: string;
   workspace_id: string;
@@ -36,6 +48,9 @@ interface ConversationWorkspaceRow {
   local_path: string | null;
 }
 
+/**
+ * 会话的数据传输对象（camelCase 字段命名）。
+ */
 export interface ConversationDto {
   id: string;
   workspaceId: string;
@@ -47,10 +62,16 @@ export interface ConversationDto {
   updatedAt: string;
 }
 
+/**
+ * 会话列表项 DTO，额外包含关联的请求表单 ID。
+ */
 export interface ConversationListItemDto extends ConversationDto {
   requestFormId?: string;
 }
 
+/**
+ * 请求表单的数据传输对象。
+ */
 export interface RequestFormDto {
   id: string;
   chatId: string;
@@ -61,6 +82,9 @@ export interface RequestFormDto {
   updatedAt: string;
 }
 
+/**
+ * 会话关联工作区的数据传输对象，供产品上下文读取服务定位工作区路径。
+ */
 export interface ConversationWorkspaceDto {
   conversationId: string;
   workspaceId: string;
@@ -68,6 +92,9 @@ export interface ConversationWorkspaceDto {
   localPath: string | null;
 }
 
+/**
+ * 查询 当前 workspace + user 下所有的 active conversation，并且附带最新 request_form 记录
+ */
 export async function listActiveConversations(
   workspaceId: string,
 ): Promise<ConversationListItemDto[]> {
@@ -102,18 +129,25 @@ export async function listActiveConversations(
   }));
 }
 
+/**
+ * 在指定工作区中创建新会话，同时创建一条请求表单记录。
+ * 事务内确保本地用户存在（不存在时自动创建）。
+ */
 export async function createConversationWithInitialRequestForm(
   workspaceId: string,
   title: string,
 ): Promise<{ conversation: ConversationDto; requestForm: RequestFormDto }> {
-  const { conversation, requestForm } = await prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`
+  const { conversation, requestForm } = await prisma.$transaction(
+    async (tx) => {
+      // 确保本地用户记录存在
+      await tx.$executeRaw`
       INSERT INTO "user" ("id", "username")
       VALUES (${LOCAL_USER_ID}, 'Local User')
       ON CONFLICT ("id") DO NOTHING
     `;
 
-    const conversations = await tx.$queryRaw<ConversationRow[]>`
+      // 创建会话记录
+      const conversations = await tx.$queryRaw<ConversationRow[]>`
       INSERT INTO "conversation" (
         "id",
         "workspace_id",
@@ -140,23 +174,25 @@ export async function createConversationWithInitialRequestForm(
         "last_message_at",
         "created_at"
     `;
-    const conversation = conversations[0];
-    if (!conversation) {
-      throw new Error("Failed to create conversation.");
-    }
+      const conversation = conversations[0];
+      if (!conversation) {
+        throw new Error("Failed to create conversation.");
+      }
 
-    const requestForms = await tx.$queryRaw<RequestFormRow[]>`
+      // 创建初始请求表单
+      const requestForms = await tx.$queryRaw<RequestFormRow[]>`
       INSERT INTO "request_form" ("id", "chat_id", "version", "status")
       VALUES (${randomUUID()}, ${conversation.id}, 1, 'active')
       RETURNING "id", "chat_id", "version", "status", "summary", "created_at", "updated_at"
     `;
-    const requestForm = requestForms[0];
-    if (!requestForm) {
-      throw new Error("Failed to create request form.");
-    }
+      const requestForm = requestForms[0];
+      if (!requestForm) {
+        throw new Error("Failed to create request form.");
+      }
 
-    return { conversation, requestForm };
-  });
+      return { conversation, requestForm };
+    },
+  );
 
   return {
     conversation: mapConversationRow(conversation),
@@ -164,6 +200,10 @@ export async function createConversationWithInitialRequestForm(
   };
 }
 
+/**
+ * 通过会话 ID 反查关联的工作区信息（名称和本地路径）。
+ * 供产品上下文读取服务定位工作区概述文档。
+ */
 export async function getConversationWorkspace(
   conversationId: string,
 ): Promise<ConversationWorkspaceDto | null> {
@@ -192,6 +232,9 @@ export async function getConversationWorkspace(
   };
 }
 
+/**
+ * 将数据库行映射为会话 DTO。
+ */
 function mapConversationRow(row: ConversationRow): ConversationDto {
   const updatedAt = row.last_message_at ?? row.created_at;
 
@@ -207,6 +250,9 @@ function mapConversationRow(row: ConversationRow): ConversationDto {
   };
 }
 
+/**
+ * 将数据库行映射为请求表单 DTO。
+ */
 function mapRequestFormRow(row: RequestFormRow): RequestFormDto {
   return {
     id: row.id,
