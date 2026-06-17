@@ -1,0 +1,8 @@
+{
+  "node_version": "20",
+  "dependencies": ["."],
+  "graphs": {
+    "meta_pm_agent": "./apps/agent-runtime/src/graph/workflow.ts:graph"
+  },
+  "env": ".env"
+}

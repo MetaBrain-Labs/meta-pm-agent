@@ -29,6 +29,13 @@ interface ConversationListRow extends ConversationRow {
   request_form_id: string | null;
 }
 
+interface ConversationWorkspaceRow {
+  id: string;
+  workspace_id: string;
+  workspace_name: string;
+  local_path: string | null;
+}
+
 export interface ConversationDto {
   id: string;
   workspaceId: string;
@@ -52,6 +59,13 @@ export interface RequestFormDto {
   summary: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ConversationWorkspaceDto {
+  conversationId: string;
+  workspaceId: string;
+  workspaceName: string;
+  localPath: string | null;
 }
 
 export async function listActiveConversations(
@@ -147,6 +161,34 @@ export async function createConversationWithInitialRequestForm(
   return {
     conversation: mapConversationRow(conversation),
     requestForm: mapRequestFormRow(requestForm),
+  };
+}
+
+export async function getConversationWorkspace(
+  conversationId: string,
+): Promise<ConversationWorkspaceDto | null> {
+  // 通过会话反查工作区路径，供产品上下文读取服务定位概述性文档。
+  const rows = await prisma.$queryRaw<ConversationWorkspaceRow[]>`
+    SELECT
+      c."id",
+      c."workspace_id",
+      w."name" AS "workspace_name",
+      w."local_path"
+    FROM "conversation" c
+    JOIN "workspace" w ON w."id" = c."workspace_id"
+    WHERE c."id" = ${conversationId}
+      AND c."user_id" = ${LOCAL_USER_ID}
+    LIMIT 1
+  `;
+
+  const row = rows[0];
+  if (!row) return null;
+
+  return {
+    conversationId: row.id,
+    workspaceId: row.workspace_id,
+    workspaceName: row.workspace_name,
+    localPath: row.local_path,
   };
 }
 

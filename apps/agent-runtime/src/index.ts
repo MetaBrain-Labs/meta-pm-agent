@@ -1,9 +1,16 @@
 export {
   streamConversation,
   streamQuestionForm,
-} from "./conversation-agent";
+} from "./agents/conversation/stream";
+export {
+  createRequestAgent,
+  formatRequestAnalysisBlock,
+  runRequestAgent,
+} from "./agents/request/agent";
+export { graph, runWorkflowGraph } from "./graph/workflow";
 export type {
   ConversationStreamEvent,
+  ConversationStreamOptions,
   StreamChunk,
 } from "./types";
 export {

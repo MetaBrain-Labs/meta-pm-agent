@@ -197,6 +197,16 @@ async function fetchChatMessages(threadId: string): Promise<Message[]> {
           },
         }
       : {}),
+    // 历史消息从 API 返回结构化结果后，恢复成和流式事件一致的卡片状态。
+    ...(message.requestAnalysis
+      ? {
+          requestAnalysis: {
+            state: "complete" as const,
+            content: JSON.stringify(message.requestAnalysis, null, 2),
+            analysis: message.requestAnalysis,
+          },
+        }
+      : {}),
   }));
 }
 
@@ -1100,7 +1110,7 @@ function ThreadChatView({
                 return next;
               });
             } catch {
-              // Ignore malformed stream chunks and keep reading the stream.
+              // 忽略格式异常的流片段，继续读取后续 SSE 数据。
             }
           }
         }

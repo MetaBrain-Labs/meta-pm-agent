@@ -1,10 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@repo/database";
-import type { ChatMessage } from "@repo/shared";
+import {
+  type ChatMessage,
+  type RequestAnalysis,
+} from "@repo/shared";
 import {
   parseUserInputPayload,
   type UserInputRecord,
 } from "../utils/user-input";
+import { parseRequestAnalysisPayload } from "../utils/request-analysis";
 
 interface MessageRow {
   id: string;
@@ -22,6 +26,7 @@ export interface MessageDto {
   timestamp: string;
   reasoningContent?: string;
   userInput?: UserInputRecord[] | null;
+  requestAnalysis?: RequestAnalysis | null;
 }
 
 export async function listConversationMessages(
@@ -96,11 +101,20 @@ export async function persistConversationMessages(
 function mapMessageRow(row: MessageRow): MessageDto {
   const meta = parseRecord(row.meta);
   const userInput = parseRecord(row.user_input);
+
+  // 旧消息可能只把 tagged block 存在正文里，因此读取历史消息时需要从正文回填结构化字段。
   const inlineUserInput = parseUserInputPayload(row.content);
+  const inlineRequestAnalysis = parseRequestAnalysisPayload(row.content);
+
+  // 正文返回给前端展示时去掉结构化 block，避免 JSON 原文和卡片重复显示。
   const cleanedContent = removeTaggedBlock(
-    row.content,
-    "<user-input",
-    "</user-input>",
+    removeTaggedBlock(
+      row.content,
+      "<user-input",
+      "</user-input>",
+    ),
+    "<request-analysis",
+    "</request-analysis>",
   );
   const timestamp =
     typeof meta?.timestamp === "string"
@@ -118,6 +132,7 @@ function mapMessageRow(row: MessageRow): MessageDto {
     userInput: Array.isArray(userInput?.user_input)
       ? (userInput.user_input as UserInputRecord[])
       : inlineUserInput,
+    requestAnalysis: inlineRequestAnalysis,
   };
 }
 

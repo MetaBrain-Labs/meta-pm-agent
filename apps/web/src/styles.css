@@ -695,6 +695,7 @@ body {
   flex: 1;
   flex-direction: column;
   align-items: center;
+  justify-content: space-evenly;
   background: #fafafa;
 }
 
@@ -770,6 +771,10 @@ body {
   box-shadow: none !important;
   resize: none;
   font-size: 16px;
+}
+
+.chat-composer .ant-input:focus {
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12) !important;
 }
 
 .chat-composer-bar {
@@ -933,7 +938,7 @@ body {
   position: absolute !important;
   inset-inline-end: auto !important;
   right: auto !important;
-  bottom: 164px !important;
+  bottom: 200px !important;
   left: 50% !important;
   border-radius: 50% !important;
   opacity: 0;

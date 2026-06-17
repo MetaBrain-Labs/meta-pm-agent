@@ -1,9 +1,10 @@
 import { ChatOpenAI } from "@langchain/openai";
-import { createDeepAgent } from "deepagents";
-import { getLlmConfig } from "./config";
-import { DISCOVERY_PROMPT } from "./prompts/discovery";
+import { getLlmConfig } from "../../config";
 
-export function createConversationAgent() {
+/**
+ * 创建所有 Agent 共用的聊天模型实例，统一读取 LLM 配置和 thinking 参数。
+ */
+export function createChatModel() {
   const config = getLlmConfig();
   const modelKwargs: Record<string, unknown> = {};
 
@@ -12,7 +13,7 @@ export function createConversationAgent() {
     modelKwargs.reasoning_effort = config.reasoningEffort;
   }
 
-  const model = new ChatOpenAI({
+  return new ChatOpenAI({
     model: config.model,
     apiKey: config.apiKey,
     temperature: config.temperature,
@@ -22,13 +23,5 @@ export function createConversationAgent() {
     modelKwargs: Object.keys(modelKwargs).length > 0
       ? modelKwargs
       : undefined,
-  });
-
-  return createDeepAgent({
-    model: model as any,
-    systemPrompt: DISCOVERY_PROMPT,
-    tools: [],
-    name: "conversation-agent",
-    skills: [],
   });
 }

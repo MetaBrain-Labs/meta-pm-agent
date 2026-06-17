@@ -49,6 +49,26 @@ export function applyStreamEvent(
           content: event.content,
         },
       };
+    case "request-analysis-start":
+      return {
+        ...message,
+        requestAnalysis: { state: "generating" },
+      };
+    case "request-analysis-complete":
+      // Request Agent 结果用独立卡片展示，因此从普通正文里移除 tagged block。
+      return {
+        ...message,
+        content: removeTaggedBlock(
+          message.content,
+          "<request-analysis",
+          "</request-analysis>",
+        ),
+        requestAnalysis: {
+          state: "complete",
+          content: event.content,
+          analysis: event.analysis,
+        },
+      };
     case "todo-update":
       return {
         ...message,
@@ -130,6 +150,24 @@ function applyTextChunk(
       userInput: {
         state: "complete",
         content: userInput.block,
+      },
+    };
+  }
+
+  const requestAnalysis = extractTaggedBlock(
+    content,
+    "<request-analysis",
+    "</request-analysis>",
+  );
+
+  if (requestAnalysis) {
+    // 兼容模型直接把完整 block 当 text chunk 输出的情况。
+    return {
+      ...message,
+      content: requestAnalysis.remainingText,
+      requestAnalysis: {
+        state: "complete",
+        content: requestAnalysis.block,
       },
     };
   }

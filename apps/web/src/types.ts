@@ -7,6 +7,8 @@ export type StreamEventType =
   | "question-form-complete"
   | "user-input-start"
   | "user-input-complete"
+  | "request-analysis-start"
+  | "request-analysis-complete"
   | "todo-update"
   | "tool-call"
   | "tool-result"
@@ -24,6 +26,7 @@ export interface StreamEvent {
   usage?: Record<string, unknown>;
   error?: unknown;
   todos?: Array<{ index: number; content: string; status: string }>;
+  analysis?: RequestAnalysis;
 }
 
 export interface TodoItem {
@@ -38,6 +41,26 @@ export interface UserInputItem {
   type: "陈述" | "提问" | "补充" | "请求";
 }
 
+export interface MissingInformation {
+  index: number;
+  description: string;
+  importance: number;
+}
+
+export interface BusinessModelItem {
+  index: number;
+  user_goal: string;
+  goal_constraints: string[];
+  missing_information: MissingInformation[];
+  covered_user_input_indexes: number[];
+}
+
+export interface RequestAnalysis {
+  business_model: BusinessModelItem[];
+  questions: number[];
+  chitchat: number[];
+}
+
 export interface Message {
   id: string;
   role: "user" | "agent";
@@ -45,6 +68,11 @@ export interface Message {
   thinking?: string;
   questionForm?: { state: "generating" | "complete"; content?: string };
   userInput?: { state: "generating" | "complete"; content?: string };
+  requestAnalysis?: {
+    state: "generating" | "complete";
+    content?: string;
+    analysis?: RequestAnalysis;
+  };
   todos?: TodoItem[];
   toolCalls?: Array<{ name: string; args?: Record<string, unknown>; result?: unknown }>;
   usage?: Record<string, unknown>;
@@ -94,4 +122,5 @@ export interface PersistedMessageInfo {
   timestamp: string;
   reasoningContent?: string;
   userInput?: Array<{ index: number; content: string; type: string }> | null;
+  requestAnalysis?: RequestAnalysis | null;
 }

@@ -51,6 +51,154 @@ packages/
 - `apps/agent-runtime` filters internal DeepAgent/environment noise such as `No files found in /` before emitting user-visible `text`. Do not reintroduce internal tool/environment noise into normal assistant output.
 - Do not change dependency versions, generated files, unrelated modules, or repository-wide configuration unless the task requires it.
 
+## Styling Rules
+
+### Tailwind First
+
+- Use Tailwind CSS for all styling by default.
+- Do not create `.css`, `.scss`, `.sass`, `.less`, or CSS Module files unless explicitly requested.
+- Prefer Tailwind utility classes over custom CSS.
+- Prefer Tailwind arbitrary values (`w-[320px]`, `max-h-[calc(100vh-72px)]`) instead of creating custom CSS classes.
+- Prefer Tailwind state variants (`hover:`, `focus:`, `disabled:`, `group-hover:`) instead of writing CSS selectors.
+- Prefer Tailwind responsive utilities (`sm:`, `md:`, `lg:`, `xl:`) instead of media queries.
+
+### Exceptions
+
+Custom CSS is allowed only when:
+
+1. Tailwind cannot express the required styling.
+2. Complex keyframe animations are required.
+3. Third-party libraries require custom stylesheet overrides.
+4. The user explicitly requests CSS/SCSS.
+
+### Forbidden
+
+Unless explicitly requested, do not:
+
+- Create `*.css`
+- Create `*.module.css`
+- Create `*.scss`
+- Create `*.sass`
+- Create `*.less`
+- Add inline `<style>` blocks
+- Add global stylesheet rules
+
+When styling React/Vue components, always attempt a Tailwind-only implementation first.
+
+## Code Comment Rules
+
+### Mandatory Comments
+
+All generated backend code, frontend functions, classes, services, repositories, hooks, agents, workflows, and utilities MUST include comments.
+
+### Class Comments
+
+Every class must have a JSDoc comment.
+
+Example:
+
+```ts
+/**
+ * 专门处理其他流式输出
+ */
+export class StreamOutputHandler {}
+```
+
+### Method / Function Comments
+
+Every public method, exported function, React Hook, and business function must have a JSDoc comment.
+
+Example:
+
+```ts
+/**
+ * 获取当前工作区的产品上下文
+ */
+export async function getProductContext() {}
+```
+
+```ts
+/**
+ * 初始化 Request Agent 工作流
+ */
+function createRequestWorkflow() {}
+```
+
+### Inline Comments
+
+Important business logic, branches, state transitions, workflow nodes, and complex calculations should use single-line comments.
+
+Example:
+
+```ts
+// 加载工作区上下文
+const context = await loadWorkspaceContext();
+
+// 校验需求分析结果完整性
+validateAnalysis(result);
+```
+
+### Comment Language
+
+- Use Simplified Chinese comments.
+- Comments should describe business intent rather than implementation details.
+- Avoid meaningless comments such as:
+
+```ts
+// 定义变量
+const data = {};
+```
+
+### Required Coverage
+
+Comments are required for:
+
+- Classes
+- Interfaces
+- Types with business meaning
+- Exported functions
+- React Hooks
+- Services
+- Repositories
+- Controllers
+- Agent implementations
+- LangGraph nodes
+- Workflow steps
+
+### Preferred Format
+
+Use JSDoc for classes and functions:
+
+```ts
+/**
+ * 注释内容
+ */
+```
+
+Use single-line comments for logic blocks:
+
+```ts
+// 注释内容
+```
+
+### Workflow Documentation
+
+Every Agent node, workflow node, and graph transition must include a comment explaining its responsibility.
+
+Example:
+
+```ts
+/**
+ * 分析用户需求并生成结构化需求表单
+ */
+const requestAgentNode = async () => {};
+```
+
+```ts
+// 将需求分析结果交给 Planner Agent
+graph.addEdge("request-agent", "planner-agent");
+```
+
 ## Workflow
 
 1. Read the relevant source, configuration, and package scripts before editing.
