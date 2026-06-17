@@ -142,7 +142,7 @@ export function ChatApp({
         <div
           ref={containerRef}
           onScroll={handleScroll}
-          className="chat-scroll scrollbar-none"
+          className="chat-scroll scrollbar-none items-center"
         >
           {messages.length === 0 && (
             <div className="chat-empty">
@@ -181,7 +181,12 @@ export function ChatApp({
           {error && (
             <div className="chat-error">
               <span>{error}</span>
-              <Button size="small" danger icon={<ClearOutlined />} onClick={onClear}>
+              <Button
+                size="small"
+                danger
+                icon={<ClearOutlined />}
+                onClick={onClear}
+              >
                 清除
               </Button>
             </div>

@@ -13,8 +13,7 @@ const { Sider } = Layout;
 
 const TEXT = {
   appName: "问渠",
-  emptyConversation:
-    "还未有对话历史，创建一个新对话开始构建一款新产品吧！",
+  emptyConversation: "还未有对话历史，创建一个新对话开始构建一款新产品吧！",
   expand: "展开侧边栏",
   collapse: "收起侧边栏",
   newConversation: "创建新对话",
@@ -116,10 +115,18 @@ export function Sidebar({
             >
               {TEXT.newConversation}
             </Button>
-            <Button icon={<ApartmentOutlined />} block disabled={!activeWorkspaceId}>
+            <Button
+              icon={<ApartmentOutlined />}
+              block
+              disabled={!activeWorkspaceId}
+            >
               {TEXT.knowledge}
             </Button>
-            <Button icon={<FolderOpenOutlined />} block disabled={!activeWorkspaceId}>
+            <Button
+              icon={<FolderOpenOutlined />}
+              block
+              disabled={!activeWorkspaceId}
+            >
               {TEXT.document}
             </Button>
           </>
@@ -146,8 +153,10 @@ export function Sidebar({
                 }`}
                 onClick={() => onSelect(thread.id)}
               >
-                <span>{thread.title || TEXT.untitledConversation}</span>
-                {index === 0 && <DeleteOutlined />}
+                <div className="w-full flex justify-between items-center">
+                  <span>{thread.title || TEXT.untitledConversation}</span>
+                  <div>{<DeleteOutlined />}</div>
+                </div>
               </button>
             ))}
           </>

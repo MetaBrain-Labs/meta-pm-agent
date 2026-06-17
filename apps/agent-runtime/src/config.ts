@@ -20,6 +20,9 @@ export interface LlmConfig {
   timeout: number;
 }
 
+/**
+ * 获取LLM配置信息
+ */
 export function getLlmConfig(): LlmConfig {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
