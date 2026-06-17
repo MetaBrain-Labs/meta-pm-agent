@@ -19,6 +19,10 @@ const OVERVIEW_FILES = [
   "docs/product-draft.md",
 ];
 
+/**
+ * 根据会话 ID 加载对应工作区的产品概述上下文，供 Request Agent 使用。
+ * 只读取预定义的概述性文档，避免将整个工作区文件带入提示词。
+ */
 export async function loadProductContextForConversation(
   conversationId: string | undefined,
 ): Promise<string> {
@@ -47,6 +51,9 @@ export async function loadProductContextForConversation(
   return sections.join("\n\n").slice(0, MAX_CONTEXT_CHARS);
 }
 
+/**
+ * 读取文件内容，文件不存在时返回 null 而非抛出异常。
+ */
 async function readTextFileIfExists(filePath: string): Promise<string | null> {
   try {
     await access(filePath);
@@ -56,6 +63,9 @@ async function readTextFileIfExists(filePath: string): Promise<string | null> {
   }
 }
 
+/**
+ * 检查文件路径是否位于指定目录之内，防止路径遍历逃逸到工作区外部。
+ */
 function isInsideDirectory(filePath: string, directory: string): boolean {
   const relative = path.relative(path.resolve(directory), filePath);
 

@@ -1,10 +1,7 @@
 import { END, START, StateGraph } from "@langchain/langgraph";
 import type { RequestAnalysis } from "@repo/shared";
 import type { UserInputRecord } from "../agents/request/user-input";
-import {
-  parseUserInputNode,
-  requestAgentNode,
-} from "./nodes/request-node";
+import { parseUserInputNode, requestAgentNode } from "./nodes/request-node";
 import { WorkflowGraphState } from "./state";
 
 export interface WorkflowGraphInput {
@@ -25,17 +22,36 @@ export interface WorkflowGraphResult {
  * 应继续在这里增加节点和边，而不是放到某个单独 Agent 目录里。
  */
 export const graph = new StateGraph(WorkflowGraphState)
-  // 先解析 user_input，为 Request Agent 和后续 Agent 准备统一输入。
+  /* 
+    解析 user_input，为 Request Agent 和后续 Agent 准备统一输入。
+  */
   .addNode("parse_user_input", parseUserInputNode)
-  // Request Agent 对独立语句做业务模型、问答、闲聊分类。
+
+  /* 
+    Request Agent 结点：
+      根据 user_input，形成 Request Analysis；
+      提供 Request Analysis 给后续结点使用。
+  */
   .addNode("request_agent", requestAgentNode)
+
+  // 结点的连接逻辑
   .addEdge(START, "parse_user_input")
   .addEdge("parse_user_input", "request_agent")
   .addEdge("request_agent", END)
+
   .compile();
 
 /**
- * 业务代码运行公共图的入口；LangGraph Studio 直接读取上方导出的 graph。
+ * 此处开始就开始根据 LangGraph 相关逻辑进行一系列的运行，后续整个 LangGraph 流程大致为：
+ *   初始信息输入 ->
+ *     Request Agent 进行分析 ->
+ *       生成对应的 request_analysis ->
+ *         ProductDirector Agent ->
+ *           Planner Agent ->
+ *             Executor Agent ->
+ *               Critique Agent ->
+ *               Document Agent -> 文档保存
+ * 其中还有很多分支逻辑处理，待完善。
  */
 export async function runWorkflowGraph(
   input: WorkflowGraphInput,

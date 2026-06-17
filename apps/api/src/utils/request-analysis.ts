@@ -4,6 +4,10 @@ import {
 } from "@repo/shared";
 import { parseJsonObject } from "./json";
 
+/**
+ * 从助手消息文本中解析 request-analysis tagged block，提取需求分析结果。
+ * 与 user-input block 可共存于同一条消息中，互不影响。
+ */
 export function parseRequestAnalysisPayload(
   text: string,
 ): RequestAnalysis | null {
@@ -20,6 +24,9 @@ export function parseRequestAnalysisPayload(
   return result.success ? result.data : null;
 }
 
+/**
+ * 从文本中按起始和结束标记提取 tagged block 内容。
+ */
 function extractTaggedBlock(
   text: string,
   startMarker: string,
@@ -37,6 +44,9 @@ function extractTaggedBlock(
   return text.slice(openEnd + 1, endIndex).trim();
 }
 
+/**
+ * 转义正则表达式特殊字符，防止 marker 作为正则解析时产生意外匹配。
+ */
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

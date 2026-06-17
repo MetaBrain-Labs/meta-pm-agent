@@ -1,5 +1,7 @@
+/**
+ * 解析 JSON 对象
+ */
 export function parseJsonObject(text: string): unknown | null {
-  // LLM 有时会返回 Markdown 代码块或额外文本，这里只提取最外层 JSON 对象。
   const jsonText = extractJsonObject(text);
   if (!jsonText) return null;
 
@@ -10,6 +12,9 @@ export function parseJsonObject(text: string): unknown | null {
   }
 }
 
+/**
+ * 提取最外层 JSON 对象
+ */
 function extractJsonObject(text: string): string | null {
   const trimmed = text.trim();
   if (!trimmed) return null;

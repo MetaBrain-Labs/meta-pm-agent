@@ -1,7 +1,4 @@
-export {
-  streamConversation,
-  streamQuestionForm,
-} from "./agents/conversation/stream";
+export { streamConversation } from "./agents/conversation/stream";
 export {
   createRequestAgent,
   formatRequestAnalysisBlock,
@@ -13,10 +10,4 @@ export type {
   ConversationStreamOptions,
   StreamChunk,
 } from "./types";
-export {
-  parseQuestionForm,
-  hasQuestionForm,
-  isFormAnswer,
-  parseFormAnswers,
-} from "./utils/form-parser";
-export type { QuestionFormData } from "./utils/form-parser";
+export { isFormAnswer } from "./utils/form-parser";

@@ -1,15 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@repo/database";
-import {
-  type ChatMessage,
-  type RequestAnalysis,
-} from "@repo/shared";
+import { type ChatMessage, type RequestAnalysis } from "@repo/shared";
 import {
   parseUserInputPayload,
   type UserInputRecord,
 } from "../utils/user-input";
 import { parseRequestAnalysisPayload } from "../utils/request-analysis";
 
+/**
+ * 数据库 message 表原始行结构。
+ */
 interface MessageRow {
   id: string;
   role: string;
@@ -19,6 +19,9 @@ interface MessageRow {
   created_at: Date | null;
 }
 
+/**
+ * 消息的数据传输对象，包含用户输入和需求分析的结构化数据。
+ */
 export interface MessageDto {
   id: string;
   role: "user" | "assistant";
@@ -29,6 +32,9 @@ export interface MessageDto {
   requestAnalysis?: RequestAnalysis | null;
 }
 
+/**
+ * 查询指定会话的所有历史消息，按创建时间升序排列。
+ */
 export async function listConversationMessages(
   conversationId: string,
 ): Promise<MessageDto[]> {
@@ -48,6 +54,10 @@ export async function listConversationMessages(
   return rows.map(mapMessageRow);
 }
 
+/**
+ * 批量持久化会话消息，使用 UPSERT 逻辑（存在则更新内容和元数据）。
+ * 仅持久化用户消息，助手回复由 persistAssistantMessage 单独处理。
+ */
 export async function persistConversationMessages(
   conversationId: string,
   messages: ChatMessage[],
@@ -98,6 +108,9 @@ export async function persistConversationMessages(
   });
 }
 
+/**
+ * 将数据库行映射为消息 DTO，处理旧消息兼容和正文清洗。
+ */
 function mapMessageRow(row: MessageRow): MessageDto {
   const meta = parseRecord(row.meta);
   const userInput = parseRecord(row.user_input);
@@ -108,11 +121,7 @@ function mapMessageRow(row: MessageRow): MessageDto {
 
   // 正文返回给前端展示时去掉结构化 block，避免 JSON 原文和卡片重复显示。
   const cleanedContent = removeTaggedBlock(
-    removeTaggedBlock(
-      row.content,
-      "<user-input",
-      "</user-input>",
-    ),
+    removeTaggedBlock(row.content, "<user-input", "</user-input>"),
     "<request-analysis",
     "</request-analysis>",
   );
@@ -136,6 +145,9 @@ function mapMessageRow(row: MessageRow): MessageDto {
   };
 }
 
+/**
+ * 安全地将 unknown 类型的 JSON 字段解析为对象，非对象类型返回 null。
+ */
 function parseRecord(value: unknown): Record<string, unknown> | null {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     return value as Record<string, unknown>;
@@ -144,6 +156,9 @@ function parseRecord(value: unknown): Record<string, unknown> | null {
   return null;
 }
 
+/**
+ * 持久化助手回复消息，同时写入推理内容和用户输入结构化数据。
+ */
 export async function persistAssistantMessage(
   conversationId: string,
   content: string,
@@ -151,6 +166,7 @@ export async function persistAssistantMessage(
   reasoningContent?: string,
 ): Promise<void> {
   await prisma.$transaction(async (tx) => {
+    // TODO 目前type均为：conversation，后续需要进行更改
     await tx.$executeRaw`
       INSERT INTO "message" (
         "id",
@@ -183,6 +199,9 @@ export async function persistAssistantMessage(
   });
 }
 
+/**
+ * 从消息正文中移除指定 tagged block，避免结构化 JSON 原文在正文中重复展示。
+ */
 function removeTaggedBlock(
   content: string,
   startMarker: string,

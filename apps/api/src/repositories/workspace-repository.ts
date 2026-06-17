@@ -4,6 +4,9 @@ import { prisma } from "@repo/database";
 const LOCAL_USER_ID = "local";
 const DEFAULT_WORKSPACE_NAME = "\u672c\u5730\u5de5\u4f5c\u533a";
 
+/**
+ * 数据库 workspace 表原始行结构。
+ */
 interface WorkspaceRow {
   id: string;
   user_id: string;
@@ -16,6 +19,9 @@ interface WorkspaceRow {
   updated_at: Date;
 }
 
+/**
+ * 数据库 user 表原始行结构。
+ */
 interface UserRow {
   id: string;
   email: string | null;
@@ -25,6 +31,9 @@ interface UserRow {
   updated_at: Date | null;
 }
 
+/**
+ * 工作区的数据传输对象。
+ */
 export interface WorkspaceDto {
   id: string;
   userId: string;
@@ -37,6 +46,9 @@ export interface WorkspaceDto {
   updatedAt: string;
 }
 
+/**
+ * 账户信息的数据传输对象。
+ */
 export interface AccountDto {
   id: string;
   email: string | null;
@@ -46,6 +58,9 @@ export interface AccountDto {
   updatedAt: string | null;
 }
 
+/**
+ * 获取本地用户的账户信息，不存在时自动创建。
+ */
 export async function getLocalUserAccount(): Promise<AccountDto> {
   await ensureLocalUser();
 
@@ -70,6 +85,9 @@ export async function getLocalUserAccount(): Promise<AccountDto> {
   return mapUserRow(user);
 }
 
+/**
+ * 获取本地用户的所有工作区列表，按更新时间降序排列。
+ */
 export async function listLocalUserWorkspaces(): Promise<WorkspaceDto[]> {
   await ensureLocalUser();
 
@@ -92,6 +110,9 @@ export async function listLocalUserWorkspaces(): Promise<WorkspaceDto[]> {
   return rows.map(mapWorkspaceRow);
 }
 
+/**
+ * 为本地用户创建新工作区，支持指定名称和本地存储路径。
+ */
 export async function createLocalUserWorkspace(
   name = DEFAULT_WORKSPACE_NAME,
   localPath?: string,
@@ -127,6 +148,9 @@ export async function createLocalUserWorkspace(
   return mapWorkspaceRow(workspace);
 }
 
+/**
+ * 确保本地用户记录存在，不存在时幂等插入。
+ */
 async function ensureLocalUser(): Promise<void> {
   await prisma.$executeRaw`
     INSERT INTO "user" ("id", "username")
@@ -135,6 +159,9 @@ async function ensureLocalUser(): Promise<void> {
   `;
 }
 
+/**
+ * 将数据库行映射为工作区 DTO。
+ */
 function mapWorkspaceRow(row: WorkspaceRow): WorkspaceDto {
   return {
     id: row.id,
@@ -149,6 +176,9 @@ function mapWorkspaceRow(row: WorkspaceRow): WorkspaceDto {
   };
 }
 
+/**
+ * 将数据库行映射为用户账户 DTO。
+ */
 function mapUserRow(row: UserRow): AccountDto {
   return {
     id: row.id,
