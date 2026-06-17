@@ -7,7 +7,7 @@ export {
   formatRequestAnalysisBlock,
   runRequestAgent,
 } from "./agents/request/agent";
-export { runRequestWorkflow } from "./agents/request/workflow";
+export { graph, runWorkflowGraph } from "./graph/workflow";
 export type {
   ConversationStreamEvent,
   ConversationStreamOptions,

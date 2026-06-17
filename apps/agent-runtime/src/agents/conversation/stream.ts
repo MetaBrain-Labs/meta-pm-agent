@@ -8,7 +8,7 @@ import {
 } from "../../utils/message-adapter";
 import { streamTaggedBlock } from "../../utils/tagged-block-stream";
 import { isFormAnswer } from "../../utils/form-parser";
-import { runRequestWorkflow } from "../request/workflow";
+import { runWorkflowGraph } from "../../graph/workflow";
 import type {
   ConversationStreamEvent,
   ConversationStreamOptions,
@@ -88,6 +88,7 @@ async function* streamUserInputIntegration(
   let started = false;
 
   for await (const chunk of streamAgentEvents(toLangChainMessages(messages))) {
+    // TODO 这部分的推理可能需要再页面展示，考虑使用一个通用的方法接收所有Agent的推理过程
     if (chunk.type === "reasoning") {
       yield chunk;
       continue;
@@ -109,7 +110,7 @@ async function* streamUserInputIntegration(
 
     // 表单答案被整理成 user_input 后，立即进入无需用户参与的 Request Agent 处理。
     yield { type: "request-analysis-start" };
-    const result = await runRequestWorkflow({
+    const result = await runWorkflowGraph({
       productContext: options.productContext,
       userInputBlock,
     });
