@@ -41,11 +41,11 @@ pnpm dev
 
 ### 服务列表
 
-| 服务 | 端口 | 单独启动命令 |
-|------|------|-------------|
-| API | 3001 | `pnpm --filter @repo/api dev` |
-| Web | 3000 | `pnpm --filter web dev` |
-| Worker | — | `pnpm --filter @repo/worker dev` |
+| 服务   | 端口 | 单独启动命令                     |
+| ------ | ---- | -------------------------------- |
+| API    | 3001 | `pnpm --filter @repo/api dev`    |
+| Web    | 3000 | `pnpm --filter web dev`          |
+| Worker | —    | `pnpm --filter @repo/worker dev` |
 
 ### API 接口
 
@@ -75,4 +75,5 @@ packages/
 pnpm build    # 构建全部包和应用（按依赖顺序）
 pnpm dev      # 启动全部服务开发模式（需先执行 pnpm build）
 pnpm lint     # 代码检查（目前仅 web 配置了 eslint）
+pnpm dlx @langchain/langgraph-cli@1.2.0 dev   # 启用LangGraph Studio
 ```
