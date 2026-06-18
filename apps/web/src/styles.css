@@ -757,11 +757,16 @@ body {
   color: var(--primary);
 }
 
-.chat-composer {
+.chat-composer-border-beam {
+  position: relative;
   width: min(1180px, calc(100% - 48px));
-  margin: 0 auto 20px;
+  margin-bottom: 24px;
+}
+
+.chat-composer {
+  width: 100%;
   border: 1px solid var(--line-soft);
-  border-radius: 18px;
+  border-radius: 12px;
   background: #ffffff;
   padding: 16px 16px 12px;
 }

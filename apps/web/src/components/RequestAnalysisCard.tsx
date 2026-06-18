@@ -1,11 +1,10 @@
-import { useState } from "react";
-import { Button, Card, Empty, List, Progress, Space, Tag, Typography } from "antd";
+import { useState, type ReactNode } from "react";
+import { Collapse, Empty, List, Progress, Space, Tag, Typography } from "antd";
 import {
   ApartmentOutlined,
-  DownOutlined,
+  CaretRightOutlined,
   MessageOutlined,
   QuestionCircleOutlined,
-  RightOutlined,
 } from "@ant-design/icons";
 import type { RequestAnalysis } from "../types";
 
@@ -23,161 +22,260 @@ export function RequestAnalysisCard({ raw, analysis }: Props) {
   if (!data) return null;
 
   return (
-    <Card
-      size="small"
-      className="mb-2"
-      style={{
-        background: "var(--surface)",
-        borderColor: "var(--line-soft)",
-        borderRadius: 8,
-        borderLeft: "3px solid var(--success)",
-        boxShadow: "var(--shadow-card)",
-      }}
-      title={
-        <div className="flex items-center gap-2">
-          <ApartmentOutlined style={{ color: "var(--success)" }} />
-          <span
-            style={{
-              fontFamily: "var(--sans)",
-              color: "var(--ink)",
-              fontWeight: 800,
-              fontSize: 14,
-            }}
-          >
-            Request Agent 分析
-          </span>
-          <Tag
-            style={{
-              fontFamily: "var(--sans)",
-              fontWeight: 700,
-              fontSize: 11,
-              borderRadius: 6,
-              border: "none",
-              background: "var(--success-soft)",
-              color: "var(--success)",
-            }}
-          >
-            {data.business_model.length} 条业务
-          </Tag>
-        </div>
-      }
-      extra={
-        <Button
-          type="text"
-          size="small"
-          icon={open ? <DownOutlined /> : <RightOutlined />}
-          onClick={() => setOpen(!open)}
-        />
-      }
-    >
-      {open && (
-        <>
-          {data.business_model.length === 0 ? (
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description="暂无业务模型"
-            />
-          ) : (
-            <List
-              size="small"
-              dataSource={data.business_model}
-              renderItem={(item) => (
-                <List.Item
-                  style={{
-                    alignItems: "flex-start",
-                    borderBottom: "1px solid var(--line-soft)",
-                    paddingLeft: 0,
-                    paddingRight: 0,
-                  }}
-                >
-                  <div className="min-w-0 flex-1">
-                    <Space size={6} wrap className="mb-1">
-                      <Tag color="blue">业务 {item.index}</Tag>
-                      <Tag>
-                        覆盖 {item.covered_user_input_indexes.join(", ")}
-                      </Tag>
-                    </Space>
-                    <Typography.Paragraph
+    <Collapse
+      defaultActiveKey={[]}
+      expandIcon={({ isActive }) => (
+        <CaretRightOutlined rotate={isActive ? 90 : 0} />
+      )}
+      items={[
+        {
+          key: "1",
+          label: (
+            <div
+              className="flex items-center gap-2"
+              onClick={() => setOpen(!open)}
+            >
+              <ApartmentOutlined style={{ color: "var(--success)" }} />
+              <span
+                style={{
+                  fontFamily: "var(--sans)",
+                  color: "var(--ink)",
+                  fontWeight: 800,
+                  fontSize: 14,
+                }}
+              >
+                Request Agent 分析
+              </span>
+              <Tag
+                style={{
+                  fontFamily: "var(--sans)",
+                  fontWeight: 700,
+                  fontSize: 11,
+                  borderRadius: 6,
+                  border: "none",
+                  background: "var(--success-soft)",
+                  color: "var(--success)",
+                }}
+              >
+                {data.business_model.length} 条业务
+              </Tag>
+            </div>
+          ),
+          children: (
+            <>
+              {data.business_model.length === 0 ? (
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description="暂无业务模型"
+                />
+              ) : (
+                <List
+                  size="small"
+                  dataSource={data.business_model}
+                  renderItem={(item) => (
+                    <List.Item
                       style={{
-                        marginBottom: 8,
-                        color: "var(--ink-soft)",
-                        fontFamily: "var(--body)",
-                        fontSize: 14,
-                        lineHeight: 1.65,
+                        alignItems: "flex-start",
+                        borderBottom: "1px solid var(--line-soft)",
+                        paddingLeft: 0,
+                        paddingRight: 0,
                       }}
                     >
-                      {item.user_goal}
-                    </Typography.Paragraph>
+                      <div className="min-w-0 flex-1">
+                        <div className="mb-3 flex flex-wrap items-center gap-2">
+                          <Tag color="blue">业务序号：{item.index}</Tag>
+                          <Tag>
+                            覆盖请求：
+                            {item.covered_user_input_indexes.join(", ")}
+                          </Tag>
+                        </div>
 
-                    {item.goal_constraints.length > 0 && (
-                      <div className="mb-2">
-                        <Typography.Text strong>目标约束：</Typography.Text>
-                        <Space size={6} wrap className="ml-1">
-                          {item.goal_constraints.map((constraint, index) => (
-                            <Tag key={index}>{constraint}</Tag>
-                          ))}
-                        </Space>
-                      </div>
-                    )}
+                        <FieldBlock label="序号">
+                          <Typography.Text>{item.index}</Typography.Text>
+                        </FieldBlock>
 
-                    {item.missing_information.length > 0 && (
-                      <List
-                        size="small"
-                        dataSource={item.missing_information}
-                        renderItem={(missing) => (
-                          <List.Item
+                        <FieldBlock label="用户目标">
+                          <Typography.Paragraph
                             style={{
-                              paddingLeft: 0,
-                              paddingRight: 0,
-                              borderBottom: "none",
+                              marginBottom: 0,
+                              color: "var(--ink-soft)",
+                              fontFamily: "var(--body)",
+                              fontSize: 14,
+                              lineHeight: 1.65,
                             }}
                           >
-                            <div className="w-full">
-                              <div className="mb-1 flex items-start gap-2">
-                                <QuestionCircleOutlined
-                                  style={{
-                                    color: "var(--warning)",
-                                    marginTop: 3,
-                                  }}
-                                />
-                                <span className="min-w-0 flex-1">
-                                  {missing.index}. {missing.description}
-                                </span>
-                              </div>
-                              <Progress
-                                percent={Math.round(missing.importance * 100)}
-                                size="small"
-                                showInfo
-                              />
-                            </div>
-                          </List.Item>
-                        )}
-                      />
-                    )}
-                  </div>
-                </List.Item>
-              )}
-            />
-          )}
+                            {item.user_goal}
+                          </Typography.Paragraph>
+                        </FieldBlock>
 
-          {(data.questions.length > 0 || data.chitchat.length > 0) && (
-            <Space size={6} wrap className="mt-2">
-              {data.questions.length > 0 && (
-                <Tag icon={<QuestionCircleOutlined />} color="gold">
-                  问答：{data.questions.join(", ")}
-                </Tag>
+                        <FieldBlock label="目标约束">
+                          <Typography.Text
+                            className="mb-2 block"
+                            style={{
+                              color: "var(--ink-faint)",
+                              fontSize: 12,
+                              lineHeight: 1.5,
+                            }}
+                          >
+                            来源于用户输入，而非 Agent 自行生成，例如用户输入中
+                            “若 X，则 Y”里的 X。
+                          </Typography.Text>
+                          {item.goal_constraints.length > 0 ? (
+                            <Space size={6} wrap>
+                              {item.goal_constraints.map(
+                                (constraint, index) => (
+                                  <Tag key={index}>{constraint}</Tag>
+                                ),
+                              )}
+                            </Space>
+                          ) : (
+                            <Typography.Text type="secondary">
+                              无明确目标约束
+                            </Typography.Text>
+                          )}
+                        </FieldBlock>
+
+                        <FieldBlock label="欠缺信息">
+                          <Typography.Text
+                            className="mb-2 block"
+                            style={{
+                              color: "var(--ink-faint)",
+                              fontSize: 12,
+                              lineHeight: 1.5,
+                            }}
+                          >
+                            由 Request Agent
+                            提出它认为具有价值的缺失项；重要程度为 0-1
+                            之间的数值，越高表示越重要，衡量该问题能多大程度减少关于用户真实目标的不确定性。
+                          </Typography.Text>
+                          {item.missing_information.length > 0 ? (
+                            <List
+                              size="small"
+                              dataSource={item.missing_information}
+                              renderItem={(missing) => (
+                                <List.Item
+                                  style={{
+                                    paddingLeft: 0,
+                                    paddingRight: 0,
+                                    borderBottom: "1px solid var(--line-soft)",
+                                  }}
+                                >
+                                  <div className="w-full">
+                                    <div className="mb-1 flex items-start gap-2">
+                                      <QuestionCircleOutlined
+                                        style={{
+                                          color: "var(--warning)",
+                                          marginTop: 3,
+                                        }}
+                                      />
+                                      <div className="min-w-0 flex-1">
+                                        <div className="mb-1 flex flex-wrap gap-2">
+                                          <Tag>序号：{missing.index}</Tag>
+                                          <Tag color="gold">
+                                            重要程度：
+                                            {formatImportance(
+                                              missing.importance,
+                                            )}
+                                          </Tag>
+                                        </div>
+                                        <Typography.Text>
+                                          描述：{missing.description}
+                                        </Typography.Text>
+                                        <Progress
+                                          percent={Math.round(
+                                            missing.importance * 100,
+                                          )}
+                                          size="small"
+                                          showInfo
+                                        />
+                                      </div>
+                                    </div>
+                                  </div>
+                                </List.Item>
+                              )}
+                            />
+                          ) : (
+                            <Typography.Text type="secondary">
+                              暂无欠缺信息
+                            </Typography.Text>
+                          )}
+                        </FieldBlock>
+
+                        <FieldBlock label="覆盖的用户请求序号列表">
+                          {item.covered_user_input_indexes.length > 0 ? (
+                            <Space size={6} wrap>
+                              {item.covered_user_input_indexes.map((index) => (
+                                <Tag key={index}>{index}</Tag>
+                              ))}
+                            </Space>
+                          ) : (
+                            <Typography.Text type="secondary">
+                              暂无覆盖请求
+                            </Typography.Text>
+                          )}
+                        </FieldBlock>
+                      </div>
+                    </List.Item>
+                  )}
+                />
               )}
-              {data.chitchat.length > 0 && (
-                <Tag icon={<MessageOutlined />}>
-                  闲聊：{data.chitchat.join(", ")}
-                </Tag>
+
+              {(data.questions.length > 0 || data.chitchat.length > 0) && (
+                <Space size={6} wrap className="mt-2">
+                  {data.questions.length > 0 && (
+                    <Tag icon={<QuestionCircleOutlined />} color="gold">
+                      问答：{data.questions.join(", ")}
+                    </Tag>
+                  )}
+                  {data.chitchat.length > 0 && (
+                    <Tag icon={<MessageOutlined />}>
+                      闲聊：{data.chitchat.join(", ")}
+                    </Tag>
+                  )}
+                </Space>
               )}
-            </Space>
-          )}
-        </>
-      )}
-    </Card>
+            </>
+          ),
+        },
+      ]}
+    />
   );
+}
+
+/**
+ * 渲染业务模型中的单个字段块，保证结构化内容有稳定视觉层级。
+ */
+function FieldBlock({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="mb-3 rounded-md border border-[var(--line-soft)] bg-white px-3 py-2">
+      <Typography.Text
+        strong
+        className="mb-1 block"
+        style={{
+          color: "var(--ink)",
+          fontFamily: "var(--sans)",
+          fontSize: 13,
+        }}
+      >
+        {label}
+      </Typography.Text>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * 将重要程度规范化为 0-1 的展示文本。
+ */
+function formatImportance(value: number): string {
+  if (!Number.isFinite(value)) return "-";
+  return Math.max(0, Math.min(1, value)).toFixed(2);
 }
 
 /**

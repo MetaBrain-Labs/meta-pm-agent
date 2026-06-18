@@ -17,8 +17,9 @@
 - 不要提交 `dist/`；生成的构建产物已被 Git 忽略。
 - 根目录及 Node.js 应用/包使用 TypeScript 6.0.3。由于 `baseUrl` 已废弃，基础配置中的 `ignoreDeprecations: "6.0"` 必须保留。
 - `apps/web` 使用 TypeScript 5.8.3，并拥有独立的 `baseUrl`、`paths` 和 `noEmit: true` 配置。不要升级它的 TypeScript 版本。
+- `apps/web` 当前使用 React、Vite 和 Ant Design 6。处理前端时保留 Ant Design 6 的导入方式和组件 API。
 - `packages/shared`、`packages/database` 和 `apps/agent-runtime` 使用 TypeScript project references，并启用 `composite: true`。新增可导入共享包时遵循此模式。
-- 保留 `packages/database/tsconfig.json` 中的 `"types": ["node"]`；pnpm 严格隔离不会自动暴露 `@types/node`。
+- 保留 `packages/database/tsconfig.json` 中的 `"types": ["node"]`，pnpm 严格隔离不会自动暴露 `@types/node`。
 - `apps/agent-runtime/src/graph.ts` 历史上存在由 `@langchain/langgraph` 版本不匹配引起的 LangGraph typed-state API 类型问题。分析包级 TypeScript 失败时需要考虑这一点。
 - `apps/web` 通过 `eslint-config-next` 配置 ESLint；如果本地缺少 Next 的 compiled parser 包，lint 可能失败。根目录 Turbo 的 lint 和 typecheck 任务当前没有完整生效脚本。
 
@@ -30,7 +31,7 @@
 apps/
   agent-runtime/   基于 LangGraph/DeepAgents 的 PM Runtime（Node.js，composite TypeScript）
   api/             Hono HTTP API 服务（端口 3001，SSE 流式响应，Prisma 持久化）
-  web/             Vite + React + Ant Design 5 前端（TypeScript 5.8.3，浅色主题）
+  web/             Vite + React + Ant Design 6 前端（TypeScript 5.8.3，浅色主题）
   worker/          BullMQ Redis Worker
 packages/
   shared/          共享类型、Zod Schema、DTO、Agent 状态/图/运行时类型
@@ -43,6 +44,17 @@ packages/
 - 保持工作区/聊天路由的当前划分：`/workplace`、`/chat/:workspaceId`、`/chat/:workspaceId/:threadId`。
 - 标准 Web 环境中的目录选择无法可靠暴露完整绝对路径。保留可编辑路径输入，并在可用时保留宿主环境提供的 `file.path` 处理。
 - 除非任务确有需要，不要修改依赖版本、生成文件、无关模块或仓库级配置。
+
+## Web 结构规则
+
+- 保持 `apps/web/src/App.tsx` 作为路由级组合层。它负责串联状态、路由、工作区/聊天流程和弹窗，但不要继续堆积 API 客户端或数据映射逻辑。
+- 浏览器侧 API 调用放在 `apps/web/src/api/`。
+- 共享 UI 常量和本地偏好 key 放在 `apps/web/src/constants/`。
+- DTO 到视图模型的恢复逻辑放在 `apps/web/src/mappers/`。
+- 路径解析和 History 辅助函数放在 `apps/web/src/router/`。
+- 流事件 reducer、Markdown 工具和结构化块解析器放在 `apps/web/src/utils/`。
+- React 视图组件放在 `apps/web/src/components/`，可复用 Hook 放在 `apps/web/src/hooks/`。
+- 在继续向 `App.tsx` 增加代码前，优先把逻辑移动到这些职责清晰的模块中。
 
 ## 聊天和 Agent 协议
 

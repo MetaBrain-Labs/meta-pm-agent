@@ -1,4 +1,4 @@
-import {
+﻿import {
   useState,
   useCallback,
   useRef,
@@ -15,198 +15,29 @@ import type {
   StreamEvent,
   WorkspaceInfo,
   AccountInfo,
-  PersistedMessageInfo,
 } from "./types";
 import { applyStreamEvent } from "./utils/apply-stream-event";
-
-const ACTIVE_WORKSPACE_KEY = "pm-agent-active-workspace";
-const DEFAULT_CHAT_TITLE = "\u65b0\u5bf9\u8bdd";
-const DEFAULT_WORKSPACE_NAME = "\u672c\u5730\u5de5\u4f5c\u533a";
-const NO_WORKSPACE_MESSAGE =
-  "\u8bf7\u5148\u65b0\u5efa\u6216\u9009\u62e9\u5de5\u4f5c\u533a";
-
-type AppRoute =
-  | { name: "workspace" }
-  | { name: "chat"; workspaceId: string; threadId: string | null };
-
-function parseAppRoute(pathname = window.location.pathname): AppRoute {
-  const parts = pathname.split("/").filter(Boolean);
-  if (parts[0] === "chat" && parts[1]) {
-    return {
-      name: "chat",
-      workspaceId: decodeURIComponent(parts[1]),
-      threadId: parts[2] ? decodeURIComponent(parts[2]) : null,
-    };
-  }
-
-  return { name: "workspace" };
-}
-
-function buildChatPath(workspaceId: string, threadId?: string | null): string {
-  const base = `/chat/${encodeURIComponent(workspaceId)}`;
-  return threadId ? `${base}/${encodeURIComponent(threadId)}` : base;
-}
-
-function replacePath(path: string) {
-  if (window.location.pathname !== path) {
-    window.history.replaceState(null, "", path);
-  }
-}
-
-function pushPath(path: string) {
-  if (window.location.pathname !== path) {
-    window.history.pushState(null, "", path);
-    window.dispatchEvent(new PopStateEvent("popstate"));
-  }
-}
-
-async function fetchAccount(): Promise<AccountInfo> {
-  const response = await fetch("/api/account");
-
-  if (!response.ok) {
-    throw new Error(`Server error: ${response.status}`);
-  }
-
-  const data = (await response.json()) as {
-    account: AccountInfo;
-  };
-
-  return data.account;
-}
-
-async function fetchWorkspaces(): Promise<WorkspaceInfo[]> {
-  const response = await fetch("/api/workspaces");
-
-  if (!response.ok) {
-    throw new Error(`Server error: ${response.status}`);
-  }
-
-  const data = (await response.json()) as {
-    workspaces: WorkspaceInfo[];
-  };
-
-  return data.workspaces;
-}
-
-async function createWorkspaceRecord(
-  name: string,
-  localPath: string,
-): Promise<WorkspaceInfo> {
-  const response = await fetch("/api/workspaces", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, localPath }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Server error: ${response.status}`);
-  }
-
-  const data = (await response.json()) as {
-    workspace: WorkspaceInfo;
-  };
-
-  return data.workspace;
-}
-
-async function createChatRecord(
-  workspaceId: string,
-  title: string,
-): Promise<ThreadInfo> {
-  const response = await fetch("/api/chats", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ workspaceId, title }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Server error: ${response.status}`);
-  }
-
-  const data = (await response.json()) as {
-    chat: ThreadInfo;
-    requestForm: {
-      id: string;
-    };
-  };
-
-  return {
-    ...data.chat,
-    requestFormId: data.requestForm.id,
-  };
-}
-
-async function fetchChatRecords(
-  workspaceId: string,
-): Promise<ThreadInfo[]> {
-  const params = new URLSearchParams({ workspaceId });
-  const response = await fetch(`/api/chats?${params.toString()}`);
-
-  if (!response.ok) {
-    throw new Error(`Server error: ${response.status}`);
-  }
-
-  const data = (await response.json()) as {
-    chats: ThreadInfo[];
-  };
-
-  return data.chats;
-}
-
-async function fetchChatMessages(threadId: string): Promise<Message[]> {
-  const response = await fetch(`/api/chats/${threadId}/messages`);
-
-  if (!response.ok) {
-    throw new Error(`Server error: ${response.status}`);
-  }
-
-  const data = (await response.json()) as {
-    messages: PersistedMessageInfo[];
-  };
-
-  return data.messages.map((message) => ({
-    id: message.id,
-    role: message.role === "assistant" ? "agent" : "user",
-    type: message.type,
-    content: message.content,
-    timestamp: new Date(message.timestamp).getTime(),
-    ...(message.reasoningContent && message.type && message.type !== "conversation"
-      ? {
-          reasoningBlocks: [
-            {
-              agentType: message.type,
-              content: message.reasoningContent,
-            },
-          ],
-        }
-      : {}),
-    ...(message.reasoningContent && (!message.type || message.type === "conversation")
-      ? { thinking: message.reasoningContent }
-      : {}),
-    ...(message.userInput
-      ? {
-          userInput: {
-            state: "complete" as const,
-            content: JSON.stringify(
-              { user_input: message.userInput },
-              null,
-              2,
-            ),
-          },
-        }
-      : {}),
-    // 历史消息从 API 返回结构化结果后，恢复成和流式事件一致的卡片状态。
-    ...(message.requestAnalysis
-      ? {
-          requestAnalysis: {
-            state: "complete" as const,
-            content: JSON.stringify(message.requestAnalysis, null, 2),
-            analysis: message.requestAnalysis,
-          },
-        }
-      : {}),
-  }));
-}
+import {
+  createChatRecord,
+  createWorkspaceRecord,
+  fetchAccount,
+  fetchChatMessages,
+  fetchChatRecords,
+  fetchWorkspaces,
+} from "./api/chat-api";
+import {
+  ACTIVE_WORKSPACE_KEY,
+  DEFAULT_CHAT_TITLE,
+  DEFAULT_WORKSPACE_NAME,
+  NO_WORKSPACE_MESSAGE,
+} from "./constants/app";
+import {
+  buildChatPath,
+  parseAppRoute,
+  pushPath,
+  replacePath,
+  type AppRoute,
+} from "./router/app-route";
 
 export default function App() {
   const [projectForm] = Form.useForm<{ name: string; location?: string }>();
@@ -341,14 +172,17 @@ export default function App() {
     pushPath(buildChatPath(newThread.workspaceId, newThread.id));
   }, []);
 
-  const handleSelectThread = useCallback((id: string) => {
-    const workspaceId = activeWorkspaceId;
-    if (workspaceId) {
-      pushPath(buildChatPath(workspaceId, id));
-    }
-    setWorkspaceDetailOpen(true);
-    setActiveThreadId(id);
-  }, [activeWorkspaceId]);
+  const handleSelectThread = useCallback(
+    (id: string) => {
+      const workspaceId = activeWorkspaceId;
+      if (workspaceId) {
+        pushPath(buildChatPath(workspaceId, id));
+      }
+      setWorkspaceDetailOpen(true);
+      setActiveThreadId(id);
+    },
+    [activeWorkspaceId],
+  );
 
   const handleOpenWorkspace = useCallback((id: string) => {
     pushPath(buildChatPath(id));
@@ -575,52 +409,56 @@ export default function App() {
         closable={false}
         className="project-create-modal"
         onCancel={() => setProjectModalOpen(false)}
+        mask={{ blur: true }}
       >
         <div className="project-modal-head">
-          <h2>新建本地项目</h2>
+          <h2>鏂板缓鏈湴椤圭洰</h2>
           <p>在指定文件夹下创建一个新的项目</p>
         </div>
         <Form form={projectForm} layout="vertical" className="project-form">
           <div className="project-form-panel">
             <Form.Item
-              label="项目名称"
+              label="椤圭洰鍚嶇О"
               name="name"
               rules={[{ required: true, message: "请输入项目名称" }]}
             >
               <Input autoFocus />
             </Form.Item>
             <div className="project-form-divider" />
-            <Form.Item label="项目地址" name="location" className="mb-0">
+            <Form.Item label="椤圭洰鍦板潃" name="location" className="mb-0">
               <Input
-                placeholder="选择后的位置"
+                placeholder="閫夋嫨鍚庣殑浣嶇疆"
                 addonAfter={
                   <Button
                     type="link"
                     onClick={() => void handleBrowseDirectory()}
                   >
-                    浏览
+                    娴忚
                   </Button>
                 }
               />
             </Form.Item>
             <div className="project-location-note">
-              指定项目在本地的存放位置：
-              <button type="button" onClick={() => void handleBrowseDirectory()}>
+              指定项目在本地的存放位置，
+              <button
+                type="button"
+                onClick={() => void handleBrowseDirectory()}
+              >
                 选择后的位置
               </button>
             </div>
           </div>
           {projectLocationHint && (
-            <div className="project-form-error">请输入报错信息位置</div>
+            <div className="project-form-error">请输入项目位置</div>
           )}
           <div className="project-modal-actions">
-            <Button onClick={() => setProjectModalOpen(false)}>取消</Button>
+            <Button onClick={() => setProjectModalOpen(false)}>鍙栨秷</Button>
             <Button
               type="primary"
               loading={isCreatingWorkspace}
               onClick={() => void handleNewWorkspace()}
             >
-              创建
+              鍒涘缓
             </Button>
           </div>
         </Form>
@@ -637,21 +475,19 @@ export default function App() {
         activeTab={configTab}
         showWorkspace={configWorkspaceVisible}
         accountRows={[
-          ["账号 ID", account?.id ?? "-"],
+          ["璐﹀彿 ID", account?.id ?? "-"],
           ["用户名", account?.username ?? "Local User"],
-          ["邮箱", account?.email ?? "-"],
-          ["头像", account?.avatar ?? "默认头像"],
+          ["閭", account?.email ?? "-"],
+          ["澶村儚", account?.avatar ?? "榛樿澶村儚"],
         ]}
         workspaceRows={(() => {
           const workspace =
-            workspaces.find(
-              (item) => item.id === activeWorkspaceId,
-            ) ?? null;
+            workspaces.find((item) => item.id === activeWorkspaceId) ?? null;
           return [
-            ["工作区 ID", workspace?.id ?? "-"],
-            ["名称", workspace?.name ?? "-"],
-            ["本地路径", workspace?.localPath ?? "-"],
-            ["存储类型", workspace?.storageType ?? "-"],
+            ["宸ヤ綔鍖?ID", workspace?.id ?? "-"],
+            ["鍚嶇О", workspace?.name ?? "-"],
+            ["鏈湴璺緞", workspace?.localPath ?? "-"],
+            ["瀛樺偍绫诲瀷", workspace?.storageType ?? "-"],
             ["同步状态", workspace?.syncStatus ?? "-"],
           ];
         })()}
@@ -707,21 +543,21 @@ function WorkspaceDashboard({
                 onClick={() => onOpenWorkspace(workspace.id)}
               >
                 <span>
-                  <strong>{workspace.name || "项目名称"}</strong>
-                  {index === 0 && <em>上次打开</em>}
+                  <strong>{workspace.name || "椤圭洰鍚嶇О"}</strong>
+                  {index === 0 && <em>涓婃鎵撳紑</em>}
                 </span>
                 <small>
                   {workspace.localPath ||
                     workspace.cloudPath ||
-                    "项目存储地址/云端地址"}
+                    "椤圭洰瀛樺偍鍦板潃/浜戠鍦板潃"}
                 </small>
-                <i aria-hidden="true">⋮</i>
+                <i aria-hidden="true">›</i>
               </button>
             ))
           ) : (
             <div className="workspace-empty-projects">
-              <strong>暂无项目</strong>
-              <small>新建或打开一个项目后会显示在这里</small>
+              <strong>鏆傛棤椤圭洰</strong>
+              <small>鏂板缓鎴栨墦寮€涓€涓」鐩悗浼氭樉绀哄湪杩欓噷</small>
             </div>
           )}
         </div>
@@ -732,45 +568,45 @@ function WorkspaceDashboard({
         >
           <AvatarMark src={account?.avatar} />
           <b>{account?.username || "Local User"}</b>
-          <i aria-hidden="true">⌄</i>
+          <i aria-hidden="true">›</i>
         </button>
       </aside>
 
       <main className="workspace-main">
         <div className="window-controls" aria-hidden="true">
           <span>−</span>
-          <span>×</span>
+          <span>脳</span>
         </div>
         <section className="workspace-brand">
           <div className="workspace-logo" />
-          <h1>问渠</h1>
+          <h1>闂笭</h1>
           <p>V1.01</p>
         </section>
 
-        <section className="workspace-actions" aria-label="项目操作">
+        <section className="workspace-actions" aria-label="椤圭洰鎿嶄綔">
           <ActionRow
-            title="新建项目"
+            title="鏂板缓椤圭洰"
             description="在指定文件夹下创建一个新的项目"
-            buttonLabel="创建"
+            buttonLabel="鍒涘缓"
             primary
             loading={creatingWorkspace}
             onClick={onNewWorkspace}
           />
           <ActionRow
-            title="打开项目"
+            title="鎵撳紑椤圭洰"
             description={
               activeWorkspace
-                ? `打开 ${activeWorkspace.name}`
-                : "将指定本地文件夹作为项目打开"
+                ? `鎵撳紑 ${activeWorkspace.name}`
+                : "灏嗘寚瀹氭湰鍦版枃浠跺す浣滀负椤圭洰鎵撳紑"
             }
-            buttonLabel="打开"
+            buttonLabel="鎵撳紑"
             loading={creating}
             onClick={onOpenProject}
           />
           <ActionRow
-            title="云端同步"
-            description="将远程服务中的项目同步至本地"
-            buttonLabel="同步"
+            title="浜戠鍚屾"
+            description="灏嗚繙绋嬫湇鍔′腑鐨勯」鐩悓姝ヨ嚦鏈湴"
+            buttonLabel="鍚屾"
             primary
             onClick={onOpenProject}
           />
@@ -778,7 +614,7 @@ function WorkspaceDashboard({
         {error && <div className="workspace-error">{error}</div>}
         {threads.length > 0 && (
           <div className="workspace-recent">
-            最近对话：{threads[0]?.title || DEFAULT_CHAT_TITLE}
+            鏈€杩戝璇濓細{threads[0]?.title || DEFAULT_CHAT_TITLE}
           </div>
         )}
       </main>
@@ -821,10 +657,11 @@ function ConfigModal({
       centered
       width={680}
       open={open}
-      title="配置"
-      footer={<Button onClick={onClose}>关闭</Button>}
+      title="閰嶇疆"
+      footer={<Button onClick={onClose}>鍏抽棴</Button>}
       onCancel={onClose}
       className="info-modal"
+      mask={{ blur: true }}
     >
       <div className="settings-modal-body">
         <aside className="settings-modal-nav">
@@ -833,7 +670,7 @@ function ConfigModal({
             className={activeTab === "account" ? "is-active" : ""}
             onClick={() => onTabChange("account")}
           >
-            账号信息
+            璐﹀彿淇℃伅
           </button>
           <button
             type="button"
@@ -1037,9 +874,7 @@ function ThreadChatView({
           content: message.content || message.userInput?.content || "",
           timestamp: new Date(message.timestamp).toISOString(),
           sessionId: "local",
-          ...(message.thinking
-            ? { reasoningContent: message.thinking }
-            : {}),
+          ...(message.thinking ? { reasoningContent: message.thinking } : {}),
         }));
 
         const resp = await fetch("/api/chat", {

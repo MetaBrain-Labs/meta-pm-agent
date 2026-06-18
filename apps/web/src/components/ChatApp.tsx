@@ -6,6 +6,7 @@ import {
   type FormEvent,
 } from "react";
 import { Button, Dropdown, FloatButton, Input, Tooltip } from "antd";
+import BorderBeam from "antd/es/border-beam";
 import {
   ArrowDownOutlined,
   ArrowLeftOutlined,
@@ -201,59 +202,74 @@ export function ChatApp({
             setUserScrolled(false);
           }}
         />
+        <BorderBeam
+          color={[
+            { color: "#1677ff", percent: 0 },
+            { color: "#36cfc9", percent: 54 },
+            { color: "#95de64", percent: 100 },
+          ]}
+          outset={0}
+        >
+          <div className="chat-composer-border-beam">
+            <form onSubmit={handleSubmit} className="chat-composer">
+              <TextArea
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={handleKeyDown}
+                rows={1}
+                placeholder={disabledReason || "输入消息"}
+                disabled={isLoading || Boolean(disabledReason)}
+                autoSize={{ minRows: 3, maxRows: 7 }}
+              />
 
-        <form onSubmit={handleSubmit} className="chat-composer">
-          <TextArea
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={handleKeyDown}
-            rows={1}
-            placeholder={disabledReason || "输入消息"}
-            disabled={isLoading || Boolean(disabledReason)}
-            autoSize={{ minRows: 3, maxRows: 7 }}
-          />
-          <div className="chat-composer-bar">
-            <Tooltip title="添加附件">
-              <Button type="text" shape="circle" icon={<PaperClipOutlined />} />
-            </Tooltip>
-            <Dropdown
-              trigger={["click"]}
-              menu={{
-                selectable: true,
-                selectedKeys: [ACTIVE_MODEL],
-                items: [{ key: ACTIVE_MODEL, label: ACTIVE_MODEL }],
-              }}
-            >
-              <button type="button" className="model-selector">
-                <span>{ACTIVE_MODEL}</span>
-                <DownOutlined />
-              </button>
-            </Dropdown>
-            <div className="chat-composer-actions">
-              {isLoading ? (
-                <Tooltip title="停止生成">
+              <div className="chat-composer-bar">
+                <Tooltip title="添加附件">
                   <Button
-                    type="primary"
+                    type="text"
                     shape="circle"
-                    danger
-                    icon={<StopOutlined />}
-                    onClick={onStop}
+                    icon={<PaperClipOutlined />}
                   />
                 </Tooltip>
-              ) : (
-                <Tooltip title="发送">
-                  <Button
-                    type="primary"
-                    shape="circle"
-                    htmlType="submit"
-                    icon={<SendOutlined />}
-                    disabled={!input.trim() || Boolean(disabledReason)}
-                  />
-                </Tooltip>
-              )}
-            </div>
+                <Dropdown
+                  trigger={["click"]}
+                  menu={{
+                    selectable: true,
+                    selectedKeys: [ACTIVE_MODEL],
+                    items: [{ key: ACTIVE_MODEL, label: ACTIVE_MODEL }],
+                  }}
+                >
+                  <button type="button" className="model-selector">
+                    <span>{ACTIVE_MODEL}</span>
+                    <DownOutlined />
+                  </button>
+                </Dropdown>
+                <div className="chat-composer-actions">
+                  {isLoading ? (
+                    <Tooltip title="停止生成">
+                      <Button
+                        type="primary"
+                        shape="circle"
+                        danger
+                        icon={<StopOutlined />}
+                        onClick={onStop}
+                      />
+                    </Tooltip>
+                  ) : (
+                    <Tooltip title="发送">
+                      <Button
+                        type="primary"
+                        shape="circle"
+                        htmlType="submit"
+                        icon={<SendOutlined />}
+                        disabled={!input.trim() || Boolean(disabledReason)}
+                      />
+                    </Tooltip>
+                  )}
+                </div>
+              </div>
+            </form>
           </div>
-        </form>
+        </BorderBeam>
       </div>
     </div>
   );

@@ -83,6 +83,7 @@ export function MessageBubble({
     );
   }
 
+  const streamActive = isLast && streaming;
   const requestReasoningBlocks = message.reasoningBlocks?.filter(
     (block) => block.agentType === "request",
   );
@@ -94,8 +95,15 @@ export function MessageBubble({
     <div className="flex max-w-[min(860px,92%)] flex-col self-start">
       {message.thinking && (
         <ThinkingBox
+          label={getReasoningLabel("conversation")}
           content={message.thinking}
-          hasResponse={Boolean(message.content)}
+          active={
+            streamActive &&
+            !message.content &&
+            !message.questionForm &&
+            !message.userInput &&
+            !message.requestAnalysis
+          }
         />
       )}
 
@@ -183,7 +191,9 @@ export function MessageBubble({
           key={block.agentType}
           label={getReasoningLabel(block.agentType)}
           content={block.content}
-          hasResponse={message.requestAnalysis?.state === "complete"}
+          active={
+            streamActive && message.requestAnalysis?.state !== "complete"
+          }
         />
       ))}
 
@@ -205,7 +215,7 @@ export function MessageBubble({
           key={block.agentType}
           label={getReasoningLabel(block.agentType)}
           content={block.content}
-          hasResponse
+          active={streamActive}
         />
       ))}
 
@@ -289,13 +299,13 @@ function QFGenerating({ label }: { label: string }) {
  * 展示 Agent 推理过程，流式阶段保持自动滚动。
  */
 function ThinkingBox({
-  label = "思考过程",
+  label,
   content,
-  hasResponse,
+  active,
 }: {
-  label?: string;
+  label: string;
   content: string;
-  hasResponse: boolean;
+  active: boolean;
 }) {
   const [open, setOpen] = useState(true);
   const [userScrolled, setUserScrolled] = useState(false);
@@ -334,7 +344,7 @@ function ThinkingBox({
         />
         <span className="thinking-label">
           {label}
-          {!hasResponse && <span className="loading-dots" />}
+          {active && <span className="loading-dots" />}
         </span>
       </button>
       {open && (
@@ -354,7 +364,7 @@ function ThinkingBox({
  * 将 Agent 类型转换为前端推理过程标题。
  */
 function getReasoningLabel(agentType: string): string {
-  if (agentType === "request") return "Request Agent 思考过程";
-  if (agentType === "conversation") return "思考过程";
-  return `${agentType} 思考过程`;
+  if (agentType === "request") return "思考过程（Request Agent）";
+  if (agentType === "conversation") return "思考过程（Conversation Agent）";
+  return `思考过程（${agentType} Agent）`;
 }

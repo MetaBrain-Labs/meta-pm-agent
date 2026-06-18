@@ -17,6 +17,7 @@ Deliver correct, maintainable changes that integrate with the current pnpm works
 - Never commit `dist/`; generated build output is ignored by Git.
 - Root and Node.js apps/packages use TypeScript 6.0.3. Keep `ignoreDeprecations: "6.0"` in the base config because of the `baseUrl` deprecation.
 - `apps/web` uses TypeScript 5.8.3 with its own `baseUrl`, `paths`, and `noEmit: true`. Do not upgrade its TypeScript version.
+- `apps/web` currently uses React, Vite, and Ant Design 6. Preserve the Ant Design 6 imports and component APIs when working on the frontend.
 - `packages/shared`, `packages/database`, and `apps/agent-runtime` use TypeScript project references and `composite: true`. Follow this pattern when adding an importable shared package.
 - Keep `"types": ["node"]` in `packages/database/tsconfig.json`; pnpm strict isolation does not expose `@types/node` automatically.
 - `apps/agent-runtime/src/graph.ts` has historically had LangGraph typed-state API errors caused by an `@langchain/langgraph` version mismatch. Account for this when interpreting package-level TypeScript failures.
@@ -30,7 +31,7 @@ Preserve package and application boundaries:
 apps/
   agent-runtime/   LangGraph/DeepAgents PM runtime (Node.js, composite TypeScript)
   api/             Hono HTTP API server (port 3001, SSE streaming, Prisma persistence)
-  web/             Vite + React + Ant Design 5 frontend (TypeScript 5.8.3, light theme)
+  web/             Vite + React + Ant Design 6 frontend (TypeScript 5.8.3, light theme)
   worker/          BullMQ Redis worker
 packages/
   shared/          Shared types, Zod schemas, DTOs, and agent state/graph/runtime types
@@ -43,6 +44,17 @@ packages/
 - Preserve the workspace/chat routes and their current split: `/workplace`, `/chat/:workspaceId`, and `/chat/:workspaceId/:threadId`.
 - Browser directory selection cannot reliably expose a full absolute path in standard web contexts. Preserve editable path fields and host-provided `file.path` handling where available.
 - Do not change dependency versions, generated files, unrelated modules, or repository-wide configuration unless the task requires it.
+
+## Web Structure Rules
+
+- Keep `apps/web/src/App.tsx` as the route-level composition layer. It should wire state, routes, workspace/chat flows, and modals, but avoid accumulating API clients or data mapping logic.
+- Place browser-side API calls in `apps/web/src/api/`.
+- Place shared UI constants and local preference keys in `apps/web/src/constants/`.
+- Place DTO-to-view-model restoration logic in `apps/web/src/mappers/`.
+- Place path parsing and history helpers in `apps/web/src/router/`.
+- Keep stream reducers, markdown helpers, and structured block parsers in `apps/web/src/utils/`.
+- Keep React view components in `apps/web/src/components/` and reusable hooks in `apps/web/src/hooks/`.
+- Prefer moving logic into these focused modules before adding more code to `App.tsx`.
 
 ## Chat And Agent Contracts
 
