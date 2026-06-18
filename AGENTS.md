@@ -47,13 +47,14 @@ packages/
 
 ## Web Structure Rules
 
-- Keep `apps/web/src/App.tsx` as the route-level composition layer. It should wire state, routes, workspace/chat flows, and modals, but avoid accumulating API clients or data mapping logic.
+- Keep `apps/web/src/App.tsx` as the application shell. It should wire providers, top-level state, routes, and page selection, but avoid accumulating page JSX, API clients, SSE readers, or DTO mapping logic.
 - Place browser-side API calls in `apps/web/src/api/`.
 - Place shared UI constants and local preference keys in `apps/web/src/constants/`.
 - Place DTO-to-view-model restoration logic in `apps/web/src/mappers/`.
+- Place route-level page implementations in `apps/web/src/pages/<page-name>/`, for example `pages/workplace/` and `pages/chat/`.
 - Place path parsing and history helpers in `apps/web/src/router/`.
 - Keep stream reducers, markdown helpers, and structured block parsers in `apps/web/src/utils/`.
-- Keep React view components in `apps/web/src/components/` and reusable hooks in `apps/web/src/hooks/`.
+- Keep shared React view components in `apps/web/src/components/`, reusable modal views in `apps/web/src/components/modals/`, and reusable hooks in `apps/web/src/hooks/`.
 - Prefer moving logic into these focused modules before adding more code to `App.tsx`.
 
 ## Chat And Agent Contracts

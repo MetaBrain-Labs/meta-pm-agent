@@ -107,9 +107,11 @@ Supporting responsibilities are split into focused modules:
 | `api/` | Browser-side API clients for account, workspace, chat, and persisted messages |
 | `constants/` | UI constants and local preference keys |
 | `mappers/` | Data restoration between API DTOs and frontend view models |
+| `pages/` | Route-level page folders such as `pages/workplace` and `pages/chat` |
 | `router/` | Lightweight path parsing and history updates for `/workplace` and chat routes |
 | `utils/` | Stream-event reducers, markdown rendering, and structured-block parsers |
-| `components/` | React views and presentational chat/workspace components |
+| `components/` | Shared presentational components; page-specific orchestration belongs in `pages/` |
+| `components/modals/` | Reusable modal views such as project creation and configuration |
 | `hooks/` | Reusable React hooks kept separate from route-level app orchestration |
 
 The frontend does not persist chat history in browser `localStorage`. Chat messages are restored through `GET /api/chats/:id/messages`; browser storage is limited to non-authoritative UI preferences such as the active workspace id.
