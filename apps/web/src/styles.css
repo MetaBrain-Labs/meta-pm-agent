@@ -203,54 +203,6 @@ body {
   color: var(--ink);
 }
 
-.workspace-account,
-.chat-account {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: calc(100% - 16px);
-  height: 36px;
-  margin: 0 8px 16px;
-  border: 0;
-  border-radius: 8px;
-  background: #ffffff;
-  padding: 0 14px 0 16px;
-  color: var(--ink);
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.avatar-mark,
-.chat-account span {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: #c6c8cc;
-  color: #ffffff;
-  font-size: 10px;
-  font-weight: 700;
-  object-fit: cover;
-}
-
-.workspace-account b,
-.chat-account strong {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-account i {
-  color: #11161d;
-  font-style: normal;
-}
-
 .workspace-main {
   position: relative;
   display: flex;
@@ -441,14 +393,11 @@ body {
   display: none;
 }
 
-.info-modal .ant-modal-footer {
-  margin-top: 18px;
-}
-
 .settings-modal-body {
+  height: min(600px, 100%);
   display: grid;
   grid-template-columns: 160px minmax(0, 1fr);
-  min-height: 260px;
+  min-height: 600px;
   overflow: hidden;
   border: 1px solid var(--line-soft);
   border-radius: 8px;

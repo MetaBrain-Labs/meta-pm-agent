@@ -1,4 +1,4 @@
-import { Button, Modal } from "antd";
+import { Modal } from "antd";
 
 interface ConfigModalProps {
   open: boolean;
@@ -28,13 +28,19 @@ export function ConfigModal({
   return (
     <Modal
       centered
-      width={680}
+      mask={{ enabled: true, blur: true, closable: true }}
+      width={1080}
       open={open}
-      title="配置"
-      footer={<Button onClick={onClose}>退出</Button>}
       onCancel={onClose}
       className="info-modal"
-      mask={{ blur: true }}
+      footer={null}
+      closable={false}
+      styles={{
+        mask: {
+          backdropFilter: "blur(8px)",
+          background: "rgba(0,0,0,0.3)",
+        },
+      }}
     >
       <div className="settings-modal-body">
         <aside className="settings-modal-nav">

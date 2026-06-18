@@ -1,6 +1,7 @@
 import { Button } from "antd";
 import type { AccountInfo, ThreadInfo, WorkspaceInfo } from "../../types";
 import { DEFAULT_CHAT_TITLE } from "../../constants/app";
+import { LinuxOutlined, RightOutlined } from "@ant-design/icons";
 
 interface WorkspacePageProps {
   workspaces: WorkspaceInfo[];
@@ -70,15 +71,18 @@ export function WorkspacePage({
             </div>
           )}
         </div>
-        <button
-          type="button"
-          className="workspace-account"
-          onClick={onAccountInfo}
-        >
-          <AvatarMark src={account?.avatar} />
-          <b>{account?.username || "Local User"}</b>
-          <i aria-hidden="true">›</i>
-        </button>
+        <div className="w-full  p-4" onClick={onAccountInfo}>
+          <div className="flex items-center justify-between cursor-pointer rounded bg-white hover:bg-gray-100 p-2">
+            <div className="flex items-center gap-2">
+              <LinuxOutlined style={{ fontSize: "16px", color: "#1890ff" }} />
+              <span className="text-sm font-bold">
+                {account?.username || "Local User"}
+              </span>
+            </div>
+
+            <RightOutlined />
+          </div>
+        </div>
       </aside>
 
       <main className="workspace-main">
@@ -128,19 +132,6 @@ export function WorkspacePage({
         )}
       </main>
     </div>
-  );
-}
-
-/**
- * 展示账号头像，缺省时使用账号入口的文字标识。
- */
-function AvatarMark({ src }: { src?: string | null }) {
-  return src ? (
-    <img src={src} alt="" className="avatar-mark" />
-  ) : (
-    <span className="avatar-mark" aria-hidden="true">
-      账
-    </span>
   );
 }
 

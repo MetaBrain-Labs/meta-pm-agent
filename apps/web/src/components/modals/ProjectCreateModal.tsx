@@ -1,5 +1,5 @@
 import type { ChangeEvent, RefObject } from "react";
-import { Button, Form, Input, Modal, type FormInstance } from "antd";
+import { Button, Form, Input, Modal, Space, type FormInstance } from "antd";
 
 interface ProjectCreateModalProps {
   open: boolean;
@@ -12,6 +12,8 @@ interface ProjectCreateModalProps {
   onCreate: () => void | Promise<void>;
   onCancel: () => void;
 }
+
+const { Search } = Input;
 
 /**
  * 创建本地项目的弹窗，封装路径选择和表单展示。
@@ -29,15 +31,21 @@ export function ProjectCreateModal({
 }: ProjectCreateModalProps) {
   return (
     <Modal
+      mask={{ enabled: true, blur: true, closable: true }}
       centered
+      p={true}
       width={610}
       open={open}
       title={null}
       footer={null}
       closable={false}
       className="project-create-modal"
-      onCancel={onCancel}
-      mask={{ blur: true }}
+      styles={{
+        mask: {
+          backdropFilter: "blur(8px)",
+          background: "rgba(0,0,0,0.3)",
+        },
+      }}
     >
       <div className="project-modal-head">
         <h2>新建本地项目</h2>
@@ -53,16 +61,20 @@ export function ProjectCreateModal({
             <Input autoFocus />
           </Form.Item>
           <div className="project-form-divider" />
+
           <Form.Item label="项目地址" name="location" className="mb-0">
-            <Input
-              placeholder="选择后的位置"
-              addonAfter={
-                <Button type="link" onClick={() => void onBrowseDirectory()}>
-                  浏览
-                </Button>
-              }
-            />
+            <Space.Compact style={{ width: "100%" }}>
+              <Input placeholder="选择后的位置" />
+              <Button
+                className="w-[30%]"
+                type="primary"
+                onClick={onBrowseDirectory}
+              >
+                浏览
+              </Button>
+            </Space.Compact>
           </Form.Item>
+
           <div className="project-location-note">
             指定项目在本地的存放位置，
             <button type="button" onClick={() => void onBrowseDirectory()}>
@@ -75,7 +87,11 @@ export function ProjectCreateModal({
         )}
         <div className="project-modal-actions">
           <Button onClick={onCancel}>取消</Button>
-          <Button type="primary" loading={creating} onClick={() => void onCreate()}>
+          <Button
+            type="primary"
+            loading={creating}
+            onClick={() => void onCreate()}
+          >
             创建
           </Button>
         </div>

@@ -4,8 +4,10 @@ import {
   DeleteOutlined,
   EditOutlined,
   FolderOpenOutlined,
+  LinuxOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  RightOutlined,
 } from "@ant-design/icons";
 import type { ThreadInfo, WorkspaceInfo } from "../types";
 
@@ -164,15 +166,18 @@ export function Sidebar({
       </div>
 
       {!collapsed && (
-        <button
-          type="button"
-          className="chat-account"
-          onClick={onWorkspaceInfo}
-        >
-          <span />
-          <strong>{activeWorkspace?.name || TEXT.account}</strong>
-          <i aria-hidden="true">⌄</i>
-        </button>
+        <div className="w-full  p-4" onClick={onWorkspaceInfo}>
+          <div className="flex items-center justify-between cursor-pointer rounded bg-white hover:bg-gray-100 p-2">
+            <div className="flex items-center gap-2">
+              <LinuxOutlined style={{ fontSize: "16px", color: "#1890ff" }} />
+              <span className="text-sm font-bold">
+                {activeWorkspace?.name || TEXT.account}
+              </span>
+            </div>
+
+            <RightOutlined style={{ fontSize: "12px", color: "#1890ff" }} />
+          </div>
+        </div>
       )}
     </Sider>
   );
