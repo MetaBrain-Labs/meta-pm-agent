@@ -15,6 +15,15 @@ import { parseUserInputPayload } from "../utils/user-input";
 const DEFAULT_CHAT_TITLE = "New Chat";
 
 /**
+ * 单个 Agent 在一轮对话中的输出，用于分 Agent 持久化消息和推理过程。
+ */
+export interface AgentConversationOutput {
+  type: string;
+  content: string;
+  reasoningContent?: string;
+}
+
+/**
  * 获取指定工作区内的活跃会话列表。
  */
 export function listChats(workspaceId: string) {
@@ -53,7 +62,7 @@ export async function persistConversationStart(
 ): Promise<void> {
   if (!conversationId) return;
 
-  // 只持久化用户消息，助手回复由 persistConversationResult 统一写入
+  // 只持久化用户消息，助手回复由 persistConversationResult 统一写入。
   await persistConversationMessages(
     conversationId,
     messages.filter((message) => message.role === "user"),
@@ -61,30 +70,47 @@ export async function persistConversationStart(
 }
 
 /**
- * 在 Agent 完成一轮处理后，解析并持久化助手回复、推理内容及需求分析结果。
+ * 在 Agent 完成一轮处理后，按 Agent 类型分别持久化回复、推理和结构化结果。
  */
 export async function persistConversationResult({
   conversationId,
   requestFormId,
-  assistantText,
-  reasoningContent,
+  agentOutputs,
 }: {
   conversationId?: string;
   requestFormId?: string;
-  assistantText: string;
-  reasoningContent?: string;
+  agentOutputs: AgentConversationOutput[];
 }): Promise<void> {
-  if (!conversationId || assistantText.trim().length === 0) return;
+  if (!conversationId || agentOutputs.length === 0) return;
 
-  // 同一条 assistant 消息里会同时携带 user-input 与 request-analysis，
-  // 这里分别解析并写入对应的消息表字段与请求表单条目。
-  const items = parseUserInputPayload(assistantText);
-  const requestAnalysis = parseRequestAnalysisPayload(assistantText);
-  await persistAssistantMessage(
-    conversationId,
-    assistantText,
-    items,
-    reasoningContent,
+  const conversationOutput = agentOutputs.find(
+    (output) => output.type === "conversation",
   );
+  const requestOutput = agentOutputs.find((output) => output.type === "request");
+  const items = conversationOutput
+    ? parseUserInputPayload(conversationOutput.content)
+    : null;
+  const requestAnalysis = requestOutput
+    ? parseRequestAnalysisPayload(requestOutput.content)
+    : null;
+
+  // 每个 Agent 单独落库，message.type 用于前端恢复正确的展示位置。
+  for (const output of agentOutputs) {
+    if (
+      output.content.trim().length === 0 &&
+      !output.reasoningContent?.trim()
+    ) {
+      continue;
+    }
+
+    await persistAssistantMessage({
+      conversationId,
+      content: output.content,
+      userInput: output.type === "conversation" ? items : null,
+      reasoningContent: output.reasoningContent,
+      type: output.type,
+    });
+  }
+
   await persistRequestAnalysisItems(requestFormId, requestAnalysis);
 }

@@ -20,6 +20,7 @@ export type StreamEventType =
 export interface StreamEvent {
   type: StreamEventType;
   content?: string;
+  agentType?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolResult?: unknown;
@@ -64,8 +65,10 @@ export interface RequestAnalysis {
 export interface Message {
   id: string;
   role: "user" | "agent";
+  type?: string | null;
   content: string;
   thinking?: string;
+  reasoningBlocks?: ReasoningBlock[];
   questionForm?: { state: "generating" | "complete"; content?: string };
   userInput?: { state: "generating" | "complete"; content?: string };
   requestAnalysis?: {
@@ -77,6 +80,14 @@ export interface Message {
   toolCalls?: Array<{ name: string; args?: Record<string, unknown>; result?: unknown }>;
   usage?: Record<string, unknown>;
   timestamp: number;
+}
+
+/**
+ * 按 Agent 阶段记录推理过程，便于在对应业务卡片附近展示。
+ */
+export interface ReasoningBlock {
+  agentType: string;
+  content: string;
 }
 
 export interface ChatState {
@@ -118,6 +129,7 @@ export interface AccountInfo {
 export interface PersistedMessageInfo {
   id: string;
   role: "user" | "assistant";
+  type?: string | null;
   content: string;
   timestamp: string;
   reasoningContent?: string;

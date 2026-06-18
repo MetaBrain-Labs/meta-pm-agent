@@ -134,8 +134,10 @@ export async function chatStreamHandler(c: Context) {
     await writeSse(writer, { type: "start" });
 
     let responseLength = 0;
-    let assistantText = "";
-    let reasoningContent = "";
+    const agentOutputs = new Map<
+      string,
+      { type: string; content: string; reasoningContent: string }
+    >();
 
     try {
       // 持久化用户发送的消息
@@ -155,14 +157,16 @@ export async function chatStreamHandler(c: Context) {
         { productContext },
       )) {
         if ("content" in event && event.type === "reasoning") {
-          reasoningContent += event.content;
+          getAgentOutput(agentOutputs, getEventAgentType(event)).reasoningContent +=
+            event.content;
         }
         if (
           "content" in event &&
           event.type !== "reasoning"
         ) {
           responseLength += event.content.length;
-          assistantText += event.content;
+          getAgentOutput(agentOutputs, getEventAgentType(event)).content +=
+            event.content;
         }
         await writeSse(writer, toApiEvent(event));
       }
@@ -171,8 +175,7 @@ export async function chatStreamHandler(c: Context) {
       await persistConversationResult({
         conversationId: parsed.data.chatId,
         requestFormId: parsed.data.requestFormId,
-        assistantText,
-        reasoningContent,
+        agentOutputs: [...agentOutputs.values()],
       });
 
       console.log(
@@ -207,4 +210,28 @@ async function readJsonBody(request: Request): Promise<unknown> {
  */
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 按事件来源推断 Agent 类型，确保后续新增 Agent 时可以优先使用事件自带标识。
+ */
+function getEventAgentType(event: { type: string; agentType?: string }): string {
+  if (event.agentType) return event.agentType;
+  if (event.type.startsWith("request-analysis")) return "request";
+  return "conversation";
+}
+
+/**
+ * 获取指定 Agent 的输出累加器，统一收集正文和推理内容。
+ */
+function getAgentOutput(
+  outputs: Map<string, { type: string; content: string; reasoningContent: string }>,
+  type: string,
+) {
+  const existing = outputs.get(type);
+  if (existing) return existing;
+
+  const created = { type, content: "", reasoningContent: "" };
+  outputs.set(type, created);
+  return created;
 }
