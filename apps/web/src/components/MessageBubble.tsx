@@ -45,10 +45,16 @@ interface Props {
   onFormSubmit?: (text: string) => void;
 }
 
+/**
+ * 将工具内部名称映射为面向用户的展示名称。
+ */
 function mapToolName(name: string): string {
   return TOOL_NAME_LABELS[name] ?? name;
 }
 
+/**
+ * 渲染单条聊天消息，并按 Agent 阶段放置推理、整理和分析卡片。
+ */
 export function MessageBubble({
   message,
   isLast,
@@ -76,6 +82,13 @@ export function MessageBubble({
       </div>
     );
   }
+
+  const requestReasoningBlocks = message.reasoningBlocks?.filter(
+    (block) => block.agentType === "request",
+  );
+  const otherReasoningBlocks = message.reasoningBlocks?.filter(
+    (block) => block.agentType !== "request",
+  );
 
   return (
     <div className="flex max-w-[min(860px,92%)] flex-col self-start">
@@ -165,6 +178,15 @@ export function MessageBubble({
         </div>
       )}
 
+      {requestReasoningBlocks?.map((block) => (
+        <ThinkingBox
+          key={block.agentType}
+          label={getReasoningLabel(block.agentType)}
+          content={block.content}
+          hasResponse={message.requestAnalysis?.state === "complete"}
+        />
+      ))}
+
       {message.requestAnalysis && (
         <div>
           {message.requestAnalysis.state === "generating" ? (
@@ -178,8 +200,18 @@ export function MessageBubble({
         </div>
       )}
 
+      {otherReasoningBlocks?.map((block) => (
+        <ThinkingBox
+          key={block.agentType}
+          label={getReasoningLabel(block.agentType)}
+          content={block.content}
+          hasResponse
+        />
+      ))}
+
       {!message.content &&
         !message.thinking &&
+        !message.reasoningBlocks?.length &&
         !message.questionForm &&
         !message.userInput &&
         !message.requestAnalysis && (
@@ -221,6 +253,9 @@ export function MessageBubble({
   );
 }
 
+/**
+ * 渲染生成中状态，用于表单、用户输入整理和 Request Agent 分析。
+ */
 function QFGenerating({ label }: { label: string }) {
   return (
     <div className="mb-2 flex items-center gap-3 rounded-lg border border-[var(--line-soft)] bg-white p-5">
@@ -250,10 +285,15 @@ function QFGenerating({ label }: { label: string }) {
   );
 }
 
+/**
+ * 展示 Agent 推理过程，流式阶段保持自动滚动。
+ */
 function ThinkingBox({
+  label = "思考过程",
   content,
   hasResponse,
 }: {
+  label?: string;
   content: string;
   hasResponse: boolean;
 }) {
@@ -293,7 +333,7 @@ function ThinkingBox({
           }}
         />
         <span className="thinking-label">
-          思考过程
+          {label}
           {!hasResponse && <span className="loading-dots" />}
         </span>
       </button>
@@ -308,4 +348,13 @@ function ThinkingBox({
       )}
     </div>
   );
+}
+
+/**
+ * 将 Agent 类型转换为前端推理过程标题。
+ */
+function getReasoningLabel(agentType: string): string {
+  if (agentType === "request") return "Request Agent 思考过程";
+  if (agentType === "conversation") return "思考过程";
+  return `${agentType} 思考过程`;
 }

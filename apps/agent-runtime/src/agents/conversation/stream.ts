@@ -8,7 +8,11 @@ import {
 } from "../../utils/message-adapter";
 import { streamTaggedBlock } from "../../utils/tagged-block-stream";
 import { isFormAnswer } from "../../utils/form-parser";
-import { runWorkflowGraph } from "../../graph/workflow";
+import {
+  formatRequestAnalysisBlock,
+  streamRequestAgent,
+} from "../request/agent";
+import { parseUserInputBlock } from "../request/user-input";
 import type {
   ConversationStreamEvent,
   ConversationStreamOptions,
@@ -30,13 +34,17 @@ async function* streamAgentEvents(
   for await (const [message] of run) {
     const reasoning = getReasoningContent(message);
     if (reasoning) {
-      yield { type: "reasoning", content: reasoning };
+      yield {
+        type: "reasoning",
+        content: reasoning,
+        agentType: "conversation",
+      };
     }
 
     const text = getTextContent(message);
     const cleanText = stripInternalNoise(text);
     if (cleanText) {
-      yield { type: "text", content: cleanText };
+      yield { type: "text", content: cleanText, agentType: "conversation" };
     }
   }
 }
@@ -82,7 +90,6 @@ async function* streamUserInputIntegration(
   let started = false;
 
   for await (const chunk of streamAgentEvents(toLangChainMessages(messages))) {
-    // TODO 这部分的推理可能需要再页面展示，考虑使用一个通用的方法接收所有Agent的推理过程
     if (chunk.type === "reasoning") {
       yield chunk;
       continue;
@@ -105,16 +112,26 @@ async function* streamUserInputIntegration(
     };
 
     // 表单答案被整理成 user_input 后，立即进入无需用户参与的 Request Agent 处理。
-    yield { type: "request-analysis-start" };
-    const result = await runWorkflowGraph({
+    const userInput = parseUserInputBlock(userInputBlock);
+
+    // Request Agent 的推理过程需要出现在用户输入整理之后、分析结果之前。
+    yield { type: "request-analysis-start", agentType: "request" };
+    for await (const event of streamRequestAgent({
       productContext: options.productContext,
-      userInputBlock,
-    });
-    yield {
-      type: "request-analysis-complete",
-      content: result.requestAnalysisBlock,
-      analysis: result.requestAnalysis,
-    };
+      userInput,
+    })) {
+      if (event.type === "reasoning") {
+        yield event;
+        continue;
+      }
+
+      yield {
+        type: "request-analysis-complete",
+        content: formatRequestAnalysisBlock(event.analysis),
+        analysis: event.analysis,
+        agentType: "request",
+      };
+    }
   }
 }
 

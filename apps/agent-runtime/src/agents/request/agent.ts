@@ -3,7 +3,10 @@ import { createDeepAgent } from "deepagents";
 import { RequestAnalysisSchema, type RequestAnalysis } from "@repo/shared";
 import { createChatModel } from "../common/model";
 import { REQUEST_AGENT_PROMPT } from "./prompt";
-import { getTextContent } from "../../utils/message-adapter";
+import {
+  getReasoningContent,
+  getTextContent,
+} from "../../utils/message-adapter";
 import { parseJsonObject } from "../../utils/json";
 import type { UserInputRecord } from "./user-input";
 
@@ -11,6 +14,13 @@ export interface RequestAgentInput {
   productContext?: string;
   userInput: UserInputRecord[];
 }
+
+/**
+ * Request Agent 流式输出，用于把推理过程和最终分析结果分开传递给上层。
+ */
+export type RequestAgentStreamEvent =
+  | { type: "reasoning"; content: string; agentType: "request" }
+  | { type: "complete"; analysis: RequestAnalysis };
 
 /**
  * 创建真正的 Request Agent，由 DeepAgent 承载 system prompt 和模型调用。
@@ -29,6 +39,28 @@ export function createRequestAgent() {
 export async function runRequestAgent(
   input: RequestAgentInput,
 ): Promise<RequestAnalysis> {
+  let analysis: RequestAnalysis | null = null;
+
+  // 复用流式实现，保证图节点和 SSE 路径使用同一套 Request Agent 解析逻辑。
+  for await (const event of streamRequestAgent(input)) {
+    if (event.type === "complete") {
+      analysis = event.analysis;
+    }
+  }
+
+  if (!analysis) {
+    throw new Error("Request Agent did not produce a request analysis.");
+  }
+
+  return analysis;
+}
+
+/**
+ * 流式执行 Request Agent，实时暴露推理过程，并在结束时返回结构化分析结果。
+ */
+export async function* streamRequestAgent(
+  input: RequestAgentInput,
+): AsyncGenerator<RequestAgentStreamEvent> {
   const agent = createRequestAgent();
 
   // Request Agent 不直接和用户交互，只读取 Conversation Agent 整理出的
@@ -50,6 +82,11 @@ export async function runRequestAgent(
 
   let responseText = "";
   for await (const [message] of run) {
+    const reasoning = getReasoningContent(message);
+    if (reasoning) {
+      yield { type: "reasoning", content: reasoning, agentType: "request" };
+    }
+
     responseText += getTextContent(message);
   }
 
@@ -63,7 +100,7 @@ export async function runRequestAgent(
   }
 
   assertEveryUserInputCovered(result.data, input.userInput);
-  return result.data;
+  yield { type: "complete", analysis: result.data };
 }
 
 /**

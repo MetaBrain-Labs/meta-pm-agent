@@ -6,6 +6,14 @@ export function applyStreamEvent(
 ): Message {
   switch (event.type) {
     case "thinking":
+      if (event.agentType && event.agentType !== "conversation") {
+        return appendReasoningBlock(
+          message,
+          event.agentType,
+          event.content ?? "",
+        );
+      }
+
       return {
         ...message,
         thinking:
@@ -113,6 +121,38 @@ export function applyStreamEvent(
     default:
       return message;
   }
+}
+
+/**
+ * 将指定 Agent 的推理过程追加到对应阶段，后续渲染时可放在业务卡片附近。
+ */
+function appendReasoningBlock(
+  message: Message,
+  agentType: string,
+  content: string,
+): Message {
+  if (!content) return message;
+
+  const blocks = message.reasoningBlocks ?? [];
+  const existingIndex = blocks.findIndex(
+    (block) => block.agentType === agentType,
+  );
+
+  if (existingIndex === -1) {
+    return {
+      ...message,
+      reasoningBlocks: [...blocks, { agentType, content }],
+    };
+  }
+
+  return {
+    ...message,
+    reasoningBlocks: blocks.map((block, index) =>
+      index === existingIndex
+        ? { ...block, content: block.content + content }
+        : block,
+    ),
+  };
 }
 
 function applyTextChunk(

@@ -13,6 +13,7 @@ import { parseRequestAnalysisPayload } from "../utils/request-analysis";
 interface MessageRow {
   id: string;
   role: string;
+  type: string | null;
   content: string;
   meta: unknown;
   user_input: unknown;
@@ -20,11 +21,12 @@ interface MessageRow {
 }
 
 /**
- * 消息的数据传输对象，包含用户输入和需求分析的结构化数据。
+ * 消息的数据传输对象，包含 Agent 类型、推理内容和结构化分析结果。
  */
 export interface MessageDto {
   id: string;
   role: "user" | "assistant";
+  type?: string | null;
   content: string;
   timestamp: string;
   reasoningContent?: string;
@@ -33,7 +35,7 @@ export interface MessageDto {
 }
 
 /**
- * 查询指定会话的所有历史消息，按创建时间升序排列。
+ * 查询指定会话的所有历史消息，按用户消息、Conversation Agent、Request Agent 的顺序恢复。
  */
 export async function listConversationMessages(
   conversationId: string,
@@ -42,21 +44,29 @@ export async function listConversationMessages(
     SELECT
       "id",
       "role",
+      "type",
       "content",
       "meta",
       "user_input",
       "created_at"
     FROM "message"
     WHERE "conversation_id" = ${conversationId}
-    ORDER BY "created_at" ASC
+    ORDER BY
+      "created_at" ASC,
+      CASE
+        WHEN "role" = 'user' THEN 0
+        WHEN "type" = 'conversation' THEN 1
+        WHEN "type" = 'request' THEN 2
+        ELSE 3
+      END,
+      "id" ASC
   `;
 
   return rows.map(mapMessageRow);
 }
 
 /**
- * 批量持久化会话消息，使用 UPSERT 逻辑（存在则更新内容和元数据）。
- * 仅持久化用户消息，助手回复由 persistAssistantMessage 单独处理。
+ * 批量持久化会话消息，使用 UPSERT 逻辑；这里只写入用户消息。
  */
 export async function persistConversationMessages(
   conversationId: string,
@@ -109,13 +119,13 @@ export async function persistConversationMessages(
 }
 
 /**
- * 将数据库行映射为消息 DTO，处理旧消息兼容和正文清洗。
+ * 将数据库行映射为消息 DTO，兼容旧消息中内联的 tagged block。
  */
 function mapMessageRow(row: MessageRow): MessageDto {
   const meta = parseRecord(row.meta);
   const userInput = parseRecord(row.user_input);
 
-  // 旧消息可能只把 tagged block 存在正文里，因此读取历史消息时需要从正文回填结构化字段。
+  // 旧消息可能只把 tagged block 存在正文里，读取历史消息时需要从正文回填结构化字段。
   const inlineUserInput = parseUserInputPayload(row.content);
   const inlineRequestAnalysis = parseRequestAnalysisPayload(row.content);
 
@@ -133,6 +143,7 @@ function mapMessageRow(row: MessageRow): MessageDto {
   return {
     id: row.id,
     role: row.role === "assistant" ? "assistant" : "user",
+    type: row.type,
     content: cleanedContent,
     timestamp,
     ...(typeof meta?.reasoningContent === "string"
@@ -157,16 +168,28 @@ function parseRecord(value: unknown): Record<string, unknown> | null {
 }
 
 /**
- * 持久化助手回复消息，同时写入推理内容和用户输入结构化数据。
+ * 持久化单个 Agent 的助手消息，同时写入推理内容和结构化用户输入。
  */
-export async function persistAssistantMessage(
-  conversationId: string,
-  content: string,
-  userInput: UserInputRecord[] | null,
-  reasoningContent?: string,
-): Promise<void> {
+export async function persistAssistantMessage({
+  conversationId,
+  content,
+  userInput,
+  reasoningContent,
+  type,
+}: {
+  conversationId: string;
+  content: string;
+  userInput: UserInputRecord[] | null;
+  reasoningContent?: string;
+  type: string;
+}): Promise<void> {
   await prisma.$transaction(async (tx) => {
-    // TODO 目前type均为：conversation，后续需要进行更改
+    const meta = JSON.stringify({
+      source: `${type}-agent`,
+      ...(reasoningContent ? { reasoningContent } : {}),
+    });
+
+    // 按 Agent 类型写入 message.type，前端据此恢复对应阶段的展示顺序。
     await tx.$executeRaw`
       INSERT INTO "message" (
         "id",
@@ -182,12 +205,9 @@ export async function persistAssistantMessage(
         ${conversationId},
         'assistant',
         ${content},
-        ${JSON.stringify({
-          source: "conversation-agent",
-          ...(reasoningContent ? { reasoningContent } : {}),
-        })}::jsonb,
+        ${meta}::jsonb,
         ${userInput ? JSON.stringify({ user_input: userInput }) : null}::jsonb,
-        'conversation'
+        ${type}
       )
     `;
 

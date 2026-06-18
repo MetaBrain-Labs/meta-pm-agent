@@ -1,11 +1,17 @@
 import type { RequestAnalysis } from "@repo/shared";
 
 /**
+ * 标识当前流式内容所属的 Agent，便于 API 持久化和前端按阶段展示。
+ */
+export type AgentMessageType = "conversation" | "request" | (string & {});
+
+/**
  * 基础流切片
  */
 export interface StreamChunk {
   type: "reasoning" | "text";
   content: string;
+  agentType?: AgentMessageType;
 }
 
 /**
@@ -26,11 +32,12 @@ export type ConversationStreamEvent =
   | { type: "question-form-complete"; content: string }
   | { type: "user-input-start" }
   | { type: "user-input-complete"; content: string }
-  | { type: "request-analysis-start" }
+  | { type: "request-analysis-start"; agentType?: AgentMessageType }
   | {
       type: "request-analysis-complete";
       content: string;
       analysis: RequestAnalysis;
+      agentType?: AgentMessageType;
     };
 
 /**

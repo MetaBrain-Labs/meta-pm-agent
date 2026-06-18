@@ -21,7 +21,6 @@ export async function* streamTaggedBlock(
   let activeOptions: TaggedBlockOptions | null = null;
 
   for await (const chunk of source) {
-    // TODO 这部分的推理可能需要再页面展示，考虑使用一个通用的方法接收所有 Agent 的推理过程
     if (chunk.type === "reasoning") {
       yield chunk;
       continue;

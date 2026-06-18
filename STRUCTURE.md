@@ -2,17 +2,17 @@
 
 ## Overview
 
-`meta-pm-agent` is a pnpm + Turborepo monorepo for an AI-assisted PM workspace. It contains a LangGraph/DeepAgents-based runtime, a Hono API with SSE streaming and PostgreSQL persistence, a Vite + React + Ant Design frontend, a BullMQ worker, and shared TypeScript/database packages.
+`meta-pm-agent` is a pnpm + Turborepo monorepo for an AI-assisted product-management workspace. It contains a LangGraph/DeepAgents runtime, a Hono API with SSE streaming and PostgreSQL persistence, a Vite + React + Ant Design frontend, a BullMQ worker scaffold, and shared TypeScript/database packages.
 
 ## Tech Stack
 
 | Layer | Technology | Notes |
 | --- | --- | --- |
-| Agent runtime | LangGraph, LangChain, DeepAgents | PM conversation agent, question/user-input extraction, reasoning stream |
-| API | Hono | HTTP API on port 3001, SSE `/api/chat` stream |
-| Web | Vite, React, Ant Design 5 | Workspace and chat UI on port 3000 |
+| Agent runtime | LangGraph, LangChain, DeepAgents | Conversation Agent, Request Agent, reasoning stream, workflow graph |
+| API | Hono | HTTP API on port 3001, SSE `/api/chat` stream, Prisma repositories |
+| Web | Vite, React, Ant Design 5 | Workspace and chat UI, TypeScript 5.8.3 |
 | Worker | BullMQ, Redis | Background queue worker scaffold |
-| Database | PostgreSQL, Prisma | Users, workspaces, conversations, messages, request forms, tasks |
+| Database | PostgreSQL, Prisma | Account, workspace, conversation, message, request-form, task data |
 | Build | Turborepo | Workspace task graph |
 | Package manager | pnpm 11.3.0 | Enforced by root `packageManager` |
 
@@ -23,65 +23,85 @@ meta-pm-agent/
 ├── apps/
 │   ├── agent-runtime/
 │   │   ├── src/
-│   │   │   ├── index.ts                 # Runtime exports
-│   │   │   ├── conversation-agent.ts    # Streaming PM conversation agent
-│   │   │   ├── graph.ts                 # Legacy LangGraph state graph
-│   │   │   ├── model.ts                 # LLM model factory/config usage
-│   │   │   ├── config.ts                # Runtime env config
-│   │   │   ├── prompts/                 # Discovery/compress/direction prompts
-│   │   │   └── utils/
-│   │   │       ├── form-parser.ts
-│   │   │       ├── message-adapter.ts
-│   │   │       └── tagged-block-stream.ts
-│   │   └── package.json                 # @repo/agent-runtime
+│   │   │   ├── agents/
+│   │   │   │   ├── common/model.ts
+│   │   │   │   ├── conversation/
+│   │   │   │   │   ├── agent.ts
+│   │   │   │   │   ├── prompt.ts
+│   │   │   │   │   └── stream.ts
+│   │   │   │   └── request/
+│   │   │   │       ├── agent.ts
+│   │   │   │       ├── prompt.ts
+│   │   │   │       └── user-input.ts
+│   │   │   ├── graph/
+│   │   │   │   ├── nodes/request-node.ts
+│   │   │   │   ├── state.ts
+│   │   │   │   └── workflow.ts
+│   │   │   ├── utils/
+│   │   │   │   ├── form-parser.ts
+│   │   │   │   ├── json.ts
+│   │   │   │   ├── message-adapter.ts
+│   │   │   │   └── tagged-block-stream.ts
+│   │   │   ├── config.ts
+│   │   │   ├── index.ts
+│   │   │   └── types.ts
+│   │   └── package.json
 │   ├── api/
 │   │   ├── src/
-│   │   │   ├── app.ts                   # Hono app composition
-│   │   │   ├── index.ts                 # Node server entry
-│   │   │   ├── env.ts                   # dotenv/env loading
-│   │   │   ├── routes/chat.ts           # Account/workspace/chat/SSE routes
-│   │   │   ├── schemas/chat.ts          # API request validation schemas
-│   │   │   ├── services/                # Workspace/chat/agent-stream services
-│   │   │   ├── repositories/            # Prisma-backed repositories
-│   │   │   └── utils/                   # SSE and user-input helpers
-│   │   └── package.json                 # @repo/api
+│   │   │   ├── controllers/
+│   │   │   │   ├── chat.ts
+│   │   │   │   └── chat-controller.ts
+│   │   │   ├── repositories/
+│   │   │   │   ├── chat-repository.ts
+│   │   │   │   ├── message-repository.ts
+│   │   │   │   ├── request-form-repository.ts
+│   │   │   │   └── workspace-repository.ts
+│   │   │   ├── schemas/
+│   │   │   ├── services/
+│   │   │   ├── utils/
+│   │   │   ├── app.ts
+│   │   │   ├── env.ts
+│   │   │   └── index.ts
+│   │   └── package.json
 │   ├── web/
 │   │   ├── src/
-│   │   │   ├── main.tsx                 # React entry
-│   │   │   ├── App.tsx                  # Route/workspace/config orchestration
-│   │   │   ├── types.ts                 # Frontend data and stream types
-│   │   │   ├── styles.css               # App styling
-│   │   │   ├── hooks/useChat.ts         # SSE chat state management
-│   │   │   ├── utils/                   # Stream, markdown, question/user input parsing
-│   │   │   └── components/
-│   │   │       ├── ChatApp.tsx          # Workspace detail + chat surface
-│   │   │       ├── Sidebar.tsx          # Chat history/workspace sidebar
-│   │   │       ├── MessageBubble.tsx
-│   │   │       ├── ProseBlock.tsx
-│   │   │       ├── QuestionForm.tsx
-│   │   │       ├── UserInputCard.tsx
-│   │   │       ├── TodoCard.tsx
-│   │   │       └── Icon.tsx
-│   │   ├── vite.config.ts               # Vite config and `/api` proxy
-│   │   └── package.json                 # web
+│   │   │   ├── components/
+│   │   │   │   ├── ChatApp.tsx
+│   │   │   │   ├── MessageBubble.tsx
+│   │   │   │   ├── ProseBlock.tsx
+│   │   │   │   ├── QuestionForm.tsx
+│   │   │   │   ├── RequestAnalysisCard.tsx
+│   │   │   │   ├── Sidebar.tsx
+│   │   │   │   ├── TodoCard.tsx
+│   │   │   │   └── UserInputCard.tsx
+│   │   │   ├── hooks/
+│   │   │   ├── utils/
+│   │   │   │   ├── apply-stream-event.ts
+│   │   │   │   ├── markdown.tsx
+│   │   │   │   ├── question-form.ts
+│   │   │   │   └── user-input.ts
+│   │   │   ├── App.tsx
+│   │   │   ├── main.tsx
+│   │   │   ├── styles.css
+│   │   │   └── types.ts
+│   │   ├── package.json
+│   │   └── vite.config.ts
 │   └── worker/
-│       ├── src/index.ts                 # BullMQ queue/worker entry
-│       └── package.json                 # @repo/worker
+│       └── src/index.ts
 ├── packages/
-│   ├── shared/
-│   │   ├── src/
-│   │   │   ├── schemas/                 # Shared Zod schemas
-│   │   │   ├── events/                  # Chat/event types
-│   │   │   ├── dto/                     # DTO types
-│   │   │   └── agent/                   # Graph/runtime/state types
-│   │   └── package.json                 # @repo/shared
-│   └── database/
-│       ├── src/client.ts                # PrismaClient singleton
-│       ├── src/index.ts                 # Package exports
-│       ├── prisma/schema.prisma         # PostgreSQL schema
-│       └── package.json                 # @repo/database
-├── references/                          # Product/agent reference docs and prompts
-├── .env.example
+│   ├── database/
+│   │   ├── prisma/schema.prisma
+│   │   └── src/
+│   │       ├── client.ts
+│   │       └── index.ts
+│   └── shared/
+│       └── src/
+│           ├── agent/
+│           ├── dto/
+│           ├── events/
+│           ├── schemas/
+│           └── index.ts
+├── references/
 ├── AGENTS.md
 ├── AGENTS-zh.md
 ├── package.json
@@ -90,48 +110,52 @@ meta-pm-agent/
 └── turbo.json
 ```
 
-Generated `dist/` directories are intentionally omitted from the tree and must not be committed.
+Generated `dist/` directories are intentionally omitted and must not be committed.
 
 ## Dependency Graph
 
 ```text
 apps/web
-  └─ HTTP/SSE through Vite proxy `/api` -> apps/api
+  └── HTTP/SSE through Vite proxy `/api` -> apps/api
 
 apps/api
-  ├─ @repo/agent-runtime
-  ├─ @repo/database
-  └─ @repo/shared
+  ├── @repo/agent-runtime
+  ├── @repo/database
+  └── @repo/shared
 
 apps/agent-runtime
-  └─ @repo/shared
+  └── @repo/shared
 
 apps/worker
-  ├─ Redis/BullMQ
-  ├─ @repo/agent-runtime
-  └─ @repo/shared
+  ├── Redis/BullMQ
+  ├── @repo/agent-runtime
+  └── @repo/shared
 
 packages/database
-  └─ Prisma Client / PostgreSQL
+  └── Prisma Client / PostgreSQL
 ```
 
-Shared package entry points reference `dist/`, so run `pnpm build` at least once before starting apps that import workspace packages.
+Workspace package entry points reference `dist/`, so run `pnpm build` at least once before starting apps that import workspace packages.
 
-## Runtime Modules
+## Runtime Flow
 
-### `apps/agent-runtime`
+### Conversation Agent
 
-The runtime provides the PM conversation agent and streaming behavior used by the API. `conversation-agent.ts` adapts frontend chat messages into model messages, streams reasoning as `thinking`, streams visible answer content as `text`, extracts structured question/user-input blocks, emits tool/todo events, and filters internal DeepAgent environment noise such as `No files found in /` from user-visible text.
+`apps/agent-runtime/src/agents/conversation/stream.ts` is the primary streaming entry point. It adapts frontend chat messages into LangChain messages, streams Conversation Agent reasoning as `reasoning` events with `agentType: "conversation"`, streams visible answer content as `text`, extracts question-form and user-input tagged blocks, and filters internal DeepAgent environment noise such as `No files found in /`.
 
-Key exports include `streamConversation`, legacy graph helpers, form parsing helpers, and message adaptation utilities. Runtime configuration comes from:
+### Request Agent
 
-- `OPENAI_API_KEY`
-- `LLM_MODEL`
-- `LLM_BASE_URL`
+When a user submits a form answer, the Conversation Agent first emits a `user-input` block. The runtime then starts the Request Agent and streams its reasoning as `reasoning` events with `agentType: "request"` before emitting `request-analysis-complete`.
 
-### `apps/api`
+The Request Agent output is persisted as a separate assistant message with `message.type = "request"`. Its reasoning is stored in `message.meta.reasoningContent`.
 
-The API exposes account, workspace, chat, message, and SSE routes. It validates request bodies with Zod, persists data through Prisma repositories, and streams agent events to the frontend.
+### Workflow Graph
+
+`apps/agent-runtime/src/graph/workflow.ts` remains the shared LangGraph workflow entry point for graph-oriented execution. Keep graph nodes documented and continue extending shared graph state when adding new agents.
+
+## API
+
+The API exposes account, workspace, chat, message, and SSE routes:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -155,11 +179,27 @@ The API exposes account, workspace, chat, message, and SSE routes. It validates 
 }
 ```
 
-The SSE stream returns `text/event-stream` and uses typed events including `start`, `thinking`, `text`, `question-form-start`, `question-form-complete`, `user-input-start`, `user-input-complete`, `todo-update`, `tool-call`, `tool-result`, `step-finish`, `finish`, and `error`, followed by `[DONE]`.
+The SSE stream returns `text/event-stream` and uses typed events including `start`, `thinking`, `text`, `question-form-start`, `question-form-complete`, `user-input-start`, `user-input-complete`, `request-analysis-start`, `request-analysis-complete`, `todo-update`, `tool-call`, `tool-result`, `step-finish`, `finish`, and `error`, followed by `[DONE]`.
 
-### `apps/web`
+`thinking` events may include `agentType`. The frontend uses that field to place reasoning next to the corresponding stage.
 
-The frontend is a routed Vite/React app:
+## Message Persistence
+
+The API persists messages through `apps/api/src/repositories/message-repository.ts`.
+
+- User messages are upserted before agent execution.
+- Conversation Agent output is persisted as an assistant message with `message.type = "conversation"`.
+- Request Agent output is persisted as an assistant message with `message.type = "request"`.
+- Agent reasoning is stored in `message.meta.reasoningContent`.
+- Conversation Agent structured user input is stored in `message.user_input`.
+- Request Agent analysis remains parseable from the request message content and is also written to request-form items.
+- `GET /api/chats/:id/messages` returns message `type`, `reasoningContent`, `userInput`, and `requestAnalysis` so the frontend can restore the correct display order.
+
+Chat message history must be loaded from PostgreSQL through the API. The frontend must not persist chat message history in browser `localStorage`.
+
+## Web
+
+The frontend routes are:
 
 | Route | View |
 | --- | --- |
@@ -167,13 +207,19 @@ The frontend is a routed Vite/React app:
 | `/chat/:workspaceId` | Workspace detail chat page |
 | `/chat/:workspaceId/:threadId` | Specific persisted conversation |
 
-The workspace homepage loads account and workspace data from the API. Creating a workspace sends `name` and `localPath` to `POST /api/workspaces`. Browser directory pickers cannot reliably expose a full absolute path in standard web contexts; the code uses host-provided `file.path` when available and keeps the path field editable.
+The chat page loads workspace chats from `GET /api/chats`, loads messages from `GET /api/chats/:id/messages`, and sends new turns to `POST /api/chat`.
 
-The chat page loads workspace chats from `GET /api/chats`, loads persisted messages from `GET /api/chats/:id/messages`, and keeps a localStorage cache for responsive UI state. The model selector currently exposes only `DeepSeek V4 Pro`.
+Message rendering is staged:
 
-### `apps/worker`
+1. Conversation Agent reasoning.
+2. Visible assistant prose.
+3. Question form.
+4. User input整理 card.
+5. Request Agent reasoning.
+6. Request Agent分析 card.
+7. Future agent-specific reasoning blocks.
 
-The worker currently sets up a BullMQ queue and worker around Redis. It is a scaffold for background execution and is not the primary chat execution path.
+`UserInputCard` and `RequestAnalysisCard` default to collapsed.
 
 ## Database
 
@@ -182,7 +228,7 @@ The worker currently sets up a BullMQ queue and worker around Redis. It is a sca
 - `User`: local/default account profile.
 - `Workspace`: user-owned workspace with local/cloud path fields and sync status.
 - `Conversation`: chat thread scoped to a workspace and user.
-- `Message`: persisted user/assistant messages, metadata, reasoning content in `meta`, and parsed `userInput`.
+- `Message`: persisted user/assistant messages, metadata, Agent type, reasoning content in `meta`, and parsed `userInput`.
 - `RequestForm` and `RequestFormItem`: structured request form state for a chat.
 - `Task`, `AgentRun`, `Artifact`, `ActivityLog`: task execution and audit entities.
 
@@ -227,7 +273,7 @@ Useful commands:
 | `apps/agent-runtime` | 6.0.3 | yes | `dist/` | Runtime package |
 | `apps/api` | 6.0.3 | no | `dist/` | Imports runtime/database/shared |
 | `apps/worker` | 6.0.3 | no | `dist/` | Imports runtime/shared |
-| `apps/web` | 5.8.3 | no | no emit | Vite app; do not upgrade TS |
+| `apps/web` | 5.8.3 | no | no emit | Vite app; do not upgrade TypeScript |
 
 Keep `ignoreDeprecations: "6.0"` in `tsconfig.base.json` because the repo still uses `baseUrl`.
 
@@ -252,7 +298,8 @@ REDIS_TLS="false"
 
 1. Build shared packages before app dev scripts because package entry points reference `dist/`.
 2. Do not commit generated `dist/` output.
-3. Preserve the `/api/chat` SSE event contract when changing streaming behavior.
-4. Persisted workspace/chat/message data lives in PostgreSQL through Prisma; frontend localStorage is a cache, not the source of truth.
-5. `apps/web` has ESLint configured through `eslint-config-next`, but local lint may fail if `next/dist/compiled/babel/eslint-parser` is unavailable.
-6. Standard browser folder selection may not expose full absolute paths. Keep manual path entry and host-provided path handling intact.
+3. Preserve the `/api/chat` SSE event names when changing streaming behavior.
+4. Persisted workspace/chat/message data lives in PostgreSQL through Prisma.
+5. Do not store chat message history in browser `localStorage`.
+6. Preserve `message.type` and SSE `agentType` when adding new agents so reasoning and results can be displayed in the right stage.
+7. Standard browser folder selection may not expose full absolute paths. Keep manual path entry and host-provided path handling intact.

@@ -1,9 +1,12 @@
-import { Card, Tag, List } from "antd";
+import { useState } from "react";
+import { Button, Card, Tag, List } from "antd";
 import {
+  DownOutlined,
   FileTextOutlined,
   MessageOutlined,
   PlusCircleOutlined,
   QuestionCircleOutlined,
+  RightOutlined,
   SendOutlined,
 } from "@ant-design/icons";
 import type { UserInputItem } from "../types";
@@ -39,7 +42,11 @@ const TYPE_CONFIG: Record<
   },
 };
 
+/**
+ * 展示 Conversation Agent 整理后的用户输入，默认折叠明细。
+ */
 export function UserInputCard({ raw }: Props) {
+  const [open, setOpen] = useState(false);
   const items = parseUserInputBlock(raw);
   if (!items) return null;
 
@@ -82,67 +89,77 @@ export function UserInputCard({ raw }: Props) {
           </Tag>
         </div>
       }
+      extra={
+        <Button
+          type="text"
+          size="small"
+          icon={open ? <DownOutlined /> : <RightOutlined />}
+          onClick={() => setOpen(!open)}
+        />
+      }
     >
-      <List
-        size="small"
-        dataSource={items}
-        renderItem={(item) => {
-          const config = TYPE_CONFIG[item.type];
-          return (
-            <List.Item
-              style={{
-                alignItems: "flex-start",
-                borderBottom: "1px solid var(--line-soft)",
-                gap: 10,
-                paddingLeft: 0,
-                paddingRight: 0,
-              }}
-            >
-              <span
-                className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[11px]"
+      {open && (
+        <List
+          size="small"
+          dataSource={items}
+          renderItem={(item) => {
+            const config = TYPE_CONFIG[item.type];
+            return (
+              <List.Item
                 style={{
-                  background: "var(--surface-muted)",
-                  color: "var(--ink-faint)",
-                  fontFamily: "var(--sans)",
-                  fontWeight: 800,
+                  alignItems: "flex-start",
+                  borderBottom: "1px solid var(--line-soft)",
+                  gap: 10,
+                  paddingLeft: 0,
+                  paddingRight: 0,
                 }}
               >
-                {item.index}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="mb-1">
-                  <Tag
-                    icon={config.icon}
-                    style={{
-                      marginInlineEnd: 0,
-                      border: "none",
-                      borderRadius: 6,
-                      background: config.background,
-                      color: config.color,
-                      fontFamily: "var(--sans)",
-                      fontSize: 11,
-                      fontWeight: 700,
-                    }}
-                  >
-                    {item.type}
-                  </Tag>
-                </div>
-                <div
-                  className="wrap-break-word"
+                <span
+                  className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[11px]"
                   style={{
-                    color: "var(--ink-soft)",
-                    fontFamily: "var(--body)",
-                    fontSize: 14,
-                    lineHeight: 1.65,
+                    background: "var(--surface-muted)",
+                    color: "var(--ink-faint)",
+                    fontFamily: "var(--sans)",
+                    fontWeight: 800,
                   }}
                 >
-                  {item.content}
+                  {item.index}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="mb-1">
+                    <Tag
+                      icon={config.icon}
+                      style={{
+                        marginInlineEnd: 0,
+                        border: "none",
+                        borderRadius: 6,
+                        background: config.background,
+                        color: config.color,
+                        fontFamily: "var(--sans)",
+                        fontSize: 11,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {item.type}
+                    </Tag>
+                  </div>
+                  <div
+                    className="wrap-break-word"
+                    style={{
+                      color: "var(--ink-soft)",
+                      fontFamily: "var(--body)",
+                      fontSize: 14,
+                      lineHeight: 1.65,
+                    }}
+                  >
+                    {item.content}
+                  </div>
                 </div>
-              </div>
-            </List.Item>
-          );
-        }}
-      />
+              </List.Item>
+            );
+          }}
+        />
+      )}
     </Card>
   );
 }

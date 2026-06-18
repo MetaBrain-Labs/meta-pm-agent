@@ -9,6 +9,7 @@ export function toApiEvent(event: ConversationStreamEvent) {
     return {
       type: "thinking" as const,
       content: event.content,
+      agentType: event.agentType,
     };
   }
 

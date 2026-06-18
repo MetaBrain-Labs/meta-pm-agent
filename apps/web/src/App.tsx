@@ -60,19 +60,6 @@ function pushPath(path: string) {
   }
 }
 
-function loadMessages(threadId: string): Message[] {
-  try {
-    const raw = localStorage.getItem(`pm-msgs-${threadId}`);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveMessages(threadId: string, messages: Message[]) {
-  localStorage.setItem(`pm-msgs-${threadId}`, JSON.stringify(messages));
-}
-
 async function fetchAccount(): Promise<AccountInfo> {
   const response = await fetch("/api/account");
 
@@ -180,9 +167,20 @@ async function fetchChatMessages(threadId: string): Promise<Message[]> {
   return data.messages.map((message) => ({
     id: message.id,
     role: message.role === "assistant" ? "agent" : "user",
+    type: message.type,
     content: message.content,
     timestamp: new Date(message.timestamp).getTime(),
-    ...(message.reasoningContent
+    ...(message.reasoningContent && message.type && message.type !== "conversation"
+      ? {
+          reasoningBlocks: [
+            {
+              agentType: message.type,
+              content: message.reasoningContent,
+            },
+          ],
+        }
+      : {}),
+    ...(message.reasoningContent && (!message.type || message.type === "conversation")
       ? { thinking: message.reasoningContent }
       : {}),
     ...(message.userInput
@@ -470,7 +468,6 @@ export default function App() {
         DEFAULT_CHAT_TITLE,
       );
       handleNewThread(newThread);
-      saveMessages(newThread.id, []);
     } catch (error) {
       console.error("[chat] Failed to create chat:", error);
       setCreationError(mapErrorToChinese(error as Error));
@@ -945,21 +942,14 @@ function ThreadChatView({
     threadIdRef.current = thread?.id ?? null;
     requestFormIdRef.current = thread?.requestFormId;
     if (thread?.id) {
-      const cachedMessages = loadMessages(thread.id);
-      setMessages(cachedMessages);
+      setMessages([]);
       let cancelled = false;
 
       fetchChatMessages(thread.id)
         .then((serverMessages) => {
-          if (cancelled || serverMessages.length === 0) return;
-          const mergedMessages = serverMessages.map((message) => {
-            const cached = cachedMessages.find((item) => item.id === message.id);
-            return message.thinking || !cached?.thinking
-              ? message
-              : { ...message, thinking: cached.thinking };
-          });
-          setMessages(mergedMessages);
-          saveMessages(thread.id, mergedMessages);
+          if (cancelled) return;
+          // 历史消息以数据库为准，不再读取或回写浏览器本地缓存。
+          setMessages(serverMessages);
         })
         .catch((error) => {
           console.error("[chat] Failed to load messages:", error);
@@ -993,6 +983,7 @@ function ThreadChatView({
       }
 
       let tid = threadIdRef.current;
+      const hasExistingThread = Boolean(tid);
       if (!tid) {
         try {
           const newThread = await createChatRecord(
@@ -1027,24 +1018,16 @@ function ThreadChatView({
         content: "",
         timestamp: Date.now(),
       };
+      const priorMessages = hasExistingThread ? messagesRef.current : [];
 
       setMessages((prev) => {
-        const next = [...prev, userMsg, agentMsg];
-        const currentTid = threadIdRef.current;
-        if (currentTid) saveMessages(currentTid, next);
-        return next;
+        return [...prev, userMsg, agentMsg];
       });
 
       const controller = new AbortController();
       abortRef.current = controller;
 
       try {
-        const priorMessages = tid
-          ? loadMessages(tid).filter(
-              (message) =>
-                message.id !== userMsg.id && message.id !== agentMsgId,
-            )
-          : [];
         const requestMessages = [...priorMessages, userMsg].map((message) => ({
           id: message.id,
           role:
@@ -1105,8 +1088,6 @@ function ThreadChatView({
                   if (message.id !== agentMsgId) return message;
                   return applyStreamEvent(message, event);
                 });
-                const currentTid = threadIdRef.current;
-                if (currentTid) saveMessages(currentTid, next);
                 return next;
               });
             } catch {
@@ -1129,8 +1110,6 @@ function ThreadChatView({
   const clearMessages = useCallback(() => {
     setMessages([]);
     setError(null);
-    const tid = threadIdRef.current;
-    if (tid) saveMessages(tid, []);
   }, []);
 
   return (
