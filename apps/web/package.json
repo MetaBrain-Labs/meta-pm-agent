@@ -10,8 +10,8 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@ant-design/icons": "^5.6.1",
-    "antd": "^5.24.0",
+    "@ant-design/icons": "^6.2.5",
+    "antd": "^6.4.4",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
