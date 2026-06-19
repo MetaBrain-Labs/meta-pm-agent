@@ -1,4 +1,4 @@
-import type { ConversationStreamEvent, StreamChunk } from "../types";
+import type { ConversationStreamEvent } from "../types";
 
 interface TaggedBlockOptions {
   startMarker: string;
@@ -11,7 +11,7 @@ interface TaggedBlockOptions {
  * 处理 Conversation Agent 相关标记块（Question Form 标记块/ User Input 标记块）
  */
 export async function* streamTaggedBlock(
-  source: AsyncIterable<StreamChunk>,
+  source: AsyncIterable<ConversationStreamEvent>,
   options: TaggedBlockOptions | TaggedBlockOptions[],
 ): AsyncGenerator<ConversationStreamEvent> {
   const tagOptions = Array.isArray(options) ? options : [options];
@@ -22,6 +22,10 @@ export async function* streamTaggedBlock(
 
   for await (const chunk of source) {
     if (chunk.type === "reasoning") {
+      yield chunk;
+      continue;
+    }
+    if (chunk.type !== "text") {
       yield chunk;
       continue;
     }
@@ -61,7 +65,11 @@ export async function* streamTaggedBlock(
       if (match) {
         const textBeforeBlock = pendingText.slice(0, match.startIndex);
         if (textBeforeBlock) {
-          yield { type: "text", content: textBeforeBlock };
+          yield {
+            type: "text",
+            content: textBeforeBlock,
+            agentType: chunk.agentType,
+          };
         }
 
         blockBuffer = pendingText.slice(match.startIndex);
@@ -74,7 +82,11 @@ export async function* streamTaggedBlock(
 
       if (!couldEndWithAnyMarkerPrefix(pendingText, tagOptions)) {
         if (pendingText) {
-          yield { type: "text", content: pendingText };
+          yield {
+            type: "text",
+            content: pendingText,
+            agentType: chunk.agentType,
+          };
           pendingText = "";
         }
       }
@@ -83,10 +95,10 @@ export async function* streamTaggedBlock(
   }
 
   if (collecting && blockBuffer) {
-    yield { type: "text", content: blockBuffer };
+    yield { type: "text", content: blockBuffer, agentType: "conversation" };
   }
   if (pendingText) {
-    yield { type: "text", content: pendingText };
+    yield { type: "text", content: pendingText, agentType: "conversation" };
   }
 }
 

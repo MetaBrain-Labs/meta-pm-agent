@@ -13,6 +13,7 @@ import {
   ClearOutlined,
   DownOutlined,
   PaperClipOutlined,
+  SearchOutlined,
   SendOutlined,
   StopOutlined,
 } from "@ant-design/icons";
@@ -36,7 +37,7 @@ interface Props {
   isLoading: boolean;
   error: string | null;
   disabledReason?: string | null;
-  onSend: (text: string) => void;
+  onSend: (text: string, options?: { webSearchEnabled?: boolean }) => void;
   onStop: () => void;
   onClear: () => void;
   onBack: () => void;
@@ -54,6 +55,7 @@ export function ChatApp({
   onBack,
 }: Props) {
   const [input, setInput] = useState("");
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [userScrolled, setUserScrolled] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -100,10 +102,10 @@ export function ChatApp({
 
   const doSubmit = useCallback(() => {
     if (!input.trim() || isLoading || disabledReason) return;
-    onSend(input.trim());
+    onSend(input.trim(), { webSearchEnabled });
     setInput("");
     setUserScrolled(false);
-  }, [disabledReason, input, isLoading, onSend]);
+  }, [disabledReason, input, isLoading, onSend, webSearchEnabled]);
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
@@ -119,7 +121,7 @@ export function ChatApp({
 
   const handleExampleClick = (query: string) => {
     if (disabledReason || isLoading) return;
-    onSend(query);
+    onSend(query, { webSearchEnabled });
     setUserScrolled(false);
   };
 
@@ -175,7 +177,7 @@ export function ChatApp({
                 message.role === "agent"
               }
               nextUserContent={nextUserContentByAssistantId.get(message.id)}
-              onFormSubmit={onSend}
+              onFormSubmit={(text) => onSend(text, { webSearchEnabled })}
             />
           ))}
 
@@ -228,6 +230,23 @@ export function ChatApp({
                     type="text"
                     shape="circle"
                     icon={<PaperClipOutlined />}
+                  />
+                </Tooltip>
+                <Tooltip
+                  title={
+                    webSearchEnabled
+                      ? "联网搜索已开启"
+                      : "开启联网搜索"
+                  }
+                >
+                  <Button
+                    type={webSearchEnabled ? "primary" : "text"}
+                    shape="circle"
+                    icon={<SearchOutlined />}
+                    aria-label="联网搜索"
+                    aria-pressed={webSearchEnabled}
+                    disabled={isLoading || Boolean(disabledReason)}
+                    onClick={() => setWebSearchEnabled((enabled) => !enabled)}
                   />
                 </Tooltip>
                 <Dropdown

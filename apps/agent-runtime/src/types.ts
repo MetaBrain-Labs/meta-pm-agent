@@ -1,4 +1,5 @@
 import type { RequestAnalysis } from "@repo/shared";
+import type { AgentRuntimeTool } from "@repo/shared";
 
 /**
  * 标识当前流式内容所属的 Agent，便于 API 持久化和前端按阶段展示。
@@ -28,6 +29,18 @@ export interface StreamChunk {
  */
 export type ConversationStreamEvent =
   | StreamChunk
+  | {
+      type: "tool-call";
+      toolName: string;
+      toolArgs?: Record<string, unknown>;
+      agentType?: AgentMessageType;
+    }
+  | {
+      type: "tool-result";
+      toolName: string;
+      toolResult: unknown;
+      agentType?: AgentMessageType;
+    }
   | { type: "question-form-start" }
   | { type: "question-form-complete"; content: string }
   | { type: "user-input-start" }
@@ -44,5 +57,6 @@ export type ConversationStreamEvent =
  * 会话流选项
  */
 export interface ConversationStreamOptions {
+  enabledTools?: AgentRuntimeTool[];
   productContext?: string;
 }

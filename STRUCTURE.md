@@ -11,6 +11,7 @@
 | Agent runtime | LangGraph, LangChain, DeepAgents | Conversation Agent, Request Agent, reasoning stream, workflow graph |
 | API | Hono | HTTP API on port 3001, SSE `/api/chat` stream, Prisma repositories |
 | Web | Vite, React, Ant Design 6 | Workspace and chat UI, TypeScript 5.8.3 |
+| Web search | LangChain tool + Brave/DuckDuckGo | Optional `web_search` runtime tool, centrally authorized per Agent |
 | Worker | BullMQ, Redis | Background queue worker scaffold |
 | Database | PostgreSQL, Prisma | Account, workspace, conversation, message, request-form, task data |
 | Build | Turborepo | Workspace task graph |
@@ -153,6 +154,14 @@ When a user submits a form answer, the Conversation Agent first emits a `user-in
 
 The Request Agent output is persisted as a separate assistant message with `message.type = "request"`. Its reasoning is stored in `message.meta.reasoningContent`.
 
+### Runtime Tools
+
+Runtime tools are enabled per request through `POST /api/chat` `enabledTools`. The shared schema currently defines `web_search` as the only runtime tool.
+
+Tool visibility is managed centrally in `apps/agent-runtime/src/agents/common/tool-access.ts`. At present, `web_search` is authorized only for the Conversation Agent; Request Agent and future agents should be added through the same access table instead of ad hoc tool wiring.
+
+`apps/agent-runtime/src/agents/common/web-search-tool.ts` implements the `web_search` LangChain tool. It uses `BRAVE_SEARCH_API_KEY` when configured and falls back to DuckDuckGo Instant Answer for local development. Search backend failures are returned as structured tool results with `results: []` and `error` instead of throwing, so a network timeout does not terminate the chat stream.
+
 ## API
 
 The API exposes account, workspace, chat, message, and SSE routes:
@@ -168,6 +177,8 @@ The API exposes account, workspace, chat, message, and SSE routes:
 | `POST` | `/api/chat` | Stream an agent response with SSE and persist messages |
 
 `POST /api/chat` returns `text/event-stream` and uses typed events including `start`, `thinking`, `text`, `question-form-start`, `question-form-complete`, `user-input-start`, `user-input-complete`, `request-analysis-start`, `request-analysis-complete`, `todo-update`, `tool-call`, `tool-result`, `step-finish`, `finish`, and `error`, followed by `[DONE]`.
+
+`POST /api/chat` may include `enabledTools: ["web_search"]`. The API validates tool names with the shared schema and passes them to the runtime; the runtime decides which agents may actually see each enabled tool.
 
 `thinking` events may include `agentType`. The frontend uses that field to place reasoning next to the corresponding stage.
 
@@ -226,3 +237,4 @@ Useful commands:
 5. Do not store chat message history in browser `localStorage`.
 6. Preserve `message.type` and SSE `agentType` when adding new agents so reasoning and results can be displayed in the right stage.
 7. Standard browser folder selection may not expose full absolute paths. Keep manual path entry and host-provided path handling intact.
+8. Keep runtime tool access centralized in `tool-access.ts`; do not grant tools directly inside individual agents unless the centralized policy is updated.

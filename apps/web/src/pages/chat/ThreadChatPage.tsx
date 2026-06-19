@@ -100,7 +100,7 @@ export function ThreadChatPage({
   }, []);
 
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, options?: { webSearchEnabled?: boolean }) => {
       if (!text.trim() || isLoading) return;
 
       const currentWorkspaceId = workspaceIdRef.current;
@@ -170,6 +170,7 @@ export function ThreadChatPage({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             chatId: threadId,
+            enabledTools: options?.webSearchEnabled ? ["web_search"] : [],
             requestFormId: requestFormIdRef.current,
             messages: requestMessages,
           }),

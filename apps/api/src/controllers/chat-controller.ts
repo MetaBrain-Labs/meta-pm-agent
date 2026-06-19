@@ -154,7 +154,10 @@ export async function chatStreamHandler(c: Context) {
       // 启动 agent-runtime 流式对话
       for await (const event of streamConversation(
         parsed.data.messages,
-        { productContext },
+        {
+          enabledTools: parsed.data.enabledTools,
+          productContext,
+        },
       )) {
         if ("content" in event && event.type === "reasoning") {
           getAgentOutput(agentOutputs, getEventAgentType(event)).reasoningContent +=
