@@ -72,10 +72,13 @@ async function searchWeb(
   }
 
   try {
+    const fallback = await searchWithFreePublicIndexes(query, maxResults);
     return {
-      results: await searchWithDuckDuckGo(query, maxResults),
-      source: "duckduckgo",
-      warnings: warnings.length > 0 ? warnings : undefined,
+      ...fallback,
+      warnings:
+        warnings.length > 0
+          ? [...warnings, ...(fallback.warnings ?? [])]
+          : fallback.warnings,
     };
   } catch (error) {
     return {
@@ -131,17 +134,40 @@ async function searchWithBrave(
 }
 
 /**
- * 使用 DuckDuckGo 公开 Instant Answer 接口作为无密钥开发环境降级方案。
+ * 使用免费公开索引作为无密钥搜索兜底。
  */
-async function searchWithDuckDuckGo(
+async function searchWithFreePublicIndexes(
+  query: string,
+  maxResults: number,
+): Promise<WebSearchResponse> {
+  const [hackerNews, openAlex] = await Promise.allSettled([
+    searchHackerNews(query, maxResults),
+    searchOpenAlex(query, maxResults),
+  ]);
+
+  const warnings: string[] = [];
+  const results = [
+    ...collectPublicIndexResults("hacker-news", hackerNews, warnings),
+    ...collectPublicIndexResults("openalex", openAlex, warnings),
+  ];
+
+  return {
+    results: dedupeResults(results).slice(0, maxResults),
+    source: "free-public-indexes",
+    warnings: warnings.length > 0 ? warnings : undefined,
+  };
+}
+
+/**
+ * 搜索 Hacker News Algolia 索引，适合技术新闻和工程资料。
+ */
+async function searchHackerNews(
   query: string,
   maxResults: number,
 ): Promise<WebSearchResult[]> {
-  const url = new URL("https://api.duckduckgo.com/");
-  url.searchParams.set("q", query);
-  url.searchParams.set("format", "json");
-  url.searchParams.set("no_html", "1");
-  url.searchParams.set("skip_disambig", "1");
+  const url = new URL("https://hn.algolia.com/api/v1/search");
+  url.searchParams.set("query", query);
+  url.searchParams.set("hitsPerPage", String(maxResults));
 
   const response = await fetch(url, {
     headers: {
@@ -151,79 +177,116 @@ async function searchWithDuckDuckGo(
   });
 
   if (!response.ok) {
-    throw new Error(
-      `DuckDuckGo web search failed with status ${response.status}.`,
-    );
+    throw new Error(`Hacker News search failed with status ${response.status}.`);
   }
 
   const payload = (await response.json()) as {
-    AbstractText?: string;
-    AbstractURL?: string;
-    Heading?: string;
-    RelatedTopics?: DuckDuckGoTopic[];
+    hits?: Array<{
+      title?: string;
+      story_title?: string;
+      url?: string;
+      story_url?: string;
+      author?: string;
+      created_at?: string;
+    }>;
   };
 
-  const results: WebSearchResult[] = [];
-  if (payload.AbstractText && payload.AbstractURL) {
-    results.push({
-      title: payload.Heading || query,
-      url: payload.AbstractURL,
-      snippet: payload.AbstractText,
-    });
-  }
-
-  for (const topic of flattenDuckDuckGoTopics(payload.RelatedTopics ?? [])) {
-    if (results.length >= maxResults) break;
-    if (!topic.FirstURL || !topic.Text) continue;
-
-    results.push({
-      title: topic.Text.split(" - ")[0] || topic.FirstURL,
-      url: topic.FirstURL,
-      snippet: topic.Text,
-    });
-  }
-
-  return results.slice(0, maxResults);
-}
-
-type DuckDuckGoTopic =
-  | {
-      FirstURL?: string;
-      Text?: string;
-    }
-  | {
-      Topics?: DuckDuckGoTopic[];
-    };
-
-/**
- * 展开 DuckDuckGo 分组结果，保持工具输出结构稳定。
- */
-function flattenDuckDuckGoTopics(
-  topics: DuckDuckGoTopic[],
-): Array<{ FirstURL?: string; Text?: string }> {
-  const flattened: Array<{ FirstURL?: string; Text?: string }> = [];
-
-  for (const topic of topics) {
-    if ("Topics" in topic && Array.isArray(topic.Topics)) {
-      flattened.push(...flattenDuckDuckGoTopics(topic.Topics));
-      continue;
-    }
-
-    if (isDuckDuckGoResultTopic(topic)) {
-      flattened.push(topic);
-    }
-  }
-
-  return flattened;
+  return (payload.hits ?? [])
+    .map((item) => ({
+      title: stripHtml(item.title ?? item.story_title ?? ""),
+      url: item.url ?? item.story_url ?? "",
+      snippet: [
+        item.author ? `author: ${item.author}` : "",
+        item.created_at ? `created: ${item.created_at}` : "",
+      ]
+        .filter(Boolean)
+        .join("; "),
+    }))
+    .filter((item) => item.title && item.url);
 }
 
 /**
- * 判断 DuckDuckGo 条目是否为可展示的搜索结果。
+ * 搜索 OpenAlex 公开学术索引，适合论文、报告和研究背景。
  */
-function isDuckDuckGoResultTopic(
-  topic: DuckDuckGoTopic,
-): topic is { FirstURL?: string; Text?: string } {
-  return "FirstURL" in topic || "Text" in topic;
+async function searchOpenAlex(
+  query: string,
+  maxResults: number,
+): Promise<WebSearchResult[]> {
+  const url = new URL("https://api.openalex.org/works");
+  url.searchParams.set("search", query);
+  url.searchParams.set("per-page", String(maxResults));
+
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/json",
+    },
+    signal: createTimeoutSignal(),
+  });
+
+  if (!response.ok) {
+    throw new Error(`OpenAlex search failed with status ${response.status}.`);
+  }
+
+  const payload = (await response.json()) as {
+    results?: Array<{
+      title?: string;
+      display_name?: string;
+      doi?: string;
+      id?: string;
+      publication_year?: number;
+      primary_location?: {
+        landing_page_url?: string;
+      };
+    }>;
+  };
+
+  return (payload.results ?? [])
+    .map((item) => ({
+      title: stripHtml(item.title ?? item.display_name ?? ""),
+      url: item.primary_location?.landing_page_url ?? item.doi ?? item.id ?? "",
+      snippet: item.publication_year
+        ? `publication year: ${item.publication_year}`
+        : "",
+    }))
+    .filter((item) => item.title && item.url);
+}
+
+/**
+ * 收集公开索引结果并记录单个索引的失败原因。
+ */
+function collectPublicIndexResults(
+  source: string,
+  result: PromiseSettledResult<WebSearchResult[]>,
+  warnings: string[],
+): WebSearchResult[] {
+  if (result.status === "fulfilled") return result.value;
+
+  warnings.push(`${source} unavailable: ${formatSearchError(result.reason)}`);
+  return [];
+}
+
+/**
+ * 按 URL 去重，避免多个公开索引返回同一资料。
+ */
+function dedupeResults(results: WebSearchResult[]): WebSearchResult[] {
+  const seenUrls = new Set<string>();
+
+  return results.filter((result) => {
+    const key = result.url.trim().toLowerCase();
+    if (!key || seenUrls.has(key)) return false;
+    seenUrls.add(key);
+    return true;
+  });
+}
+
+/**
+ * 清理搜索结果中的 HTML 高亮标签。
+ */
+function stripHtml(value: string): string {
+  return value
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**

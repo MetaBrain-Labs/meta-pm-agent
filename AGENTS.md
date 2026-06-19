@@ -38,7 +38,7 @@ packages/
   database/        Prisma client singleton exported from dist/
 ```
 
-- Use `.env` for local configuration. Copy `.env.example` and provide `DATABASE_URL`, Redis settings, `OPENAI_API_KEY`, `LLM_MODEL`, and `LLM_BASE_URL`. Configure `BRAVE_SEARCH_API_KEY` when the `web_search` tool should use Brave; otherwise the runtime falls back to DuckDuckGo Instant Answer for local development.
+- Use `.env` for local configuration. Copy `.env.example` and provide `DATABASE_URL`, Redis settings, `OPENAI_API_KEY`, `LLM_MODEL`, and `LLM_BASE_URL`. Configure `BRAVE_SEARCH_API_KEY` when the `web_search` tool should use Brave; otherwise the runtime falls back to free public indexes without extra search dependencies.
 - Run Prisma commands from `packages/database`: `pnpm db:generate`, `pnpm db:push`, or `pnpm db:migrate`.
 - Ensure `prisma generate` runs before building `@repo/database`; `allowBuilds` in `pnpm-workspace.yaml` handles this installation requirement.
 - Preserve the workspace/chat routes and their current split: `/workplace`, `/chat/:workspaceId`, and `/chat/:workspaceId/:threadId`.
@@ -56,6 +56,7 @@ packages/
 - Keep stream reducers, markdown helpers, and structured block parsers in `apps/web/src/utils/`.
 - Keep shared React view components in `apps/web/src/components/`, reusable modal views in `apps/web/src/components/modals/`, and reusable hooks in `apps/web/src/hooks/`.
 - Prefer moving logic into these focused modules before adding more code to `App.tsx`.
+- Keep assistant markdown rendering in `apps/web/src/utils/markdown.tsx`; preserve support for standard pipe tables, links, lists, code blocks, and inline emphasis without using `dangerouslySetInnerHTML`.
 
 ## Chat And Agent Contracts
 
@@ -89,6 +90,7 @@ packages/
 - Conversation Agent reasoning appears with the conversation assistant message.
 - Request Agent reasoning appears after "用户输入整理" and before "Request Agent 分析".
 - Future agents should follow the same `agentType`-based placement pattern.
+- Tool-call details, including `web_search` results, should render through `ToolCallsCard` as a collapsed card near the related assistant message.
 - "用户输入整理" and "Request Agent 分析" cards should default to collapsed.
 - Prefer Tailwind utilities for new styling. Do not create new CSS/SCSS/Less/CSS Module files unless explicitly requested or unavoidable.
 - Do not add global stylesheet rules or inline `<style>` blocks unless the task explicitly requires it.

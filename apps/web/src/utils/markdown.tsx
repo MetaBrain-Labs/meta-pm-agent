@@ -25,6 +25,7 @@ type Block =
   | { kind: "h"; level: 1 | 2 | 3 | 4; text: string }
   | { kind: "ul"; items: string[] }
   | { kind: "ol"; items: string[] }
+  | { kind: "table"; headers: string[]; rows: string[][] }
   | { kind: "code"; lang: string | null; body: string }
   | { kind: "hr" };
 
@@ -67,6 +68,19 @@ function parseBlocks(input: string): Block[] {
       i++;
       continue;
     }
+    if (isTableStart(lines, i)) {
+      const headers = splitTableRow(lines[i] ?? "");
+      const rows: string[][] = [];
+      i += 2;
+      while (i < lines.length && isTableRow(lines[i] ?? "")) {
+        rows.push(
+          normalizeTableRow(splitTableRow(lines[i] ?? ""), headers.length),
+        );
+        i++;
+      }
+      out.push({ kind: "table", headers, rows });
+      continue;
+    }
     // Unordered list. Group consecutive items.
     if (/^\s*[-*+]\s+/.test(line)) {
       const items: string[] = [];
@@ -95,6 +109,7 @@ function parseBlocks(input: string): Block[] {
       if (next.trim() === "") break;
       if (/^```/.test(next)) break;
       if (/^#{1,4}\s+/.test(next)) break;
+      if (isTableStart(lines, i)) break;
       if (/^\s*[-*+]\s+/.test(next)) break;
       if (/^\s*\d+\.\s+/.test(next)) break;
       buf.push(next);
@@ -122,10 +137,18 @@ function renderBlock(block: Block, key: number): ReactNode {
         style={{
           fontFamily: 'var(--sans)',
           fontWeight: block.level <= 2 ? 700 : 600,
-          fontSize: block.level === 1 ? 20 : block.level === 2 ? 17 : block.level === 3 ? 15 : 13,
+          fontSize:
+            block.level === 1
+              ? 20
+              : block.level === 2
+                ? 17
+                : block.level === 3
+                  ? 15
+                  : 13,
           color: 'var(--ink)',
           letterSpacing: '-0.014em',
-          borderBottom: block.level === 1 ? '1px solid var(--line-soft)' : undefined,
+          borderBottom:
+            block.level === 1 ? '1px solid var(--line-soft)' : undefined,
           paddingBottom: block.level === 1 ? 6 : undefined,
           lineHeight: 1.2,
         }}
@@ -138,7 +161,9 @@ function renderBlock(block: Block, key: number): ReactNode {
     return (
       <ul key={key} className="my-0.5 pl-5">
         {block.items.map((item, i) => (
-          <li key={i} className="my-0.5">{renderInline(item)}</li>
+          <li key={i} className="my-0.5">
+            {renderInline(item)}
+          </li>
         ))}
       </ul>
     );
@@ -147,9 +172,51 @@ function renderBlock(block: Block, key: number): ReactNode {
     return (
       <ol key={key} className="my-0.5 pl-5">
         {block.items.map((item, i) => (
-          <li key={i} className="my-0.5">{renderInline(item)}</li>
+          <li key={i} className="my-0.5">
+            {renderInline(item)}
+          </li>
         ))}
       </ol>
+    );
+  }
+  if (block.kind === "table") {
+    return (
+      <div
+        key={key}
+        className="my-2 max-w-full overflow-x-auto rounded-md border border-[var(--line-soft)]"
+      >
+        <table className="min-w-full border-collapse text-left text-[13px]">
+          <thead className="bg-[var(--surface-muted)]">
+            <tr>
+              {block.headers.map((header, index) => (
+                <th
+                  key={index}
+                  className="border-b border-[var(--line-soft)] px-3 py-2 font-bold text-[var(--ink)]"
+                >
+                  {renderInline(header)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {block.rows.map((row, rowIndex) => (
+              <tr
+                key={rowIndex}
+                className="border-b border-[var(--line-soft)] last:border-b-0"
+              >
+                {block.headers.map((_, cellIndex) => (
+                  <td
+                    key={cellIndex}
+                    className="max-w-[320px] align-top px-3 py-2 text-[var(--ink-soft)]"
+                  >
+                    {renderInline(row[cellIndex] ?? "")}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     );
   }
   if (block.kind === "code") {
@@ -159,6 +226,52 @@ function renderBlock(block: Block, key: number): ReactNode {
     return <hr key={key} className="md-hr" />;
   }
   return null;
+}
+
+/**
+ * 判断当前位置是否是标准 Markdown 表格的开头。
+ */
+function isTableStart(lines: string[], index: number): boolean {
+  const header = lines[index] ?? "";
+  const separator = lines[index + 1] ?? "";
+  return isTableRow(header) && isTableSeparator(separator);
+}
+
+/**
+ * 判断一行是否形如 Markdown 表格行。
+ */
+function isTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.includes("|") && /^\|?.+\|.+\|?$/.test(trimmed);
+}
+
+/**
+ * 判断一行是否是 Markdown 表格分隔行。
+ */
+function isTableSeparator(line: string): boolean {
+  const cells = splitTableRow(line);
+  return (
+    cells.length > 0 &&
+    cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()))
+  );
+}
+
+/**
+ * 拆分 Markdown 表格行，并去掉可选的首尾竖线。
+ */
+function splitTableRow(line: string): string[] {
+  let trimmed = line.trim();
+  if (trimmed.startsWith("|")) trimmed = trimmed.slice(1);
+  if (trimmed.endsWith("|")) trimmed = trimmed.slice(0, -1);
+  return trimmed.split("|").map((cell) => cell.trim());
+}
+
+/**
+ * 对齐行单元格数量，避免短行导致渲染错位。
+ */
+function normalizeTableRow(row: string[], length: number): string[] {
+  if (row.length >= length) return row.slice(0, length);
+  return [...row, ...Array.from({ length: length - row.length }, () => "")];
 }
 
 // Inline pass: tokenize into runs of `code`, **bold**, *italic*, links,

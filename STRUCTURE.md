@@ -11,7 +11,7 @@
 | Agent runtime | LangGraph, LangChain, DeepAgents | Conversation Agent, Request Agent, reasoning stream, workflow graph |
 | API | Hono | HTTP API on port 3001, SSE `/api/chat` stream, Prisma repositories |
 | Web | Vite, React, Ant Design 6 | Workspace and chat UI, TypeScript 5.8.3 |
-| Web search | LangChain tool + Brave/DuckDuckGo | Optional `web_search` runtime tool, centrally authorized per Agent |
+| Web search | LangChain tool + Brave/free public indexes | Optional `web_search` runtime tool, centrally authorized per Agent |
 | Worker | BullMQ, Redis | Background queue worker scaffold |
 | Database | PostgreSQL, Prisma | Account, workspace, conversation, message, request-form, task data |
 | Build | Turborepo | Workspace task graph |
@@ -59,6 +59,7 @@ meta-pm-agent/
 │  │  │  │  ├─ RequestAnalysisCard.tsx
 │  │  │  │  ├─ Sidebar.tsx
 │  │  │  │  ├─ TodoCard.tsx
+│  │  │  │  ├─ ToolCallsCard.tsx
 │  │  │  │  └─ UserInputCard.tsx
 │  │  │  ├─ constants/
 │  │  │  │  └─ app.ts
@@ -117,6 +118,8 @@ Supporting responsibilities are split into focused modules:
 
 The frontend does not persist chat history in browser `localStorage`. Chat messages are restored through `GET /api/chats/:id/messages`; browser storage is limited to non-authoritative UI preferences such as the active workspace id.
 
+Assistant markdown is rendered by `apps/web/src/utils/markdown.tsx`. It intentionally uses a small typed renderer instead of `dangerouslySetInnerHTML`, and supports common chat output including headings, lists, fenced code, links, inline emphasis, and standard pipe tables.
+
 ## Dependency Graph
 
 ```text
@@ -160,7 +163,7 @@ Runtime tools are enabled per request through `POST /api/chat` `enabledTools`. T
 
 Tool visibility is managed centrally in `apps/agent-runtime/src/agents/common/tool-access.ts`. At present, `web_search` is authorized only for the Conversation Agent; Request Agent and future agents should be added through the same access table instead of ad hoc tool wiring.
 
-`apps/agent-runtime/src/agents/common/web-search-tool.ts` implements the `web_search` LangChain tool. It uses `BRAVE_SEARCH_API_KEY` when configured and falls back to DuckDuckGo Instant Answer for local development. Search backend failures are returned as structured tool results with `results: []` and `error` instead of throwing, so a network timeout does not terminate the chat stream.
+`apps/agent-runtime/src/agents/common/web-search-tool.ts` implements the `web_search` LangChain tool. It uses `BRAVE_SEARCH_API_KEY` when configured and falls back to free public indexes such as Hacker News Algolia and OpenAlex without extra search dependencies. Search backend failures are returned as structured tool results with `results: []` and `error` instead of throwing, so a network timeout does not terminate the chat stream.
 
 ## API
 
@@ -197,14 +200,16 @@ The API exposes account, workspace, chat, message, and SSE routes:
 Message rendering is staged:
 
 1. Conversation Agent reasoning.
-2. Visible assistant prose.
-3. Question form.
-4. 用户输入整理 card.
-5. Request Agent reasoning.
-6. Request Agent 分析 card.
-7. Future agent-specific reasoning blocks.
+2. Todo updates.
+3. Tool calls, including `web_search`, in a collapsed `ToolCallsCard`.
+4. Visible assistant prose.
+5. Question form.
+6. 用户输入整理 card.
+7. Request Agent reasoning.
+8. Request Agent 分析 card.
+9. Future agent-specific reasoning blocks.
 
-`UserInputCard` and `RequestAnalysisCard` default to collapsed.
+`ToolCallsCard`, `UserInputCard`, and `RequestAnalysisCard` default to collapsed so detailed intermediate data stays available without pushing normal assistant prose out of view.
 
 ## Development Workflow
 

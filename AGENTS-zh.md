@@ -33,13 +33,18 @@ packages/
 - 流事件 reducer、Markdown 工具和结构化块解析器放在 `apps/web/src/utils/`。
 - 共享 React 视图组件放在 `apps/web/src/components/`，可复用弹窗放在 `apps/web/src/components/modals/`，可复用 Hook 放在 `apps/web/src/hooks/`。
 - 在继续向 `App.tsx` 增加代码前，优先把逻辑移动到这些职责清晰的模块中。
+- 助手消息 Markdown 渲染保持在 `apps/web/src/utils/markdown.tsx`；需要保留标准管道表格、链接、列表、代码块和行内强调的解析能力，不要改用 `dangerouslySetInnerHTML`。
 ## 联网搜索与工具授权
 
 - `/api/chat` 请求体可以携带 `enabledTools`，当前只支持 `["web_search"]`。新增工具名称时先更新 `packages/shared` 中的共享 schema，再更新 API 校验和 runtime 使用方。
 - 运行时工具权限统一放在 `apps/agent-runtime/src/agents/common/tool-access.ts`。当前 `web_search` 只授权给 Conversation Agent；后续要允许 Request Agent 或其他 Agent 使用联网搜索时，只在该集中授权表中扩展，不要在单个 Agent 内部绕过授权。
-- `web_search` 的具体实现位于 `apps/agent-runtime/src/agents/common/web-search-tool.ts`。配置 `BRAVE_SEARCH_API_KEY` 时优先使用 Brave Search；未配置时使用 DuckDuckGo Instant Answer 作为本地开发降级方案。
+- `web_search` 的具体实现位于 `apps/agent-runtime/src/agents/common/web-search-tool.ts`。配置 `BRAVE_SEARCH_API_KEY` 时优先使用 Brave Search；未配置时使用 Hacker News Algolia、OpenAlex 等免费公开索引作为无额外搜索依赖的兜底。
 - 联网搜索后端不可用、超时或网络失败时，工具必须返回结构化结果，例如 `results: []` 和 `error` 字段，而不是抛出异常，避免中断 `/api/chat` SSE 流。
 - 转发 `tool-call` 和 `tool-result` 事件时保留 `agentType`，方便后续多 Agent 工具调用在前端按来源展示。
+## 前端展示补充
+
+- 工具调用明细（包括 `web_search` 结果）应通过 `ToolCallsCard` 以折叠卡片展示在对应助手消息附近。
+- `ToolCallsCard`、`UserInputCard` 和 `RequestAnalysisCard` 默认折叠，让中间数据可追溯但不挤占普通助手正文。
 ## 鑱婂ぉ鍜?Agent 鍗忚
 
 - 淇濇寔 `/api/chat` 鐨?SSE 鍗忚銆傛帴鍙ｈ繑鍥?`text/event-stream`锛屼簨浠剁被鍨嬪寘鎷?`start`銆乣text`銆乣thinking`銆乣question-form-start`銆乣question-form-complete`銆乣user-input-start`銆乣user-input-complete`銆乣request-analysis-start`銆乣request-analysis-complete`銆乣todo-update`銆乣tool-call`銆乣tool-result`銆乣step-finish`銆乣finish` 鍜?`error`銆?- `thinking` 浜嬩欢鍙互鎼哄甫 `agentType`銆傝浆鍙戞垨杞崲娴佷簨浠舵椂蹇呴』淇濈暀璇ュ瓧娈点€?- Conversation Agent 鐨勬祦鐗囨浣跨敤 `agentType: "conversation"`銆?- Request Agent 鐨勬祦鐗囨浣跨敤 `agentType: "request"`銆?- 鍚庣画鏂板 Agent 鏃讹紝闇€瑕佸垎閰嶇ǔ瀹氱殑 `agentType`锛屽苟鍦?runtime 浜嬩欢銆丄PI 鎸佷箙鍖栧拰鍓嶇娓叉煋涓繚鎸佷竴鑷淬€?- `apps/agent-runtime` 浼氬湪杈撳嚭鐢ㄦ埛鍙 `text` 鍓嶈繃婊?`No files found in /` 绛?DeepAgent/杩愯鐜鍐呴儴鍣０銆備笉瑕佹妸鍐呴儴宸ュ叿鎴栫幆澧冨櫔澹伴噸鏂板紩鍏ユ櫘閫氬姪鎵嬫鏂囥€?
