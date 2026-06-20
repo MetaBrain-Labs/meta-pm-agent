@@ -650,7 +650,7 @@ body {
 
 .chat-scroll {
   display: flex;
-  width: 100%;
+  width: 90%;
   min-height: 0;
   flex: 1;
   flex-direction: column;
@@ -708,7 +708,7 @@ body {
 
 .chat-composer-border-beam {
   position: relative;
-  width: min(1180px, calc(100% - 48px));
+  width: min(1018px, calc(100% - 48px));
   margin-bottom: 24px;
 }
 

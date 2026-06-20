@@ -38,7 +38,7 @@ packages/
 
 - `/api/chat` 请求体可以携带 `enabledTools`，当前只支持 `["web_search"]`。新增工具名称时先更新 `packages/shared` 中的共享 schema，再更新 API 校验和 runtime 使用方。
 - 运行时工具权限统一放在 `apps/agent-runtime/src/agents/common/tool-access.ts`。当前 `web_search` 只授权给 Conversation Agent；后续要允许 Request Agent 或其他 Agent 使用联网搜索时，只在该集中授权表中扩展，不要在单个 Agent 内部绕过授权。
-- `web_search` 的具体实现位于 `apps/agent-runtime/src/agents/common/web-search-tool.ts`。配置 `BRAVE_SEARCH_API_KEY` 时优先使用 Brave Search；未配置时使用 Hacker News Algolia、OpenAlex 等免费公开索引作为无额外搜索依赖的兜底。
+- `web_search` 的具体实现位于 `apps/agent-runtime/src/agents/common/web-search-tool.ts`。配置 `TAVILY_API_KEY` 时优先使用 Tavily Search；未配置时使用 Hacker News Algolia、OpenAlex 等免费公开索引作为无额外搜索依赖的兜底。
 - 联网搜索后端不可用、超时或网络失败时，工具必须返回结构化结果，例如 `results: []` 和 `error` 字段，而不是抛出异常，避免中断 `/api/chat` SSE 流。
 - 转发 `tool-call` 和 `tool-result` 事件时保留 `agentType`，方便后续多 Agent 工具调用在前端按来源展示。
 ## 前端展示补充

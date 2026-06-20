@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "@repo/database";
 
 const DEFAULT_CHAT_TITLE = "New Chat";
+const LOCALIZED_DEFAULT_CHAT_TITLE = "新对话";
 const LOCAL_USER_ID = "local";
 
 /**
@@ -36,6 +37,7 @@ interface RequestFormRow {
  */
 interface ConversationListRow extends ConversationRow {
   request_form_id: string | null;
+  message_count: number;
 }
 
 /**
@@ -67,6 +69,7 @@ export interface ConversationDto {
  */
 export interface ConversationListItemDto extends ConversationDto {
   requestFormId?: string;
+  messageCount: number;
 }
 
 /**
@@ -108,7 +111,8 @@ export async function listActiveConversations(
       c."status",
       c."last_message_at",
       c."created_at",
-      rf."id" AS "request_form_id"
+      rf."id" AS "request_form_id",
+      mc."message_count"
     FROM "conversation" c
     LEFT JOIN LATERAL (
       SELECT "id"
@@ -117,6 +121,11 @@ export async function listActiveConversations(
       ORDER BY "version" DESC, "created_at" DESC
       LIMIT 1
     ) rf ON true
+    LEFT JOIN LATERAL (
+      SELECT COUNT(*)::int AS "message_count"
+      FROM "message"
+      WHERE "conversation_id" = c."id"
+    ) mc ON true
     WHERE c."status" = 'active'
       AND c."workspace_id" = ${workspaceId}
       AND c."user_id" = ${LOCAL_USER_ID}
@@ -126,6 +135,7 @@ export async function listActiveConversations(
   return rows.map((row) => ({
     ...mapConversationRow(row),
     requestFormId: row.request_form_id ?? undefined,
+    messageCount: row.message_count,
   }));
 }
 
@@ -230,6 +240,44 @@ export async function getConversationWorkspace(
     workspaceName: row.workspace_name,
     localPath: row.local_path,
   };
+}
+
+/**
+ * 首轮用户消息完成后，仅在会话仍是默认标题时写入基于意图生成的标题。
+ */
+export async function updateFirstTurnConversationTitle(
+  conversationId: string,
+  title: string,
+): Promise<ConversationDto | null> {
+  const rows = await prisma.$queryRaw<ConversationRow[]>`
+    UPDATE "conversation" c
+    SET "title" = ${title}
+    WHERE c."id" = ${conversationId}
+      AND c."user_id" = ${LOCAL_USER_ID}
+      AND (
+        c."title" IS NULL
+        OR btrim(c."title") = ''
+        OR c."title" IN (${DEFAULT_CHAT_TITLE}, ${LOCALIZED_DEFAULT_CHAT_TITLE})
+      )
+      AND (
+        SELECT COUNT(*)
+        FROM "message" m
+        WHERE m."conversation_id" = c."id"
+          AND m."role" = 'user'
+      ) <= 1
+    RETURNING
+      "id",
+      "workspace_id",
+      "user_id",
+      "title",
+      "type",
+      "status",
+      "last_message_at",
+      "created_at"
+  `;
+
+  const row = rows[0];
+  return row ? mapConversationRow(row) : null;
 }
 
 /**

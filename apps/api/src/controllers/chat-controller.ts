@@ -192,11 +192,20 @@ export async function chatStreamHandler(c: Context) {
       }
 
       // Agent 完成后持久化结果
-      await persistConversationResult({
+      const titleUpdate = await persistConversationResult({
         conversationId: parsed.data.chatId,
         requestFormId: parsed.data.requestFormId,
         agentOutputs: [...agentOutputs.values()],
+        messages: parsed.data.messages,
       });
+
+      if (titleUpdate) {
+        await writeSse(writer, {
+          type: "conversation-title",
+          chatId: titleUpdate.id,
+          title: titleUpdate.title,
+        });
+      }
 
       console.log(
         `[chat] Stream complete, response length: ${responseLength}`,

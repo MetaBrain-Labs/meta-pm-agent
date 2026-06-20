@@ -92,6 +92,7 @@ export async function createChatRecord(
   return {
     ...data.chat,
     requestFormId: data.requestForm.id,
+    messageCount: data.chat.messageCount ?? 0,
   };
 }
 

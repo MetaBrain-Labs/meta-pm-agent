@@ -38,7 +38,7 @@ packages/
   database/        Prisma client singleton exported from dist/
 ```
 
-- Use `.env` for local configuration. Copy `.env.example` and provide `DATABASE_URL`, Redis settings, `OPENAI_API_KEY`, `LLM_MODEL`, and `LLM_BASE_URL`. Configure `BRAVE_SEARCH_API_KEY` when the `web_search` tool should use Brave; otherwise the runtime falls back to free public indexes without extra search dependencies.
+- Use `.env` for local configuration. Copy `.env.example` and provide `DATABASE_URL`, Redis settings, `OPENAI_API_KEY`, `LLM_MODEL`, and `LLM_BASE_URL`. Configure `TAVILY_API_KEY` when the `web_search` tool should use Tavily; otherwise the runtime falls back to free public indexes without extra search dependencies.
 - Run Prisma commands from `packages/database`: `pnpm db:generate`, `pnpm db:push`, or `pnpm db:migrate`.
 - Ensure `prisma generate` runs before building `@repo/database`; `allowBuilds` in `pnpm-workspace.yaml` handles this installation requirement.
 - Preserve the workspace/chat routes and their current split: `/workplace`, `/chat/:workspaceId`, and `/chat/:workspaceId/:threadId`.

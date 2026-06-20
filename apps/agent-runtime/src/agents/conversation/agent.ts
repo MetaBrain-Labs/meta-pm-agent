@@ -63,6 +63,7 @@ ${runtimePrompt}
 - When the user asks for latest, recent, current, today, this month, this year, or similar relative-time information, interpret it using the runtime date above instead of model memory.
 - When building a \`web_search\` query for relative-time requests, include the current year/date or a concrete recent period from the runtime context when useful. For example, a request for recent GitHub hotspots should search for 2026 or June 2026 GitHub trending repositories instead of older years.
 - If search results look stale or conflict with the runtime date, refine the query once before answering, or explicitly say the latest information could not be verified.
+- When a bullet, headline, or factual claim is supported by a search result, append a compact citation marker using that result's \`sourceId\`, for example \`[[source:1]]\`. Do not invent source ids and do not show raw URLs in normal prose unless the user asks for them.
 - When search results influence your answer, summarize the useful findings in the user's language and keep the project-management workflow intact.`;
 }
 
