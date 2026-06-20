@@ -66,14 +66,16 @@ async function searchWeb(
 ): Promise<WebSearchResponse> {
   const warnings: string[] = [];
 
-  if (process.env.BRAVE_SEARCH_API_KEY) {
+  const tavilyApiKey = process.env.TAVILY_API_KEY?.trim();
+
+  if (tavilyApiKey) {
     try {
       return {
-        results: await searchWithBrave(query, maxResults),
-        source: "brave",
+        results: await searchWithTavily(query, maxResults, tavilyApiKey),
+        source: "tavily",
       };
     } catch (error) {
-      warnings.push(`Brave search unavailable: ${formatSearchError(error)}`);
+      warnings.push(`Tavily search unavailable: ${formatSearchError(error)}`);
     }
   }
 
@@ -96,46 +98,51 @@ async function searchWeb(
 }
 
 /**
- * 通过 Brave Search API 获取结构化网页搜索结果。
+ * 通过 Tavily Search API 获取面向 Agent 的实时网页搜索结果。
  */
-async function searchWithBrave(
+async function searchWithTavily(
   query: string,
   maxResults: number,
+  apiKey: string,
 ): Promise<WebSearchResult[]> {
-  const url = new URL("https://api.search.brave.com/res/v1/web/search");
-  url.searchParams.set("q", query);
-  url.searchParams.set("count", String(maxResults));
-
-  const response = await fetch(url, {
+  const response = await fetch("https://api.tavily.com/search", {
+    method: "POST",
     headers: {
       Accept: "application/json",
-      "Accept-Encoding": "gzip",
-      "X-Subscription-Token": process.env.BRAVE_SEARCH_API_KEY!,
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
     },
+    body: JSON.stringify({
+      query,
+      search_depth: "advanced",
+      chunks_per_source: 3,
+      max_results: maxResults,
+      include_answer: false,
+      include_images: false,
+      include_raw_content: false,
+    }),
     signal: createTimeoutSignal(),
   });
 
   if (!response.ok) {
-    throw new Error(`Brave web search failed with status ${response.status}.`);
+    throw new Error(`Tavily web search failed with status ${response.status}.`);
   }
 
   const payload = (await response.json()) as {
-    web?: {
-      results?: Array<{
-        title?: string;
-        url?: string;
-        description?: string;
-      }>;
-    };
+    results?: Array<{
+      title?: string;
+      url?: string;
+      content?: string;
+    }>;
   };
 
-  return (payload.web?.results ?? [])
+  return (payload.results ?? [])
     .filter((item) => item.title && item.url)
     .slice(0, maxResults)
     .map((item) => ({
       title: item.title!,
       url: item.url!,
-      snippet: item.description ?? "",
+      snippet: item.content ?? "",
     }));
 }
 

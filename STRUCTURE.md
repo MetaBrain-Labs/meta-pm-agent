@@ -11,7 +11,7 @@
 | Agent runtime | LangGraph, LangChain, DeepAgents | Conversation Agent, Request Agent, reasoning stream, workflow graph |
 | API | Hono | HTTP API on port 3001, SSE `/api/chat` stream, Prisma repositories |
 | Web | Vite, React, Ant Design 6 | Workspace and chat UI, TypeScript 5.8.3 |
-| Web search | LangChain tool + Brave/free public indexes | Optional `web_search` runtime tool, centrally authorized per Agent |
+| Web search | LangChain tool + Tavily/free public indexes | Optional `web_search` runtime tool, centrally authorized per Agent |
 | Worker | BullMQ, Redis | Background queue worker scaffold |
 | Database | PostgreSQL, Prisma | Account, workspace, conversation, message, request-form, task data |
 | Build | Turborepo | Workspace task graph |
@@ -163,7 +163,7 @@ Runtime tools are enabled per request through `POST /api/chat` `enabledTools`. T
 
 Tool visibility is managed centrally in `apps/agent-runtime/src/agents/common/tool-access.ts`. At present, `web_search` is authorized only for the Conversation Agent; Request Agent and future agents should be added through the same access table instead of ad hoc tool wiring.
 
-`apps/agent-runtime/src/agents/common/web-search-tool.ts` implements the `web_search` LangChain tool. It uses `BRAVE_SEARCH_API_KEY` when configured and falls back to free public indexes such as Hacker News Algolia and OpenAlex without extra search dependencies. Search backend failures are returned as structured tool results with `results: []` and `error` instead of throwing, so a network timeout does not terminate the chat stream.
+`apps/agent-runtime/src/agents/common/web-search-tool.ts` implements the `web_search` LangChain tool. It uses `TAVILY_API_KEY` when configured and falls back to free public indexes such as Hacker News Algolia and OpenAlex without extra search dependencies. Search backend failures are returned as structured tool results with `results: []` and `error` instead of throwing, so a network timeout does not terminate the chat stream.
 
 ## API
 
