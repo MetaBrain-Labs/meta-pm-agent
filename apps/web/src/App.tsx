@@ -38,6 +38,8 @@ export default function App() {
                 thread={app.activeThread}
                 creationError={app.creationError}
                 onNewThread={app.handleNewThread}
+                onThreadMessageStarted={app.handleThreadMessageStarted}
+                onThreadTitleChange={app.handleThreadTitleChange}
                 onBack={app.handleBackToWorkspaceList}
               />
             </Layout>

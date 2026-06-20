@@ -2,6 +2,7 @@ import type { ChatMessage } from "@repo/shared";
 import {
   createConversationWithInitialRequestForm,
   listActiveConversations,
+  updateFirstTurnConversationTitle,
 } from "../repositories/chat-repository";
 import {
   listConversationMessages,
@@ -10,9 +11,13 @@ import {
 } from "../repositories/message-repository";
 import { persistRequestAnalysisItems } from "../repositories/request-form-repository";
 import { parseRequestAnalysisPayload } from "../utils/request-analysis";
-import { parseUserInputPayload } from "../utils/user-input";
+import {
+  parseUserInputPayload,
+  type UserInputRecord,
+} from "../utils/user-input";
 
 const DEFAULT_CHAT_TITLE = "New Chat";
+const MAX_GENERATED_TITLE_LENGTH = 36;
 
 /**
  * 单个 Agent 在一轮对话中的输出，用于分 Agent 持久化消息和推理过程。
@@ -26,6 +31,14 @@ export interface AgentConversationOutput {
     args?: Record<string, unknown>;
     result?: unknown;
   }>;
+}
+
+/**
+ * 会话标题更新结果，供 SSE 通知前端同步侧边栏列表。
+ */
+export interface ConversationTitleUpdate {
+  id: string;
+  title: string;
 }
 
 /**
@@ -81,12 +94,14 @@ export async function persistConversationResult({
   conversationId,
   requestFormId,
   agentOutputs,
+  messages,
 }: {
   conversationId?: string;
   requestFormId?: string;
   agentOutputs: AgentConversationOutput[];
-}): Promise<void> {
-  if (!conversationId || agentOutputs.length === 0) return;
+  messages: ChatMessage[];
+}): Promise<ConversationTitleUpdate | null> {
+  if (!conversationId || agentOutputs.length === 0) return null;
 
   const conversationOutput = agentOutputs.find(
     (output) => output.type === "conversation",
@@ -119,4 +134,52 @@ export async function persistConversationResult({
   }
 
   await persistRequestAnalysisItems(requestFormId, requestAnalysis);
+
+  const generatedTitle = buildFirstTurnConversationTitle(items, messages);
+  if (!generatedTitle) return null;
+
+  const updatedConversation = await updateFirstTurnConversationTitle(
+    conversationId,
+    generatedTitle,
+  );
+
+  return updatedConversation
+    ? { id: updatedConversation.id, title: updatedConversation.title }
+    : null;
+}
+
+/**
+ * 根据 Conversation Agent 整理出的用户意图生成短标题；缺少结构化结果时用首条用户消息兜底。
+ */
+export function buildFirstTurnConversationTitle(
+  userInput: UserInputRecord[] | null,
+  messages: ChatMessage[],
+): string | null {
+  const userMessages = messages.filter((message) => message.role === "user");
+  if (userMessages.length !== 1) return null;
+
+  const intentText =
+    userInput?.find((item) => item.type === "请求")?.content ??
+    userInput?.[0]?.content ??
+    userMessages[0]?.content;
+
+  return intentText ? normalizeConversationTitle(intentText) : null;
+}
+
+/**
+ * 将用户意图压缩成适合侧边栏展示的标题，避免表单前缀、换行和过长文本撑开列表。
+ */
+function normalizeConversationTitle(text: string): string | null {
+  const cleaned = text
+    .replace(/^\[form answers[^\]]*\]\s*/i, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^["'“”‘’]+|["'“”‘’。！？!?.,，、：:；;]+$/g, "");
+
+  if (!cleaned) return null;
+  if (cleaned.length <= MAX_GENERATED_TITLE_LENGTH) return cleaned;
+
+  return `${cleaned.slice(0, MAX_GENERATED_TITLE_LENGTH - 3).trim()}...`;
 }

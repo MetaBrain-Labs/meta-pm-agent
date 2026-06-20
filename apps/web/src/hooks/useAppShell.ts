@@ -28,6 +28,8 @@ import {
 } from "../router/app-route";
 import { mapErrorToChinese } from "../utils/errors";
 
+const DEFAULT_DRAFT_CHAT_TITLES = new Set([DEFAULT_CHAT_TITLE, "New Chat"]);
+
 /**
  * 管理应用外壳的顶层状态、路由同步和跨页面动作。
  */
@@ -166,6 +168,29 @@ export function useAppShell() {
     pushPath(buildChatPath(newThread.workspaceId, newThread.id));
   }, []);
 
+  const handleThreadTitleChange = useCallback(
+    (threadId: string, title: string) => {
+      // SSE 标题更新只改对应会话，避免刷新整个列表打断当前聊天流。
+      setThreads((prev) =>
+        prev.map((thread) =>
+          thread.id === threadId ? { ...thread, title } : thread,
+        ),
+      );
+    },
+    [],
+  );
+
+  const handleThreadMessageStarted = useCallback((threadId: string) => {
+    // 用户首条消息开始发送后，该会话不再视为空白新对话。
+    setThreads((prev) =>
+      prev.map((thread) =>
+        thread.id === threadId
+          ? { ...thread, messageCount: Math.max(thread.messageCount ?? 0, 1) }
+          : thread,
+      ),
+    );
+  }, []);
+
   const handleSelectThread = useCallback(
     (id: string) => {
       const workspaceId = activeWorkspaceId;
@@ -289,6 +314,19 @@ export function useAppShell() {
 
   const handleNewChat = useCallback(async () => {
     if (isCreatingChat || !activeWorkspaceId) return;
+
+    const reusableDraftThread = findReusableDraftThread(
+      threads,
+      activeThreadId,
+    );
+    if (reusableDraftThread) {
+      setCreationError(null);
+      setWorkspaceDetailOpen(true);
+      setActiveThreadId(reusableDraftThread.id);
+      pushPath(buildChatPath(activeWorkspaceId, reusableDraftThread.id));
+      return;
+    }
+
     setIsCreatingChat(true);
 
     try {
@@ -303,7 +341,13 @@ export function useAppShell() {
     } finally {
       setIsCreatingChat(false);
     }
-  }, [activeWorkspaceId, handleNewThread, isCreatingChat]);
+  }, [
+    activeThreadId,
+    activeWorkspaceId,
+    handleNewThread,
+    isCreatingChat,
+    threads,
+  ]);
 
   const activeWorkspace =
     workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null;
@@ -326,6 +370,8 @@ export function useAppShell() {
     handleDirectoryInputChange,
     handleNewChat,
     handleNewThread,
+    handleThreadMessageStarted,
+    handleThreadTitleChange,
     handleNewWorkspace,
     handleOpenWorkspace,
     handleSelectThread,
@@ -345,4 +391,29 @@ export function useAppShell() {
     workspaceDetailOpen,
     workspaces,
   };
+}
+
+/**
+ * 识别尚未发送任何消息的默认标题会话，避免连续点击“创建新对话”生成多个空记录。
+ */
+function findReusableDraftThread(
+  threads: ThreadInfo[],
+  activeThreadId: string | null,
+): ThreadInfo | null {
+  const activeDraft = threads.find(
+    (thread) => thread.id === activeThreadId && isDraftThread(thread),
+  );
+  if (activeDraft) return activeDraft;
+
+  return threads.find(isDraftThread) ?? null;
+}
+
+/**
+ * 空白新对话以默认标题和零消息数为准；标题生成后或已有消息后都不再复用。
+ */
+function isDraftThread(thread: ThreadInfo): boolean {
+  return (
+    DEFAULT_DRAFT_CHAT_TITLES.has(thread.title.trim()) &&
+    (thread.messageCount ?? 0) === 0
+  );
 }

@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { ChatApp } from "../../components/ChatApp";
 import {
   createChatRecord,
@@ -18,6 +25,8 @@ interface ThreadChatPageProps {
   thread: ThreadInfo | null;
   creationError: string | null;
   onNewThread: (thread: ThreadInfo) => void;
+  onThreadMessageStarted: (threadId: string) => void;
+  onThreadTitleChange: (threadId: string, title: string) => void;
   onBack: () => void;
 }
 
@@ -30,6 +39,8 @@ export function ThreadChatPage({
   thread,
   creationError,
   onNewThread,
+  onThreadMessageStarted,
+  onThreadTitleChange,
   onBack,
 }: ThreadChatPageProps) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -41,6 +52,8 @@ export function ThreadChatPage({
   const requestFormIdRef = useRef<string | undefined>(thread?.requestFormId);
   const messagesRef = useRef<Message[]>(messages);
   const creatingRef = useRef(false);
+  const threadId = thread?.id ?? null;
+  const requestFormId = thread?.requestFormId;
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -58,24 +71,24 @@ export function ThreadChatPage({
   }, [workspaceId]);
 
   useEffect(() => {
+    threadIdRef.current = threadId;
+    requestFormIdRef.current = requestFormId;
+  }, [requestFormId, threadId]);
+
+  useEffect(() => {
     if (creatingRef.current) {
       creatingRef.current = false;
-      threadIdRef.current = thread?.id ?? null;
-      requestFormIdRef.current = thread?.requestFormId;
       return;
     }
 
-    threadIdRef.current = thread?.id ?? null;
-    requestFormIdRef.current = thread?.requestFormId;
-
-    if (thread?.id) {
+    if (threadId) {
       setMessages([]);
       let cancelled = false;
 
-      fetchChatMessages(thread.id)
+      fetchChatMessages(threadId)
         .then((serverMessages) => {
           if (cancelled) return;
-          // 历史消息以数据库为准，不再读取或回写浏览器本地缓存。
+          // 历史消息以数据库为准；会话元信息变化不触发重载。
           setMessages(serverMessages);
         })
         .catch((error) => {
@@ -89,7 +102,7 @@ export function ThreadChatPage({
 
     setMessages([]);
     setError(null);
-  }, [thread]);
+  }, [threadId]);
 
   const stopGeneration = useCallback(() => {
     if (abortRef.current) {
@@ -115,7 +128,7 @@ export function ThreadChatPage({
         try {
           const newThread = await createChatRecord(
             currentWorkspaceId,
-            text.slice(0, 30) || DEFAULT_CHAT_TITLE,
+            DEFAULT_CHAT_TITLE,
           );
           threadId = newThread.id;
           creatingRef.current = true;
@@ -127,6 +140,8 @@ export function ThreadChatPage({
           return;
         }
       }
+
+      onThreadMessageStarted(threadId);
 
       setError(null);
       setIsLoading(true);
@@ -189,7 +204,12 @@ export function ThreadChatPage({
           return;
         }
 
-        await readChatStream(reader, agentMsgId, setMessages);
+        await readChatStream(
+          reader,
+          agentMsgId,
+          setMessages,
+          onThreadTitleChange,
+        );
       } catch (error: unknown) {
         if (error instanceof Error && error.name === "AbortError") return;
         setError(mapErrorToChinese(error));
@@ -198,7 +218,7 @@ export function ThreadChatPage({
         abortRef.current = null;
       }
     },
-    [isLoading, onNewThread],
+    [isLoading, onNewThread, onThreadMessageStarted, onThreadTitleChange],
   );
 
   const clearMessages = useCallback(() => {
@@ -227,7 +247,8 @@ export function ThreadChatPage({
 async function readChatStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   agentMsgId: string,
-  setMessages: React.Dispatch<React.SetStateAction<Message[]>>,
+  setMessages: Dispatch<SetStateAction<Message[]>>,
+  onThreadTitleChange: (threadId: string, title: string) => void,
 ) {
   const decoder = new TextDecoder();
   let buffer = "";
@@ -247,6 +268,15 @@ async function readChatStream(
 
       try {
         const event = JSON.parse(payload) as StreamEvent;
+        if (
+          event.type === "conversation-title" &&
+          event.chatId &&
+          event.title
+        ) {
+          onThreadTitleChange(event.chatId, event.title);
+          continue;
+        }
+
         setMessages((prev) =>
           prev.map((message) => {
             if (message.id !== agentMsgId) return message;

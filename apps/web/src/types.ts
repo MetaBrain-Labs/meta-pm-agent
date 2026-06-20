@@ -12,6 +12,7 @@ export type StreamEventType =
   | "todo-update"
   | "tool-call"
   | "tool-result"
+  | "conversation-title"
   | "step-finish"
   | "finish"
   | "error"
@@ -26,6 +27,8 @@ export interface StreamEvent {
   toolResult?: unknown;
   usage?: Record<string, unknown>;
   error?: unknown;
+  chatId?: string;
+  title?: string;
   todos?: Array<{ index: number; content: string; status: string }>;
   analysis?: RequestAnalysis;
 }
@@ -106,6 +109,7 @@ export interface ThreadInfo {
   workspaceId: string;
   requestFormId?: string;
   title: string;
+  messageCount?: number;
   createdAt: string;
   updatedAt: string;
 }
