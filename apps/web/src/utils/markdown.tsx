@@ -12,12 +12,32 @@
  * so untrusted text can't smuggle markup through.
  */
 import { Fragment, useState, useCallback, type ReactNode } from "react";
-import { Button } from "antd";
-import { CopyOutlined } from "@ant-design/icons";
+import { Button, Tooltip } from "antd";
+import { CopyOutlined, LinkOutlined } from "@ant-design/icons";
 
-export function renderMarkdown(input: string): ReactNode {
+/**
+ * 联网搜索结果在正文中可引用的来源信息。
+ */
+export interface MarkdownCitationSource {
+  sourceId?: string;
+  title: string;
+  url: string;
+  snippet?: string;
+}
+
+/**
+ * Markdown 渲染时可选的增强数据。
+ */
+interface RenderMarkdownOptions {
+  citationSources?: MarkdownCitationSource[];
+}
+
+export function renderMarkdown(
+  input: string,
+  options: RenderMarkdownOptions = {},
+): ReactNode {
   const blocks = parseBlocks(input);
-  return <>{blocks.map((b, i) => renderBlock(b, i))}</>;
+  return <>{blocks.map((b, i) => renderBlock(b, i, options))}</>;
 }
 
 type Block =
@@ -120,16 +140,33 @@ function parseBlocks(input: string): Block[] {
   return out;
 }
 
-function renderBlock(block: Block, key: number): ReactNode {
+function renderBlock(
+  block: Block,
+  key: number,
+  options: RenderMarkdownOptions,
+): ReactNode {
   if (block.kind === "p") {
+    const citation = hasResolvableSourceMarker(
+      block.text,
+      options.citationSources,
+    )
+      ? null
+      : findBestCitation(block.text, options.citationSources);
     return (
       <p key={key} className="my-0.5">
-        {renderInline(block.text)}
+        {renderInline(block.text, options)}
+        {citation && <CitationLink source={citation} />}
       </p>
     );
   }
   if (block.kind === "h") {
     const Tag = `h${block.level}` as "h1" | "h2" | "h3" | "h4";
+    const citation = hasResolvableSourceMarker(
+      block.text,
+      options.citationSources,
+    )
+      ? null
+      : findBestCitation(block.text, options.citationSources);
     return (
       <Tag
         key={key}
@@ -153,29 +190,48 @@ function renderBlock(block: Block, key: number): ReactNode {
           lineHeight: 1.2,
         }}
       >
-        {renderInline(block.text)}
+        {renderInline(block.text, options)}
+        {citation && <CitationLink source={citation} />}
       </Tag>
     );
   }
   if (block.kind === "ul") {
     return (
       <ul key={key} className="my-0.5 pl-5">
-        {block.items.map((item, i) => (
-          <li key={i} className="my-0.5">
-            {renderInline(item)}
-          </li>
-        ))}
+        {block.items.map((item, i) => {
+          const citation = hasResolvableSourceMarker(
+            item,
+            options.citationSources,
+          )
+            ? null
+            : findBestCitation(item, options.citationSources);
+          return (
+            <li key={i} className="my-0.5">
+              {renderInline(item, options)}
+              {citation && <CitationLink source={citation} />}
+            </li>
+          );
+        })}
       </ul>
     );
   }
   if (block.kind === "ol") {
     return (
       <ol key={key} className="my-0.5 pl-5">
-        {block.items.map((item, i) => (
-          <li key={i} className="my-0.5">
-            {renderInline(item)}
-          </li>
-        ))}
+        {block.items.map((item, i) => {
+          const citation = hasResolvableSourceMarker(
+            item,
+            options.citationSources,
+          )
+            ? null
+            : findBestCitation(item, options.citationSources);
+          return (
+            <li key={i} className="my-0.5">
+              {renderInline(item, options)}
+              {citation && <CitationLink source={citation} />}
+            </li>
+          );
+        })}
       </ol>
     );
   }
@@ -193,7 +249,7 @@ function renderBlock(block: Block, key: number): ReactNode {
                   key={index}
                   className="border-b border-[var(--line-soft)] px-3 py-2 font-bold text-[var(--ink)]"
                 >
-                  {renderInline(header)}
+                  {renderInline(header, options)}
                 </th>
               ))}
             </tr>
@@ -209,7 +265,7 @@ function renderBlock(block: Block, key: number): ReactNode {
                     key={cellIndex}
                     className="max-w-[320px] align-top px-3 py-2 text-[var(--ink-soft)]"
                   >
-                    {renderInline(row[cellIndex] ?? "")}
+                    {renderInline(row[cellIndex] ?? "", options)}
                   </td>
                 ))}
               </tr>
@@ -274,16 +330,194 @@ function normalizeTableRow(row: string[], length: number): string[] {
   return [...row, ...Array.from({ length: length - row.length }, () => "")];
 }
 
+/**
+ * 为一段助手正文选择最可能支撑该事实的联网搜索来源。
+ */
+function findBestCitation(
+  text: string,
+  sources: MarkdownCitationSource[] | undefined,
+): MarkdownCitationSource | null {
+  if (!sources?.length) return null;
+
+  const target = normalizeCitationText(text);
+  const targetTokens = tokenizeForCitation(target);
+  if (targetTokens.size < 2) return null;
+
+  let best: { source: MarkdownCitationSource; score: number } | null = null;
+
+  for (const source of sources) {
+    const title = normalizeCitationText(source.title);
+    const snippet = normalizeCitationText(source.snippet ?? "");
+
+    if (hasStrongTextContainment(target, title)) {
+      return source;
+    }
+
+    const titleScore = scoreTokenOverlap(targetTokens, tokenizeForCitation(title));
+    const snippetScore =
+      scoreTokenOverlap(targetTokens, tokenizeForCitation(snippet)) * 0.6;
+    const score = Math.max(titleScore, snippetScore);
+
+    if (!best || score > best.score) {
+      best = { source, score };
+    }
+  }
+
+  return best && best.score >= 0.26 ? best.source : null;
+}
+
+/**
+ * 根据模型输出的来源编号查找明确引用。
+ */
+function findCitationBySourceId(
+  sourceId: string,
+  sources: MarkdownCitationSource[] | undefined,
+): MarkdownCitationSource | null {
+  if (!sources?.length) return null;
+
+  return sources.find((source) => source.sourceId === sourceId) ?? null;
+}
+
+/**
+ * 判断文本中是否已经包含显式来源标记。
+ */
+function hasResolvableSourceMarker(
+  text: string,
+  sources: MarkdownCitationSource[] | undefined,
+): boolean {
+  const markers = text.match(/\[\[source:([^\]\s]+)\]\]/g) ?? [];
+
+  return markers.some((marker) => {
+    const sourceId = /\[\[source:([^\]\s]+)\]\]/.exec(marker)?.[1];
+    return Boolean(sourceId && findCitationBySourceId(sourceId, sources));
+  });
+}
+
+/**
+ * 渲染可悬浮查看、可点击跳转的来源图标。
+ */
+function CitationLink({ source }: { source: MarkdownCitationSource }) {
+  return (
+    <Tooltip
+      title={
+        <div className="max-w-[320px]">
+          <div className="text-[12px] font-bold leading-snug">
+            来源：{source.title}
+          </div>
+          <div className="mt-1 wrap-break-word text-[11px] opacity-80">
+            {source.url}
+          </div>
+        </div>
+      }
+    >
+      <a
+        aria-label={`查看来源：${source.title}`}
+        className="ml-1 inline-flex align-text-bottom text-[12px] text-[var(--primary)]"
+        href={source.url}
+        target="_blank"
+        rel="noreferrer noopener"
+      >
+        <LinkOutlined />
+      </a>
+    </Tooltip>
+  );
+}
+
+/**
+ * 清理 Markdown 和标点噪声，保留用于来源匹配的事实文本。
+ */
+function normalizeCitationText(text: string): string {
+  return text
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/[`*_>#|[\](){}:：,，.。!！?？;；"“”'‘’、/\\-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * 对中英文混合内容生成关键词集合，支持中文二元短语和英文单词匹配。
+ */
+function tokenizeForCitation(text: string): Set<string> {
+  const tokens = new Set<string>();
+  const latinWords = text.match(/[a-z0-9][a-z0-9.+#-]{2,}/g) ?? [];
+  for (const word of latinWords) {
+    if (!CITATION_STOP_WORDS.has(word)) tokens.add(word);
+  }
+
+  const cjkRuns = text.match(/[\u3400-\u9fff]{2,}/g) ?? [];
+  for (const run of cjkRuns) {
+    if (run.length <= 4) {
+      tokens.add(run);
+      continue;
+    }
+    for (let index = 0; index < run.length - 1; index++) {
+      tokens.add(run.slice(index, index + 2));
+    }
+  }
+
+  return tokens;
+}
+
+/**
+ * 计算正文和来源之间的关键词重合度。
+ */
+function scoreTokenOverlap(target: Set<string>, source: Set<string>): number {
+  if (target.size === 0 || source.size === 0) return 0;
+
+  let overlap = 0;
+  for (const token of target) {
+    if (source.has(token)) overlap++;
+  }
+
+  return overlap / Math.min(target.size, source.size);
+}
+
+/**
+ * 对标题级强匹配直接归因，减少短标题被阈值误伤。
+ */
+function hasStrongTextContainment(target: string, sourceTitle: string): boolean {
+  const compactTarget = target.replace(/\s+/g, "");
+  const compactTitle = sourceTitle.replace(/\s+/g, "");
+
+  return (
+    compactTitle.length >= 6 &&
+    (compactTarget.includes(compactTitle) ||
+      compactTitle.includes(compactTarget))
+  );
+}
+
+const CITATION_STOP_WORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "from",
+  "this",
+  "that",
+  "are",
+  "was",
+  "were",
+  "has",
+  "have",
+  "you",
+  "your",
+]);
+
 // Inline pass: tokenize into runs of `code`, **bold**, *italic*, links,
 // and plain text. We walk the string with a regex that matches whichever
 // delimiter shows up next; everything between delimiters becomes a text
 // span (which itself still gets autolink scanning).
-function renderInline(text: string): ReactNode {
+function renderInline(
+  text: string,
+  options: RenderMarkdownOptions = {},
+): ReactNode {
   const out: ReactNode[] = [];
   // Order matters: inline code first so its contents are not re-tokenized
   // as bold/italic.
   const re =
-    /(`[^`]+`)|(\*\*[^*]+\*\*)|(__[^_]+__)|(\*[^*\n]+\*)|(_[^_\n]+_)|\[([^\]]+)\]\(([^)\s]+)\)/g;
+    /(`[^`]+`)|(\*\*[^*]+\*\*)|(__[^_]+__)|(\*[^*\n]+\*)|(_[^_\n]+_)|\[([^\]]+)\]\(([^)\s]+)\)|\[\[source:([^\]\s]+)\]\]/g;
   let lastIndex = 0;
   let m: RegExpExecArray | null;
   let key = 0;
@@ -317,6 +551,11 @@ function renderInline(text: string): ReactNode {
           {m[6]}
         </a>,
       );
+    } else if (m[8]) {
+      const citation = findCitationBySourceId(m[8], options.citationSources);
+      if (citation) {
+        out.push(<CitationLink key={key++} source={citation} />);
+      }
     }
     lastIndex = re.lastIndex;
   }

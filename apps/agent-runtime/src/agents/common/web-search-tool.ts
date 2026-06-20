@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getRuntimeDateContext } from "./runtime-context";
 
 interface WebSearchResult {
+  sourceId?: string;
   title: string;
   url: string;
   snippet: string;
@@ -22,10 +23,16 @@ const WEB_SEARCH_TIMEOUT_MS = 8_000;
  */
 export function createWebSearchTool() {
   const runtimeContext = getRuntimeDateContext();
+  let nextCitationSourceId = 1;
 
   return tool(
     async ({ query, maxResults = 5 }) => {
       const searchResult = await searchWeb(query, maxResults);
+      const results = addCitationSourceIds(
+        searchResult.results,
+        nextCitationSourceId,
+      );
+      nextCitationSourceId += results.length;
 
       return JSON.stringify(
         {
@@ -34,6 +41,7 @@ export function createWebSearchTool() {
           currentDate: runtimeContext.currentDate,
           currentYear: runtimeContext.currentYear,
           ...searchResult,
+          results,
         },
         null,
         2,
@@ -55,6 +63,19 @@ export function createWebSearchTool() {
       }),
     },
   );
+}
+
+/**
+ * 给搜索结果补充短来源编号，便于模型在正文中输出可渲染的引用标记。
+ */
+function addCitationSourceIds(
+  results: WebSearchResult[],
+  firstSourceId: number,
+): WebSearchResult[] {
+  return results.map((result, index) => ({
+    sourceId: String(firstSourceId + index),
+    ...result,
+  }));
 }
 
 /**

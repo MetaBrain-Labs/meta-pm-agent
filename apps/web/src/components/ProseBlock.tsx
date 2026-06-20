@@ -4,9 +4,12 @@ import { SettingOutlined, CaretRightOutlined, CaretDownOutlined } from "@ant-des
 import { parseSubmittedAnswers, QuestionFormView } from "./QuestionForm";
 import { QuestionForm, splitOnQuestionForms } from "../utils/question-form";
 import { renderMarkdown } from "../utils/markdown";
+import { collectWebSearchCitationSources } from "../utils/citations";
+import type { ToolCallInfo } from "../types";
 
 export function ProseBlock({
   text,
+  toolCalls,
   isLastAssistant,
   streaming,
   nextUserContent,
@@ -14,6 +17,7 @@ export function ProseBlock({
   onSubmitForm,
 }: {
   text: string;
+  toolCalls?: ToolCallInfo[];
   isLastAssistant: boolean;
   streaming: boolean;
   nextUserContent?: string;
@@ -22,6 +26,10 @@ export function ProseBlock({
 }) {
   const cleaned = useMemo(() => stripArtifact(text), [text]);
   const segments = useMemo(() => splitOnQuestionForms(cleaned), [cleaned]);
+  const citationSources = useMemo(
+    () => collectWebSearchCitationSources(toolCalls),
+    [toolCalls],
+  );
 
   type RenderableItem =
     | { key: string; kind: "text"; text: string }
@@ -65,7 +73,11 @@ export function ProseBlock({
           return <SystemReminderBlock key={seg.key} text={seg.text} />;
         }
         if (seg.kind === "text") {
-          return <Fragment key={seg.key}>{renderMarkdown(seg.text)}</Fragment>;
+          return (
+            <Fragment key={seg.key}>
+              {renderMarkdown(seg.text, { citationSources })}
+            </Fragment>
+          );
         }
         return (
           <FormBlock

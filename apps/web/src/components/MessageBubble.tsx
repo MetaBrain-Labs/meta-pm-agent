@@ -91,6 +91,7 @@ export function MessageBubble({
         <div className="assistant-bubble">
           <ProseBlock
             text={message.content}
+            toolCalls={message.toolCalls}
             isLastAssistant={isLast}
             streaming={streaming}
             nextUserContent={nextUserContent}
