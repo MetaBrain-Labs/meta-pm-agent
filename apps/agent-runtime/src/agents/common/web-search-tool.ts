@@ -1,5 +1,6 @@
 import { tool } from "langchain/tools";
 import { z } from "zod";
+import { getRuntimeDateContext } from "./runtime-context";
 
 interface WebSearchResult {
   title: string;
@@ -20,6 +21,8 @@ const WEB_SEARCH_TIMEOUT_MS = 8_000;
  * 创建联网搜索工具，供被授权的 Agent 查询外部事实和近期信息。
  */
 export function createWebSearchTool() {
+  const runtimeContext = getRuntimeDateContext();
+
   return tool(
     async ({ query, maxResults = 5 }) => {
       const searchResult = await searchWeb(query, maxResults);
@@ -27,6 +30,9 @@ export function createWebSearchTool() {
       return JSON.stringify(
         {
           query,
+          searchedAt: runtimeContext.currentDateTime,
+          currentDate: runtimeContext.currentDate,
+          currentYear: runtimeContext.currentYear,
           ...searchResult,
         },
         null,
@@ -36,7 +42,7 @@ export function createWebSearchTool() {
     {
       name: "web_search",
       description:
-        "Search the public web for recent or external information. Use it only when the answer needs facts that may not be in the conversation or model memory.",
+        `Search the public web for recent or external information. Current server date is ${runtimeContext.currentDate} (${runtimeContext.timeZone}). Use this date for latest/recent/current/today queries and do not infer the year from model memory.`,
       schema: z.object({
         query: z.string().trim().min(1).max(500).describe("Search query."),
         maxResults: z
