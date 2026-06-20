@@ -198,7 +198,7 @@ export function ChatApp({
 
         <FloatButton
           icon={<ArrowDownOutlined style={{ color: "#ffffff" }} />}
-          className={`scroll-to-bottom ${userScrolled ? "is-visible" : ""}`}
+          className={`scroll-to-bottom w-8! h-8! ${userScrolled ? "is-visible" : ""}`}
           onClick={() => {
             scrollToBottom();
             setUserScrolled(false);
@@ -233,11 +233,7 @@ export function ChatApp({
                   />
                 </Tooltip>
                 <Tooltip
-                  title={
-                    webSearchEnabled
-                      ? "联网搜索已开启"
-                      : "开启联网搜索"
-                  }
+                  title={webSearchEnabled ? "联网搜索已开启" : "开启联网搜索"}
                 >
                   <Button
                     type={webSearchEnabled ? "primary" : "text"}

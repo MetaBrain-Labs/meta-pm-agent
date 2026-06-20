@@ -64,7 +64,7 @@ export function MessageBubble({
   );
 
   return (
-    <div className="flex max-w-[min(860px,92%)] flex-col self-start">
+    <div className="flex w-full flex-col self-stretch">
       {message.thinking && (
         <ThinkingBox
           label={getReasoningLabel("conversation")}
