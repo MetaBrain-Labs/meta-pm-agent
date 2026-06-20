@@ -103,10 +103,10 @@ export function applyStreamEvent(
     case "tool-result":
       return {
         ...message,
-        toolCalls: (message.toolCalls ?? []).map((toolCall, index) =>
-          index === (message.toolCalls?.length ?? 1) - 1
-            ? { ...toolCall, result: event.toolResult }
-            : toolCall,
+        toolCalls: attachToolResult(
+          message.toolCalls ?? [],
+          event.toolName ?? "unknown",
+          event.toolResult,
         ),
       };
     case "finish":
@@ -213,6 +213,45 @@ function applyTextChunk(
   }
 
   return { ...message, content };
+}
+
+/**
+ * 将工具结果挂到最近一次同名未完成调用上，避免多工具连续调用时结果错位。
+ */
+function attachToolResult(
+  toolCalls: NonNullable<Message["toolCalls"]>,
+  toolName: string,
+  toolResult: unknown,
+): NonNullable<Message["toolCalls"]> {
+  const targetIndex = findPendingToolCallIndex(toolCalls, toolName);
+
+  if (targetIndex === -1) {
+    return [...toolCalls, { name: toolName, result: toolResult }];
+  }
+
+  return toolCalls.map((toolCall, index) =>
+    index === targetIndex ? { ...toolCall, result: toolResult } : toolCall,
+  );
+}
+
+/**
+ * 从后往前查找同名未完成工具调用，兼容当前前端 TypeScript lib 配置。
+ */
+function findPendingToolCallIndex(
+  toolCalls: NonNullable<Message["toolCalls"]>,
+  toolName: string,
+): number {
+  for (let index = toolCalls.length - 1; index >= 0; index--) {
+    const toolCall = toolCalls[index];
+    if (
+      toolCall?.name === toolName &&
+      !Object.prototype.hasOwnProperty.call(toolCall, "result")
+    ) {
+      return index;
+    }
+  }
+
+  return -1;
 }
 
 function removeTaggedBlock(

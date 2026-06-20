@@ -9,6 +9,7 @@ import {
 } from "../schemas";
 import { toApiEvent } from "../services/agent-stream-service";
 import {
+  type AgentConversationOutput,
   createChat,
   listMessages,
   listChats,
@@ -22,6 +23,14 @@ import {
   listWorkspaces,
 } from "../services/workspace-service";
 import { writeSse, writeSseDone } from "../utils/sse";
+
+/**
+ * SSE 处理期间的 Agent 输出累加器，内部始终保留可写的工具调用数组。
+ */
+type AgentOutputAccumulator = AgentConversationOutput & {
+  reasoningContent: string;
+  toolCalls: NonNullable<AgentConversationOutput["toolCalls"]>;
+};
 
 /**
  * 获取当前本地用户的账户信息。
@@ -134,10 +143,7 @@ export async function chatStreamHandler(c: Context) {
     await writeSse(writer, { type: "start" });
 
     let responseLength = 0;
-    const agentOutputs = new Map<
-      string,
-      { type: string; content: string; reasoningContent: string }
-    >();
+    const agentOutputs = new Map<string, AgentOutputAccumulator>();
 
     try {
       // 持久化用户发送的消息
@@ -162,6 +168,17 @@ export async function chatStreamHandler(c: Context) {
         if ("content" in event && event.type === "reasoning") {
           getAgentOutput(agentOutputs, getEventAgentType(event)).reasoningContent +=
             event.content;
+        }
+        if (event.type === "tool-call") {
+          const output = getAgentOutput(agentOutputs, getEventAgentType(event));
+          output.toolCalls.push({
+            name: event.toolName,
+            args: event.toolArgs,
+          });
+        }
+        if (event.type === "tool-result") {
+          const output = getAgentOutput(agentOutputs, getEventAgentType(event));
+          attachToolResult(output.toolCalls, event.toolName, event.toolResult);
         }
         if (
           "content" in event &&
@@ -228,13 +245,59 @@ function getEventAgentType(event: { type: string; agentType?: string }): string 
  * 获取指定 Agent 的输出累加器，统一收集正文和推理内容。
  */
 function getAgentOutput(
-  outputs: Map<string, { type: string; content: string; reasoningContent: string }>,
+  outputs: Map<string, AgentOutputAccumulator>,
   type: string,
-) {
+): AgentOutputAccumulator {
   const existing = outputs.get(type);
   if (existing) return existing;
 
-  const created = { type, content: "", reasoningContent: "" };
+  const created = {
+    type,
+    content: "",
+    reasoningContent: "",
+    toolCalls: [],
+  };
   outputs.set(type, created);
   return created;
+}
+
+/**
+ * 将工具结果挂到最近一次同名工具调用上，恢复历史消息时可重新展示工具卡片。
+ */
+function attachToolResult(
+  toolCalls: NonNullable<AgentConversationOutput["toolCalls"]>,
+  toolName: string,
+  toolResult: unknown,
+): void {
+  const targetIndex = findPendingToolCallIndex(toolCalls, toolName);
+
+  if (targetIndex === -1) {
+    toolCalls.push({ name: toolName, result: toolResult });
+    return;
+  }
+
+  toolCalls[targetIndex] = {
+    ...toolCalls[targetIndex],
+    result: toolResult,
+  };
+}
+
+/**
+ * 从后往前查找同名未完成工具调用，避免依赖较新的数组运行时 API。
+ */
+function findPendingToolCallIndex(
+  toolCalls: NonNullable<AgentConversationOutput["toolCalls"]>,
+  toolName: string,
+): number {
+  for (let index = toolCalls.length - 1; index >= 0; index--) {
+    const toolCall = toolCalls[index];
+    if (
+      toolCall?.name === toolName &&
+      !Object.prototype.hasOwnProperty.call(toolCall, "result")
+    ) {
+      return index;
+    }
+  }
+
+  return -1;
 }

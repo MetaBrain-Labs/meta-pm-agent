@@ -51,6 +51,8 @@ async function* streamAgentEvents(
         toolResult: toolResult.content,
         agentType: "conversation",
       };
+      // 工具响应只进入工具卡片，不作为普通助手正文继续输出。
+      continue;
     }
 
     const reasoning = getReasoningContent(message);

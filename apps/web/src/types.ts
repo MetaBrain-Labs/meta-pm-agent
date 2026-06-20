@@ -83,6 +83,11 @@ export interface Message {
 }
 
 /**
+ * Agent 工具调用展示数据，实时流和历史消息恢复共用同一结构。
+ */
+export type ToolCallInfo = NonNullable<Message["toolCalls"]>[number];
+
+/**
  * 按 Agent 阶段记录推理过程，便于在对应业务卡片附近展示。
  */
 export interface ReasoningBlock {
@@ -133,6 +138,7 @@ export interface PersistedMessageInfo {
   content: string;
   timestamp: string;
   reasoningContent?: string;
+  toolCalls?: ToolCallInfo[];
   userInput?: Array<{ index: number; content: string; type: string }> | null;
   requestAnalysis?: RequestAnalysis | null;
 }

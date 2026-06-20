@@ -30,8 +30,18 @@ export interface MessageDto {
   content: string;
   timestamp: string;
   reasoningContent?: string;
+  toolCalls?: ToolCallDto[];
   userInput?: UserInputRecord[] | null;
   requestAnalysis?: RequestAnalysis | null;
+}
+
+/**
+ * 前端展示工具调用卡片所需的最小结构。
+ */
+export interface ToolCallDto {
+  name: string;
+  args?: Record<string, unknown>;
+  result?: unknown;
 }
 
 /**
@@ -135,6 +145,10 @@ function mapMessageRow(row: MessageRow): MessageDto {
     "<request-analysis",
     "</request-analysis>",
   );
+  const extractedSearch = extractWebSearchToolCalls(cleanedContent);
+  const metaToolCalls = Array.isArray(meta?.toolCalls)
+    ? normalizeToolCalls(meta.toolCalls)
+    : [];
   const timestamp =
     typeof meta?.timestamp === "string"
       ? meta.timestamp
@@ -144,10 +158,13 @@ function mapMessageRow(row: MessageRow): MessageDto {
     id: row.id,
     role: row.role === "assistant" ? "assistant" : "user",
     type: row.type,
-    content: cleanedContent,
+    content: extractedSearch.content,
     timestamp,
     ...(typeof meta?.reasoningContent === "string"
       ? { reasoningContent: meta.reasoningContent }
+      : {}),
+    ...(metaToolCalls.length > 0 || extractedSearch.toolCalls.length > 0
+      ? { toolCalls: [...metaToolCalls, ...extractedSearch.toolCalls] }
       : {}),
     userInput: Array.isArray(userInput?.user_input)
       ? (userInput.user_input as UserInputRecord[])
@@ -175,18 +192,21 @@ export async function persistAssistantMessage({
   content,
   userInput,
   reasoningContent,
+  toolCalls,
   type,
 }: {
   conversationId: string;
   content: string;
   userInput: UserInputRecord[] | null;
   reasoningContent?: string;
+  toolCalls?: ToolCallDto[];
   type: string;
 }): Promise<void> {
   await prisma.$transaction(async (tx) => {
     const meta = JSON.stringify({
       source: `${type}-agent`,
       ...(reasoningContent ? { reasoningContent } : {}),
+      ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
     });
 
     // 按 Agent 类型写入 message.type，前端据此恢复对应阶段的展示顺序。
@@ -235,4 +255,137 @@ function removeTaggedBlock(
 
   const blockEnd = endIndex + endMarker.length;
   return `${content.slice(0, startIndex)}${content.slice(blockEnd)}`.trim();
+}
+
+/**
+ * 只恢复前端可展示的工具调用字段，避免 meta 中混入非预期结构。
+ */
+function normalizeToolCalls(value: unknown[]): ToolCallDto[] {
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return [];
+    }
+
+    const record = item as Record<string, unknown>;
+    if (typeof record.name !== "string") return [];
+
+    return [
+      {
+        name: record.name,
+        ...(isRecord(record.args) ? { args: record.args } : {}),
+        ...(Object.prototype.hasOwnProperty.call(record, "result")
+          ? { result: record.result }
+          : {}),
+      },
+    ];
+  });
+}
+
+/**
+ * 判断值是否是普通对象，用于恢复工具参数。
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * 兼容旧消息：早期工具结果可能被写进正文，这里将搜索 JSON 迁回工具卡片数据。
+ */
+function extractWebSearchToolCalls(content: string): {
+  content: string;
+  toolCalls: ToolCallDto[];
+} {
+  const toolCalls: ToolCallDto[] = [];
+  let cleaned = "";
+  let cursor = 0;
+
+  while (cursor < content.length) {
+    const startIndex = content.indexOf("{", cursor);
+    if (startIndex === -1) {
+      cleaned += content.slice(cursor);
+      break;
+    }
+
+    const endIndex = findJsonObjectEnd(content, startIndex);
+    if (endIndex === -1) {
+      cleaned += content.slice(cursor);
+      break;
+    }
+
+    const rawJson = content.slice(startIndex, endIndex + 1);
+    const payload = parseWebSearchPayload(rawJson);
+    if (!payload) {
+      cleaned += content.slice(cursor, endIndex + 1);
+      cursor = endIndex + 1;
+      continue;
+    }
+
+    cleaned += content.slice(cursor, startIndex);
+    toolCalls.push({ name: "web_search", result: payload });
+    cursor = endIndex + 1;
+  }
+
+  return { content: cleaned.trim(), toolCalls };
+}
+
+/**
+ * 解析旧正文中的联网搜索 JSON，只有符合搜索结果形状时才迁移。
+ */
+function parseWebSearchPayload(rawJson: string): unknown | null {
+  try {
+    const value = JSON.parse(rawJson) as unknown;
+    if (!isRecord(value)) return null;
+
+    const hasQuery = typeof value.query === "string";
+    const hasResults = Array.isArray(value.results);
+    const hasSearchSource =
+      typeof value.source === "string" || Array.isArray(value.warnings);
+
+    return hasQuery && hasResults && hasSearchSource ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 找到从指定 `{` 开始的 JSON 对象结尾，正确跳过字符串中的大括号。
+ */
+function findJsonObjectEnd(content: string, startIndex: number): number {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = startIndex; index < content.length; index++) {
+    const char = content[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      depth++;
+      continue;
+    }
+    if (char === "}") {
+      depth--;
+      if (depth === 0) return index;
+    }
+  }
+
+  return -1;
 }
