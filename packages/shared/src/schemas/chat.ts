@@ -1,5 +1,15 @@
 import { z } from "zod";
 
+/**
+ * Agent 可按需启用的运行时工具名称。
+ */
+export const AgentRuntimeToolSchema = z.enum(["web_search"]);
+
+/**
+ * Agent 可按需启用的运行时工具名称类型。
+ */
+export type AgentRuntimeTool = z.infer<typeof AgentRuntimeToolSchema>;
+
 export const ChatMessageSchema = z.object({
   id: z.string(),
   role: z.enum(["user", "assistant"]),

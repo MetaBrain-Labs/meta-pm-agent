@@ -21,6 +21,11 @@ export interface AgentConversationOutput {
   type: string;
   content: string;
   reasoningContent?: string;
+  toolCalls?: Array<{
+    name: string;
+    args?: Record<string, unknown>;
+    result?: unknown;
+  }>;
 }
 
 /**
@@ -108,6 +113,7 @@ export async function persistConversationResult({
       content: output.content,
       userInput: output.type === "conversation" ? items : null,
       reasoningContent: output.reasoningContent,
+      toolCalls: output.toolCalls,
       type: output.type,
     });
   }

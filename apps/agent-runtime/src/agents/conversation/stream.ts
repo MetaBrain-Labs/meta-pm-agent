@@ -1,4 +1,4 @@
-import { AIMessage, HumanMessage } from "langchain";
+import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "langchain";
 import type { ChatMessage } from "@repo/shared";
 import { createConversationAgent } from "./agent";
 import {
@@ -16,7 +16,6 @@ import { parseUserInputBlock } from "../request/user-input";
 import type {
   ConversationStreamEvent,
   ConversationStreamOptions,
-  StreamChunk,
 } from "../../types";
 
 /**
@@ -27,11 +26,35 @@ import type {
  */
 async function* streamAgentEvents(
   messages: (HumanMessage | AIMessage)[],
-): AsyncGenerator<StreamChunk> {
-  const agent = createConversationAgent();
+  options: ConversationStreamOptions,
+): AsyncGenerator<ConversationStreamEvent> {
+  const agent = createConversationAgent({
+    enabledTools: options.enabledTools,
+  });
   const run = await agent.stream({ messages }, { streamMode: "messages" });
 
   for await (const [message] of run) {
+    for (const toolCall of getToolCalls(message)) {
+      yield {
+        type: "tool-call",
+        toolName: toolCall.name,
+        toolArgs: toolCall.args,
+        agentType: "conversation",
+      };
+    }
+
+    const toolResult = getToolResult(message);
+    if (toolResult) {
+      yield {
+        type: "tool-result",
+        toolName: toolResult.name,
+        toolResult: toolResult.content,
+        agentType: "conversation",
+      };
+      // 工具响应只进入工具卡片，不作为普通助手正文继续输出。
+      continue;
+    }
+
     const reasoning = getReasoningContent(message);
     if (reasoning) {
       yield {
@@ -66,20 +89,23 @@ export async function* streamConversation(
     return;
   }
 
-  yield* streamTaggedBlock(streamAgentEvents(toLangChainMessages(messages)), [
-    {
-      startMarker: "<question-form",
-      endMarker: "</question-form>",
-      startEvent: "question-form-start",
-      completeEvent: "question-form-complete",
-    },
-    {
-      startMarker: "<user-input",
-      endMarker: "</user-input>",
-      startEvent: "user-input-start",
-      completeEvent: "user-input-complete",
-    },
-  ]);
+  yield* streamTaggedBlock(
+    streamAgentEvents(toLangChainMessages(messages), options),
+    [
+      {
+        startMarker: "<question-form",
+        endMarker: "</question-form>",
+        startEvent: "question-form-start",
+        completeEvent: "question-form-complete",
+      },
+      {
+        startMarker: "<user-input",
+        endMarker: "</user-input>",
+        startEvent: "user-input-start",
+        completeEvent: "user-input-complete",
+      },
+    ],
+  );
 }
 
 async function* streamUserInputIntegration(
@@ -89,9 +115,20 @@ async function* streamUserInputIntegration(
   let textBuffer = "";
   let started = false;
 
-  for await (const chunk of streamAgentEvents(toLangChainMessages(messages))) {
+  for await (const chunk of streamAgentEvents(
+    toLangChainMessages(messages),
+    options,
+  )) {
+    if (chunk.type === "tool-call" || chunk.type === "tool-result") {
+      yield chunk;
+      continue;
+    }
+
     if (chunk.type === "reasoning") {
       yield chunk;
+      continue;
+    }
+    if (chunk.type !== "text") {
       continue;
     }
 
@@ -154,4 +191,37 @@ function stripInternalNoise(content: string): string {
   return content
     .replace(/(^|\n)No files found in\s+\/\s*/g, "$1")
     .replace(/(^|\n)No files found in\s+\.\s*/g, "$1");
+}
+
+/**
+ * 从模型消息中提取已完成的工具调用。
+ */
+function getToolCalls(
+  message: BaseMessage,
+): Array<{ name: string; args?: Record<string, unknown> }> {
+  if (!AIMessage.isInstance(message)) return [];
+
+  return (message.tool_calls ?? [])
+    .filter((toolCall) => toolCall.name)
+    .map((toolCall) => ({
+      name: toolCall.name,
+      args:
+        typeof toolCall.args === "object" && toolCall.args !== null
+          ? (toolCall.args as Record<string, unknown>)
+          : undefined,
+    }));
+}
+
+/**
+ * 从工具响应消息中提取前端可展示的结果摘要。
+ */
+function getToolResult(
+  message: BaseMessage,
+): { name: string; content: unknown } | null {
+  if (!ToolMessage.isInstance(message)) return null;
+
+  return {
+    name: message.name ?? "unknown",
+    content: message.content,
+  };
 }

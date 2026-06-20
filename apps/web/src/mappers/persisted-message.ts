@@ -28,6 +28,9 @@ export function mapPersistedMessageToMessage(
     (!message.type || message.type === "conversation")
       ? { thinking: message.reasoningContent }
       : {}),
+    ...(message.toolCalls && message.toolCalls.length > 0
+      ? { toolCalls: message.toolCalls }
+      : {}),
     ...(message.userInput
       ? {
           userInput: {

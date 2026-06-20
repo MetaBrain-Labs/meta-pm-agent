@@ -32,6 +32,27 @@ test("returns 400 for malformed JSON", async () => {
   assert.equal(response.status, 400);
 });
 
+test("rejects unknown chat runtime tools", async () => {
+  const response = await createApp().request("/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      enabledTools: ["unknown_tool"],
+      messages: [
+        {
+          id: "local-message",
+          role: "user",
+          content: "hello",
+          timestamp: new Date().toISOString(),
+          sessionId: "local",
+        },
+      ],
+    }),
+  });
+
+  assert.equal(response.status, 400);
+});
+
 test("requires a workspace id when listing chats", async () => {
   const response = await createApp().request("/api/chats");
 

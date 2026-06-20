@@ -3,39 +3,18 @@ import {
   useEffect,
   useRef,
   useState,
-  type CSSProperties,
 } from "react";
-import { Spin, Tag } from "antd";
+import { Spin } from "antd";
 import {
   CaretRightOutlined,
-  CheckCircleOutlined,
   LoadingOutlined,
-  ToolOutlined,
 } from "@ant-design/icons";
 import type { Message } from "../types";
 import { ProseBlock } from "./ProseBlock";
 import { RequestAnalysisCard } from "./RequestAnalysisCard";
 import { TodoCard } from "./TodoCard";
+import { ToolCallsCard } from "./ToolCallsCard";
 import { UserInputCard } from "./UserInputCard";
-
-const TOOL_NAME_LABELS: Record<string, string> = {
-  write_todos: "生成任务",
-  ask_user: "询问用户",
-  search_knowledge: "搜索知识库",
-  read_file: "读取文件",
-  write_file: "写入文件",
-  execute_command: "执行命令",
-  generate_artifact: "生成文档",
-  web_search: "网页搜索",
-  web_fetch: "抓取页面",
-};
-
-const TAG_STYLE: CSSProperties = {
-  fontFamily: "var(--sans)",
-  fontSize: 11,
-  borderRadius: 6,
-  fontWeight: 700,
-};
 
 interface Props {
   message: Message;
@@ -43,13 +22,6 @@ interface Props {
   streaming: boolean;
   nextUserContent?: string;
   onFormSubmit?: (text: string) => void;
-}
-
-/**
- * 将工具内部名称映射为面向用户的展示名称。
- */
-function mapToolName(name: string): string {
-  return TOOL_NAME_LABELS[name] ?? name;
 }
 
 /**
@@ -112,34 +84,7 @@ export function MessageBubble({
       )}
 
       {message.toolCalls && message.toolCalls.length > 0 && (
-        <div className="mb-1.5 flex flex-wrap gap-1.5">
-          {message.toolCalls.map((toolCall, index) => {
-            const completed = toolCall.result !== undefined;
-            return (
-              <Tag
-                key={index}
-                icon={completed ? <CheckCircleOutlined /> : <ToolOutlined />}
-                style={{
-                  ...TAG_STYLE,
-                  background: completed
-                    ? "var(--success-soft)"
-                    : "var(--primary-soft)",
-                  color: completed ? "var(--success)" : "var(--primary)",
-                  borderColor: completed
-                    ? "rgba(5, 150, 105, 0.22)"
-                    : "rgba(17, 94, 171, 0.22)",
-                }}
-                title={
-                  toolCall.result !== undefined
-                    ? JSON.stringify(toolCall.result, null, 2).slice(0, 500)
-                    : JSON.stringify(toolCall.args, null, 2)
-                }
-              >
-                {mapToolName(toolCall.name)}
-              </Tag>
-            );
-          })}
-        </div>
+        <ToolCallsCard toolCalls={message.toolCalls} />
       )}
 
       {message.content && (
