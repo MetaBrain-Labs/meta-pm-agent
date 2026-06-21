@@ -37,6 +37,7 @@ export interface ProductDirectorWorkflowInput {
   productContext?: string;
   requestAnalysis: RequestAnalysis;
   userInput: UserInputRecord[];
+  signal?: AbortSignal;
 }
 
 export type ProductWorkflowStreamEvent =
@@ -86,6 +87,7 @@ export async function* streamProductDirectorWorkflow(
       requestAnalysis: input.requestAnalysis,
       userInput: input.userInput,
       previousResults: executorResults,
+      signal: input.signal,
     });
     executorResults.push(result);
     yield {
@@ -101,6 +103,7 @@ export async function* streamProductDirectorWorkflow(
     plan,
     executorResults,
     knowledgeGraph,
+    signal: input.signal,
   });
 
   yield {
@@ -112,6 +115,27 @@ export async function* streamProductDirectorWorkflow(
 }
 
 /**
+ * 运行完整产品工作流并返回结构化结果，供 LangGraph 节点在非 SSE 场景下复用。
+ */
+export async function runProductDirectorWorkflow(
+  input: ProductDirectorWorkflowInput,
+): Promise<ProductDirectorWorkflowResult> {
+  let result: ProductDirectorWorkflowResult | null = null;
+
+  for await (const event of streamProductDirectorWorkflow(input)) {
+    if (event.type === "complete") {
+      result = event.result;
+    }
+  }
+
+  if (!result) {
+    throw new Error("Product workflow completed without a director result.");
+  }
+
+  return result;
+}
+
+/**
  * Planner Agent：把 Request Agent 的 business_model 转换为可执行 DAG。
  */
 async function* streamPlannerAgent(input: {
@@ -119,6 +143,7 @@ async function* streamPlannerAgent(input: {
   requestAnalysis: RequestAnalysis;
   userInput: UserInputRecord[];
   knowledgeGraph: ProductKnowledgeGraph;
+  signal?: AbortSignal;
 }): AsyncGenerator<ProductWorkflowStreamEvent, TaskExecutionPlan, void> {
   return yield* runJsonAgent({
     agentType: "planner",
@@ -136,6 +161,7 @@ async function* streamPlannerAgent(input: {
     },
     schema: TaskExecutionPlanSchema,
     fallback: () => createFallbackPlan(input.requestAnalysis),
+    signal: input.signal,
   });
 }
 
@@ -149,6 +175,7 @@ async function* streamExecutorAgent(input: {
   requestAnalysis: RequestAnalysis;
   userInput: UserInputRecord[];
   previousResults: ExecutorAgentResult[];
+  signal?: AbortSignal;
 }): AsyncGenerator<ProductWorkflowStreamEvent, ExecutorAgentResult, void> {
   const definition = getExecutorDefinition(input.task.assigned_agent);
 
@@ -175,6 +202,7 @@ async function* streamExecutorAgent(input: {
     },
     schema: ExecutorAgentResultSchema,
     fallback: () => createFallbackExecutorResult(input.task),
+    signal: input.signal,
   });
 }
 
@@ -187,6 +215,7 @@ async function* streamProductDirectorReview(input: {
   plan: TaskExecutionPlan;
   executorResults: ExecutorAgentResult[];
   knowledgeGraph: ProductKnowledgeGraph;
+  signal?: AbortSignal;
 }): AsyncGenerator<
   ProductWorkflowStreamEvent,
   ProductDirectorWorkflowResult,
@@ -209,6 +238,7 @@ async function* streamProductDirectorReview(input: {
     },
     schema: ProductDirectorWorkflowResultSchema,
     fallback: () => createFallbackWorkflowResult(input.plan, input.executorResults),
+    signal: input.signal,
   });
 }
 
@@ -227,6 +257,7 @@ async function* runJsonAgent<T>(options: {
       | { success: false; error: unknown };
   };
   fallback: (reason: string) => T;
+  signal?: AbortSignal;
 }): AsyncGenerator<ProductWorkflowStreamEvent, T, void> {
   try {
     const agent = createDeepAgent({
@@ -241,7 +272,7 @@ async function* runJsonAgent<T>(options: {
       {
         messages: [new HumanMessage(JSON.stringify(options.payload))],
       },
-      { streamMode: "messages" },
+      { streamMode: "messages", signal: options.signal },
     );
 
     let responseText = "";
@@ -534,10 +565,15 @@ function collectProposalSlots(result: ProductDirectorWorkflowResult): Array<{
       if (!normalized) return;
 
       const priority = executorResult.open_questions.length - index;
-      const existing = slots.get(normalized);
+      const slotKey = createProposalSlotKey({
+        sourceTaskId: executorResult.task_id,
+        sourceAgent: executorResult.agent_type,
+        normalizedQuestion: normalized,
+      });
+      const existing = slots.get(slotKey);
       if (existing && existing.priority >= priority) return;
 
-      slots.set(normalized, {
+      slots.set(slotKey, {
         id: `slot-${slots.size + 1}`,
         question,
         source_task_id: executorResult.task_id,
@@ -548,8 +584,7 @@ function collectProposalSlots(result: ProductDirectorWorkflowResult): Array<{
   }
 
   return [...slots.values()]
-    .sort((left, right) => right.priority - left.priority)
-    .slice(0, 5);
+    .sort((left, right) => right.priority - left.priority);
 }
 
 /**
@@ -557,6 +592,21 @@ function collectProposalSlots(result: ProductDirectorWorkflowResult): Array<{
  */
 function normalizeSlotQuestion(question: string): string {
   return question.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
+ * 生成 proposal slot 去重键；相同问题来自不同任务时必须分别确认。
+ */
+function createProposalSlotKey({
+  sourceTaskId,
+  sourceAgent,
+  normalizedQuestion,
+}: {
+  sourceTaskId: string;
+  sourceAgent: string;
+  normalizedQuestion: string;
+}): string {
+  return `${sourceTaskId}:${sourceAgent}:${normalizedQuestion}`;
 }
 
 /**

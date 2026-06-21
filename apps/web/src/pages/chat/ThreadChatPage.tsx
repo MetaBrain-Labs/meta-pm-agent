@@ -10,6 +10,7 @@ import { ChatApp } from "../../components/ChatApp";
 import {
   createChatRecord,
   fetchChatMessages,
+  stopChatGeneration as requestStopChatGeneration,
 } from "../../api/chat-api";
 import {
   DEFAULT_CHAT_TITLE,
@@ -105,6 +106,12 @@ export function ThreadChatPage({
   }, [threadId]);
 
   const stopGeneration = useCallback(() => {
+    const currentThreadId = threadIdRef.current;
+    if (currentThreadId) {
+      // 先通知服务端中止模型调用，再断开当前浏览器流。
+      void requestStopChatGeneration(currentThreadId);
+    }
+
     if (abortRef.current) {
       abortRef.current.abort();
       abortRef.current = null;

@@ -6,6 +6,7 @@ import {
   CreateChatRequestSchema,
   CreateWorkspaceRequestSchema,
   ListChatsQuerySchema,
+  StopChatRequestSchema,
 } from "../schemas";
 import { toApiEvent } from "../services/agent-stream-service";
 import {
@@ -14,6 +15,7 @@ import {
   listMessages,
   listChats,
   loadPendingDecisionQuestionForm,
+  markRequestFormStatus,
   persistConversationResult,
   persistConversationStart,
 } from "../services/chat-service";
@@ -32,6 +34,8 @@ type AgentOutputAccumulator = AgentConversationOutput & {
   reasoningContent: string;
   toolCalls: NonNullable<AgentConversationOutput["toolCalls"]>;
 };
+
+const activeChatRuns = new Map<string, AbortController>();
 
 /**
  * 获取当前本地用户的账户信息。
@@ -122,6 +126,25 @@ export async function createChatHandler(c: Context) {
 }
 
 /**
+ * 停止指定会话当前运行中的 Agent 流，并向运行时传播 abort 信号。
+ */
+export async function stopChatHandler(c: Context) {
+  const body = await readJsonBody(c.req.raw);
+  const parsed = StopChatRequestSchema.safeParse(body ?? {});
+
+  if (!parsed.success) {
+    return c.json({ error: parsed.error.flatten() }, 400);
+  }
+
+  const controller = activeChatRuns.get(parsed.data.chatId);
+  if (controller && !controller.signal.aborted) {
+    controller.abort();
+  }
+
+  return c.json({ stopped: Boolean(controller) });
+}
+
+/**
  * 处理 SSE 流式对话请求，负责消息持久化、上下文加载和流式事件转发。
  */
 export async function chatStreamHandler(c: Context) {
@@ -140,6 +163,22 @@ export async function chatStreamHandler(c: Context) {
   c.header("X-Accel-Buffering", "no");
 
   return stream(c, async (writer) => {
+    const runtimeController = new AbortController();
+    const abortRuntime = () => runtimeController.abort();
+    const chatId = parsed.data.chatId;
+    let requestFormStatus: string | null = null;
+
+    if (chatId) {
+      activeChatRuns.set(chatId, runtimeController);
+    }
+    c.req.raw.signal.addEventListener("abort", abortRuntime, { once: true });
+
+    const markStatus = async (status: string) => {
+      if (requestFormStatus === status) return;
+      requestFormStatus = status;
+      await markRequestFormStatus(parsed.data.requestFormId, status);
+    };
+
     // 发送 SSE 开始事件
     await writeSse(writer, { type: "start" });
 
@@ -153,11 +192,13 @@ export async function chatStreamHandler(c: Context) {
         parsed.data.requestFormId,
         parsed.data.messages,
       );
+      await markStatus("received");
 
       const pendingDecisionForm = await loadPendingDecisionQuestionForm(
         parsed.data.requestFormId,
       );
       if (pendingDecisionForm) {
+        await markStatus("pending_user_confirmation");
         const promptText =
           "Conversation Agent 正在根据 ProductDirector Agent 的决策项向你确认信息。";
         const output = getAgentOutput(
@@ -203,8 +244,14 @@ export async function chatStreamHandler(c: Context) {
         {
           enabledTools: parsed.data.enabledTools,
           productContext,
+          signal: runtimeController.signal,
         },
       )) {
+        const nextStatus = getRequestFormStatusForEvent(event);
+        if (nextStatus) {
+          await markStatus(nextStatus);
+        }
+
         if ("content" in event && event.type === "reasoning") {
           getAgentOutput(agentOutputs, getEventAgentType(event)).reasoningContent +=
             event.content;
@@ -247,15 +294,30 @@ export async function chatStreamHandler(c: Context) {
         });
       }
 
+      if (requestFormStatus !== "pending_user_confirmation") {
+        await markStatus("completed");
+      }
+
       console.log(
         `[chat] Stream complete, response length: ${responseLength}`,
       );
     } catch (error) {
-      console.error("[chat] Error:", error);
-      await writeSse(writer, {
-        type: "error",
-        error: getErrorMessage(error),
-      });
+      if (isAbortError(error) || runtimeController.signal.aborted) {
+        await markStatus("stopped");
+        await writeSse(writer, { type: "abort" });
+      } else {
+        await markStatus("failed");
+        console.error("[chat] Error:", error);
+        await writeSse(writer, {
+          type: "error",
+          error: getErrorMessage(error),
+        });
+      }
+    } finally {
+      if (chatId && activeChatRuns.get(chatId) === runtimeController) {
+        activeChatRuns.delete(chatId);
+      }
+      c.req.raw.signal.removeEventListener("abort", abortRuntime);
     }
 
     // 发送 SSE 结束信号
@@ -279,6 +341,40 @@ async function readJsonBody(request: Request): Promise<unknown> {
  */
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 根据流式事件推导 request_form 的阶段状态。
+ */
+function getRequestFormStatusForEvent(event: {
+  type: string;
+  agentType?: string;
+}): string | null {
+  if (event.type === "user-input-complete") return "conversation_consumed";
+  if (event.type === "request-analysis-start") return "request_agent_running";
+  if (event.type === "request-analysis-complete") return "request_analyzed";
+  if (
+    event.type === "reasoning" &&
+    event.agentType &&
+    event.agentType !== "conversation" &&
+    event.agentType !== "request"
+  ) {
+    return "workflow_running";
+  }
+  if (
+    event.type === "question-form-complete" &&
+    event.agentType === "conversation_confirmation"
+  ) {
+    return "pending_user_confirmation";
+  }
+  return null;
+}
+
+/**
+ * 判断异常是否来自用户或客户端主动中止。
+ */
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 /**

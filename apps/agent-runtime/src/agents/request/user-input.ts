@@ -13,6 +13,9 @@ const UserInputPayloadSchema = z.object({
 
 export type UserInputRecord = z.infer<typeof UserInputRecordSchema>;
 
+/**
+ * 解析 <user-input> 块或裸 JSON，返回结构化的 UserInputRecord 数组。
+ */
 export function parseUserInputBlock(text: string): UserInputRecord[] {
   // Conversation Agent 通常输出 tagged block；同时兼容裸 JSON，方便测试和后续直接调用图。
   const block = extractTaggedBlock(text, "<user-input", "</user-input>");
@@ -20,12 +23,17 @@ export function parseUserInputBlock(text: string): UserInputRecord[] {
   const result = UserInputPayloadSchema.safeParse(parsed);
 
   if (!result.success) {
-    throw new Error("Conversation Agent did not produce a valid user_input payload.");
+    throw new Error(
+      "Conversation Agent did not produce a valid user_input payload.",
+    );
   }
 
   return result.data.user_input;
 }
 
+/**
+ * 抽取带标记的块
+ */
 function extractTaggedBlock(
   text: string,
   startMarker: string,

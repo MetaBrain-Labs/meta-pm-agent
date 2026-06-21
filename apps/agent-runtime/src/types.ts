@@ -60,4 +60,5 @@ export type ConversationStreamEvent =
 export interface ConversationStreamOptions {
   enabledTools?: AgentRuntimeTool[];
   productContext?: string;
+  signal?: AbortSignal;
 }

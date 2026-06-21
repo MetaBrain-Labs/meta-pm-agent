@@ -1,5 +1,8 @@
 import { Annotation } from "@langchain/langgraph";
-import type { RequestAnalysis } from "@repo/shared";
+import type {
+  ProductDirectorWorkflowResult,
+  RequestAnalysis,
+} from "@repo/shared";
 import type { UserInputRecord } from "../agents/request/user-input";
 
 /**
@@ -32,6 +35,12 @@ export const WorkflowGraphState = Annotation.Root({
   requestAnalysisBlock: Annotation<string>({
     reducer: (_current, update) => update,
     default: () => "",
+  }),
+
+  // ProductDirector/Planner/Executor 工作流结果，由 LangGraph 的产品工作流节点写入。
+  productWorkflow: Annotation<ProductDirectorWorkflowResult | null>({
+    reducer: (_current, update) => update,
+    default: () => null,
   }),
 });
 

@@ -2,14 +2,14 @@
 
 ## Overview
 
-`meta-pm-agent` is a pnpm + Turborepo monorepo for an AI-assisted product-management workspace. It contains a LangGraph/DeepAgents runtime, a Hono API with SSE streaming and PostgreSQL persistence, a Vite + React + Ant Design frontend, a BullMQ worker scaffold, and shared TypeScript/database packages.
+`meta-pm-agent` is a pnpm + Turborepo monorepo for an AI-assisted product-management workspace. It contains a LangGraph/DeepAgents runtime, a Hono API with SSE streaming, abortable model execution and PostgreSQL persistence, a Vite + React + Ant Design frontend, a BullMQ worker scaffold, and shared TypeScript/database packages.
 
 ## Tech Stack
 
 | Layer | Technology | Notes |
 | --- | --- | --- |
-| Agent runtime | LangGraph, LangChain, DeepAgents | Conversation Agent, Request Agent, reasoning stream, workflow graph |
-| API | Hono | HTTP API on port 3001, SSE `/api/chat` stream, Prisma repositories |
+| Agent runtime | LangGraph, LangChain, DeepAgents | Conversation Agent, Request Agent, ProductDirector/Planner/Executor workflow graph |
+| API | Hono | HTTP API on port 3001, SSE `/api/chat` stream, `/api/chat/stop`, Prisma repositories |
 | Web | Vite, React, Ant Design 6 | Workspace and chat UI, TypeScript 5.8.3 |
 | Web search | LangChain tool + Tavily/free public indexes | Optional `web_search` runtime tool, centrally authorized per Agent |
 | Worker | BullMQ, Redis | Background queue worker scaffold |
@@ -27,8 +27,10 @@ meta-pm-agent/
 │  │  │  ├─ agents/
 │  │  │  │  ├─ common/
 │  │  │  │  ├─ conversation/
+│  │  │  │  ├─ product-workflow/
 │  │  │  │  └─ request/
 │  │  │  ├─ graph/
+│  │  │  │  └─ nodes/
 │  │  │  ├─ utils/
 │  │  │  ├─ config.ts
 │  │  │  ├─ index.ts
@@ -153,9 +155,21 @@ Workspace package entry points reference `dist/`, so run `pnpm build` at least o
 
 ### Request Agent
 
-When a user submits a form answer, the Conversation Agent first emits a `user-input` block. The runtime then starts the Request Agent and streams its reasoning with `agentType: "request"` before emitting `request-analysis-complete`.
+When a user submits a form answer, the Conversation Agent first emits a `user-input` block. The runtime then hands the block to `apps/agent-runtime/src/graph/workflow.ts`. LangGraph parses user input, runs the Request Agent, and conditionally enters the product workflow when the request analysis contains business-model items.
 
 The Request Agent output is persisted as a separate assistant message with `message.type = "request"`. Its reasoning is stored in `message.meta.reasoningContent`.
+
+### LangGraph Product Workflow
+
+The LangGraph main graph is:
+
+```text
+parse_user_input -> request_agent -> product_workflow -> END
+```
+
+`product_workflow` is implemented in `apps/agent-runtime/src/graph/nodes/product-workflow-node.ts`. It invokes the ProductDirector workflow, which streams Planner Agent DAG output, Executor Agent results, and ProductDirector review output. The SSE path uses `streamWorkflowGraph` so intermediate reasoning, Planner DAG cards, executor results, and confirmation forms remain visible while the graph owns the stage transitions.
+
+The ProductDirector workflow may produce proposal slots from multiple executor tasks. Proposal slot aggregation must preserve `source_task_id` and `source_agent`; identical question text from different tasks is not a duplicate. Do not reintroduce text-only de-duplication or hard caps that hide valid pending proposal items.
 
 ### Runtime Tools
 
@@ -178,12 +192,15 @@ The API exposes account, workspace, chat, message, and SSE routes:
 | `POST` | `/api/chats` | Create a chat and its request form |
 | `GET` | `/api/chats/:id/messages` | Load persisted chat messages |
 | `POST` | `/api/chat` | Stream an agent response with SSE and persist messages |
+| `POST` | `/api/chat/stop` | Abort the current running Agent stream for a chat |
 
-`POST /api/chat` returns `text/event-stream` and uses typed events including `start`, `thinking`, `text`, `question-form-start`, `question-form-complete`, `user-input-start`, `user-input-complete`, `request-analysis-start`, `request-analysis-complete`, `todo-update`, `tool-call`, `tool-result`, `step-finish`, `finish`, and `error`, followed by `[DONE]`.
+`POST /api/chat` returns `text/event-stream` and uses typed events including `start`, `thinking`, `text`, `question-form-start`, `question-form-complete`, `user-input-start`, `user-input-complete`, `request-analysis-start`, `request-analysis-complete`, `todo-update`, `tool-call`, `tool-result`, `step-finish`, `finish`, `abort`, and `error`, followed by `[DONE]`.
 
 `POST /api/chat` may include `enabledTools: ["web_search"]`. The API validates tool names with the shared schema and passes them to the runtime; the runtime decides which agents may actually see each enabled tool.
 
 `thinking` events may include `agentType`. The frontend uses that field to place reasoning next to the corresponding stage.
+
+`POST /api/chat/stop` aborts the server-side runtime `AbortController` for the current `chatId`. Frontend stop handling should call this endpoint before aborting the browser fetch so the model provider request is cancelled, not merely hidden in the UI.
 
 ## Message Persistence
 
@@ -193,6 +210,9 @@ The API exposes account, workspace, chat, message, and SSE routes:
 - Agent reasoning is stored in `message.meta.reasoningContent`.
 - Conversation Agent structured user input is stored in `message.user_input`.
 - Request Agent analysis is written to the request message content and request-form items.
+- `request_form.status` tracks high-level processing state such as `received`, `conversation_consumed`, `request_agent_running`, `request_analyzed`, `workflow_running`, `pending_user_confirmation`, `completed`, `stopped`, and `failed`.
+- `request_form_item.status` tracks item-level progress. Proposal confirmation forms are represented by `decision` items; when a user submits a proposal decision, the corresponding `decision` and all referenced `proposal` items must be marked `finish` and record the answer in `payload`.
+- Pending proposal decision restoration must merge current pending `proposal` items into the visible question form, preserving distinct `source_task_id`/`source_agent` rows even when question text is identical.
 - `GET /api/chats/:id/messages` returns message `type`, `reasoningContent`, `userInput`, and `requestAnalysis` so the frontend can restore the correct display order.
 
 ## Frontend Rendering Order
