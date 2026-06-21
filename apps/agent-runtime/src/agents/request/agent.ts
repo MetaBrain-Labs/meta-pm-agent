@@ -15,6 +15,7 @@ const REQUEST_AGENT_MAX_ATTEMPTS = 2;
 export interface RequestAgentInput {
   productContext?: string;
   userInput: UserInputRecord[];
+  signal?: AbortSignal;
 }
 
 /**
@@ -93,7 +94,7 @@ export async function* streamRequestAgent(
           ),
         ],
       },
-      { streamMode: "messages" },
+      { streamMode: "messages", signal: input.signal },
     );
 
     let responseText = "";

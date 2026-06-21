@@ -132,3 +132,15 @@ export async function fetchChatMessages(threadId: string): Promise<Message[]> {
 
   return data.messages.map(mapPersistedMessageToMessage);
 }
+
+/**
+ * 请求服务端停止指定会话当前运行中的 Agent。
+ */
+export async function stopChatGeneration(threadId: string): Promise<void> {
+  await fetch("/api/chat/stop", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chatId: threadId }),
+    keepalive: true,
+  });
+}

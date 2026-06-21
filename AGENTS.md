@@ -20,7 +20,7 @@ Deliver correct, maintainable changes that integrate with the current pnpm works
 - `apps/web` currently uses React, Vite, and Ant Design 6. Preserve the Ant Design 6 imports and component APIs when working on the frontend.
 - `packages/shared`, `packages/database`, and `apps/agent-runtime` use TypeScript project references and `composite: true`. Follow this pattern when adding an importable shared package.
 - Keep `"types": ["node"]` in `packages/database/tsconfig.json`; pnpm strict isolation does not expose `@types/node` automatically.
-- `apps/agent-runtime/src/graph.ts` has historically had LangGraph typed-state API errors caused by an `@langchain/langgraph` version mismatch. Account for this when interpreting package-level TypeScript failures.
+- `apps/agent-runtime/src/graph/workflow.ts` owns the LangGraph main graph. Account for historical LangGraph typed-state API/version issues when interpreting package-level TypeScript failures.
 - `apps/web` has ESLint configured through `eslint-config-next`; local lint may fail if Next's compiled parser package is unavailable. Root Turbo lint and typecheck tasks currently have no active scripts.
 
 ## Boundaries
@@ -61,9 +61,12 @@ packages/
 ## Chat And Agent Contracts
 
 - Preserve the `/api/chat` SSE contract. It returns `text/event-stream` and typed events such as `start`, `text`, `thinking`, `question-form-start`, `question-form-complete`, `user-input-start`, `user-input-complete`, `request-analysis-start`, `request-analysis-complete`, `todo-update`, `tool-call`, `tool-result`, `step-finish`, `finish`, and `error`.
+- Preserve `/api/chat/stop`. The frontend stop action must call this endpoint before aborting the browser fetch so the API can abort the server-side runtime and propagate `AbortSignal` to model provider requests.
 - `thinking` events may include `agentType`. Preserve this field when forwarding or transforming stream events.
 - Conversation Agent stream chunks use `agentType: "conversation"`.
 - Request Agent stream chunks use `agentType: "request"`.
+- After Conversation Agent emits `user-input-complete`, subsequent planning must flow through `apps/agent-runtime/src/graph/workflow.ts`. Do not directly wire Request Agent, ProductDirector, Planner, or Executor orchestration inside Conversation Agent.
+- Product workflow routing is LangGraph-owned: `parse_user_input -> request_agent -> product_workflow`. Add future workflow stages as graph nodes/edges instead of ad hoc calls from individual agents.
 - `POST /api/chat` may include `enabledTools`, currently `["web_search"]`. Validate tool names through shared schemas before passing them to the runtime.
 - Runtime tool visibility is centrally managed in `apps/agent-runtime/src/agents/common/tool-access.ts`. Today `web_search` is only authorized for the Conversation Agent; future agent permissions should be added there instead of directly wiring tools inside individual agents.
 - `web_search` is implemented in `apps/agent-runtime/src/agents/common/web-search-tool.ts`. Search backend/network failures must return structured tool results with `results: []` and an `error` field, not throw, so tool failures do not terminate the SSE stream.
@@ -82,6 +85,9 @@ packages/
 - Agent reasoning must be persisted in `message.meta.reasoningContent`.
 - Conversation Agent structured user-input data is stored in `message.user_input`.
 - Request Agent analysis must be written to the request message content and to request-form items.
+- `request_form.status` must be updated as the request advances through processing states. Current statuses include `received`, `conversation_consumed`, `request_agent_running`, `request_analyzed`, `workflow_running`, `pending_user_confirmation`, `completed`, `stopped`, and `failed`.
+- `request_form_item.status` must also move with user-visible decisions. When a user submits a proposal confirmation form, mark the matching `decision` item and all referenced `proposal` items as `finish`, and persist the answer metadata in each item's `payload`.
+- Proposal aggregation must preserve source identity. Identical question text from different `source_task_id`/`source_agent` pairs represents distinct pending proposal confirmations and must not be collapsed or hidden by a hard result cap.
 - When changing persisted chat/workspace contracts, update API schemas, repositories, services, routes/controllers, frontend types, and restoration/rendering logic together.
 
 ## Frontend Display Rules

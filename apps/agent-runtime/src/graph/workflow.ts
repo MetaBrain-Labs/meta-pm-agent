@@ -1,65 +1,81 @@
 import { END, START, StateGraph } from "@langchain/langgraph";
-import type { RequestAnalysis } from "@repo/shared";
-import type { UserInputRecord } from "../agents/request/user-input";
+import type {
+  ProductDirectorWorkflowResult,
+  RequestAnalysis,
+} from "@repo/shared";
+import {
+  formatRequestAnalysisBlock,
+  streamRequestAgent,
+} from "../agents/request/agent";
+import {
+  parseUserInputBlock,
+  type UserInputRecord,
+} from "../agents/request/user-input";
+import {
+  streamProductDirectorWorkflow,
+  type ProductWorkflowStreamEvent,
+} from "../agents/product-workflow/agent";
+import { productWorkflowNode } from "./nodes/product-workflow-node";
 import { parseUserInputNode, requestAgentNode } from "./nodes/request-node";
-import { WorkflowGraphState } from "./state";
+import { WorkflowGraphState, type WorkflowGraphStateValue } from "./state";
 
 export interface WorkflowGraphInput {
   productContext?: string;
   userInputBlock: string;
+  signal?: AbortSignal;
 }
 
 export interface WorkflowGraphResult {
   requestAnalysis: RequestAnalysis;
   requestAnalysisBlock: string;
   userInput: UserInputRecord[];
+  productWorkflow?: ProductDirectorWorkflowResult | null;
 }
 
+export type WorkflowGraphStreamEvent =
+  | { type: "reasoning"; content: string; agentType: "request" }
+  | { type: "request-analysis-start"; agentType: "request" }
+  | {
+      type: "request-analysis-complete";
+      content: string;
+      analysis: RequestAnalysis;
+      agentType: "request";
+    }
+  | ProductWorkflowStreamEvent;
+
 /**
- * Meta PM Agent 的公共 LangGraph 主图。
- *
- * 当前图只接入 Request Agent；后续新增 Planner、QA Gate、模块 Agent 时，
- * 应继续在这里增加节点和边，而不是放到某个单独 Agent 目录里。
+ * Meta PM Agent 的 LangGraph 主图，负责从用户输入整理到产品工作流的阶段规划。
  */
 export const graph = new StateGraph(WorkflowGraphState)
-  /* 
-    解析 user_input，为 Request Agent 和后续 Agent 准备统一输入。
-  */
+  // 将 Conversation Agent 的 <user-input> block 转成结构化输入。
   .addNode("parse_user_input", parseUserInputNode)
-
-  /* 
-    Request Agent 结点：
-      根据 user_input，形成 Request Analysis；
-      提供 Request Analysis 给后续结点使用。
-  */
+  // Request Agent 负责对用户输入进行业务建模分类。
   .addNode("request_agent", requestAgentNode)
+  // ProductDirector 节点内部继续编排 Planner 与 Executor。
+  .addNode("product_workflow", productWorkflowNode)
 
-  // 结点的连接逻辑
   .addEdge(START, "parse_user_input")
   .addEdge("parse_user_input", "request_agent")
-  .addEdge("request_agent", END)
-
+  .addConditionalEdges("request_agent", selectNextNodeAfterRequestAgent, {
+    product_workflow: "product_workflow",
+    end: END,
+  })
+  .addEdge("product_workflow", END)
   .compile();
 
 /**
- * 此处开始就开始根据 LangGraph 相关逻辑进行一系列的运行，后续整个 LangGraph 流程大致为：
- *   初始信息输入 ->
- *     Request Agent 进行分析 ->
- *       生成对应的 request_analysis ->
- *         ProductDirector Agent ->
- *           Planner Agent ->
- *             Executor Agent ->
- *               Critique Agent ->
- *               Document Agent -> 文档保存
- * 其中还有很多分支逻辑处理，待完善。
+ * 运行完整 LangGraph 主图，适用于不需要 SSE 中间事件的调用场景。
  */
 export async function runWorkflowGraph(
   input: WorkflowGraphInput,
 ): Promise<WorkflowGraphResult> {
-  const result = await graph.invoke({
-    productContext: input.productContext ?? "",
-    userInputBlock: input.userInputBlock,
-  });
+  const result = await graph.invoke(
+    {
+      productContext: input.productContext ?? "",
+      userInputBlock: input.userInputBlock,
+    },
+    { signal: input.signal },
+  );
 
   if (!result.requestAnalysis) {
     throw new Error("Workflow graph completed without request analysis.");
@@ -69,5 +85,57 @@ export async function runWorkflowGraph(
     requestAnalysis: result.requestAnalysis,
     requestAnalysisBlock: result.requestAnalysisBlock,
     userInput: result.userInput,
+    productWorkflow: result.productWorkflow,
   };
+}
+
+/**
+ * 流式运行主工作图，供 SSE 路径复用图编排并保留中间 Agent 事件。
+ */
+export async function* streamWorkflowGraph(
+  input: WorkflowGraphInput,
+): AsyncGenerator<WorkflowGraphStreamEvent> {
+  const userInput = parseUserInputBlock(input.userInputBlock);
+
+  yield { type: "request-analysis-start", agentType: "request" };
+
+  for await (const event of streamRequestAgent({
+    productContext: input.productContext,
+    userInput,
+    signal: input.signal,
+  })) {
+    if (event.type === "reasoning") {
+      yield event;
+      continue;
+    }
+
+    yield {
+      type: "request-analysis-complete",
+      content: formatRequestAnalysisBlock(event.analysis),
+      analysis: event.analysis,
+      agentType: "request",
+    };
+
+    if (event.analysis.business_model.length === 0) {
+      return;
+    }
+
+    for await (const workflowEvent of streamProductDirectorWorkflow({
+      productContext: input.productContext,
+      requestAnalysis: event.analysis,
+      userInput,
+      signal: input.signal,
+    })) {
+      yield workflowEvent;
+    }
+  }
+}
+
+/**
+ * 根据 Request Agent 是否识别到业务建模项，决定是否进入产品工作流。
+ */
+function selectNextNodeAfterRequestAgent(state: WorkflowGraphStateValue) {
+  return state.requestAnalysis?.business_model.length
+    ? "product_workflow"
+    : "end";
 }

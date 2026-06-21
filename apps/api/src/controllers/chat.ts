@@ -7,6 +7,7 @@ import {
   listMessagesHandler,
   createChatHandler,
   chatStreamHandler,
+  stopChatHandler,
 } from "./chat-controller";
 
 /**
@@ -22,6 +23,7 @@ export function createChatRoutes() {
   routes.get("/chats/:id/messages", listMessagesHandler);
   routes.post("/chats", createChatHandler);
   routes.post("/chat", chatStreamHandler);
+  routes.post("/chat/stop", stopChatHandler);
 
   return routes;
 }

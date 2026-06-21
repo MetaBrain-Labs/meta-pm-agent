@@ -8,6 +8,24 @@ import type {
 } from "@repo/shared";
 
 /**
+ * 更新请求表单的阶段状态，用于前端和后续调度判断当前表单被哪个阶段消费。
+ */
+export async function updateRequestFormStatus(
+  requestFormId: string | undefined,
+  status: string,
+): Promise<void> {
+  if (!requestFormId) return;
+
+  await prisma.$executeRaw`
+    UPDATE "request_form"
+    SET
+      "status" = ${status},
+      "updated_at" = CURRENT_TIMESTAMP
+    WHERE "id" = ${requestFormId}
+  `;
+}
+
+/**
  * 将 Request Agent 的分析结果写入请求表单条目表。
  * 业务建模项标记为 pending 待后续 Agent 处理，闲聊项直接标记为 completed。
  */
@@ -241,26 +259,73 @@ export async function finishAnsweredDecisionItems(
     : null;
   if (!answer) return;
 
-  await prisma.$executeRaw`
-    UPDATE "request_form_item"
-    SET
-      "status" = 'finish',
-      "payload" = "payload" || ${JSON.stringify({
-        answer: answer.content,
-        answered_at: new Date().toISOString(),
-      })}::jsonb,
-      "updated_at" = CURRENT_TIMESTAMP
-    WHERE "form_id" = ${requestFormId}
-      AND "status" = 'pending'
-      AND "type" IN ('decision', 'confirmation_decision')
-      AND "payload"->>'question_id' = ${answer.formId}
-  `;
+  await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<RequestFormDecisionRow[]>`
+      SELECT "id", "type", "payload"
+      FROM "request_form_item"
+      WHERE "form_id" = ${requestFormId}
+        AND "status" = 'pending'
+        AND "type" IN ('decision', 'confirmation_decision')
+        AND "payload"->>'question_id' = ${answer.formId}
+      LIMIT 1
+    `;
+    const row = rows[0];
+    if (!row) return;
+
+    const answeredAt = new Date().toISOString();
+    const answerPatch = {
+      answer: answer.content,
+      answered_at: answeredAt,
+    };
+
+    await tx.$executeRaw`
+      UPDATE "request_form_item"
+      SET
+        "status" = 'finish',
+        "payload" = "payload" || ${JSON.stringify(answerPatch)}::jsonb,
+        "updated_at" = CURRENT_TIMESTAMP
+      WHERE "id" = ${row.id}
+    `;
+
+    // 补充信息确认表单提交后，同步关闭它汇总的 Executor proposal 条目。
+    if (row.type !== "decision") return;
+
+    const taskIds = extractProposalTaskIds(parsePayload(row.payload));
+    for (const taskId of taskIds) {
+      await tx.$executeRaw`
+        UPDATE "request_form_item"
+        SET
+          "status" = 'finish',
+          "payload" = "payload" || ${JSON.stringify({
+            ...answerPatch,
+            decision_item_id: row.id,
+          })}::jsonb,
+          "updated_at" = CURRENT_TIMESTAMP
+        WHERE "form_id" = ${requestFormId}
+          AND "status" = 'pending'
+          AND "type" = 'proposal'
+          AND "payload"->>'task_id' = ${taskId}
+      `;
+    }
+  });
 }
 
 interface RequestFormDecisionRow {
   id: string;
   type: string;
   payload: unknown;
+}
+
+interface RequestFormProposalRow {
+  payload: unknown;
+}
+
+interface ProposalQuestion {
+  id: string;
+  question: string;
+  source_task_id: string;
+  source_agent: string;
+  priority: number;
 }
 
 /**
@@ -290,9 +355,16 @@ export async function getPendingDecisionQuestionForm(
   const payload = parsePayload(row.payload);
   if (!payload) return null;
 
-  return row.type === "confirmation_decision"
-    ? buildConfirmationQuestionForm(payload)
-    : buildDecisionQuestionForm(payload);
+  if (row.type === "confirmation_decision") {
+    return buildConfirmationQuestionForm(payload);
+  }
+
+  const syncedPayload = await syncDecisionPayloadWithPendingProposals(
+    requestFormId,
+    row.id,
+    payload,
+  );
+  return buildDecisionQuestionForm(syncedPayload);
 }
 
 /**
@@ -308,6 +380,102 @@ function toPriority(
     ...missingInformation.map((item) => item.importance),
   );
   return Math.round(maxImportance * 100);
+}
+
+/**
+ * 用当前 pending proposal 条目补齐 decision payload，兼容旧逻辑生成的不完整 decision。
+ */
+async function syncDecisionPayloadWithPendingProposals(
+  requestFormId: string,
+  decisionItemId: string,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const existingQuestions = parseDecisionQuestions(payload.questions);
+  const proposalQuestions = await listPendingProposalQuestions(requestFormId);
+  if (proposalQuestions.length === 0) return payload;
+
+  const byKey = new Map<string, ProposalQuestion>();
+  for (const question of [...existingQuestions, ...proposalQuestions]) {
+    byKey.set(
+      createProposalSlotKey({
+        sourceTaskId: question.source_task_id,
+        sourceAgent: question.source_agent,
+        normalizedQuestion: normalizeSlotQuestion(question.question),
+      }),
+      question,
+    );
+  }
+
+  const questions = [...byKey.values()].sort(
+    (left, right) => right.priority - left.priority,
+  );
+  const nextPayload = { ...payload, questions };
+
+  if (questions.length !== existingQuestions.length) {
+    await prisma.$executeRaw`
+      UPDATE "request_form_item"
+      SET
+        "payload" = ${JSON.stringify(nextPayload)}::jsonb,
+        "updated_at" = CURRENT_TIMESTAMP
+      WHERE "id" = ${decisionItemId}
+    `;
+  }
+
+  return nextPayload;
+}
+
+/**
+ * 读取当前仍待确认的 proposal slots。
+ */
+async function listPendingProposalQuestions(
+  requestFormId: string,
+): Promise<ProposalQuestion[]> {
+  const rows = await prisma.$queryRaw<RequestFormProposalRow[]>`
+    SELECT "payload"
+    FROM "request_form_item"
+    WHERE "form_id" = ${requestFormId}
+      AND "status" = 'pending'
+      AND "type" = 'proposal'
+    ORDER BY "priority" DESC, "created_at" ASC
+  `;
+
+  return rows.flatMap((row) => {
+    const payload = parsePayload(row.payload);
+    if (!payload || !Array.isArray(payload.slots)) return [];
+    return parseDecisionQuestions(payload.slots);
+  });
+}
+
+/**
+ * 将 decision/proposal payload 中的 questions 或 slots 解析为统一结构。
+ */
+function parseDecisionQuestions(value: unknown): ProposalQuestion[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return [];
+    }
+    const record = item as Record<string, unknown>;
+    if (
+      typeof record.question !== "string" ||
+      typeof record.source_task_id !== "string" ||
+      typeof record.source_agent !== "string"
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        id: typeof record.id === "string" ? record.id : `slot-${index + 1}`,
+        question: record.question,
+        source_task_id: record.source_task_id,
+        source_agent: record.source_agent,
+        priority:
+          typeof record.priority === "number" ? record.priority : 0,
+      },
+    ];
+  });
 }
 
 /**
@@ -348,10 +516,15 @@ function collectProposalSlots(result: ProductDirectorWorkflowResult): Array<{
       if (!normalized) return;
 
       const priority = executorResult.open_questions.length - index;
-      const existing = slots.get(normalized);
+      const slotKey = createProposalSlotKey({
+        sourceTaskId: executorResult.task_id,
+        sourceAgent: executorResult.agent_type,
+        normalizedQuestion: normalized,
+      });
+      const existing = slots.get(slotKey);
       if (existing && existing.priority >= priority) return;
 
-      slots.set(normalized, {
+      slots.set(slotKey, {
         id: `slot-${slots.size + 1}`,
         question,
         source_task_id: executorResult.task_id,
@@ -362,8 +535,7 @@ function collectProposalSlots(result: ProductDirectorWorkflowResult): Array<{
   }
 
   return [...slots.values()]
-    .sort((left, right) => right.priority - left.priority)
-    .slice(0, 5);
+    .sort((left, right) => right.priority - left.priority);
 }
 
 /**
@@ -381,6 +553,21 @@ function normalizeSlotQuestion(question: string): string {
 }
 
 /**
+ * 生成 proposal slot 去重键；相同问题来自不同任务时必须分别确认。
+ */
+function createProposalSlotKey({
+  sourceTaskId,
+  sourceAgent,
+  normalizedQuestion,
+}: {
+  sourceTaskId: string;
+  sourceAgent: string;
+  normalizedQuestion: string;
+}): string {
+  return `${sourceTaskId}:${sourceAgent}:${normalizedQuestion}`;
+}
+
+/**
  * 将 JSONB payload 安全转换为普通对象。
  */
 function parsePayload(value: unknown): Record<string, unknown> | null {
@@ -388,6 +575,27 @@ function parsePayload(value: unknown): Record<string, unknown> | null {
     return null;
   }
   return value as Record<string, unknown>;
+}
+
+/**
+ * 从补充信息 decision payload 中提取其汇总的 proposal task_id。
+ */
+function extractProposalTaskIds(
+  payload: Record<string, unknown> | null,
+): string[] {
+  if (!payload || !Array.isArray(payload.questions)) return [];
+
+  return [
+    ...new Set(
+      payload.questions.flatMap((item) => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) {
+          return [];
+        }
+        const taskId = (item as Record<string, unknown>).source_task_id;
+        return typeof taskId === "string" && taskId.trim() ? [taskId] : [];
+      }),
+    ),
+  ];
 }
 
 /**

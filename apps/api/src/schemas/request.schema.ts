@@ -12,6 +12,14 @@ export const ChatRequestSchema = z.object({
 });
 
 /**
+ * 停止指定会话当前 Agent 运行的请求体校验规则。
+ */
+export const StopChatRequestSchema = z.object({
+  chatId: z.string().uuid(),
+});
+
+/**
  * 聊天请求体的类型。
  */
 export type ChatRequest = z.infer<typeof ChatRequestSchema>;
+export type StopChatRequest = z.infer<typeof StopChatRequestSchema>;

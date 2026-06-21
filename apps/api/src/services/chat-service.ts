@@ -16,6 +16,7 @@ import {
   persistProposalDecisionItem,
   persistProductWorkflowConfirmationDecision,
   persistRequestAnalysisItems,
+  updateRequestFormStatus,
 } from "../repositories/request-form-repository";
 import { persistTaskExecutionPlan } from "../repositories/task-execution-repository";
 import { parseRequestAnalysisPayload } from "../utils/request-analysis";
@@ -73,6 +74,16 @@ export function listMessages(conversationId: string) {
  */
 export function loadPendingDecisionQuestionForm(requestFormId?: string) {
   return getPendingDecisionQuestionForm(requestFormId);
+}
+
+/**
+ * 标记请求表单的当前处理阶段。
+ */
+export function markRequestFormStatus(
+  requestFormId: string | undefined,
+  status: string,
+) {
+  return updateRequestFormStatus(requestFormId, status);
 }
 
 /**
