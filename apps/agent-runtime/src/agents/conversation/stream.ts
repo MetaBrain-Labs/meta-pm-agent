@@ -12,6 +12,11 @@ import {
   formatRequestAnalysisBlock,
   streamRequestAgent,
 } from "../request/agent";
+import {
+  formatProductWorkflowConfirmationQuestionForm,
+  formatProductWorkflowProposalQuestionForm,
+  streamProductDirectorWorkflow,
+} from "../product-workflow/agent";
 import { parseUserInputBlock } from "../request/user-input";
 import type {
   ConversationStreamEvent,
@@ -153,21 +158,81 @@ async function* streamUserInputIntegration(
 
     // Request Agent 的推理过程需要出现在用户输入整理之后、分析结果之前。
     yield { type: "request-analysis-start", agentType: "request" };
-    for await (const event of streamRequestAgent({
-      productContext: options.productContext,
-      userInput,
-    })) {
-      if (event.type === "reasoning") {
-        yield event;
-        continue;
-      }
+    try {
+      for await (const event of streamRequestAgent({
+        productContext: options.productContext,
+        userInput,
+      })) {
+        if (event.type === "reasoning") {
+          yield event;
+          continue;
+        }
 
+        yield {
+          type: "request-analysis-complete",
+          content: formatRequestAnalysisBlock(event.analysis),
+          analysis: event.analysis,
+          agentType: "request",
+        };
+
+        if (event.analysis.business_model.length === 0) {
+          continue;
+        }
+
+        // Request Agent 识别到业务建模项后进入 ProductDirector 工作流，当前 MVP 会产出待用户确认的规划和图谱更新建议。
+        for await (const workflowEvent of streamProductDirectorWorkflow({
+          productContext: options.productContext,
+          requestAnalysis: event.analysis,
+          userInput,
+        })) {
+          if (workflowEvent.type === "reasoning") {
+            yield workflowEvent;
+            continue;
+          }
+          if (workflowEvent.type === "agent-output") {
+            yield {
+              type: "text",
+              content: workflowEvent.content,
+              agentType: workflowEvent.agentType,
+            };
+            continue;
+          }
+          if (workflowEvent.type === "complete") {
+            const proposalForm = formatProductWorkflowProposalQuestionForm(
+              workflowEvent.result,
+            );
+            const questionForm =
+              proposalForm ??
+              formatProductWorkflowConfirmationQuestionForm(workflowEvent.result);
+
+            // ProductDirector 只向 Conversation Agent 发起确认/补充请求，由 Conversation Agent 负责面向用户提问。
+            yield {
+              type: "text",
+              content:
+                proposalForm
+                  ? "ProductDirector Agent 汇总了需要补充确认的信息，我需要你先回答这些问题。"
+                  : "ProductDirector Agent 已完成本轮验收，我需要你确认下一步处理方式。",
+              agentType: "conversation_confirmation",
+            };
+            yield {
+              type: "question-form-start",
+              agentType: "conversation_confirmation",
+            };
+            yield {
+              type: "question-form-complete",
+              content: questionForm,
+              agentType: "conversation_confirmation",
+            };
+          }
+        }
+      }
+    } catch (error) {
       yield {
-        type: "request-analysis-complete",
-        content: formatRequestAnalysisBlock(event.analysis),
-        analysis: event.analysis,
+        type: "error",
+        error: getErrorMessage(error),
         agentType: "request",
       };
+      return;
     }
   }
 }
@@ -191,6 +256,13 @@ function stripInternalNoise(content: string): string {
   return content
     .replace(/(^|\n)No files found in\s+\/\s*/g, "$1")
     .replace(/(^|\n)No files found in\s+\.\s*/g, "$1");
+}
+
+/**
+ * 将 Request Agent 等下游异常转成用户可理解的错误文本。
+ */
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**

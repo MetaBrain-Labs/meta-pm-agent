@@ -1,6 +1,16 @@
 import { useMemo, useState } from "react";
-import { Button, Form, Radio, Checkbox, Select, Input, Card, Tag, Typography } from "antd";
-import { QuestionCircleOutlined, CheckCircleOutlined, EditOutlined } from "@ant-design/icons";
+import {
+  Button,
+  Form,
+  Radio,
+  Checkbox,
+  Select,
+  Input,
+  Card,
+  Tag,
+  Typography,
+} from "antd";
+import { QuestionCircleOutlined } from "@ant-design/icons";
 import { formatFormAnswers, QuestionForm } from "../utils/question-form";
 
 const { Text, Title } = Typography;
@@ -38,7 +48,9 @@ export function QuestionFormView({
       .filter((q) => q.required)
       .find((q) => {
         const v = answers[q.id];
-        return Array.isArray(v) ? v.length === 0 : !(typeof v === "string" && v.trim().length > 0);
+        return Array.isArray(v)
+          ? v.length === 0
+          : !(typeof v === "string" && v.trim().length > 0);
       });
     if (missing) return;
     onSubmit(formatFormAnswers(form, answers), answers);
@@ -48,7 +60,9 @@ export function QuestionFormView({
     .filter((q) => q.required)
     .every((q) => {
       const v = answers[q.id];
-      return Array.isArray(v) ? v.length > 0 : typeof v === "string" && v.trim().length > 0;
+      return Array.isArray(v)
+        ? v.length > 0
+        : typeof v === "string" && v.trim().length > 0;
     });
 
   return (
@@ -56,7 +70,13 @@ export function QuestionFormView({
       title={
         <div className="flex items-center gap-2">
           <QuestionCircleOutlined style={{ color: "var(--primary)" }} />
-          <span style={{ fontFamily: "var(--sans)", color: "var(--ink)", fontWeight: 800 }}>
+          <span
+            style={{
+              fontFamily: "var(--sans)",
+              color: "var(--ink)",
+              fontWeight: 800,
+            }}
+          >
             {form.title}
           </span>
           <Tag
@@ -66,10 +86,14 @@ export function QuestionFormView({
               borderRadius: 6,
               border: "none",
               background: locked
-                ? (submittedAnswers ? "var(--success-soft)" : "var(--line-faint)")
+                ? submittedAnswers
+                  ? "var(--success-soft)"
+                  : "var(--line-faint)"
                 : "var(--primary-soft)",
               color: locked
-                ? (submittedAnswers ? "var(--success)" : "var(--ink-faint)")
+                ? submittedAnswers
+                  ? "var(--success)"
+                  : "var(--ink-faint)"
                 : "var(--primary)",
             }}
           >
@@ -83,14 +107,25 @@ export function QuestionFormView({
         background: "var(--surface)",
         borderColor: "var(--line-soft)",
         borderRadius: 8,
-        borderLeft: interactive && !submittedAnswers ? "3px solid var(--primary)" : undefined,
+        borderLeft:
+          interactive && !submittedAnswers
+            ? "3px solid var(--primary)"
+            : undefined,
         boxShadow: "var(--shadow-card)",
       }}
-      extra={form.description && (
-        <Text style={{ color: "var(--ink-faint)", fontSize: 12, fontFamily: "var(--body)" }}>
-          {form.description}
-        </Text>
-      )}
+      extra={
+        form.description && (
+          <Text
+            style={{
+              color: "var(--ink-faint)",
+              fontSize: 12,
+              fontFamily: "var(--body)",
+            }}
+          >
+            {form.description}
+          </Text>
+        )
+      }
     >
       {form.questions.map((q) => {
         const value = answers[q.id];
@@ -98,7 +133,14 @@ export function QuestionFormView({
           <div key={q.id} className="mb-3">
             <Form.Item
               label={
-                <span style={{ fontFamily: 'var(--sans)', color: 'var(--ink)', fontWeight: 500, fontSize: 13 }}>
+                <span
+                  style={{
+                    fontFamily: "var(--sans)",
+                    color: "var(--ink)",
+                    fontWeight: 500,
+                    fontSize: 13,
+                  }}
+                >
                   {q.label}
                   {q.required && (
                     <span style={{ color: "var(--danger)" }}> *</span>
@@ -115,7 +157,9 @@ export function QuestionFormView({
                   onChange={(e) => update(q.id, e.target.value)}
                 >
                   {q.options.map((opt) => (
-                    <Radio.Button key={opt} value={opt}>{opt}</Radio.Button>
+                    <Radio.Button key={opt} value={opt}>
+                      {opt}
+                    </Radio.Button>
                   ))}
                 </Radio.Group>
               )}
@@ -173,7 +217,13 @@ export function QuestionFormView({
 
       {locked && (
         <div className="text-right mt-2">
-          <Text style={{ color: 'var(--ink-faint)', fontSize: 12, fontFamily: 'var(--body)' }}>
+          <Text
+            style={{
+              color: "var(--ink-faint)",
+              fontSize: 12,
+              fontFamily: "var(--body)",
+            }}
+          >
             {submittedAnswers ? "表单已提交" : "历史记录（只读）"}
           </Text>
         </div>

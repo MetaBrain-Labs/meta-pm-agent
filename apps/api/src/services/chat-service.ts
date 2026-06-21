@@ -9,8 +9,21 @@ import {
   persistAssistantMessage,
   persistConversationMessages,
 } from "../repositories/message-repository";
-import { persistRequestAnalysisItems } from "../repositories/request-form-repository";
+import {
+  finishAnsweredDecisionItems,
+  getPendingDecisionQuestionForm,
+  persistExecutorProposalItems,
+  persistProposalDecisionItem,
+  persistProductWorkflowConfirmationDecision,
+  persistRequestAnalysisItems,
+} from "../repositories/request-form-repository";
+import { persistTaskExecutionPlan } from "../repositories/task-execution-repository";
 import { parseRequestAnalysisPayload } from "../utils/request-analysis";
+import { parseTaskExecutionPlanPayload } from "../utils/task-execution";
+import {
+  parseExecutorResultPayload,
+  parseProductWorkflowPayload,
+} from "../utils/product-workflow";
 import {
   parseUserInputPayload,
   type UserInputRecord,
@@ -56,6 +69,13 @@ export function listMessages(conversationId: string) {
 }
 
 /**
+ * 获取请求表单中下一组待 Conversation Agent 提问的决策表单。
+ */
+export function loadPendingDecisionQuestionForm(requestFormId?: string) {
+  return getPendingDecisionQuestionForm(requestFormId);
+}
+
+/**
  * 在指定工作区中创建新会话，同时初始化一条请求表单记录。
  */
 export async function createChat(
@@ -76,9 +96,12 @@ export async function createChat(
  */
 export async function persistConversationStart(
   conversationId: string | undefined,
+  requestFormId: string | undefined,
   messages: ChatMessage[],
 ): Promise<void> {
   if (!conversationId) return;
+
+  await finishAnsweredDecisionItems(requestFormId, messages);
 
   // 只持久化用户消息，助手回复由 persistConversationResult 统一写入。
   await persistConversationMessages(
@@ -107,11 +130,24 @@ export async function persistConversationResult({
     (output) => output.type === "conversation",
   );
   const requestOutput = agentOutputs.find((output) => output.type === "request");
+  const plannerOutput = agentOutputs.find((output) => output.type === "planner");
+  const productDirectorOutput = agentOutputs.find(
+    (output) => output.type === "product_director",
+  );
   const items = conversationOutput
     ? parseUserInputPayload(conversationOutput.content)
     : null;
   const requestAnalysis = requestOutput
     ? parseRequestAnalysisPayload(requestOutput.content)
+    : null;
+  const taskExecutionPlan = plannerOutput
+    ? parseTaskExecutionPlanPayload(plannerOutput.content)
+    : null;
+  const executorResults = agentOutputs
+    .map((output) => parseExecutorResultPayload(output.content))
+    .filter((result) => result !== null);
+  const productWorkflow = productDirectorOutput
+    ? parseProductWorkflowPayload(productDirectorOutput.content)
     : null;
 
   // 每个 Agent 单独落库，message.type 用于前端恢复正确的展示位置。
@@ -134,6 +170,17 @@ export async function persistConversationResult({
   }
 
   await persistRequestAnalysisItems(requestFormId, requestAnalysis);
+  await persistTaskExecutionPlan({
+    conversationId,
+    requestFormId,
+    plan: taskExecutionPlan,
+  });
+  await persistExecutorProposalItems(requestFormId, executorResults);
+  await persistProposalDecisionItem(requestFormId, productWorkflow);
+  await persistProductWorkflowConfirmationDecision(
+    requestFormId,
+    productWorkflow,
+  );
 
   const generatedTitle = buildFirstTurnConversationTitle(items, messages);
   if (!generatedTitle) return null;
