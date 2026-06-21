@@ -1,11 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@repo/database";
-import { type ChatMessage, type RequestAnalysis } from "@repo/shared";
+import {
+  type ChatMessage,
+  type ProductDirectorWorkflowResult,
+  type RequestAnalysis,
+  type TaskExecutionPlan,
+} from "@repo/shared";
 import {
   parseUserInputPayload,
   type UserInputRecord,
 } from "../utils/user-input";
 import { parseRequestAnalysisPayload } from "../utils/request-analysis";
+import { parseTaskExecutionPlanPayload } from "../utils/task-execution";
+import { parseProductWorkflowPayload } from "../utils/product-workflow";
 
 /**
  * 数据库 message 表原始行结构。
@@ -33,6 +40,8 @@ export interface MessageDto {
   toolCalls?: ToolCallDto[];
   userInput?: UserInputRecord[] | null;
   requestAnalysis?: RequestAnalysis | null;
+  taskExecutionPlan?: TaskExecutionPlan | null;
+  productWorkflow?: ProductDirectorWorkflowResult | null;
 }
 
 /**
@@ -67,7 +76,16 @@ export async function listConversationMessages(
         WHEN "role" = 'user' THEN 0
         WHEN "type" = 'conversation' THEN 1
         WHEN "type" = 'request' THEN 2
-        ELSE 3
+        WHEN "type" = 'planner' THEN 3
+        WHEN "type" = 'product_strategy' THEN 4
+        WHEN "type" = 'user_insight' THEN 5
+        WHEN "type" = 'solution_decision' THEN 6
+        WHEN "type" = 'feature_arch' THEN 7
+        WHEN "type" = 'tech_design' THEN 8
+        WHEN "type" = 'data_ops' THEN 9
+        WHEN "type" = 'product_director' THEN 10
+        WHEN "type" = 'conversation_confirmation' THEN 11
+        ELSE 12
       END,
       "id" ASC
   `;
@@ -138,12 +156,26 @@ function mapMessageRow(row: MessageRow): MessageDto {
   // 旧消息可能只把 tagged block 存在正文里，读取历史消息时需要从正文回填结构化字段。
   const inlineUserInput = parseUserInputPayload(row.content);
   const inlineRequestAnalysis = parseRequestAnalysisPayload(row.content);
+  const inlineTaskExecutionPlan = parseTaskExecutionPlanPayload(row.content);
+  const inlineProductWorkflow = parseProductWorkflowPayload(row.content);
 
   // 正文返回给前端展示时去掉结构化 block，避免 JSON 原文和卡片重复显示。
   const cleanedContent = removeTaggedBlock(
-    removeTaggedBlock(row.content, "<user-input", "</user-input>"),
-    "<request-analysis",
-    "</request-analysis>",
+    removeTaggedBlock(
+      removeTaggedBlock(
+        removeTaggedBlock(
+          removeTaggedBlock(row.content, "<user-input", "</user-input>"),
+          "<request-analysis",
+          "</request-analysis>",
+        ),
+        "<task-execution",
+        "</task-execution>",
+      ),
+      "<executor-result",
+      "</executor-result>",
+    ),
+    "<product-workflow",
+    "</product-workflow>",
   );
   const extractedSearch = extractWebSearchToolCalls(cleanedContent);
   const metaToolCalls = Array.isArray(meta?.toolCalls)
@@ -170,6 +202,8 @@ function mapMessageRow(row: MessageRow): MessageDto {
       ? (userInput.user_input as UserInputRecord[])
       : inlineUserInput,
     requestAnalysis: inlineRequestAnalysis,
+    taskExecutionPlan: inlineTaskExecutionPlan,
+    productWorkflow: inlineProductWorkflow,
   };
 }
 

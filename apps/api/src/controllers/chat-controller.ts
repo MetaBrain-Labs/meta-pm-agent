@@ -13,6 +13,7 @@ import {
   createChat,
   listMessages,
   listChats,
+  loadPendingDecisionQuestionForm,
   persistConversationResult,
   persistConversationStart,
 } from "../services/chat-service";
@@ -149,8 +150,47 @@ export async function chatStreamHandler(c: Context) {
       // 持久化用户发送的消息
       await persistConversationStart(
         parsed.data.chatId,
+        parsed.data.requestFormId,
         parsed.data.messages,
       );
+
+      const pendingDecisionForm = await loadPendingDecisionQuestionForm(
+        parsed.data.requestFormId,
+      );
+      if (pendingDecisionForm) {
+        const promptText =
+          "Conversation Agent 正在根据 ProductDirector Agent 的决策项向你确认信息。";
+        const output = getAgentOutput(
+          agentOutputs,
+          "conversation_confirmation",
+        );
+        output.content += `${promptText}\n${pendingDecisionForm}`;
+        responseLength += promptText.length + pendingDecisionForm.length;
+
+        await writeSse(writer, {
+          type: "text",
+          content: promptText,
+          agentType: "conversation_confirmation",
+        });
+        await writeSse(writer, {
+          type: "question-form-start",
+          agentType: "conversation_confirmation",
+        });
+        await writeSse(writer, {
+          type: "question-form-complete",
+          content: pendingDecisionForm,
+          agentType: "conversation_confirmation",
+        });
+
+        await persistConversationResult({
+          conversationId: parsed.data.chatId,
+          requestFormId: parsed.data.requestFormId,
+          agentOutputs: [...agentOutputs.values()],
+          messages: parsed.data.messages,
+        });
+        await writeSseDone(writer);
+        return;
+      }
 
       // Request Agent 需要产品概述上下文；按会话加载工作区概述文档
       const productContext = await loadProductContextForConversation(

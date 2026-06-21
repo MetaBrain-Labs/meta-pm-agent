@@ -112,6 +112,26 @@ model RequestFormItem {
   @@map("request_form_item")
 }
 
+model TaskExecution {
+  id                          String    @id @db.VarChar(36)
+  conversationId              String    @map("conversation_id") @db.VarChar(36)
+  requestFormId               String?   @map("request_form_id") @db.VarChar(36)
+  taskId                      String    @map("task_id") @db.VarChar(64)
+  sequence                    Int
+  dag                         Json      @db.JsonB
+  assignedAgent               String    @map("assigned_agent") @db.VarChar(32)
+  title                       String    @db.VarChar(255)
+  description                 String
+  coveredBusinessModelIndexes Json      @map("covered_business_model_indexes") @db.JsonB
+  qualityResult               Json      @map("quality_result") @db.JsonB
+  status                      String    @default("planned") @db.VarChar(32)
+  createdAt                   DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                   DateTime? @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([conversationId, taskId])
+  @@map("task_execution")
+}
+
 model Task {
   id             String        @id @db.VarChar(36)
   conversationId String?       @map("conversation_id") @db.VarChar(36)

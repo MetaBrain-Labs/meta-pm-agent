@@ -87,6 +87,7 @@ export function ChatApp({
     }
     return -1;
   })();
+  const activeAgent = isLoading ? findActiveAgent(messages) : undefined;
 
   const nextUserContentByAssistantId = (() => {
     const map = new Map<string, string>();
@@ -99,6 +100,24 @@ export function ChatApp({
     }
     return map;
   })();
+
+  const retryAssistantMessage = useCallback(
+    (messageId: string) => {
+      if (isLoading || disabledReason) return;
+      const index = messages.findIndex((message) => message.id === messageId);
+      if (index === -1) return;
+
+      for (let cursor = index - 1; cursor >= 0; cursor--) {
+        const previous = messages[cursor];
+        if (previous?.role === "user" && previous.content.trim()) {
+          onSend(previous.content.trim(), { webSearchEnabled });
+          setUserScrolled(false);
+          return;
+        }
+      }
+    },
+    [disabledReason, isLoading, messages, onSend, webSearchEnabled],
+  );
 
   const doSubmit = useCallback(() => {
     if (!input.trim() || isLoading || disabledReason) return;
@@ -125,6 +144,14 @@ export function ChatApp({
     setUserScrolled(false);
   };
 
+  const scrollToActiveThinking = useCallback(() => {
+    if (!activeAgent || !containerRef.current) return;
+    const target = containerRef.current.querySelector(
+      `[data-agent-thinking="${activeAgent}"]`,
+    );
+    target?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [activeAgent]);
+
   return (
     <div className="chat-workspace">
       <div className="chat-topbar">
@@ -139,6 +166,15 @@ export function ChatApp({
           </Tooltip>
           <span>{workspaceName}</span>
         </div>
+        {activeAgent && (
+          <div className="ml-auto flex items-center gap-2 rounded-md border border-[var(--line-soft)] bg-white px-2.5 py-1 text-[12px] text-[var(--ink-soft)]">
+            <span className="h-1.5 w-1.5 rounded-full bg-[var(--primary)]" />
+            <span>正在思考：{getAgentLabel(activeAgent)}</span>
+            <Button size="small" type="link" onClick={scrollToActiveThinking}>
+              查看
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="chat-canvas">
@@ -178,6 +214,7 @@ export function ChatApp({
               }
               nextUserContent={nextUserContentByAssistantId.get(message.id)}
               onFormSubmit={(text) => onSend(text, { webSearchEnabled })}
+              onRetry={() => retryAssistantMessage(message.id)}
             />
           ))}
 
@@ -288,4 +325,38 @@ export function ChatApp({
       </div>
     </div>
   );
+}
+
+const AGENT_LABELS: Record<string, string> = {
+  conversation: "Conversation Agent",
+  conversation_confirmation: "Conversation Agent",
+  request: "Request Agent",
+  planner: "Planner Agent",
+  product_director: "ProductDirector Agent",
+  product_strategy: "Product Strategy Agent",
+  user_insight: "User Insight Agent",
+  solution_decision: "Solution Decision Agent",
+  feature_arch: "Feature Architecture Agent",
+  tech_design: "Technical Design Agent",
+  data_ops: "Data Operations Agent",
+};
+
+/**
+ * 将当前运行中的 Agent 类型转换为可读名称。
+ */
+function getAgentLabel(agentType: string): string {
+  return AGENT_LABELS[agentType] ?? `${agentType} Agent`;
+}
+
+/**
+ * 从最新助手消息中查找当前正在思考的 Agent。
+ */
+function findActiveAgent(messages: Message[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message?.role === "agent" && message.activeAgent) {
+      return message.activeAgent;
+    }
+  }
+  return undefined;
 }

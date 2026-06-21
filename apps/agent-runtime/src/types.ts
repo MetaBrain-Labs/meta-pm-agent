@@ -41,8 +41,8 @@ export type ConversationStreamEvent =
       toolResult: unknown;
       agentType?: AgentMessageType;
     }
-  | { type: "question-form-start" }
-  | { type: "question-form-complete"; content: string }
+  | { type: "question-form-start"; agentType?: AgentMessageType }
+  | { type: "question-form-complete"; content: string; agentType?: AgentMessageType }
   | { type: "user-input-start" }
   | { type: "user-input-complete"; content: string }
   | { type: "request-analysis-start"; agentType?: AgentMessageType }
@@ -51,7 +51,8 @@ export type ConversationStreamEvent =
       content: string;
       analysis: RequestAnalysis;
       agentType?: AgentMessageType;
-    };
+    }
+  | { type: "error"; error: string; agentType?: AgentMessageType };
 
 /**
  * 会话流选项

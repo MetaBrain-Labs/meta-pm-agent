@@ -65,6 +65,78 @@ export interface RequestAnalysis {
   chitchat: number[];
 }
 
+export type ProductWorkflowAgentType =
+  | "product_director"
+  | "planner"
+  | "product_strategy"
+  | "user_insight"
+  | "solution_decision"
+  | "feature_arch"
+  | "tech_design"
+  | string;
+
+export interface TaskExecutionNode {
+  task_id: string;
+  sequence: number;
+  title: string;
+  description: string;
+  assigned_agent: ProductWorkflowAgentType;
+  depends_on: string[];
+  covered_business_model_indexes: number[];
+  expected_output: string;
+  quality_check: {
+    status: "pending" | "passed" | "failed";
+    criteria: string[];
+    result?: string;
+  };
+}
+
+export interface TaskExecutionPlan {
+  request_summary: string;
+  dag: {
+    nodes: string[];
+    edges: Array<{ source: string; target: string }>;
+  };
+  tasks: TaskExecutionNode[];
+  assumptions: string[];
+}
+
+export interface ExecutorAgentResult {
+  task_id: string;
+  agent_type: ProductWorkflowAgentType;
+  focus_layer: string;
+  summary: string;
+  entities: Array<Record<string, unknown>>;
+  relations: Array<Record<string, unknown>>;
+  decisions: string[];
+  risks: string[];
+  open_questions: string[];
+  quality_result: {
+    passed: boolean;
+    notes: string;
+  };
+}
+
+export interface ProductDirectorWorkflowResult {
+  status: "pending_user_confirmation" | "completed" | "discarded";
+  confirmation_id: string;
+  request_summary: string;
+  planner: TaskExecutionPlan;
+  executor_results: ExecutorAgentResult[];
+  review: {
+    accepted_task_ids: string[];
+    rejected_task_ids: string[];
+    notes: string;
+  };
+  product_context_update: string;
+  knowledge_graph_update: {
+    entities: Array<Record<string, unknown>>;
+    relations: Array<Record<string, unknown>>;
+    notes: string[];
+  };
+  confirmation_message: string;
+}
+
 export interface Message {
   id: string;
   role: "user" | "agent";
@@ -78,6 +150,17 @@ export interface Message {
     state: "generating" | "complete";
     content?: string;
     analysis?: RequestAnalysis;
+  };
+  plannerExecution?: {
+    state: "complete";
+    content?: string;
+    plan: TaskExecutionPlan;
+  };
+  executorResults?: ExecutorAgentResult[];
+  activeAgent?: string;
+  agentError?: {
+    agentType?: string;
+    message: string;
   };
   todos?: TodoItem[];
   toolCalls?: Array<{ name: string; args?: Record<string, unknown>; result?: unknown }>;
@@ -145,4 +228,6 @@ export interface PersistedMessageInfo {
   toolCalls?: ToolCallInfo[];
   userInput?: Array<{ index: number; content: string; type: string }> | null;
   requestAnalysis?: RequestAnalysis | null;
+  taskExecutionPlan?: TaskExecutionPlan | null;
+  productWorkflow?: ProductDirectorWorkflowResult | null;
 }

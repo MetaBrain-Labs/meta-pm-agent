@@ -53,5 +53,19 @@ export function mapPersistedMessageToMessage(
           },
         }
       : {}),
+    ...(message.taskExecutionPlan
+      ? {
+          plannerExecution: {
+            state: "complete" as const,
+            content: JSON.stringify(message.taskExecutionPlan, null, 2),
+            plan: message.taskExecutionPlan,
+          },
+        }
+      : {}),
+    ...(message.productWorkflow
+      ? {
+          executorResults: message.productWorkflow.executor_results,
+        }
+      : {}),
   };
 }

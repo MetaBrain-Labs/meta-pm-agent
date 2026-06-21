@@ -7,10 +7,12 @@ import {
 import { Spin } from "antd";
 import {
   CaretRightOutlined,
+  ReloadOutlined,
   LoadingOutlined,
 } from "@ant-design/icons";
 import type { Message } from "../types";
 import { ProseBlock } from "./ProseBlock";
+import { PlannerExecutionCard } from "./PlannerExecutionCard";
 import { RequestAnalysisCard } from "./RequestAnalysisCard";
 import { TodoCard } from "./TodoCard";
 import { ToolCallsCard } from "./ToolCallsCard";
@@ -22,6 +24,7 @@ interface Props {
   streaming: boolean;
   nextUserContent?: string;
   onFormSubmit?: (text: string) => void;
+  onRetry?: () => void;
 }
 
 /**
@@ -33,6 +36,7 @@ export function MessageBubble({
   streaming,
   nextUserContent,
   onFormSubmit,
+  onRetry,
 }: Props) {
   const [usageOpen, setUsageOpen] = useState(false);
   const [locallySubmitted] = useState<Set<string>>(() => new Set());
@@ -59,14 +63,36 @@ export function MessageBubble({
   const requestReasoningBlocks = message.reasoningBlocks?.filter(
     (block) => block.agentType === "request",
   );
+  const plannerReasoningBlocks = message.reasoningBlocks?.filter(
+    (block) => block.agentType === "planner",
+  );
+  const executorReasoningBlocks = message.reasoningBlocks?.filter((block) =>
+    isExecutorAgent(block.agentType),
+  );
+  const productDirectorReasoningBlocks = message.reasoningBlocks?.filter(
+    (block) => block.agentType === "product_director",
+  );
+  const requestError =
+    message.agentError?.agentType === "request" ? message.agentError : null;
+  const otherError =
+    message.agentError && message.agentError.agentType !== "request"
+      ? message.agentError
+      : null;
   const otherReasoningBlocks = message.reasoningBlocks?.filter(
-    (block) => block.agentType !== "request",
+    (block) =>
+      ![
+        "request",
+        "planner",
+        "product_director",
+        ...EXECUTOR_AGENT_TYPES,
+      ].includes(block.agentType),
   );
 
   return (
     <div className="flex w-full flex-col self-stretch">
       {message.thinking && (
         <ThinkingBox
+          agentType="conversation"
           label={getReasoningLabel("conversation")}
           content={message.thinking}
           active={
@@ -103,25 +129,6 @@ export function MessageBubble({
         </div>
       )}
 
-      {message.questionForm && (
-        <div>
-          {message.questionForm.state === "generating" ? (
-            <QFGenerating label="正在生成问题表单" />
-          ) : (
-            <ProseBlock
-              text={message.questionForm.content || ""}
-              isLastAssistant={isLast}
-              streaming={streaming}
-              nextUserContent={nextUserContent}
-              locallySubmitted={locallySubmitted}
-              onSubmitForm={(_formId, text) => {
-                onFormSubmit?.(text);
-              }}
-            />
-          )}
-        </div>
-      )}
-
       {message.userInput && (
         <div>
           {message.userInput.state === "generating" ? (
@@ -135,6 +142,7 @@ export function MessageBubble({
       {requestReasoningBlocks?.map((block) => (
         <ThinkingBox
           key={block.agentType}
+          agentType={block.agentType}
           label={getReasoningLabel(block.agentType)}
           content={block.content}
           active={
@@ -156,21 +164,97 @@ export function MessageBubble({
         </div>
       )}
 
+      {requestError && (
+        <AgentErrorCard
+          agentType="request"
+          message={requestError.message}
+          onRetry={onRetry}
+        />
+      )}
+
+      {plannerReasoningBlocks?.map((block) => (
+        <ThinkingBox
+          key={block.agentType}
+          agentType={block.agentType}
+          label={getReasoningLabel(block.agentType)}
+          content={block.content}
+          active={streamActive && message.activeAgent === block.agentType}
+        />
+      ))}
+
+      {message.plannerExecution && (
+        <PlannerExecutionCard
+          plan={message.plannerExecution.plan}
+          executorResults={message.executorResults}
+          activeAgent={message.activeAgent}
+        />
+      )}
+
+      {executorReasoningBlocks?.map((block) => (
+        <ThinkingBox
+          key={block.agentType}
+          agentType={block.agentType}
+          label={getReasoningLabel(block.agentType)}
+          content={block.content}
+          active={streamActive && message.activeAgent === block.agentType}
+        />
+      ))}
+
+      {productDirectorReasoningBlocks?.map((block) => (
+        <ThinkingBox
+          key={block.agentType}
+          agentType={block.agentType}
+          label={getReasoningLabel(block.agentType)}
+          content={block.content}
+          active={streamActive && message.activeAgent === block.agentType}
+        />
+      ))}
+
       {otherReasoningBlocks?.map((block) => (
         <ThinkingBox
           key={block.agentType}
+          agentType={block.agentType}
           label={getReasoningLabel(block.agentType)}
           content={block.content}
-          active={streamActive}
+          active={streamActive && message.activeAgent === block.agentType}
         />
       ))}
+
+      {message.questionForm && (
+        <div>
+          {message.questionForm.state === "generating" ? (
+            <QFGenerating label="正在生成问题表单" />
+          ) : (
+            <ProseBlock
+              text={message.questionForm.content || ""}
+              isLastAssistant={isLast}
+              streaming={streaming}
+              nextUserContent={nextUserContent}
+              locallySubmitted={locallySubmitted}
+              onSubmitForm={(_formId, text) => {
+                onFormSubmit?.(text);
+              }}
+            />
+          )}
+        </div>
+      )}
+
+      {otherError && (
+        <AgentErrorCard
+          agentType={otherError.agentType}
+          message={otherError.message}
+          onRetry={onRetry}
+        />
+      )}
 
       {!message.content &&
         !message.thinking &&
         !message.reasoningBlocks?.length &&
         !message.questionForm &&
         !message.userInput &&
-        !message.requestAnalysis && (
+        !message.requestAnalysis &&
+        !message.plannerExecution &&
+        !message.agentError && (
           <div className="assistant-bubble is-loading">
             <Spin
               indicator={<LoadingOutlined style={{ color: "var(--primary)" }} />}
@@ -205,6 +289,42 @@ export function MessageBubble({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * 展示 Agent 阶段错误，并提供重试入口。
+ */
+function AgentErrorCard({
+  agentType,
+  message,
+  onRetry,
+}: {
+  agentType?: string;
+  message: string;
+  onRetry?: () => void;
+}) {
+  return (
+    <div className="mb-2 rounded-lg border border-[#fca5a5] bg-[#fef2f2] px-4 py-3 text-[#991b1b]">
+      <div className="mb-1 flex items-center justify-between gap-3">
+        <span className="text-[13px] font-extrabold">
+          {getAgentLabel(agentType ?? "agent")} 执行失败
+        </span>
+        {onRetry && (
+          <button
+            type="button"
+            className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-[#fca5a5] bg-white px-2 py-1 text-[12px] font-bold text-[#991b1b]"
+            onClick={onRetry}
+          >
+            <ReloadOutlined />
+            重试
+          </button>
+        )}
+      </div>
+      <div className="whitespace-pre-wrap text-[13px] leading-relaxed">
+        {message}
+      </div>
     </div>
   );
 }
@@ -245,10 +365,12 @@ function QFGenerating({ label }: { label: string }) {
  * 展示 Agent 推理过程，流式阶段保持自动滚动。
  */
 function ThinkingBox({
+  agentType,
   label,
   content,
   active,
 }: {
+  agentType: string;
   label: string;
   content: string;
   active: boolean;
@@ -274,7 +396,10 @@ function ThinkingBox({
   }, [isAtBottom]);
 
   return (
-    <div className="mb-2 overflow-hidden rounded-lg border border-[var(--line-soft)] bg-white">
+    <div
+      className="mb-2 overflow-hidden rounded-lg border border-[var(--line-soft)] bg-white"
+      data-agent-thinking={agentType}
+    >
       <button
         type="button"
         className="flex w-full cursor-pointer select-none items-center gap-1.5 border-none bg-white px-4 py-2 text-left text-[13px] font-bold text-[var(--ink-faint)]"
@@ -312,5 +437,47 @@ function ThinkingBox({
 function getReasoningLabel(agentType: string): string {
   if (agentType === "request") return "思考过程（Request Agent）";
   if (agentType === "conversation") return "思考过程（Conversation Agent）";
-  return `思考过程（${agentType} Agent）`;
+  if (agentType === "conversation_confirmation") {
+    return "思考过程（Conversation Agent）";
+  }
+  if (agentType === "planner") return "思考过程（Planner Agent）";
+  if (agentType === "product_director") {
+    return "思考过程（ProductDirector Agent）";
+  }
+  return `思考过程（${getAgentLabel(agentType)}）`;
+}
+
+const EXECUTOR_AGENT_TYPES = [
+  "product_strategy",
+  "user_insight",
+  "solution_decision",
+  "feature_arch",
+  "tech_design",
+  "data_ops",
+];
+
+const AGENT_LABELS: Record<string, string> = {
+  request: "Request Agent",
+  planner: "Planner Agent",
+  product_director: "ProductDirector Agent",
+  product_strategy: "Product Strategy Agent",
+  user_insight: "User Insight Agent",
+  solution_decision: "Solution Decision Agent",
+  feature_arch: "Feature Architecture Agent",
+  tech_design: "Technical Design Agent",
+  data_ops: "Data Operations Agent",
+};
+
+/**
+ * 判断是否属于 Executor Agent。
+ */
+function isExecutorAgent(agentType: string): boolean {
+  return EXECUTOR_AGENT_TYPES.includes(agentType);
+}
+
+/**
+ * 将 Agent 类型转换为展示名。
+ */
+function getAgentLabel(agentType: string): string {
+  return AGENT_LABELS[agentType] ?? `${agentType} Agent`;
 }

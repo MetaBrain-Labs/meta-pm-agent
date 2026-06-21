@@ -1,4 +1,10 @@
-import type { Message, StreamEvent } from "../types";
+import type {
+  ExecutorAgentResult,
+  Message,
+  ProductDirectorWorkflowResult,
+  StreamEvent,
+  TaskExecutionPlan,
+} from "../types";
 
 export function applyStreamEvent(
   message: Message,
@@ -7,23 +13,28 @@ export function applyStreamEvent(
   switch (event.type) {
     case "thinking":
       if (event.agentType && event.agentType !== "conversation") {
-        return appendReasoningBlock(
-          message,
-          event.agentType,
-          event.content ?? "",
-        );
+        return {
+          ...appendReasoningBlock(
+            message,
+            event.agentType,
+            event.content ?? "",
+          ),
+          activeAgent: event.agentType,
+        };
       }
 
       return {
         ...message,
         thinking:
           (message.thinking ?? "") + (event.content ?? ""),
+        activeAgent: event.agentType ?? "conversation",
       };
     case "text":
       return applyTextChunk(message, event.content ?? "");
     case "question-form-start":
       return {
         ...message,
+        activeAgent: event.agentType ?? "conversation",
         questionForm: { state: "generating" },
       };
     case "question-form-complete":
@@ -34,6 +45,7 @@ export function applyStreamEvent(
           "<question-form",
           "</question-form>",
         ),
+        activeAgent: undefined,
         questionForm: {
           state: "complete",
           content: event.content,
@@ -60,6 +72,7 @@ export function applyStreamEvent(
     case "request-analysis-start":
       return {
         ...message,
+        activeAgent: event.agentType ?? "request",
         requestAnalysis: { state: "generating" },
       };
     case "request-analysis-complete":
@@ -71,6 +84,7 @@ export function applyStreamEvent(
           "<request-analysis",
           "</request-analysis>",
         ),
+        activeAgent: undefined,
         requestAnalysis: {
           state: "complete",
           content: event.content,
@@ -110,16 +124,41 @@ export function applyStreamEvent(
         ),
       };
     case "finish":
-      return { ...message, usage: event.usage };
+      return { ...message, usage: event.usage, activeAgent: undefined };
     case "error":
-      return {
-        ...message,
-        content:
-          message.content +
-          `\n[Error: ${JSON.stringify(event.error)}]`,
-      };
+      {
+        const failedAgentType = event.agentType ?? message.activeAgent;
+        const requestAnalysis =
+          failedAgentType === "request" &&
+          message.requestAnalysis?.state === "generating"
+            ? undefined
+            : message.requestAnalysis;
+
+        return {
+          ...message,
+          activeAgent: undefined,
+          requestAnalysis,
+          agentError: {
+            agentType: failedAgentType,
+            message: normalizeErrorMessage(event.error),
+          },
+        };
+      }
     default:
       return message;
+  }
+}
+
+/**
+ * 将 SSE 错误负载转换为简洁可展示的文本。
+ */
+function normalizeErrorMessage(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
   }
 }
 
@@ -212,7 +251,134 @@ function applyTextChunk(
     };
   }
 
+  const taskExecution = extractTaggedBlock(
+    content,
+    "<task-execution",
+    "</task-execution>",
+  );
+
+  if (taskExecution) {
+    const plan = parseJsonFromTaggedBlock<TaskExecutionPlan>(
+      taskExecution.block,
+      "<task-execution",
+      "</task-execution>",
+    );
+    return {
+      ...message,
+      content: taskExecution.remainingText,
+      ...(plan
+        ? {
+            plannerExecution: {
+              state: "complete" as const,
+              content: taskExecution.block,
+              plan,
+            },
+          }
+        : {}),
+    };
+  }
+
+  const executorResult = extractTaggedBlock(
+    content,
+    "<executor-result",
+    "</executor-result>",
+  );
+
+  if (executorResult) {
+    const result = parseJsonFromTaggedBlock<ExecutorAgentResult>(
+      executorResult.block,
+      "<executor-result",
+      "</executor-result>",
+    );
+    return {
+      ...message,
+      content: executorResult.remainingText,
+      ...(result
+        ? {
+            activeAgent:
+              message.activeAgent === result.agent_type
+                ? undefined
+                : message.activeAgent,
+            executorResults: upsertExecutorResult(
+              message.executorResults ?? [],
+              result,
+            ),
+          }
+        : {}),
+    };
+  }
+
+  const productWorkflow = extractTaggedBlock(
+    content,
+    "<product-workflow",
+    "</product-workflow>",
+  );
+
+  if (productWorkflow) {
+    const result = parseJsonFromTaggedBlock<ProductDirectorWorkflowResult>(
+      productWorkflow.block,
+      "<product-workflow",
+      "</product-workflow>",
+    );
+    return {
+      ...message,
+      content: productWorkflow.remainingText,
+      ...(result
+        ? {
+            activeAgent: undefined,
+            executorResults: result.executor_results,
+          }
+        : {}),
+    };
+  }
+
   return { ...message, content };
+}
+
+/**
+ * 根据 task_id 合并 Executor 结果，驱动 Planner DAG 卡片中的节点状态变化。
+ */
+function upsertExecutorResult(
+  results: ExecutorAgentResult[],
+  next: ExecutorAgentResult,
+): ExecutorAgentResult[] {
+  const existingIndex = results.findIndex(
+    (item) => item.task_id === next.task_id,
+  );
+  if (existingIndex === -1) return [...results, next];
+
+  return results.map((item, index) =>
+    index === existingIndex ? next : item,
+  );
+}
+
+/**
+ * 从 tagged block 中解析 JSON 负载。
+ */
+function parseJsonFromTaggedBlock<T>(
+  block: string,
+  startMarker: string,
+  endMarker: string,
+): T | null {
+  const startIndex = block.search(new RegExp(escapeRegExp(startMarker), "i"));
+  if (startIndex === -1) return null;
+
+  const openEnd = block.indexOf(">", startIndex);
+  const endIndex = block.indexOf(endMarker, openEnd + 1);
+  if (openEnd === -1 || endIndex === -1) return null;
+
+  try {
+    return JSON.parse(block.slice(openEnd + 1, endIndex).trim()) as T;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 转义正则特殊字符。
+ */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**
