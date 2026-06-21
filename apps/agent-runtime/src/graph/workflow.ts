@@ -1,21 +1,17 @@
 import { END, START, StateGraph } from "@langchain/langgraph";
 import type {
+  ExecutorAgentResult,
   ProductDirectorWorkflowResult,
   RequestAnalysis,
+  TaskExecutionPlan,
 } from "@repo/shared";
+import type { UserInputRecord } from "../agents/request/user-input";
+import type { ProductWorkflowStreamEvent } from "../agents/product-workflow/agent";
 import {
-  formatRequestAnalysisBlock,
-  streamRequestAgent,
-} from "../agents/request/agent";
-import {
-  parseUserInputBlock,
-  type UserInputRecord,
-} from "../agents/request/user-input";
-import {
-  streamProductDirectorWorkflow,
-  type ProductWorkflowStreamEvent,
-} from "../agents/product-workflow/agent";
-import { productWorkflowNode } from "./nodes/product-workflow-node";
+  executorAgentNode,
+  plannerAgentNode,
+  productDirectorAgentNode,
+} from "./nodes/product-workflow-node";
 import { parseUserInputNode, requestAgentNode } from "./nodes/request-node";
 import { WorkflowGraphState, type WorkflowGraphStateValue } from "./state";
 
@@ -29,6 +25,8 @@ export interface WorkflowGraphResult {
   requestAnalysis: RequestAnalysis;
   requestAnalysisBlock: string;
   userInput: UserInputRecord[];
+  plan?: TaskExecutionPlan | null;
+  executorResults: ExecutorAgentResult[];
   productWorkflow?: ProductDirectorWorkflowResult | null;
 }
 
@@ -51,16 +49,22 @@ export const graph = new StateGraph(WorkflowGraphState)
   .addNode("parse_user_input", parseUserInputNode)
   // Request Agent 负责对用户输入进行业务建模分类。
   .addNode("request_agent", requestAgentNode)
-  // ProductDirector 节点内部继续编排 Planner 与 Executor。
-  .addNode("product_workflow", productWorkflowNode)
+  // Planner Agent 负责把业务建模项规划为可执行 DAG。
+  .addNode("planner_agent", plannerAgentNode)
+  // Executor Agent 负责按 DAG 生成各领域图谱增量。
+  .addNode("executor_agent", executorAgentNode)
+  // ProductDirector Agent 负责验收 Planner 与 Executor 的完整结果。
+  .addNode("product_director_agent", productDirectorAgentNode)
 
   .addEdge(START, "parse_user_input")
   .addEdge("parse_user_input", "request_agent")
   .addConditionalEdges("request_agent", selectNextNodeAfterRequestAgent, {
-    product_workflow: "product_workflow",
+    planner_agent: "planner_agent",
     end: END,
   })
-  .addEdge("product_workflow", END)
+  .addEdge("planner_agent", "executor_agent")
+  .addEdge("executor_agent", "product_director_agent")
+  .addEdge("product_director_agent", END)
   .compile();
 
 /**
@@ -85,6 +89,8 @@ export async function runWorkflowGraph(
     requestAnalysis: result.requestAnalysis,
     requestAnalysisBlock: result.requestAnalysisBlock,
     userInput: result.userInput,
+    plan: result.plan,
+    executorResults: result.executorResults,
     productWorkflow: result.productWorkflow,
   };
 }
@@ -95,39 +101,16 @@ export async function runWorkflowGraph(
 export async function* streamWorkflowGraph(
   input: WorkflowGraphInput,
 ): AsyncGenerator<WorkflowGraphStreamEvent> {
-  const userInput = parseUserInputBlock(input.userInputBlock);
+  const stream = await graph.stream(
+    {
+      productContext: input.productContext ?? "",
+      userInputBlock: input.userInputBlock,
+    },
+    { signal: input.signal, streamMode: "custom" },
+  );
 
-  yield { type: "request-analysis-start", agentType: "request" };
-
-  for await (const event of streamRequestAgent({
-    productContext: input.productContext,
-    userInput,
-    signal: input.signal,
-  })) {
-    if (event.type === "reasoning") {
-      yield event;
-      continue;
-    }
-
-    yield {
-      type: "request-analysis-complete",
-      content: formatRequestAnalysisBlock(event.analysis),
-      analysis: event.analysis,
-      agentType: "request",
-    };
-
-    if (event.analysis.business_model.length === 0) {
-      return;
-    }
-
-    for await (const workflowEvent of streamProductDirectorWorkflow({
-      productContext: input.productContext,
-      requestAnalysis: event.analysis,
-      userInput,
-      signal: input.signal,
-    })) {
-      yield workflowEvent;
-    }
+  for await (const event of stream) {
+    yield event as WorkflowGraphStreamEvent;
   }
 }
 
@@ -136,6 +119,6 @@ export async function* streamWorkflowGraph(
  */
 function selectNextNodeAfterRequestAgent(state: WorkflowGraphStateValue) {
   return state.requestAnalysis?.business_model.length
-    ? "product_workflow"
+    ? "planner_agent"
     : "end";
 }

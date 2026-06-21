@@ -40,6 +40,34 @@ export interface ProductDirectorWorkflowInput {
   signal?: AbortSignal;
 }
 
+/**
+ * Planner Agent 节点输入，包含 Request Agent 结果和当前产品知识图谱快照。
+ */
+export interface PlannerAgentInput extends ProductDirectorWorkflowInput {
+  knowledgeGraph: ProductKnowledgeGraph;
+}
+
+/**
+ * Executor Agent 节点输入，描述当前任务、完整 DAG 和已完成任务结果。
+ */
+export interface ExecutorAgentInput extends ProductDirectorWorkflowInput {
+  task: TaskExecutionNode;
+  plan: TaskExecutionPlan;
+  previousResults: ExecutorAgentResult[];
+}
+
+/**
+ * ProductDirector Agent 验收节点输入，用于汇总 Planner 与 Executor 的产出。
+ */
+export interface ProductDirectorReviewInput {
+  productContext?: string;
+  requestAnalysis: RequestAnalysis;
+  plan: TaskExecutionPlan;
+  executorResults: ExecutorAgentResult[];
+  knowledgeGraph: ProductKnowledgeGraph;
+  signal?: AbortSignal;
+}
+
 export type ProductWorkflowStreamEvent =
   | {
       type: "reasoning";
@@ -59,7 +87,7 @@ export type ProductWorkflowStreamEvent =
 export async function* streamProductDirectorWorkflow(
   input: ProductDirectorWorkflowInput,
 ): AsyncGenerator<ProductWorkflowStreamEvent> {
-  const knowledgeGraph = createPlaceholderKnowledgeGraph();
+  const knowledgeGraph = createProductWorkflowKnowledgeGraph();
 
   yield {
     type: "reasoning",
@@ -138,13 +166,9 @@ export async function runProductDirectorWorkflow(
 /**
  * Planner Agent：把 Request Agent 的 business_model 转换为可执行 DAG。
  */
-async function* streamPlannerAgent(input: {
-  productContext?: string;
-  requestAnalysis: RequestAnalysis;
-  userInput: UserInputRecord[];
-  knowledgeGraph: ProductKnowledgeGraph;
-  signal?: AbortSignal;
-}): AsyncGenerator<ProductWorkflowStreamEvent, TaskExecutionPlan, void> {
+export async function* streamPlannerAgent(
+  input: PlannerAgentInput,
+): AsyncGenerator<ProductWorkflowStreamEvent, TaskExecutionPlan, void> {
   return yield* runJsonAgent({
     agentType: "planner",
     name: "planner-agent",
@@ -168,15 +192,9 @@ async function* streamPlannerAgent(input: {
 /**
  * Executor Agent：按任务分配调用对应领域 Agent，形成图谱增量建议。
  */
-async function* streamExecutorAgent(input: {
-  task: TaskExecutionNode;
-  plan: TaskExecutionPlan;
-  productContext?: string;
-  requestAnalysis: RequestAnalysis;
-  userInput: UserInputRecord[];
-  previousResults: ExecutorAgentResult[];
-  signal?: AbortSignal;
-}): AsyncGenerator<ProductWorkflowStreamEvent, ExecutorAgentResult, void> {
+export async function* streamExecutorAgent(
+  input: ExecutorAgentInput,
+): AsyncGenerator<ProductWorkflowStreamEvent, ExecutorAgentResult, void> {
   const definition = getExecutorDefinition(input.task.assigned_agent);
 
   return yield* runJsonAgent({
@@ -209,14 +227,9 @@ async function* streamExecutorAgent(input: {
 /**
  * ProductDirector Agent：验收各 Executor 结果并生成待确认的产品上下文和图谱更新。
  */
-async function* streamProductDirectorReview(input: {
-  productContext?: string;
-  requestAnalysis: RequestAnalysis;
-  plan: TaskExecutionPlan;
-  executorResults: ExecutorAgentResult[];
-  knowledgeGraph: ProductKnowledgeGraph;
-  signal?: AbortSignal;
-}): AsyncGenerator<
+export async function* streamProductDirectorReview(
+  input: ProductDirectorReviewInput,
+): AsyncGenerator<
   ProductWorkflowStreamEvent,
   ProductDirectorWorkflowResult,
   void
@@ -311,7 +324,7 @@ async function* runJsonAgent<T>(options: {
 /**
  * 构建当前版本的占位知识图谱上下文。
  */
-function createPlaceholderKnowledgeGraph(): ProductKnowledgeGraph {
+export function createProductWorkflowKnowledgeGraph(): ProductKnowledgeGraph {
   return {
     entities: [],
     relations: [],
@@ -322,7 +335,9 @@ function createPlaceholderKnowledgeGraph(): ProductKnowledgeGraph {
 /**
  * 按 sequence 排序，确保 Executor 以 DAG 的线性化顺序执行。
  */
-function orderTasksBySequence(tasks: TaskExecutionNode[]): TaskExecutionNode[] {
+export function orderTasksBySequence(
+  tasks: TaskExecutionNode[],
+): TaskExecutionNode[] {
   return [...tasks].sort((left, right) => left.sequence - right.sequence);
 }
 
@@ -461,7 +476,7 @@ export function formatTaskExecutionPlanBlock(plan: TaskExecutionPlan): string {
 /**
  * 生成 Executor Agent 的可读摘要和结构化 block。
  */
-function formatExecutorResultBlock(result: ExecutorAgentResult): string {
+export function formatExecutorResultBlock(result: ExecutorAgentResult): string {
   return `<executor-result>\n${JSON.stringify(result, null, 2)}\n</executor-result>`;
 }
 
