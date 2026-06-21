@@ -132,6 +132,44 @@ export function PlannerExecutionCard({
 }
 
 /**
+ * 展示 Planner Agent DAG 结构生成期间的占位卡片。
+ */
+export function PlannerExecutionLoadingCard() {
+  return (
+    <div className="mb-2 flex items-center gap-3 rounded-lg border border-[var(--line-soft)] bg-white p-5">
+      <div
+        className="h-5 w-5 rounded-full border-2"
+        style={{
+          borderColor: "var(--primary)",
+          animation: "qf-pulse 1.4s ease-out infinite",
+        }}
+      />
+      <div className="min-w-0">
+        <div className="flex items-center gap-2 text-[13px] font-extrabold text-[var(--ink)]">
+          <PartitionOutlined style={{ color: "var(--primary)" }} />
+          <span>Planner Agent DAG</span>
+        </div>
+        <div className="mt-1 text-[12px] font-bold text-[var(--ink-faint)]">
+          正在生成执行 DAG
+        </div>
+      </div>
+      <div className="ml-auto flex gap-1">
+        {[0, 1, 2].map((index) => (
+          <span
+            key={index}
+            className="h-1.5 w-1.5 rounded-full bg-[var(--primary)]"
+            style={{
+              animation: "qf-bounce 1.2s ease-in-out infinite",
+              animationDelay: `${index * 0.2}s`,
+            }}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
  * 渲染 DAG 顶部流程中的单个节点。
  */
 function NodePill({

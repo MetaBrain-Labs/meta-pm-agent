@@ -145,11 +145,27 @@ export function ChatApp({
   };
 
   const scrollToActiveThinking = useCallback(() => {
-    if (!activeAgent || !containerRef.current) return;
-    const target = containerRef.current.querySelector(
-      `[data-agent-thinking="${activeAgent}"]`,
+    const container = containerRef.current;
+    if (!activeAgent || !container) return;
+
+    const targetAgent = getThinkingTargetAgentType(activeAgent);
+    const target = container.querySelector<HTMLElement>(
+      `[data-agent-thinking="${escapeDataAttributeValue(targetAgent)}"]`,
     );
-    target?.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (!target) return;
+
+    // 聊天内容在内部容器滚动，直接计算容器内位置比 scrollIntoView 更稳定。
+    const containerRect = container.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const nextTop =
+      container.scrollTop +
+      targetRect.top -
+      containerRect.top -
+      container.clientHeight / 2 +
+      targetRect.height / 2;
+
+    container.scrollTo({ top: Math.max(0, nextTop), behavior: "smooth" });
+    setUserScrolled(true);
   }, [activeAgent]);
 
   return (
@@ -346,6 +362,21 @@ const AGENT_LABELS: Record<string, string> = {
  */
 function getAgentLabel(agentType: string): string {
   return AGENT_LABELS[agentType] ?? `${agentType} Agent`;
+}
+
+/**
+ * 转义 data attribute 查询值，保证 Agent 类型变化后仍能稳定定位卡片。
+ */
+function escapeDataAttributeValue(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+/**
+ * 将内部确认阶段映射回实际渲染的思考卡片锚点。
+ */
+function getThinkingTargetAgentType(agentType: string): string {
+  if (agentType === "conversation_confirmation") return "conversation";
+  return agentType;
 }
 
 /**

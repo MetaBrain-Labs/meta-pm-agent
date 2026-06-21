@@ -12,7 +12,10 @@ import {
 } from "@ant-design/icons";
 import type { Message } from "../types";
 import { ProseBlock } from "./ProseBlock";
-import { PlannerExecutionCard } from "./PlannerExecutionCard";
+import {
+  PlannerExecutionCard,
+  PlannerExecutionLoadingCard,
+} from "./PlannerExecutionCard";
 import { RequestAnalysisCard } from "./RequestAnalysisCard";
 import { TodoCard } from "./TodoCard";
 import { ToolCallsCard } from "./ToolCallsCard";
@@ -39,7 +42,9 @@ export function MessageBubble({
   onRetry,
 }: Props) {
   const [usageOpen, setUsageOpen] = useState(false);
-  const [locallySubmitted] = useState<Set<string>>(() => new Set());
+  const [locallySubmitted, setLocallySubmitted] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   if (message.role === "user") {
     return (
@@ -87,6 +92,24 @@ export function MessageBubble({
         ...EXECUTOR_AGENT_TYPES,
       ].includes(block.agentType),
   );
+  const plannerDagGenerating =
+    streamActive &&
+    message.activeAgent === "planner" &&
+    !message.plannerExecution;
+  const handleFormSubmit = useCallback(
+    (formId: string, text: string) => {
+      if (!onFormSubmit) return;
+
+      // 表单提交后立即进入本地只读态，避免等待历史消息恢复期间重复提交。
+      setLocallySubmitted((prev) => {
+        const next = new Set(prev);
+        next.add(formId);
+        return next;
+      });
+      onFormSubmit(text);
+    },
+    [onFormSubmit],
+  );
 
   return (
     <div className="flex w-full flex-col self-stretch">
@@ -122,9 +145,7 @@ export function MessageBubble({
             streaming={streaming}
             nextUserContent={nextUserContent}
             locallySubmitted={locallySubmitted}
-            onSubmitForm={(_formId, text) => {
-              onFormSubmit?.(text);
-            }}
+            onSubmitForm={handleFormSubmit}
           />
         </div>
       )}
@@ -182,6 +203,8 @@ export function MessageBubble({
         />
       ))}
 
+      {plannerDagGenerating && <PlannerExecutionLoadingCard />}
+
       {message.plannerExecution && (
         <PlannerExecutionCard
           plan={message.plannerExecution.plan}
@@ -231,9 +254,7 @@ export function MessageBubble({
               streaming={streaming}
               nextUserContent={nextUserContent}
               locallySubmitted={locallySubmitted}
-              onSubmitForm={(_formId, text) => {
-                onFormSubmit?.(text);
-              }}
+              onSubmitForm={handleFormSubmit}
             />
           )}
         </div>
