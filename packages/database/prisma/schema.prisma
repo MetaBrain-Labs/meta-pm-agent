@@ -96,6 +96,19 @@ model RequestForm {
   @@map("request_form")
 }
 
+model ProductKnowledgeGraph {
+  id             String    @id @db.VarChar(36)
+  workspaceId    String    @unique @map("workspace_id") @db.VarChar(36)
+  conversationId String?   @map("conversation_id") @db.VarChar(36)
+  requestFormId  String?   @map("request_form_id") @db.VarChar(36)
+  content        String
+  version        Int       @default(1)
+  createdAt      DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime? @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@map("product_knowledge_graph")
+}
+
 model RequestFormItem {
   id           String      @id @db.VarChar(36)
   formId       String      @map("form_id") @db.VarChar(36)

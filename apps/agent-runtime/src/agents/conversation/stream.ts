@@ -35,9 +35,12 @@ async function* streamAgentEvents(
     { messages },
     { streamMode: "messages", signal: options.signal },
   );
+  const visibleToolNames = new Set<string>(options.enabledTools ?? []);
 
   for await (const [message] of run) {
-    for (const toolCall of getToolCalls(message)) {
+    for (const toolCall of getToolCalls(message).filter((item) =>
+      visibleToolNames.has(item.name),
+    )) {
       yield {
         type: "tool-call",
         toolName: toolCall.name,
@@ -47,7 +50,7 @@ async function* streamAgentEvents(
     }
 
     const toolResult = getToolResult(message);
-    if (toolResult) {
+    if (toolResult && visibleToolNames.has(toolResult.name)) {
       yield {
         type: "tool-result",
         toolName: toolResult.name,
@@ -55,6 +58,10 @@ async function* streamAgentEvents(
         agentType: "conversation",
       };
       // 工具响应只进入工具卡片，不作为普通助手正文继续输出。
+      continue;
+    }
+    if (toolResult) {
+      // DeepAgents 内置工具响应只保留给内部状态，避免污染用户可见流。
       continue;
     }
 
@@ -170,6 +177,7 @@ async function* streamPlanningAfterUserInput(
 ): AsyncGenerator<ConversationStreamEvent> {
   try {
     for await (const event of streamWorkflowGraph({
+      workspaceId: options.workspaceId,
       productContext: options.productContext,
       userInputBlock,
       signal: options.signal,

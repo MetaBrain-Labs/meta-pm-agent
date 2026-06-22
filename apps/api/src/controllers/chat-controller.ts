@@ -19,7 +19,8 @@ import {
   persistConversationResult,
   persistConversationStart,
 } from "../services/chat-service";
-import { loadProductContextForConversation } from "../services/product-context-service";
+import { loadProductRuntimeContextForConversation } from "../services/product-context-service";
+import { finalizeWorkspaceKnowledgeGraph } from "../services/product-knowledge-graph-service";
 import {
   createWorkspace,
   getAccount,
@@ -234,7 +235,7 @@ export async function chatStreamHandler(c: Context) {
       }
 
       // Request Agent 需要产品概述上下文；按会话加载工作区概述文档
-      const productContext = await loadProductContextForConversation(
+      const runtimeContext = await loadProductRuntimeContextForConversation(
         parsed.data.chatId,
       );
 
@@ -243,7 +244,8 @@ export async function chatStreamHandler(c: Context) {
         parsed.data.messages,
         {
           enabledTools: parsed.data.enabledTools,
-          productContext,
+          workspaceId: runtimeContext.workspaceId,
+          productContext: runtimeContext.productContext,
           signal: runtimeController.signal,
         },
       )) {
@@ -261,11 +263,17 @@ export async function chatStreamHandler(c: Context) {
           output.toolCalls.push({
             name: event.toolName,
             args: event.toolArgs,
+            agentType: getEventAgentType(event),
           });
         }
         if (event.type === "tool-result") {
           const output = getAgentOutput(agentOutputs, getEventAgentType(event));
-          attachToolResult(output.toolCalls, event.toolName, event.toolResult);
+          attachToolResult(
+            output.toolCalls,
+            event.toolName,
+            event.toolResult,
+            getEventAgentType(event),
+          );
         }
         if (
           "content" in event &&
@@ -284,6 +292,12 @@ export async function chatStreamHandler(c: Context) {
         requestFormId: parsed.data.requestFormId,
         agentOutputs: [...agentOutputs.values()],
         messages: parsed.data.messages,
+      });
+
+      await finalizeWorkspaceKnowledgeGraph({
+        workspaceId: runtimeContext.workspaceId,
+        conversationId: parsed.data.chatId,
+        requestFormId: parsed.data.requestFormId,
       });
 
       if (titleUpdate) {
@@ -413,11 +427,12 @@ function attachToolResult(
   toolCalls: NonNullable<AgentConversationOutput["toolCalls"]>,
   toolName: string,
   toolResult: unknown,
+  agentType: string,
 ): void {
-  const targetIndex = findPendingToolCallIndex(toolCalls, toolName);
+  const targetIndex = findPendingToolCallIndex(toolCalls, toolName, agentType);
 
   if (targetIndex === -1) {
-    toolCalls.push({ name: toolName, result: toolResult });
+    toolCalls.push({ name: toolName, result: toolResult, agentType });
     return;
   }
 
@@ -433,11 +448,13 @@ function attachToolResult(
 function findPendingToolCallIndex(
   toolCalls: NonNullable<AgentConversationOutput["toolCalls"]>,
   toolName: string,
+  agentType: string,
 ): number {
   for (let index = toolCalls.length - 1; index >= 0; index--) {
     const toolCall = toolCalls[index];
     if (
       toolCall?.name === toolName &&
+      (!toolCall.agentType || toolCall.agentType === agentType) &&
       !Object.prototype.hasOwnProperty.call(toolCall, "result")
     ) {
       return index;

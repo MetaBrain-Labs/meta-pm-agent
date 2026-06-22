@@ -43,6 +43,54 @@ export function parseExecutorResultPayload(
 }
 
 /**
+ * 生成不包含知识图谱正文的 Executor 持久化结果。
+ */
+export function sanitizeExecutorResultForPersistence(
+  result: ExecutorAgentResult,
+): ExecutorAgentResult {
+  const { knowledge_graph_patch, knowledge_graph_markdown, ...rest } = result;
+  void knowledge_graph_patch;
+  void knowledge_graph_markdown;
+  return rest;
+}
+
+/**
+ * 生成不包含知识图谱正文的 ProductDirector 持久化结果。
+ */
+export function sanitizeProductWorkflowForPersistence(
+  result: ProductDirectorWorkflowResult,
+): ProductDirectorWorkflowResult {
+  return {
+    ...result,
+    executor_results: result.executor_results.map(
+      sanitizeExecutorResultForPersistence,
+    ),
+    knowledge_graph_update: {
+      ...result.knowledge_graph_update,
+      markdown: "",
+    },
+  };
+}
+
+/**
+ * 生成可解析的 Executor 持久化 tagged block。
+ */
+export function formatExecutorResultPayload(
+  result: ExecutorAgentResult,
+): string {
+  return `<executor-result>\n${JSON.stringify(result, null, 2)}\n</executor-result>`;
+}
+
+/**
+ * 生成可解析的 ProductDirector 持久化 tagged block。
+ */
+export function formatProductWorkflowPayload(
+  result: ProductDirectorWorkflowResult,
+): string {
+  return `<product-workflow>\n${JSON.stringify(result, null, 2)}\n</product-workflow>`;
+}
+
+/**
  * 提取 tagged block 内部 JSON 文本。
  */
 function extractTaggedBlock(

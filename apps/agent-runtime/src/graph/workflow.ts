@@ -26,6 +26,7 @@ import { parseUserInputNode, requestAgentNode } from "./nodes/request-node";
 import { WorkflowGraphState, type WorkflowGraphStateValue } from "./state";
 
 export interface WorkflowGraphInput {
+  workspaceId?: string;
   productContext?: string;
   userInputBlock: string;
   signal?: AbortSignal;
@@ -173,6 +174,7 @@ export async function runWorkflowGraph(
   const result = await graph.invoke(
     {
       productContext: input.productContext ?? "",
+      workspaceId: input.workspaceId,
       userInputBlock: input.userInputBlock,
     },
     { signal: input.signal },
@@ -201,6 +203,7 @@ export async function* streamWorkflowGraph(
   const stream = await graph.stream(
     {
       productContext: input.productContext ?? "",
+      workspaceId: input.workspaceId,
       userInputBlock: input.userInputBlock,
     },
     { signal: input.signal, streamMode: "custom" },

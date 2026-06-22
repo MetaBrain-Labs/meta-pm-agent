@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -11,7 +12,6 @@ import { fileURLToPath } from "node:url";
 
 export const KNOWLEDGE_GRAPH_FILE_NAME = "product-knowledge-graph.md";
 export const KNOWLEDGE_GRAPH_FILE_DIR = "product-knowledge-graph";
-export const KNOWLEDGE_GRAPH_FILE_PATH = `${KNOWLEDGE_GRAPH_FILE_DIR}/${KNOWLEDGE_GRAPH_FILE_NAME}`;
 
 /**
  * 运行期产品知识图谱 markdown 文件句柄。
@@ -19,6 +19,7 @@ export const KNOWLEDGE_GRAPH_FILE_PATH = `${KNOWLEDGE_GRAPH_FILE_DIR}/${KNOWLEDG
 export interface KnowledgeGraphFileHandle {
   path: string;
   absolutePath: string;
+  workspaceId?: string;
   read(): string;
   write(content: string): void;
 }
@@ -28,16 +29,19 @@ export interface KnowledgeGraphFileHandle {
  */
 export function createKnowledgeGraphFileHandle(
   initialContent: string,
+  workspaceId?: string,
 ): KnowledgeGraphFileHandle {
-  const absolutePath = resolveKnowledgeGraphFilePath();
+  const filePath = getKnowledgeGraphFilePath(workspaceId);
+  const absolutePath = resolveKnowledgeGraphFilePath(workspaceId);
   mkdirSync(dirname(absolutePath), { recursive: true });
   if (!existsSync(absolutePath)) {
     writeFileSync(absolutePath, initialContent, "utf8");
   }
 
   return {
-    path: KNOWLEDGE_GRAPH_FILE_PATH,
+    path: filePath,
     absolutePath,
+    workspaceId,
     read: () => readFileSync(absolutePath, "utf8"),
     write: (content) => {
       writeFileSync(absolutePath, content, "utf8");
@@ -46,14 +50,35 @@ export function createKnowledgeGraphFileHandle(
 }
 
 /**
- * 创建仅能操作 product-knowledge-graph.md 的文件工具集。
+ * 读取指定工作区的运行时知识图谱文件。
+ */
+export function readWorkspaceKnowledgeGraphFile(
+  workspaceId: string,
+): string | null {
+  const absolutePath = resolveKnowledgeGraphFilePath(workspaceId);
+  if (!existsSync(absolutePath)) return null;
+  return readFileSync(absolutePath, "utf8");
+}
+
+/**
+ * 删除指定工作区的运行时知识图谱文件及其工作区目录。
+ */
+export function deleteWorkspaceKnowledgeGraphFile(workspaceId: string): void {
+  const absolutePath = resolveKnowledgeGraphFilePath(workspaceId);
+  if (!existsSync(absolutePath)) return;
+
+  rmSync(dirname(absolutePath), { recursive: true, force: true });
+}
+
+/**
+ * 创建仅能操作当前工作区 product-knowledge-graph.md 的文件工具集。
  */
 export function createKnowledgeGraphFileTools(handle: KnowledgeGraphFileHandle) {
   return [
     tool(
       async ({ content }) => {
         handle.write(content);
-        return formatToolResult("created", handle.read());
+        return formatToolResult(handle, "created", handle.read());
       },
       {
         name: "kg_file_create",
@@ -66,11 +91,15 @@ export function createKnowledgeGraphFileTools(handle: KnowledgeGraphFileHandle) 
     ),
     tool(
       async () => {
+        const content = handle.read();
         return JSON.stringify(
           {
             path: handle.path,
             absolutePath: handle.absolutePath,
-            content: handle.read(),
+            workspaceId: handle.workspaceId,
+            action: "read",
+            size: content.length,
+            preview: content.slice(Math.max(0, content.length - 2000)),
           },
           null,
           2,
@@ -90,7 +119,7 @@ export function createKnowledgeGraphFileTools(handle: KnowledgeGraphFileHandle) 
           ? insertAfterText(current, afterText, content)
           : `${current.trimEnd()}\n\n${content.trim()}\n`;
         handle.write(next);
-        return formatToolResult("inserted", next);
+        return formatToolResult(handle, "inserted", next);
       },
       {
         name: "kg_file_insert",
@@ -112,6 +141,7 @@ export function createKnowledgeGraphFileTools(handle: KnowledgeGraphFileHandle) 
           return JSON.stringify(
             {
               path: handle.path,
+              workspaceId: handle.workspaceId,
               action: "not_found",
               error: "oldText was not found in product-knowledge-graph.md",
             },
@@ -121,7 +151,7 @@ export function createKnowledgeGraphFileTools(handle: KnowledgeGraphFileHandle) 
         }
         const next = current.replace(oldText, newText);
         handle.write(next);
-        return formatToolResult("updated", next);
+        return formatToolResult(handle, "updated", next);
       },
       {
         name: "kg_file_update",
@@ -140,6 +170,7 @@ export function createKnowledgeGraphFileTools(handle: KnowledgeGraphFileHandle) 
           return JSON.stringify(
             {
               path: handle.path,
+              workspaceId: handle.workspaceId,
               action: "not_found",
               error: "text was not found in product-knowledge-graph.md",
             },
@@ -149,7 +180,7 @@ export function createKnowledgeGraphFileTools(handle: KnowledgeGraphFileHandle) 
         }
         const next = current.replace(text, "");
         handle.write(next);
-        return formatToolResult("deleted_content", next);
+        return formatToolResult(handle, "deleted_content", next);
       },
       {
         name: "kg_file_delete_content",
@@ -183,11 +214,16 @@ function insertAfterText(
 /**
  * 格式化文件工具结果，控制返回体大小并保留状态。
  */
-function formatToolResult(action: string, content: string): string {
+function formatToolResult(
+  handle: KnowledgeGraphFileHandle,
+  action: string,
+  content: string,
+): string {
   return JSON.stringify(
     {
-      path: KNOWLEDGE_GRAPH_FILE_PATH,
-      absolutePath: resolveKnowledgeGraphFilePath(),
+      path: handle.path,
+      absolutePath: handle.absolutePath,
+      workspaceId: handle.workspaceId,
       action,
       size: content.length,
       preview: content.slice(Math.max(0, content.length - 2000)),
@@ -198,10 +234,29 @@ function formatToolResult(action: string, content: string): string {
 }
 
 /**
- * 定位 agent-runtime 包根目录下的 product-knowledge-graph/product-knowledge-graph.md。
+ * 返回工作区隔离后的知识图谱相对路径。
  */
-function resolveKnowledgeGraphFilePath(): string {
+function getKnowledgeGraphFilePath(workspaceId?: string): string {
+  const safeWorkspaceId = sanitizeWorkspaceId(workspaceId);
+  return safeWorkspaceId
+    ? `${KNOWLEDGE_GRAPH_FILE_DIR}/${safeWorkspaceId}/${KNOWLEDGE_GRAPH_FILE_NAME}`
+    : `${KNOWLEDGE_GRAPH_FILE_DIR}/${KNOWLEDGE_GRAPH_FILE_NAME}`;
+}
+
+/**
+ * 定位 agent-runtime 包根目录下的工作区知识图谱文件。
+ */
+function resolveKnowledgeGraphFilePath(workspaceId?: string): string {
   const currentFile = fileURLToPath(import.meta.url);
   const packageRoot = resolve(dirname(currentFile), "../../..");
-  return resolve(packageRoot, KNOWLEDGE_GRAPH_FILE_PATH);
+  return resolve(packageRoot, getKnowledgeGraphFilePath(workspaceId));
+}
+
+/**
+ * 将工作区 ID 压缩为安全目录名，避免模型或接口参数影响文件边界。
+ */
+function sanitizeWorkspaceId(workspaceId: string | undefined): string | null {
+  if (!workspaceId) return null;
+  const normalized = workspaceId.trim().replace(/[^a-zA-Z0-9_-]/g, "-");
+  return normalized || null;
 }

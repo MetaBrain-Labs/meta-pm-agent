@@ -13,6 +13,7 @@ import type { UserInputRecord } from "../request/user-input";
  * 产品工作流的公共输入，贯穿 Planner、Executor 与 ProductDirector。
  */
 export interface ProductDirectorWorkflowInput {
+  workspaceId?: string;
   productContext?: string;
   requestAnalysis: RequestAnalysis;
   userInput: UserInputRecord[];
@@ -40,6 +41,7 @@ export interface ExecutorAgentInput extends ProductDirectorWorkflowInput {
  * ProductDirector Agent 验收节点输入，用于汇总 Planner 与 Executor 的产出。
  */
 export interface ProductDirectorReviewInput {
+  workspaceId?: string;
   productContext?: string;
   requestAnalysis: RequestAnalysis;
   plan: TaskExecutionPlan;

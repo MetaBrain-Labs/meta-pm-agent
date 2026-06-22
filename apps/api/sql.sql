@@ -93,6 +93,26 @@ create table public.request_form_item (
   match simple on update no action on delete no action
 );
 
+create table public.product_knowledge_graph (
+  id character varying(36) primary key not null,
+  workspace_id character varying(36) not null,
+  conversation_id character varying(36),
+  request_form_id character varying(36),
+  content text not null,
+  version integer not null default 1,
+  created_at timestamp with time zone default CURRENT_TIMESTAMP,
+  updated_at timestamp with time zone default CURRENT_TIMESTAMP,
+  foreign key (workspace_id) references public.workspace (id)
+  match simple on update no action on delete no action,
+  foreign key (conversation_id) references public.conversation (id)
+  match simple on update no action on delete set null,
+  foreign key (request_form_id) references public.request_form (id)
+  match simple on update no action on delete set null
+);
+create unique index product_knowledge_graph_workspace_id_key
+  on public.product_knowledge_graph using btree (workspace_id);
+comment on table public.product_knowledge_graph is '按工作区保存最终产品知识图谱，一个工作区只有一份当前图谱。';
+
 create table public.task (
   id character varying(36) primary key not null,
   conversation_id character varying(36),

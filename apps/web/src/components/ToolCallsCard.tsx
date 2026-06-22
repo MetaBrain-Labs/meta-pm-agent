@@ -40,6 +40,19 @@ const TOOL_NAME_LABELS: Record<string, string> = {
   generate_artifact: "生成文档",
   web_search: "联网搜索",
   web_fetch: "抓取页面",
+  kg_file_create: "知识图谱文件",
+  kg_file_read: "知识图谱文件",
+  kg_file_insert: "知识图谱文件",
+  kg_file_update: "知识图谱文件",
+  kg_file_delete_content: "知识图谱文件",
+};
+
+const KG_TOOL_TYPE_LABELS: Record<string, string> = {
+  kg_file_create: "新增",
+  kg_file_read: "查询",
+  kg_file_insert: "插入",
+  kg_file_update: "更新",
+  kg_file_delete_content: "删除",
 };
 
 /**
@@ -133,6 +146,9 @@ function ToolCallItem({ toolCall }: { toolCall: ToolCall }) {
     toolCall.name === "web_search"
       ? parseWebSearchPayload(toolCall.result)
       : null;
+  const kgFilePayload = isKnowledgeGraphFileTool(toolCall.name)
+    ? parseKnowledgeGraphToolPayload(toolCall.result)
+    : null;
 
   return (
     <List.Item
@@ -179,10 +195,20 @@ function ToolCallItem({ toolCall }: { toolCall: ToolCall }) {
           {searchPayload?.source && (
             <Tag className="!m-0 text-[11px]">{searchPayload.source}</Tag>
           )}
+          {isKnowledgeGraphFileTool(toolCall.name) && (
+            <Tag className="!m-0 text-[11px]">
+              type: {getKnowledgeGraphToolType(toolCall)}
+            </Tag>
+          )}
         </div>
 
         {toolCall.name === "web_search" ? (
           <WebSearchResultView toolCall={toolCall} payload={searchPayload} />
+        ) : isKnowledgeGraphFileTool(toolCall.name) ? (
+          <KnowledgeGraphToolResultView
+            toolCall={toolCall}
+            payload={kgFilePayload}
+          />
         ) : (
           <GenericToolResult toolCall={toolCall} />
         )}
@@ -277,6 +303,63 @@ function WebSearchResultView({
   );
 }
 
+interface KnowledgeGraphToolPayload {
+  path?: string;
+  workspaceId?: string;
+  action?: string;
+  size?: number;
+  preview?: string;
+  error?: string;
+}
+
+/**
+ * 展示知识图谱文件工具的操作摘要，避免把完整 markdown 挤进聊天正文。
+ */
+function KnowledgeGraphToolResultView({
+  toolCall,
+  payload,
+}: {
+  toolCall: ToolCall;
+  payload: KnowledgeGraphToolPayload | null;
+}) {
+  const completed = toolCall.result !== undefined;
+  const path = payload?.path ?? readStringArg(toolCall.args, "path");
+
+  return (
+    <div className="space-y-2">
+      {!completed && (
+        <Typography.Text className="block text-[13px] text-[var(--ink-faint)]">
+          正在执行文件工具...
+        </Typography.Text>
+      )}
+
+      {payload?.error && (
+        <div className="rounded-md border border-[#fecaca] bg-[#fff1f2] px-3 py-2 text-[13px] text-[var(--danger)]">
+          {payload.error}
+        </div>
+      )}
+
+      {(path || payload?.workspaceId || typeof payload?.size === "number") && (
+        <div className="grid gap-1 rounded-md bg-[var(--surface-muted)] px-3 py-2 text-[12px] text-[var(--ink-mute)]">
+          {path && <span>文件：{path}</span>}
+          {payload?.workspaceId && <span>工作区：{payload.workspaceId}</span>}
+          {typeof payload?.size === "number" && (
+            <span>大小：{payload.size} 字符</span>
+          )}
+        </div>
+      )}
+
+      {payload?.preview ? (
+        <pre className="themed-scrollbar max-h-[220px] overflow-auto rounded-md bg-[var(--surface-muted)] p-3 text-[12px] leading-relaxed text-[var(--ink-mute)]">
+          {payload.preview}
+        </pre>
+      ) : (
+        completed && !payload?.error && <GenericToolResult toolCall={toolCall} />
+      )}
+    </div>
+  );
+}
+
 /**
  * 对未知工具输出做保底展示，方便调试和后续扩展。
  */
@@ -298,30 +381,91 @@ function mapToolName(name: string): string {
 }
 
 /**
+ * 判断工具是否属于受控知识图谱文件工具。
+ */
+function isKnowledgeGraphFileTool(name: string): boolean {
+  return Object.prototype.hasOwnProperty.call(KG_TOOL_TYPE_LABELS, name);
+}
+
+/**
+ * 获取知识图谱文件工具的操作类型展示文案。
+ */
+function getKnowledgeGraphToolType(toolCall: ToolCall): string {
+  const payload = parseKnowledgeGraphToolPayload(toolCall.result);
+  const action = payload?.action;
+  if (action === "created") return "新增";
+  if (action === "read") return "查询";
+  if (action === "inserted") return "插入";
+  if (action === "updated") return "更新";
+  if (action === "deleted_content") return "删除";
+  if (action === "not_found") return "未命中";
+  return KG_TOOL_TYPE_LABELS[toolCall.name] ?? toolCall.name;
+}
+
+/**
+ * 解析知识图谱文件工具返回的 JSON 摘要。
+ */
+function parseKnowledgeGraphToolPayload(
+  value: unknown,
+): KnowledgeGraphToolPayload | null {
+  const payload = parseObjectPayload(value);
+  if (!payload) return null;
+
+  return {
+    path: readStringArg(payload, "path"),
+    workspaceId: readStringArg(payload, "workspaceId"),
+    action: readStringArg(payload, "action"),
+    size: typeof payload.size === "number" ? payload.size : undefined,
+    preview: readStringArg(payload, "preview"),
+    error: readStringArg(payload, "error"),
+  };
+}
+
+/**
  * 解析联网搜索工具返回的 JSON 内容。
  */
 function parseWebSearchPayload(value: unknown): WebSearchPayload | null {
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value) as WebSearchPayload;
-    } catch {
-      return null;
-    }
-  }
-
-  if (typeof value === "object" && value !== null) {
-    return value as WebSearchPayload;
-  }
-
-  return null;
+  return parseObjectPayload(value) as WebSearchPayload | null;
 }
 
 /**
  * 从工具调用参数里读取查询词。
  */
 function readQueryFromArgs(args: Record<string, unknown> | undefined): string {
-  const query = args?.query;
-  return typeof query === "string" ? query : "";
+  return readStringArg(args, "query");
+}
+
+/**
+ * 从对象字段中读取字符串。
+ */
+function readStringArg(
+  args: Record<string, unknown> | undefined,
+  key: string,
+): string {
+  const value = args?.[key];
+  return typeof value === "string" ? value : "";
+}
+
+/**
+ * 将未知工具返回值解析为对象。
+ */
+function parseObjectPayload(value: unknown): Record<string, unknown> | null {
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+
+  return null;
 }
 
 /**

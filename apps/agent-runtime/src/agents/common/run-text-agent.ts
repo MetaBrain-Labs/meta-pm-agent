@@ -81,9 +81,14 @@ export async function* runTextAgent<AgentType extends string>(
       { streamMode: "messages", signal: options.signal },
     );
 
+    const visibleToolNames = new Set(
+      (options.tools ?? []).map((toolItem) => toolItem.name),
+    );
     let responseText = "";
     for await (const [message] of run) {
-      for (const toolCall of getToolCalls(message)) {
+      for (const toolCall of getToolCalls(message).filter((item) =>
+        visibleToolNames.has(item.name),
+      )) {
         yield {
           type: "tool-call",
           toolName: toolCall.name,
@@ -93,13 +98,17 @@ export async function* runTextAgent<AgentType extends string>(
       }
 
       const toolResult = getToolResult(message);
-      if (toolResult) {
+      if (toolResult && visibleToolNames.has(toolResult.name)) {
         yield {
           type: "tool-result",
           toolName: toolResult.name,
           toolResult: toolResult.content,
           agentType: options.agentType,
         };
+        continue;
+      }
+      if (toolResult) {
+        // DeepAgents 内置工具结果只用于内部状态，不进入用户可见 SSE。
         continue;
       }
 

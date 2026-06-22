@@ -1,91 +1,222 @@
 ﻿# AGENTS-zh.md
 
-## 架构补充（当前有效）
+## 角色（Role）
 
-- `apps/agent-runtime/src/graph/workflow.ts` 是 LangGraph 主图入口。Conversation Agent 产出 `user-input-complete` 后，后续 Request Agent、ProductDirector、Planner 和 Executor 流程必须经由该图编排，不要重新在 Conversation Agent 中直接串联这些 Agent。
-- 当前 LangGraph 主流程为 `parse_user_input -> request_agent -> planner_agent -> executor-* -> product_director_agent`。新增工作流阶段时，应新增 LangGraph 节点和边，而不是在单个 Agent 目录内硬编码调用链。
-- 产品工作流的模型调用已经拆成独立 DeepAgent 目录：`apps/agent-runtime/src/agents/product-workflow/planner-agent/`、`executor-agent/` 和 `product-director-agent/`。每个目录维护自己的 `agent.ts` 和 `prompt.ts`；Executor 的固定职责定义放在 `executor-agent/definitions.ts`。
-- Planner Agent 和 ProductDirector Agent 使用 `apps/agent-runtime/src/agents/common/run-json-agent.ts` 做 JSON 结构化输出。具体 Agent 传入 schema、payload、prompt、模型参数和确定性 fallback，不要在各处重复实现 JSON runner。
-- Executor Agent 使用 `apps/agent-runtime/src/agents/common/run-text-agent.ts`，并通过 DeepAgents 文件工具维护 Markdown 知识图谱，不再依赖最终 JSON 结构化输出作为主要产物。
-- 十个 Executor Agent 必须各自保留独立目录：`product-strategy-executor`、`market-research-executor`、`gtm-executor`、`product-discovery-executor`、`product-execution-executor`、`marketing-growth-executor`、`data-analytics-executor`、`ai-shipping-executor`、`toolkit-executor`、`interface-craft-executor`。
-- 产品知识图谱文件为 `apps/agent-runtime/product-knowledge-graph/product-knowledge-graph.md`。仓库只提交该目录的 `.gitkeep`；生成的 Markdown 图谱属于运行时状态，除非明确要求，否则不要提交。
-- `apps/agent-runtime/src/agents/product-workflow/agent.ts` 只负责产品工作流编排、流事件转发、tagged block 格式化和 question-form 格式化。不要把 Planner、Executor、ProductDirector 的 prompt、fallback 或模型执行逻辑重新塞回该文件。
-- 保留 `/api/chat/stop`。前端点击停止时必须先调用该接口，让 API 触发服务端 `AbortController` 并把 `AbortSignal` 传给模型供应商请求，然后再中止浏览器侧 SSE fetch。
-- `request_form.status` 需要随处理阶段更新，例如 `received`、`conversation_consumed`、`request_agent_running`、`request_analyzed`、`workflow_running`、`pending_user_confirmation`、`completed`、`stopped`、`failed`。
-- `request_form_item.status` 也必须随用户可见决策更新。用户提交补充信息确认表单后，对应 `decision` 条目以及它引用的所有 `proposal` 条目都应标记为 `finish`，并把回答内容写入各自 `payload`。
-- proposal 聚合必须保留来源身份。即使问题文本相同，只要 `source_task_id` 或 `source_agent` 不同，就代表不同的待确认 proposal，不能按文本去重，也不能用固定数量截断隐藏有效条目。
+作为 `meta-pm-agent` monorepo 中的务实软件工程 Agent 运行。
 
-## 瑙掕壊
+在进行任何修改前，需要先理解现有架构，遵循已有模式，并确保修改集中在目标范围内。
 
-浣滀负 `meta-pm-agent` monorepo 鐨勫姟瀹炲瀷杞欢宸ョ▼浠ｇ悊寮€灞曞伐浣溿€備慨鏀瑰墠鍏堢悊瑙ｇ幇鏈夋灦鏋勶紝閬靛惊椤圭洰宸叉湁妯″紡锛屽苟鎶婃敼鍔ㄤ弗鏍奸檺鍒跺湪鐢ㄦ埛瑕佹眰鐨勭洰鏍囪寖鍥村唴銆?
-## 鐩爣
+---
 
-浜や粯姝ｇ‘銆佸彲缁存姢锛屽苟鑳借瀺鍏ュ綋鍓?pnpm workspace銆乀urbo 鏋勫缓鍥俱€乀ypeScript 閰嶇疆銆佹暟鎹簱鎸佷箙鍖栨ā鍨嬨€丼SE 鍗忚鍜屽簲鐢ㄨ竟鐣岀殑鏀瑰姩銆傚湪鏈湴鐜鍏佽鐨勬儏鍐典笅锛屽畬鎴愬疄鐜板拰鐩稿簲楠岃瘉銆?
-## 閲嶈瑙勫垯
+## 目标（Goal）
 
-- 浣跨敤鏍圭洰褰?`packageManager` 瀛楁寮哄埗鎸囧畾鐨?`pnpm` v11.3.0銆?- Workspace 鑼冨洿鏄?`apps/*` 鍜?`packages/*`銆?- Turbo 璐熻矗浠诲姟缂栨帓銆俙pnpm build` 浼氳繍琛?`turbo run build`锛屽苟閫氳繃 `dependsOn: ["^build"]` 纭繚鍏堟瀯寤?packages锛屽啀鏋勫缓 apps銆?- 杩愯搴旂敤寮€鍙戣剼鏈墠蹇呴』鍏堟瀯寤哄叡浜寘锛屽洜涓哄悇鍖呭叆鍙ｆ寚鍚?`dist/`锛岃€屼笉鏄?TypeScript 婧愮爜銆傞娆℃墽琛?`pnpm dev` 鍓嶈嚦灏戣繍琛屼竴娆?`pnpm build`銆?- 涓嶈鎻愪氦 `dist/`锛涚敓鎴愮殑鏋勫缓浜х墿宸茶 Git 蹇界暐銆?- 鏍圭洰褰曞強 Node.js 搴旂敤/鍖呬娇鐢?TypeScript 6.0.3銆傜敱浜?`baseUrl` 宸插簾寮冿紝鍩虹閰嶇疆涓殑 `ignoreDeprecations: "6.0"` 蹇呴』淇濈暀銆?- `apps/web` 浣跨敤 TypeScript 5.8.3锛屽苟鎷ユ湁鐙珛鐨?`baseUrl`銆乣paths` 鍜?`noEmit: true` 閰嶇疆銆備笉瑕佸崌绾у畠鐨?TypeScript 鐗堟湰銆?- `apps/web` 褰撳墠浣跨敤 React銆乂ite 鍜?Ant Design 6銆傚鐞嗗墠绔椂淇濈暀 Ant Design 6 鐨勫鍏ユ柟寮忓拰缁勪欢 API銆?- `packages/shared`銆乣packages/database` 鍜?`apps/agent-runtime` 浣跨敤 TypeScript project references锛屽苟鍚敤 `composite: true`銆傛柊澧炲彲瀵煎叆鍏变韩鍖呮椂閬靛惊姝ゆā寮忋€?- 淇濈暀 `packages/database/tsconfig.json` 涓殑 `"types": ["node"]`锛宲npm 涓ユ牸闅旂涓嶄細鑷姩鏆撮湶 `@types/node`銆?- `apps/agent-runtime/src/graph.ts` 鍘嗗彶涓婂瓨鍦ㄧ敱 `@langchain/langgraph` 鐗堟湰涓嶅尮閰嶅紩璧风殑 LangGraph typed-state API 绫诲瀷闂銆傚垎鏋愬寘绾?TypeScript 澶辫触鏃堕渶瑕佽€冭檻杩欎竴鐐广€?- `apps/web` 閫氳繃 `eslint-config-next` 閰嶇疆 ESLint锛涘鏋滄湰鍦扮己灏?Next 鐨?compiled parser 鍖咃紝lint 鍙兘澶辫触銆傛牴鐩綍 Turbo 鐨?lint 鍜?typecheck 浠诲姟褰撳墠娌℃湁瀹屾暣鐢熸晥鑴氭湰銆?
-## 搴旂敤杈圭晫
+交付正确、可维护的代码变更，使其能够与以下系统正确集成：
 
-淇濇寔浠ヤ笅鍖呬笌搴旂敤杈圭晫锛?
-```text
-apps/
-  agent-runtime/   鍩轰簬 LangGraph/DeepAgents 鐨?PM Runtime锛圢ode.js锛宑omposite TypeScript锛?  api/             Hono HTTP API 鏈嶅姟锛堢鍙?3001锛孲SE 娴佸紡鍝嶅簲锛孭risma 鎸佷箙鍖栵級
-  web/             Vite + React + Ant Design 6 鍓嶇锛圱ypeScript 5.8.3锛屾祬鑹蹭富棰橈級
-  worker/          BullMQ Redis Worker
-packages/
-  shared/          鍏变韩绫诲瀷銆乑od Schema銆丏TO銆丄gent 鐘舵€?鍥?杩愯鏃剁被鍨?  database/        浠?dist/ 瀵煎嚭鐨?Prisma Client 鍗曚緥
-```
+- pnpm workspace
+- Turbo 构建图
+- TypeScript 配置
+- 数据库持久化模型
+- SSE 通信协议
+- 应用边界结构
 
-- 浣跨敤 `.env` 绠＄悊鏈湴閰嶇疆銆傚鍒?`.env.example` 骞跺～鍐?`DATABASE_URL`銆丷edis 閰嶇疆銆乣OPENAI_API_KEY`銆乣LLM_MODEL` 鍜?`LLM_BASE_URL`銆?- Prisma 鍛戒护蹇呴』鍦?`packages/database` 涓嬭繍琛岋細`pnpm db:generate`銆乣pnpm db:push` 鎴?`pnpm db:migrate`銆?- 鏋勫缓 `@repo/database` 鍓嶅繀椤绘墽琛?`prisma generate`锛沗pnpm-workspace.yaml` 涓殑 `allowBuilds` 璐熻矗澶勭悊瀹夎闃舵鐨勮椤硅姹傘€?- 淇濇寔宸ヤ綔鍖?鑱婂ぉ璺敱鐨勫綋鍓嶅垝鍒嗭細`/workplace`銆乣/chat/:workspaceId`銆乣/chat/:workspaceId/:threadId`銆?- 鏍囧噯 Web 鐜涓殑鐩綍閫夋嫨鏃犳硶鍙潬鏆撮湶瀹屾暣缁濆璺緞銆備繚鐣欏彲缂栬緫璺緞杈撳叆锛屽苟鍦ㄥ彲鐢ㄦ椂淇濈暀瀹夸富鐜鎻愪緵鐨?`file.path` 澶勭悊銆?- 闄ら潪浠诲姟纭湁闇€瑕侊紝涓嶈淇敼渚濊禆鐗堟湰銆佺敓鎴愭枃浠躲€佹棤鍏虫ā鍧楁垨浠撳簱绾ч厤缃€?
-## Web 结构规则
+在本地环境允许的情况下，尽可能完成实现与验证。
 
-- 保持 `apps/web/src/App.tsx` 作为应用外壳。它负责串联 Provider、顶层状态、路由和页面选择，但不要堆积页面 JSX、API 客户端、SSE 读取器或 DTO 映射逻辑。
-- 浏览器侧 API 调用放在 `apps/web/src/api/`。
-- 共享 UI 常量和本地偏好 key 放在 `apps/web/src/constants/`。
-- DTO 到视图模型的恢复逻辑放在 `apps/web/src/mappers/`。
-- 路由级页面实现放在 `apps/web/src/pages/<page-name>/`，例如 `pages/workplace/` 和 `pages/chat/`。
-- 路径解析和 History 辅助函数放在 `apps/web/src/router/`。
-- 流事件 reducer、Markdown 工具和结构化块解析器放在 `apps/web/src/utils/`。
-- 共享 React 视图组件放在 `apps/web/src/components/`，可复用弹窗放在 `apps/web/src/components/modals/`，可复用 Hook 放在 `apps/web/src/hooks/`。
-- 在继续向 `App.tsx` 增加代码前，优先把逻辑移动到这些职责清晰的模块中。
-- 助手消息 Markdown 渲染保持在 `apps/web/src/utils/markdown.tsx`；需要保留标准管道表格、链接、列表、代码块和行内强调的解析能力，不要改用 `dangerouslySetInnerHTML`。
-## 联网搜索与工具授权
+---
 
-- `/api/chat` 请求体可以携带 `enabledTools`，当前用户可见工具主要是 `["web_search"]`。知识图谱文件工具名称也需要进入共享 schema，但由产品工作流运行时按权限内部挂载，不作为任意文件系统能力暴露给用户。
-- 运行时工具权限统一放在 `apps/agent-runtime/src/agents/common/tool-access.ts`。当前 `web_search` 只授权给 Conversation Agent；`kg_file_create`、`kg_file_read`、`kg_file_insert`、`kg_file_update`、`kg_file_delete_content` 只授权给 ProductDirector Agent 和十个 Executor Agent。
-- 知识图谱文件工具实现位于 `apps/agent-runtime/src/agents/common/knowledge-graph-file-tool.ts`，并且必须绑定到 `apps/agent-runtime/product-knowledge-graph/product-knowledge-graph.md`，不要在单个 Agent 中绕过集中授权直接提供任意文件工具。
-- `web_search` 的具体实现位于 `apps/agent-runtime/src/agents/common/web-search-tool.ts`。配置 `TAVILY_API_KEY` 时优先使用 Tavily Search；未配置时使用 Hacker News Algolia、OpenAlex 等免费公开索引作为无额外搜索依赖的兜底。
-- 联网搜索后端不可用、超时或网络失败时，工具必须返回结构化结果，例如 `results: []` 和 `error` 字段，而不是抛出异常，避免中断 `/api/chat` SSE 流。
-- 转发 `tool-call` 和 `tool-result` 事件时保留 `agentType`，方便后续多 Agent 工具调用在前端按来源展示。
-## 前端展示补充
+## Agent 行为原则（Agent Operating Principles）
 
-- 工具调用明细（包括 `web_search` 结果和授权的知识图谱文件工具调用）应通过 `ToolCallsCard` 以折叠卡片展示在对应助手消息附近。
-- Executor 运行期间通过 Planner DAG 区域展示加载状态；写入知识图谱后展示“已更新至知识图谱”完成卡片。
-- `ToolCallsCard`、`UserInputCard` 和 `RequestAnalysisCard` 默认折叠，让中间数据可追溯但不挤占普通助手正文。
-## 鑱婂ぉ鍜?Agent 鍗忚
+### 1. 明确优先（Clarification First）
 
-- 淇濇寔 `/api/chat` 鐨?SSE 鍗忚銆傛帴鍙ｈ繑鍥?`text/event-stream`锛屼簨浠剁被鍨嬪寘鎷?`start`銆乣text`銆乣thinking`銆乣question-form-start`銆乣question-form-complete`銆乣user-input-start`銆乣user-input-complete`銆乣request-analysis-start`銆乣request-analysis-complete`銆乣todo-update`銆乣tool-call`銆乣tool-result`銆乣step-finish`銆乣finish` 鍜?`error`銆?- `thinking` 浜嬩欢鍙互鎼哄甫 `agentType`銆傝浆鍙戞垨杞崲娴佷簨浠舵椂蹇呴』淇濈暀璇ュ瓧娈点€?- Conversation Agent 鐨勬祦鐗囨浣跨敤 `agentType: "conversation"`銆?- Request Agent 鐨勬祦鐗囨浣跨敤 `agentType: "request"`銆?- 鍚庣画鏂板 Agent 鏃讹紝闇€瑕佸垎閰嶇ǔ瀹氱殑 `agentType`锛屽苟鍦?runtime 浜嬩欢銆丄PI 鎸佷箙鍖栧拰鍓嶇娓叉煋涓繚鎸佷竴鑷淬€?- `apps/agent-runtime` 浼氬湪杈撳嚭鐢ㄦ埛鍙 `text` 鍓嶈繃婊?`No files found in /` 绛?DeepAgent/杩愯鐜鍐呴儴鍣０銆備笉瑕佹妸鍐呴儴宸ュ叿鎴栫幆澧冨櫔澹伴噸鏂板紩鍏ユ櫘閫氬姪鎵嬫鏂囥€?
-## 鎸佷箙鍖栬鍒?
-- API 閫氳繃 Prisma/PostgreSQL 鎸佷箙鍖栬处鍙枫€佸伐浣滃尯銆佷細璇濄€佹秷鎭拰璇锋眰琛ㄥ崟鏁版嵁銆?- 鎸佷箙鍖栨暟鎹簲閫氳繃 API 鍔犺浇锛歚/api/account`銆乣/api/workspaces`銆乣/api/chats`銆乣/api/chats/:id/messages`銆?- 涓嶈鎶婅亰澶╂秷鎭巻鍙叉寔涔呭寲鍒版祻瑙堝櫒 `localStorage`銆傛祻瑙堝櫒鏈湴瀛樺偍鍙兘鐢ㄤ簬闈炴潈濞?UI 鍋忓ソ锛屼緥濡傚綋鍓嶅伐浣滃尯 id銆?- 鐢ㄦ埛娑堟伅鍦?Agent 鎵ц鍓嶆寔涔呭寲銆?- Conversation Agent 鐨勫姪鎵嬭緭鍑哄繀椤讳互 `message.type = "conversation"` 鎸佷箙鍖栥€?- Request Agent 鐨勫姪鎵嬭緭鍑哄繀椤讳互 `message.type = "request"` 鎸佷箙鍖栥€?- Agent 鎺ㄧ悊杩囩▼蹇呴』鍐欏叆 `message.meta.reasoningContent`銆?- Conversation Agent 鏁寸悊鍑虹殑缁撴瀯鍖栫敤鎴疯緭鍏ュ啓鍏?`message.user_input`銆?- Request Agent 鍒嗘瀽缁撴灉蹇呴』淇濈暀鍦?request 绫诲瀷娑堟伅姝ｆ枃涓紝骞跺悓姝ュ啓鍏?request-form items銆?- 淇敼鎸佷箙鍖栬亰澶?宸ヤ綔鍖哄崗璁椂锛岄渶瑕佸悓姝ユ洿鏂?API schemas銆乺epositories銆乻ervices銆乺outes/controllers銆佸墠绔?types锛屼互鍙婂巻鍙叉秷鎭仮澶?娓叉煋閫昏緫銆?
-## 鍓嶇灞曠ず瑙勫垯
+- 不得对缺失信息做任何假设（需求 / 架构 / 意图）。
+- 如果信息不清晰，必须先提问再实现。
+- 在无人值守（autonomous mode）时：
+  - 选择最合理解释
+  - 继续执行
+  - 明确记录所有假设，而不是阻塞流程
 
-- 鎺ㄧ悊杩囩▼搴斿睍绀哄湪瀹冩墍灞炵殑涓氬姟闃舵闄勮繎銆?- Conversation Agent 鎺ㄧ悊灞曠ず鍦ㄦ櫘閫氬姪鎵嬫秷鎭銆?- Request Agent 鎺ㄧ悊灞曠ず鍦ㄢ€滅敤鎴疯緭鍏ユ暣鐞嗏€濅箣鍚庛€佲€淩equest Agent 鍒嗘瀽鈥濅箣鍓嶃€?- 鍚庣画鏂板 Agent 鏃讹紝缁х画鎸?`agentType` 鏀剧疆瀵瑰簲鎺ㄧ悊杩囩▼銆?- 鈥滅敤鎴疯緭鍏ユ暣鐞嗏€濆拰鈥淩equest Agent 鍒嗘瀽鈥濆崱鐗囬粯璁ゆ姌鍙犮€?- 鏂板鏍峰紡浼樺厛浣跨敤 Tailwind 宸ュ叿绫汇€傞櫎闈炴槑纭姹傛垨鏃犳硶閬垮厤锛屼笉瑕佸垱寤烘柊鐨?CSS/SCSS/Less/CSS Module 鏂囦欢銆?- 闄ら潪浠诲姟鏄庣‘闇€瑕侊紝涓嶈鏂板鍏ㄥ眬鏍峰紡瑙勫垯鎴栧唴鑱?`<style>`銆?
-## 浠ｇ爜娉ㄩ噴瑙勫垯
+---
 
-鎵€鏈夌敓鎴愮殑鍚庣浠ｇ爜銆佸墠绔嚱鏁般€佺被銆佹湇鍔°€佷粨鍌ㄣ€丠ook銆丄gent銆佸伐浣滄祦鍜屽伐鍏峰嚱鏁伴兘蹇呴』鍖呭惈娉ㄩ噴銆?
-- 浣跨敤绠€浣撲腑鏂囨敞閲娿€?- 绫汇€佸叿鏈変笟鍔″惈涔夌殑鎺ュ彛/绫诲瀷銆佸鍑哄嚱鏁般€佸叕鍏辨柟娉曘€丷eact Hook銆丼ervice銆丷epository銆丆ontroller銆丄gent 瀹炵幇銆丩angGraph 鑺傜偣鍜屽伐浣滄祦姝ラ浣跨敤 JSDoc銆?- 閲嶈涓氬姟閫昏緫銆佸垎鏀€佺姸鎬佽縼绉汇€佸浘杞崲鍜屽鏉傝绠椾娇鐢ㄥ崟琛屾敞閲娿€?- 娉ㄩ噴鎻忚堪涓氬姟鎰忓浘锛岃€屼笉鏄噸澶嶅疄鐜扮粏鑺傘€?- 閬垮厤 `// 瀹氫箟鍙橀噺` 杩欑被鏃犳剰涔夋敞閲娿€?
-绀轰緥锛?
-```ts
-/**
- * 鑾峰彇褰撳墠宸ヤ綔鍖虹殑浜у搧涓婁笅鏂囥€? */
-export async function getProductContext() {}
+### 2. 简洁优先（Simplicity Principle）
 
-// 灏嗛渶姹傚垎鏋愮粨鏋滀氦缁?Planner Agent銆?graph.addEdge("request-agent", "planner-agent");
-```
+- 优先选择最简单且正确的解决方案。
+- 避免过度抽象与过早工程化。
+- 只有在确实需要时才增加扩展性。
 
-## 宸ヤ綔娴佺▼
+---
 
-1. 缂栬緫鍓嶉槄璇荤浉鍏虫簮鐮併€侀厤缃拰 package scripts銆?2. 妫€鏌ュ伐浣滄爲鐘舵€侊紝骞朵繚鐣欑敤鎴峰凡鏈夌殑鏃犲叧鏀瑰姩銆?3. 鎵惧嚭绗﹀悎浠撳簱鐜版湁妯″紡鐨勬渶灏忓畬鏁存敼鍔ㄣ€?4. 鍗忚鍙戠敓鍙樺寲鏃讹紝鍏堟洿鏂板叡浜被鍨嬫垨 Schema锛屽啀鏇存柊浣跨敤鏂广€?5. 杩愯渚濊禆鍏变韩鍖呯殑搴旂敤鎴栨祴璇曞墠锛屽厛鏋勫缓鎵€闇€鍏变韩鍖呫€?6. 浼樺厛鎵ц鑼冨洿鏈€灏忎絾鏈夋晥鐨勯獙璇侊紝鍐嶆牴鎹敼鍔ㄩ闄╂墿澶ч獙璇佽寖鍥淬€?7. 鍒嗘瀽 TypeScript 澶辫触鏃讹紝鑰冭檻 `apps/agent-runtime/src/graph.ts` 鐨勫凡鐭ョ被鍨嬮闄┿€?8. 鏈€缁堟鏌?diff锛屾帓闄ゆ剰澶栨敼鍔ㄣ€佺敓鎴愪骇鐗┿€佸瘑閽ユ硠闇层€佷緷璧栨紓绉诲拰鍗忚鍥炲綊銆?
-## 杈撳嚭瑕佹眰
+### 3. 修改范围控制（Scope Protection）
 
-- 绠€瑕佽鏄庝慨鏀瑰唴瀹瑰強鍘熷洜銆?- 鍒楀嚭宸叉墽琛岀殑楠岃瘉鍛戒护鍙婂叾缁撴灉銆?- 璇存槑鏈兘鎵ц鐨勬祴璇曟垨妫€鏌ワ紝骞剁粰鍑哄叿浣撻樆濉炲師鍥犮€?- 鏄庣‘鍓╀綑椋庨櫓銆佸亣璁俱€佽縼绉绘楠ゆ垨蹇呰鐨勭幆澧冮厤缃€?- 鐩存帴寮曠敤鍙樻洿鏂囦欢锛屽苟淇濇寔鏈€缁堝洖澶嶇畝娲併€?
+- 不得修改无关代码。
+- 如果发现代码异味或设计问题：
+  - 必须明确指出
+  - 不得自行修复（除非被要求）
+  - 可提出后续任务建议
+
+---
+
+### 4. 不确定性处理（Uncertainty Handling）
+
+- 必须显式标注不确定性。
+- 若可通过安全的小实验降低不确定性：
+  - 执行局部、低风险实验
+  - 总结假设与结果
+  - 提交给用户确认
+
+- 不允许表现出“虚假的确定性”。
+
+---
+
+### 5. 主动优化建议（Proactive Improvement Suggestions）
+
+- 在合适情况下主动提出更优方案。
+- 不仅限于当前任务，也应包含长期改进建议。
+
+---
+
+### 5.1 替代方案规则（新增）
+
+- 如果发现明显更优方案，必须在实现前提出。
+- 用 2–4 个要点解释权衡（tradeoff）。
+- 如果当前方案仍然合理：
+  - 可以继续执行当前方案
+  - 除非替代方案可以避免严重风险、浪费或重大返工
+
+---
+
+## 重要规则（Important Rules）
+
+- 使用 `pnpm v11.3.0`（由 packageManager 强制）。
+- monorepo 结构：
+  - `apps/*`
+  - `packages/*`
+
+- 使用 Turbo 进行构建编排：
+  - `pnpm build` 等价于 `turbo run build`
+
+- 构建依赖顺序：shared packages → apps
+- `dist/` 是构建产物，不可提交到 git
+- Node/Root 使用 TypeScript 6.0.3（保留 ignoreDeprecations="6.0"）
+- `apps/web` 使用 TypeScript 5.8.3（不可升级）
+- React + Vite + Ant Design 6（必须保持 API 兼容）
+- `packages/*` 使用 TypeScript project references（composite: true）
+- Prisma 必须在 `packages/database` 中执行
+- `.env` 包含数据库、Redis、LLM、Tavily 等配置
+- web_search 默认可用，但依赖配置
+- build 前必须先构建 shared packages
+- 不允许随意升级依赖版本
+
+---
+
+## 系统边界（Boundaries）
+
+### 项目结构
+
+- `apps/agent-runtime`：LangGraph / DeepAgents 运行时
+- `apps/api`：Hono API + SSE
+- `apps/web`：React 前端
+- `apps/worker`：BullMQ worker
+- `packages/shared`：共享 schema / types
+- `packages/database`：Prisma client
+
+---
+
+## Web 结构规则（Frontend Architecture）
+
+### app 结构约束
+
+- `App.tsx` 仅作为应用入口（路由 + provider）
+- API 调用必须在 `src/api/`
+- UI 常量在 `src/constants/`
+- DTO 转换在 `src/mappers/`
+- 页面在 `src/pages/`
+- 路由工具在 `src/router/`
+- 通用工具在 `src/utils/`
+- 组件在 `src/components/`
+
+---
+
+## Chat & Agent 协议
+
+- 保持 `/api/chat` SSE 流协议
+- 支持事件类型：
+  - start / text / thinking / tool-call / tool-result / finish 等
+
+- 必须保持 `agentType` 字段贯穿
+- Conversation / Request Agent 分离执行
+- Workflow 由 LangGraph 管理（禁止手动串联 agent）
+- Product workflow 顺序固定：
+
+  ```
+  parse_user_input → request_agent → planner → executor → director
+  ```
+- Conversation Agent 产出 `user-input-complete` 后，后续 Request Agent、Planner、Executor、ProductDirector 必须继续由 LangGraph 主图编排，不要在 Conversation Agent 中直接串联这些 Agent。
+- Planner 和 ProductDirector 使用 `apps/agent-runtime/src/agents/common/run-json-agent.ts`；Executor 使用 `apps/agent-runtime/src/agents/common/run-text-agent.ts`。
+- 只允许显式授权、用户可见的工具进入 `tool-call` / `tool-result` SSE。DeepAgents 内置的任务/todo 工具、未授权文件读取等内部工具事件必须过滤，避免在前端出现长期加载卡片或内部文件错误。
+
+---
+
+## 产品知识图谱（Product Knowledge Graph）
+
+- 运行时知识图谱按工作区隔离，路径为 `apps/agent-runtime/product-knowledge-graph/<workspaceId>/product-knowledge-graph.md`。
+- `apps/agent-runtime/product-knowledge-graph/` 只提交 `.gitkeep`；工作区子目录和生成的 markdown 图谱属于运行时状态，除非明确要求，不得提交。
+- Executor Agent 和 ProductDirector Agent 只能通过 `apps/agent-runtime/src/agents/common/knowledge-graph-file-tool.ts` 中的受控工具读写当前工作区图谱，不得直接接入任意文件系统工具。
+- 产品工作流结束后，API 必须将当前工作区最终图谱写入 `product_knowledge_graph` 表；只有数据库写入成功后，才能删除对应工作区的运行时图谱目录。
+- `product_knowledge_graph` 以 `workspace_id` 唯一约束保证一个工作区只有一份当前图谱，并保留可选 `conversation_id`、`request_form_id` 来源信息。
+- Executor 的 `knowledge_graph_patch` 和完整 `knowledge_graph_markdown` 不要写入 `message` 或 `request_form_item.payload`；这些重内容只应进入 `product_knowledge_graph`。
+
+---
+
+## 持久化规则（Persistence）
+
+- 聊天、workspace、message 使用 Prisma 持久化
+- conversation / request message 分类型存储
+- reasoning 必须存入 meta.reasoningContent
+- request_form 必须跟踪状态流转
+- proposal 必须保留来源信息（不能合并丢失）
+- 修改持久化协议时，必须同步更新 API schema、repository、service、controller、前端 type、历史消息恢复和渲染逻辑。
+
+---
+
+## 前端展示规则（Frontend Display Rules）
+
+- reasoning 显示在对应 agent 阶段附近
+- tool-call 使用 `ToolCallsCard` 折叠卡片展示，并且必须按 `agentType` 放在对应 Agent 阶段附近
+- 不要把所有 Executor 的工具调用合并为一个总卡片；每个 Executor Agent 应在自己的推理/进度区域下方显示自己的知识图谱工具卡片
+- `web_search` 属于 Conversation Agent；知识图谱文件工具属于 ProductDirector 和十个 Executor Agent
+- Executor 输出通过 DAG 展示
+- UI 默认使用 Tailwind
+- 禁止新增全局 CSS
+
+---
+
+## 代码注释规则（Code Comment Rules）
+
+- 后端 & 前端核心逻辑必须加注释
+- 使用中文注释
+- JSDoc 用于 public API / service / agent / workflow
+- 注释强调业务意图，不解释语法
+
+---
+
+## 工作流（Workflow）
+
+1. 阅读相关代码与配置
+2. 保持未修改部分不变
+3. 找最小修改集
+4. 先更新 schema 再更新 consumer
+5. 优先 build shared packages
+6. 先做最小验证，再扩展验证范围
+7. 注意已知 TS 报错
+8. review diff 避免污染
+
+---
+
+## 输出要求（Output）
+
+必须包含：
+
+- 修改摘要
+- 执行的验证命令及结果
+- 未执行测试及原因
+- 风险与假设
+- 变更文件列表
