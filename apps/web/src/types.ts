@@ -68,11 +68,16 @@ export interface RequestAnalysis {
 export type ProductWorkflowAgentType =
   | "product_director"
   | "planner"
-  | "product_strategy"
-  | "user_insight"
-  | "solution_decision"
-  | "feature_arch"
-  | "tech_design"
+  | "executor-product-strategy"
+  | "executor-market-research"
+  | "executor-gtm"
+  | "executor-product-discovery"
+  | "executor-product-execution"
+  | "executor-marketing-growth"
+  | "executor-data-analytics"
+  | "executor-ai-shipping"
+  | "executor-toolkit"
+  | "executor-interface-craft"
   | string;
 
 export interface TaskExecutionNode {

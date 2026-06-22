@@ -152,3 +152,5 @@ apps/api/sql/**
 _tmp*
 # LangGraph API
 .langgraph_api
+
+references

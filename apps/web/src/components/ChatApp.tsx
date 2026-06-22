@@ -349,12 +349,16 @@ const AGENT_LABELS: Record<string, string> = {
   request: "Request Agent",
   planner: "Planner Agent",
   product_director: "ProductDirector Agent",
-  product_strategy: "Product Strategy Agent",
-  user_insight: "User Insight Agent",
-  solution_decision: "Solution Decision Agent",
-  feature_arch: "Feature Architecture Agent",
-  tech_design: "Technical Design Agent",
-  data_ops: "Data Operations Agent",
+  "executor-product-strategy": "Product Strategy Executor",
+  "executor-market-research": "Market Research Executor",
+  "executor-gtm": "Go-to-Market Executor",
+  "executor-product-discovery": "Product Discovery Executor",
+  "executor-product-execution": "Product Execution Executor",
+  "executor-marketing-growth": "Marketing Growth Executor",
+  "executor-data-analytics": "Data Analytics Executor",
+  "executor-ai-shipping": "AI Shipping Executor",
+  "executor-toolkit": "Toolkit Executor",
+  "executor-interface-craft": "Interface Craft Executor",
 };
 
 /**

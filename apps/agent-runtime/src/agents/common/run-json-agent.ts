@@ -34,11 +34,13 @@ export interface RunJsonAgentOptions<T, AgentType extends string> {
   name: string;
   modelOptions?: ChatModelOptions;
   systemPrompt: string;
+  /** DeepAgents 技能目录 sources；不是单个技能名称。 */
+  skills?: string[];
   payload: unknown;
   schema: {
-    safeParse(value: unknown):
-      | { success: true; data: T }
-      | { success: false; error: unknown };
+    safeParse(
+      value: unknown,
+    ): { success: true; data: T } | { success: false; error: unknown };
   };
   fallback: (reason: string) => T;
   signal?: AbortSignal;
@@ -56,7 +58,8 @@ export async function* runJsonAgent<T, AgentType extends string>(
       systemPrompt: options.systemPrompt,
       tools: [],
       name: options.name,
-      skills: [],
+      // 这里接收 DeepAgents 技能目录 sources；具体技能名由 source 内的 SKILL.md 声明。
+      skills: options.skills ?? [],
     });
 
     const run = await agent.stream(
@@ -79,8 +82,14 @@ export async function* runJsonAgent<T, AgentType extends string>(
       responseText += getTextContent(message);
     }
 
+    console.log(`[${options.agentLabel}] Raw model output:`, responseText);
     const parsed = parseJsonObject(responseText);
+    console.log(`[${options.agentLabel}] Parsed JSON output:`, parsed);
     const result = options.schema.safeParse(parsed);
+    console.log(
+      `[${options.agentLabel}] JSON schema validation result:`,
+      result,
+    );
     if (result.success) return result.data;
 
     yield {

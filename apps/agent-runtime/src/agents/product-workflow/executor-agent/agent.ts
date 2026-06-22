@@ -11,7 +11,11 @@ import type {
   ExecutorAgentInput,
   ProductWorkflowStreamEvent,
 } from "../types";
-import { getExecutorDefinition } from "./definitions";
+import {
+  getExecutorDefinition,
+  isExecutorAgentType,
+  type ExecutorAgentType,
+} from "./definitions";
 import { createExecutorAgentPrompt } from "./prompt";
 
 /**
@@ -20,7 +24,9 @@ import { createExecutorAgentPrompt } from "./prompt";
 export async function* streamExecutorAgent(
   input: ExecutorAgentInput,
 ): AsyncGenerator<ProductWorkflowStreamEvent, ExecutorAgentResult, void> {
-  const definition = getExecutorDefinition(input.task.assigned_agent);
+  const definition = getExecutorDefinition(
+    assertExecutorAgentType(input.task.assigned_agent),
+  );
 
   return yield* runJsonAgent({
     agentType: definition.agentType,
@@ -30,13 +36,16 @@ export async function* streamExecutorAgent(
       ...JSON_AGENT_MODEL_OPTIONS,
       maxTokens: 4096,
     },
-    systemPrompt: createExecutorAgentPrompt({
-      agentType: definition.agentType,
-      focusLayer: definition.focusLayer,
-      name: definition.name,
-      role: definition.role,
-    }),
+    systemPrompt: createExecutorAgentPrompt(definition),
     payload: {
+      executor_profile: {
+        agent_type: definition.agentType,
+        domain: definition.domain,
+        graph_role: definition.graphRole,
+        allowed_entity_types: definition.allowedEntityTypes,
+        allowed_relation_types: definition.allowedRelationTypes,
+        skills: definition.skills,
+      },
       product_context: input.productContext || "No product context provided.",
       task: input.task,
       plan: input.plan,
@@ -56,14 +65,16 @@ export async function* streamExecutorAgent(
 function createFallbackExecutorResult(
   task: TaskExecutionNode,
 ): ExecutorAgentResult {
-  const definition = getExecutorDefinition(task.assigned_agent);
+  const definition = getExecutorDefinition(
+    assertExecutorAgentType(task.assigned_agent),
+  );
   const entityId = `${definition.agentType}-${task.sequence}`;
 
   return {
     task_id: task.task_id,
     agent_type: definition.agentType,
     focus_layer: definition.focusLayer,
-    summary: `${definition.displayName} generated an MVP placeholder result for the ${definition.focusLayer} layer.`,
+    summary: `${definition.displayName} generated a minimum graph-native placeholder result for the ${definition.focusLayer} layer.`,
     entities: [
       {
         id: entityId,
@@ -82,4 +93,12 @@ function createFallbackExecutorResult(
       notes: "MVP 回退结果满足最小结构化输出要求。",
     },
   };
+}
+
+/**
+ * 保护运行时分派边界，避免 Planner 输出未知 Agent 类型时静默进入错误节点。
+ */
+function assertExecutorAgentType(agentType: string): ExecutorAgentType {
+  if (isExecutorAgentType(agentType)) return agentType;
+  throw new Error(`Unknown executor agent type: ${agentType}`);
 }

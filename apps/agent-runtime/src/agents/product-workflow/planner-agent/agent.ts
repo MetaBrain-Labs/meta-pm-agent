@@ -42,7 +42,7 @@ export async function* streamPlannerAgent(
 }
 
 /**
- * 在 Planner Agent 不可用时生成稳定的六段式 DAG。
+ * 在 Planner Agent 不可用时生成稳定的十 Executor 图谱 DAG。
  */
 function createFallbackPlan(
   analysis: PlannerAgentInput["requestAnalysis"],
@@ -56,21 +56,21 @@ function createFallbackPlan(
   return {
     request_summary: summarizeBusinessModels(analysis.business_model),
     dag: {
-      nodes: taskSpecs.map(({ definition }) => definition.agentType),
-      edges: taskSpecs.slice(1).map(({ definition }, index) => ({
-        source: taskSpecs[index]!.definition.agentType,
-        target: definition.agentType,
+      nodes: taskSpecs.map(({ sequence }) => createTaskId(sequence)),
+      edges: taskSpecs.slice(1).map((_taskSpec, index) => ({
+        source: createTaskId(index + 1),
+        target: createTaskId(index + 2),
       })),
     },
     tasks: taskSpecs.map(({ definition, sequence }, index) => ({
-      task_id: `task-${String(sequence).padStart(2, "0")}`,
+      task_id: createTaskId(sequence),
       sequence,
       title: definition.displayName,
-      description: definition.role,
+      description: definition.graphRole,
       assigned_agent: definition.agentType,
-      depends_on: index === 0 ? [] : [`task-${String(index).padStart(2, "0")}`],
+      depends_on: index === 0 ? [] : [createTaskId(index)],
       covered_business_model_indexes: coveredIndexes,
-      expected_output: `Produce the minimum ${definition.focusLayer} layer graph delta and review notes.`,
+      expected_output: `Produce graph-native ${definition.allowedEntityTypes.join(", ")} updates with traceable relations.`,
       quality_check: {
         status: "pending",
         criteria: [
@@ -81,6 +81,13 @@ function createFallbackPlan(
     })),
     assumptions: ["Planner Agent 使用 MVP 回退 DAG，后续可由模型动态调整。"],
   };
+}
+
+/**
+ * 生成 Planner fallback DAG 中稳定的任务 ID。
+ */
+function createTaskId(sequence: number): string {
+  return `task-${String(sequence).padStart(2, "0")}`;
 }
 
 /**

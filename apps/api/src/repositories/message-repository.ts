@@ -77,15 +77,19 @@ export async function listConversationMessages(
         WHEN "type" = 'conversation' THEN 1
         WHEN "type" = 'request' THEN 2
         WHEN "type" = 'planner' THEN 3
-        WHEN "type" = 'product_strategy' THEN 4
-        WHEN "type" = 'user_insight' THEN 5
-        WHEN "type" = 'solution_decision' THEN 6
-        WHEN "type" = 'feature_arch' THEN 7
-        WHEN "type" = 'tech_design' THEN 8
-        WHEN "type" = 'data_ops' THEN 9
-        WHEN "type" = 'product_director' THEN 10
-        WHEN "type" = 'conversation_confirmation' THEN 11
-        ELSE 12
+        WHEN "type" = 'executor-product-strategy' THEN 4
+        WHEN "type" = 'executor-market-research' THEN 5
+        WHEN "type" = 'executor-gtm' THEN 6
+        WHEN "type" = 'executor-product-discovery' THEN 7
+        WHEN "type" = 'executor-product-execution' THEN 8
+        WHEN "type" = 'executor-marketing-growth' THEN 9
+        WHEN "type" = 'executor-data-analytics' THEN 10
+        WHEN "type" = 'executor-ai-shipping' THEN 11
+        WHEN "type" = 'executor-toolkit' THEN 12
+        WHEN "type" = 'executor-interface-craft' THEN 13
+        WHEN "type" = 'product_director' THEN 14
+        WHEN "type" = 'conversation_confirmation' THEN 15
+        ELSE 16
       END,
       "id" ASC
   `;

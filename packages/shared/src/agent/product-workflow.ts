@@ -6,12 +6,16 @@ import { z } from "zod";
 export const ProductWorkflowAgentTypeSchema = z.enum([
   "product_director",
   "planner",
-  "product_strategy",
-  "user_insight",
-  "solution_decision",
-  "feature_arch",
-  "tech_design",
-  "data_ops",
+  "executor-product-strategy",
+  "executor-market-research",
+  "executor-gtm",
+  "executor-product-discovery",
+  "executor-product-execution",
+  "executor-marketing-growth",
+  "executor-data-analytics",
+  "executor-ai-shipping",
+  "executor-toolkit",
+  "executor-interface-craft",
 ]);
 
 /**
@@ -68,6 +72,21 @@ export const ProductKnowledgeGraphSchema = z.object({
 });
 
 /**
+ * Planner 质量检查字段；兼容模型偶尔输出的简短字符串标准。
+ */
+const TaskQualityCheckSchema = z.union([
+  z.object({
+    status: z.enum(["pending", "passed", "failed"]),
+    criteria: z.array(z.string().min(1)),
+    result: z.string().optional(),
+  }),
+  z.string().min(1).transform((criteria) => ({
+    status: "pending" as const,
+    criteria: [criteria],
+  })),
+]);
+
+/**
  * Planner Agent 生成的 DAG 节点，描述执行顺序、分配对象和验收标准。
  */
 export const TaskExecutionNodeSchema = z.object({
@@ -82,11 +101,7 @@ export const TaskExecutionNodeSchema = z.object({
   depends_on: z.array(z.string().min(1)),
   covered_business_model_indexes: z.array(z.number().int().positive()),
   expected_output: z.string().min(1),
-  quality_check: z.object({
-    status: z.enum(["pending", "passed", "failed"]),
-    criteria: z.array(z.string().min(1)),
-    result: z.string().optional(),
-  }),
+  quality_check: TaskQualityCheckSchema,
 });
 
 /**
@@ -124,6 +139,7 @@ export const ExecutorAgentResultSchema = z.object({
     "Feature",
     "Component",
     "Metric",
+    "Custom",
   ]),
   summary: z.string().min(1),
   entities: z.array(KnowledgeGraphEntitySchema),
