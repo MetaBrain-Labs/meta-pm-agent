@@ -1,0 +1,41 @@
+{
+  "executor_id": "executor-data-analytics",
+  "name": "Data Analytics Executor",
+  "version": "1.0.0",
+  "description": "Data Analytics Executor — produces Evidence entities grounded in real data, validating or refuting hypotheses in the product design knowledge graph; defines reusable data query Component nodes for Metric entities.",
+  "domain": "data-analytics",
+  "graph_entity_types": ["Evidence", "Metric", "Component"],
+  "system_prompts": {
+    "chinese": "prompts/system_prompt_cn.md",
+    "english": "prompts/system_prompt_en.md"
+  },
+  "skills": [
+    "ab-test-analysis",
+    "cohort-analysis",
+    "sql-queries"
+  ],
+  "input_schema": {
+    "task_id": "string",
+    "description": "string",
+    "business_model": {
+      "goals": ["array"],
+      "covered_user_request_ids": ["array"]
+    },
+    "graph_context": {
+      "nodes": ["array"],
+      "edges": ["array"]
+    },
+    "constraints": ["array"],
+    "data_sources": ["array"]
+  },
+  "output_schema": {
+    "think": "string",
+    "execute": "array of graph directives",
+    "error": "string (optional)"
+  },
+  "dependencies": ["executor-marketing-growth", "executor-product-discovery"],
+  "author": {
+    "name": "Executor Agent System"
+  },
+  "license": "MIT"
+}

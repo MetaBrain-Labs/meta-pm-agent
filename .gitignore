@@ -153,4 +153,4 @@ _tmp*
 # LangGraph API
 .langgraph_api
 
-references
+product-knowledge-graph.md

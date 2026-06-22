@@ -1,0 +1,52 @@
+{
+  "executor_id": "executor-interface-craft",
+  "name": "Interface Craft Executor",
+  "version": "1.0.0",
+  "description": "Interface Craft Executor — audits, supplements, and performs anti-pattern detection on UI-related Component nodes in the product design knowledge graph. Produces Evidence (audit/review conclusions) and refined UI specification Component nodes (design tokens, interaction constraints, visual standards).",
+  "domain": "interface-craft",
+  "graph_entity_types": ["Component", "Evidence"],
+  "system_prompts": {
+    "chinese": "prompts/system_prompt_cn.md",
+    "english": "prompts/system_prompt_en.md"
+  },
+  "skills": [
+    "shape",
+    "layout",
+    "craft",
+    "bolder",
+    "quieter",
+    "animate",
+    "delight",
+    "colorize",
+    "audit",
+    "harden",
+    "polish",
+    "critique",
+    "codex"
+  ],
+  "input_schema": {
+    "task_id": "string",
+    "description": "string",
+    "business_model": {
+      "goals": ["array"],
+      "covered_user_request_ids": ["array"]
+    },
+    "graph_context": {
+      "nodes": ["array"],
+      "edges": ["array"]
+    },
+    "constraints": ["array"],
+    "code_sources": ["array"],
+    "design_sources": ["array"]
+  },
+  "output_schema": {
+    "think": "string",
+    "execute": "array of graph directives",
+    "error": "string (optional)"
+  },
+  "dependencies": [],
+  "author": {
+    "name": "Executor Agent System"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,49 @@
+{
+  "executor_id": "executor-product-strategy",
+  "name": "Product Strategy Executor",
+  "version": "1.0.0",
+  "description": "Product Strategy Executor — creates and refines Goal and Decision entities in the product design knowledge graph, establishing the top-level causal chain for all downstream product design work.",
+  "domain": "product-strategy",
+  "graph_entity_types": ["Goal", "Decision", "Need", "Evidence"],
+  "system_prompts": {
+    "chinese": "prompts/system_prompt_cn.md",
+    "english": "prompts/system_prompt_en.md"
+  },
+  "skills": [
+    "product-vision",
+    "product-strategy",
+    "business-model",
+    "lean-canvas",
+    "startup-canvas",
+    "ansoff-matrix",
+    "swot-analysis",
+    "porters-five-forces",
+    "pestle-analysis",
+    "value-proposition",
+    "pricing-strategy",
+    "monetization-strategy"
+  ],
+  "input_schema": {
+    "task_id": "string",
+    "description": "string",
+    "business_model": {
+      "goals": ["array"],
+      "covered_user_request_ids": ["array"]
+    },
+    "graph_context": {
+      "nodes": ["array"],
+      "edges": ["array"]
+    },
+    "constraints": ["array"]
+  },
+  "output_schema": {
+    "think": "string",
+    "execute": "array of graph directives",
+    "error": "string (optional)"
+  },
+  "dependencies": [],
+  "author": {
+    "name": "Executor Agent System"
+  },
+  "license": "MIT"
+}

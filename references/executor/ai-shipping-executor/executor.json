@@ -1,0 +1,40 @@
+{
+  "executor_id": "executor-ai-shipping",
+  "name": "AI Shipping Executor",
+  "version": "1.0.0",
+  "description": "AI Shipping Executor — creates and refines Component entities (technical specs and security constraints) to complete the implementation-layer graph; produces Evidence entities through intended-vs-implemented comparison to surface gaps between design intent and code reality.",
+  "domain": "ai-shipping",
+  "graph_entity_types": ["Component", "Evidence"],
+  "system_prompts": {
+    "chinese": "prompts/system_prompt_cn.md",
+    "english": "prompts/system_prompt_en.md"
+  },
+  "skills": [
+    "shipping-artifacts",
+    "intended-vs-implemented"
+  ],
+  "input_schema": {
+    "task_id": "string",
+    "description": "string",
+    "business_model": {
+      "goals": ["array"],
+      "covered_user_request_ids": ["array"]
+    },
+    "graph_context": {
+      "nodes": ["array"],
+      "edges": ["array"]
+    },
+    "constraints": ["array"],
+    "code_sources": ["array"]
+  },
+  "output_schema": {
+    "think": "string",
+    "execute": "array of graph directives",
+    "error": "string (optional)"
+  },
+  "dependencies": ["executor-product-execution"],
+  "author": {
+    "name": "Executor Agent System"
+  },
+  "license": "MIT"
+}

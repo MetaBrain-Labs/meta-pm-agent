@@ -1,0 +1,53 @@
+{
+  "executor_id": "executor-product-execution",
+  "name": "Product Execution Executor",
+  "version": "1.0.0",
+  "description": "Product Execution Executor — decomposes upstream Feature nodes layer by layer into sub-features and Component nodes, establishing the implementation-level knowledge graph structure and advancing Feature status from validated to detailed.",
+  "domain": "product-execution",
+  "graph_entity_types": ["Feature", "Component", "Need", "Metric", "Evidence", "Goal", "Decision", "Custom"],
+  "system_prompts": {
+    "chinese": "prompts/system_prompt_cn.md",
+    "english": "prompts/system_prompt_en.md"
+  },
+  "skills": [
+    "create-prd",
+    "user-stories",
+    "job-stories",
+    "wwas",
+    "sprint-plan",
+    "brainstorm-okrs",
+    "outcome-roadmap",
+    "prioritization-frameworks",
+    "test-scenarios",
+    "strategy-red-team",
+    "pre-mortem",
+    "stakeholder-map",
+    "summarize-meeting",
+    "release-notes",
+    "retro",
+    "dummy-dataset"
+  ],
+  "input_schema": {
+    "task_id": "string",
+    "description": "string",
+    "business_model": {
+      "goals": ["array"],
+      "covered_user_request_ids": ["array"]
+    },
+    "graph_context": {
+      "nodes": ["array"],
+      "edges": ["array"]
+    },
+    "constraints": ["array"]
+  },
+  "output_schema": {
+    "think": "string",
+    "execute": "array of graph directives",
+    "error": "string (optional)"
+  },
+  "dependencies": ["executor-product-discovery", "executor-product-strategy"],
+  "author": {
+    "name": "Executor Agent System"
+  },
+  "license": "MIT"
+}

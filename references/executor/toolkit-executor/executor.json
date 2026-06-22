@@ -1,0 +1,41 @@
+{
+  "executor_id": "executor-toolkit",
+  "name": "Toolkit Executor",
+  "version": "1.0.0",
+  "description": "Toolkit Executor — handles auxiliary compliance and tooling tasks outside the main product design causal chain; creates Custom entities and supplements Component constraints (privacy policy).",
+  "domain": "toolkit",
+  "graph_entity_types": ["Component", "Custom"],
+  "system_prompts": {
+    "chinese": "prompts/system_prompt_cn.md",
+    "english": "prompts/system_prompt_en.md"
+  },
+  "skills": [
+    "privacy-policy",
+    "draft-nda",
+    "grammar-check",
+    "review-resume"
+  ],
+  "input_schema": {
+    "task_id": "string",
+    "description": "string",
+    "business_model": {
+      "goals": ["array"],
+      "covered_user_request_ids": ["array"]
+    },
+    "graph_context": {
+      "nodes": ["array"],
+      "edges": ["array"]
+    },
+    "constraints": ["array"]
+  },
+  "output_schema": {
+    "think": "string",
+    "execute": "array of graph directives",
+    "error": "string (optional)"
+  },
+  "dependencies": [],
+  "author": {
+    "name": "Executor Agent System"
+  },
+  "license": "MIT"
+}
