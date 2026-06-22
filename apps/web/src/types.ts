@@ -68,11 +68,16 @@ export interface RequestAnalysis {
 export type ProductWorkflowAgentType =
   | "product_director"
   | "planner"
-  | "product_strategy"
-  | "user_insight"
-  | "solution_decision"
-  | "feature_arch"
-  | "tech_design"
+  | "executor-product-strategy"
+  | "executor-market-research"
+  | "executor-gtm"
+  | "executor-product-discovery"
+  | "executor-product-execution"
+  | "executor-marketing-growth"
+  | "executor-data-analytics"
+  | "executor-ai-shipping"
+  | "executor-toolkit"
+  | "executor-interface-craft"
   | string;
 
 export interface TaskExecutionNode {
@@ -115,6 +120,8 @@ export interface ExecutorAgentResult {
     passed: boolean;
     notes: string;
   };
+  knowledge_graph_patch?: string;
+  knowledge_graph_markdown?: string;
 }
 
 export interface ProductDirectorWorkflowResult {
@@ -132,6 +139,7 @@ export interface ProductDirectorWorkflowResult {
   knowledge_graph_update: {
     entities: Array<Record<string, unknown>>;
     relations: Array<Record<string, unknown>>;
+    markdown?: string;
     notes: string[];
   };
   confirmation_message: string;

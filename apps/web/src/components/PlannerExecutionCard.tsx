@@ -24,12 +24,16 @@ interface Props {
 type NodeStatus = "completed" | "running" | "waiting";
 
 const AGENT_LABELS: Record<string, string> = {
-  product_strategy: "Product Strategy Agent",
-  user_insight: "User Insight Agent",
-  solution_decision: "Solution Decision Agent",
-  feature_arch: "Feature Architecture Agent",
-  tech_design: "Technical Design Agent",
-  data_ops: "Data Operations Agent",
+  "executor-product-strategy": "Product Strategy Executor",
+  "executor-market-research": "Market Research Executor",
+  "executor-gtm": "Go-to-Market Executor",
+  "executor-product-discovery": "Product Discovery Executor",
+  "executor-product-execution": "Product Execution Executor",
+  "executor-marketing-growth": "Marketing Growth Executor",
+  "executor-data-analytics": "Data Analytics Executor",
+  "executor-ai-shipping": "AI Shipping Executor",
+  "executor-toolkit": "Toolkit Executor",
+  "executor-interface-craft": "Interface Craft Executor",
 };
 
 /**
@@ -231,7 +235,7 @@ function TaskRow({
         </Typography.Text>
         {result && (
           <Typography.Text className="mt-1 block text-[12px] text-[var(--success)]">
-            运行结果：{result.summary}
+            已更新至知识图谱：{result.summary}
           </Typography.Text>
         )}
       </div>

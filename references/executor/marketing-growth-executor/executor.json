@@ -1,0 +1,42 @@
+{
+  "executor_id": "executor-marketing-growth",
+  "name": "Marketing Growth Executor",
+  "version": "1.0.0",
+  "description": "Marketing Growth Executor — creates and refines Metric and Decision entities in the product design knowledge graph, establishing the North Star measurement framework and translating product strategy into marketing growth decisions.",
+  "domain": "marketing-growth",
+  "graph_entity_types": ["Metric", "Decision", "Need"],
+  "system_prompts": {
+    "chinese": "prompts/system_prompt_cn.md",
+    "english": "prompts/system_prompt_en.md"
+  },
+  "skills": [
+    "north-star-metric",
+    "value-prop-statements",
+    "positioning-ideas",
+    "product-name",
+    "marketing-ideas"
+  ],
+  "input_schema": {
+    "task_id": "string",
+    "description": "string",
+    "business_model": {
+      "goals": ["array"],
+      "covered_user_request_ids": ["array"]
+    },
+    "graph_context": {
+      "nodes": ["array"],
+      "edges": ["array"]
+    },
+    "constraints": ["array"]
+  },
+  "output_schema": {
+    "think": "string",
+    "execute": "array of graph directives",
+    "error": "string (optional)"
+  },
+  "dependencies": ["executor-product-strategy", "executor-market-research"],
+  "author": {
+    "name": "Executor Agent System"
+  },
+  "license": "MIT"
+}

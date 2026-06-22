@@ -1,0 +1,50 @@
+{
+  "executor_id": "executor-product-discovery",
+  "name": "Product Discovery Executor",
+  "version": "1.0.0",
+  "description": "Product Discovery Executor — creates and refines Need, Feature, and Evidence entities in the product design knowledge graph, transforming vague user intent into testable feature hypotheses through continuous discovery activities.",
+  "domain": "product-discovery",
+  "graph_entity_types": ["Need", "Feature", "Evidence", "Metric"],
+  "system_prompts": {
+    "chinese": "prompts/system_prompt_cn.md",
+    "english": "prompts/system_prompt_en.md"
+  },
+  "skills": [
+    "brainstorm-ideas-existing",
+    "brainstorm-ideas-new",
+    "brainstorm-experiments-existing",
+    "brainstorm-experiments-new",
+    "identify-assumptions-existing",
+    "identify-assumptions-new",
+    "prioritize-assumptions",
+    "prioritize-features",
+    "opportunity-solution-tree",
+    "interview-script",
+    "summarize-interview",
+    "metrics-dashboard",
+    "analyze-feature-requests"
+  ],
+  "input_schema": {
+    "task_id": "string",
+    "description": "string",
+    "business_model": {
+      "goals": ["array"],
+      "covered_user_request_ids": ["array"]
+    },
+    "graph_context": {
+      "nodes": ["array"],
+      "edges": ["array"]
+    },
+    "constraints": ["array"]
+  },
+  "output_schema": {
+    "think": "string",
+    "execute": "array of graph directives",
+    "error": "string (optional)"
+  },
+  "dependencies": ["executor-product-strategy", "executor-market-research"],
+  "author": {
+    "name": "Executor Agent System"
+  },
+  "license": "MIT"
+}

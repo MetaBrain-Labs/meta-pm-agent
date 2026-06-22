@@ -469,24 +469,32 @@ function getReasoningLabel(agentType: string): string {
 }
 
 const EXECUTOR_AGENT_TYPES = [
-  "product_strategy",
-  "user_insight",
-  "solution_decision",
-  "feature_arch",
-  "tech_design",
-  "data_ops",
+  "executor-product-strategy",
+  "executor-market-research",
+  "executor-gtm",
+  "executor-product-discovery",
+  "executor-product-execution",
+  "executor-marketing-growth",
+  "executor-data-analytics",
+  "executor-ai-shipping",
+  "executor-toolkit",
+  "executor-interface-craft",
 ];
 
 const AGENT_LABELS: Record<string, string> = {
   request: "Request Agent",
   planner: "Planner Agent",
   product_director: "ProductDirector Agent",
-  product_strategy: "Product Strategy Agent",
-  user_insight: "User Insight Agent",
-  solution_decision: "Solution Decision Agent",
-  feature_arch: "Feature Architecture Agent",
-  tech_design: "Technical Design Agent",
-  data_ops: "Data Operations Agent",
+  "executor-product-strategy": "Product Strategy Executor",
+  "executor-market-research": "Market Research Executor",
+  "executor-gtm": "Go-to-Market Executor",
+  "executor-product-discovery": "Product Discovery Executor",
+  "executor-product-execution": "Product Execution Executor",
+  "executor-marketing-growth": "Marketing Growth Executor",
+  "executor-data-analytics": "Data Analytics Executor",
+  "executor-ai-shipping": "AI Shipping Executor",
+  "executor-toolkit": "Toolkit Executor",
+  "executor-interface-craft": "Interface Craft Executor",
 };
 
 /**

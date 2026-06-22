@@ -1,0 +1,44 @@
+{
+  "executor_id": "executor-market-research",
+  "name": "Market Research Executor",
+  "version": "1.0.0",
+  "description": "Market Research Executor — creates and refines Evidence and Need entities in the product design knowledge graph, providing factual and data-driven support for downstream strategic decisions.",
+  "domain": "market-research",
+  "graph_entity_types": ["Evidence", "Need", "Custom", "Metric"],
+  "system_prompts": {
+    "chinese": "prompts/system_prompt_cn.md",
+    "english": "prompts/system_prompt_en.md"
+  },
+  "skills": [
+    "competitor-analysis",
+    "user-personas",
+    "market-sizing",
+    "market-segments",
+    "customer-journey-map",
+    "sentiment-analysis",
+    "user-segmentation"
+  ],
+  "input_schema": {
+    "task_id": "string",
+    "description": "string",
+    "business_model": {
+      "goals": ["array"],
+      "covered_user_request_ids": ["array"]
+    },
+    "graph_context": {
+      "nodes": ["array"],
+      "edges": ["array"]
+    },
+    "constraints": ["array"]
+  },
+  "output_schema": {
+    "think": "string",
+    "execute": "array of graph directives",
+    "error": "string (optional)"
+  },
+  "dependencies": [],
+  "author": {
+    "name": "Executor Agent System"
+  },
+  "license": "MIT"
+}

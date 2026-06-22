@@ -3,7 +3,13 @@
 ## 架构补充（当前有效）
 
 - `apps/agent-runtime/src/graph/workflow.ts` 是 LangGraph 主图入口。Conversation Agent 产出 `user-input-complete` 后，后续 Request Agent、ProductDirector、Planner 和 Executor 流程必须经由该图编排，不要重新在 Conversation Agent 中直接串联这些 Agent。
-- 当前 LangGraph 主流程为 `parse_user_input -> request_agent -> product_workflow`。新增工作流阶段时，应新增 LangGraph 节点和边，而不是在单个 Agent 目录内硬编码调用链。
+- 当前 LangGraph 主流程为 `parse_user_input -> request_agent -> planner_agent -> executor-* -> product_director_agent`。新增工作流阶段时，应新增 LangGraph 节点和边，而不是在单个 Agent 目录内硬编码调用链。
+- 产品工作流的模型调用已经拆成独立 DeepAgent 目录：`apps/agent-runtime/src/agents/product-workflow/planner-agent/`、`executor-agent/` 和 `product-director-agent/`。每个目录维护自己的 `agent.ts` 和 `prompt.ts`；Executor 的固定职责定义放在 `executor-agent/definitions.ts`。
+- Planner Agent 和 ProductDirector Agent 使用 `apps/agent-runtime/src/agents/common/run-json-agent.ts` 做 JSON 结构化输出。具体 Agent 传入 schema、payload、prompt、模型参数和确定性 fallback，不要在各处重复实现 JSON runner。
+- Executor Agent 使用 `apps/agent-runtime/src/agents/common/run-text-agent.ts`，并通过 DeepAgents 文件工具维护 Markdown 知识图谱，不再依赖最终 JSON 结构化输出作为主要产物。
+- 十个 Executor Agent 必须各自保留独立目录：`product-strategy-executor`、`market-research-executor`、`gtm-executor`、`product-discovery-executor`、`product-execution-executor`、`marketing-growth-executor`、`data-analytics-executor`、`ai-shipping-executor`、`toolkit-executor`、`interface-craft-executor`。
+- 产品知识图谱文件为 `apps/agent-runtime/product-knowledge-graph/product-knowledge-graph.md`。仓库只提交该目录的 `.gitkeep`；生成的 Markdown 图谱属于运行时状态，除非明确要求，否则不要提交。
+- `apps/agent-runtime/src/agents/product-workflow/agent.ts` 只负责产品工作流编排、流事件转发、tagged block 格式化和 question-form 格式化。不要把 Planner、Executor、ProductDirector 的 prompt、fallback 或模型执行逻辑重新塞回该文件。
 - 保留 `/api/chat/stop`。前端点击停止时必须先调用该接口，让 API 触发服务端 `AbortController` 并把 `AbortSignal` 传给模型供应商请求，然后再中止浏览器侧 SSE fetch。
 - `request_form.status` 需要随处理阶段更新，例如 `received`、`conversation_consumed`、`request_agent_running`、`request_analyzed`、`workflow_running`、`pending_user_confirmation`、`completed`、`stopped`、`failed`。
 - `request_form_item.status` 也必须随用户可见决策更新。用户提交补充信息确认表单后，对应 `decision` 条目以及它引用的所有 `proposal` 条目都应标记为 `finish`，并把回答内容写入各自 `payload`。
@@ -45,14 +51,16 @@ packages/
 - 助手消息 Markdown 渲染保持在 `apps/web/src/utils/markdown.tsx`；需要保留标准管道表格、链接、列表、代码块和行内强调的解析能力，不要改用 `dangerouslySetInnerHTML`。
 ## 联网搜索与工具授权
 
-- `/api/chat` 请求体可以携带 `enabledTools`，当前只支持 `["web_search"]`。新增工具名称时先更新 `packages/shared` 中的共享 schema，再更新 API 校验和 runtime 使用方。
-- 运行时工具权限统一放在 `apps/agent-runtime/src/agents/common/tool-access.ts`。当前 `web_search` 只授权给 Conversation Agent；后续要允许 Request Agent 或其他 Agent 使用联网搜索时，只在该集中授权表中扩展，不要在单个 Agent 内部绕过授权。
+- `/api/chat` 请求体可以携带 `enabledTools`，当前用户可见工具主要是 `["web_search"]`。知识图谱文件工具名称也需要进入共享 schema，但由产品工作流运行时按权限内部挂载，不作为任意文件系统能力暴露给用户。
+- 运行时工具权限统一放在 `apps/agent-runtime/src/agents/common/tool-access.ts`。当前 `web_search` 只授权给 Conversation Agent；`kg_file_create`、`kg_file_read`、`kg_file_insert`、`kg_file_update`、`kg_file_delete_content` 只授权给 ProductDirector Agent 和十个 Executor Agent。
+- 知识图谱文件工具实现位于 `apps/agent-runtime/src/agents/common/knowledge-graph-file-tool.ts`，并且必须绑定到 `apps/agent-runtime/product-knowledge-graph/product-knowledge-graph.md`，不要在单个 Agent 中绕过集中授权直接提供任意文件工具。
 - `web_search` 的具体实现位于 `apps/agent-runtime/src/agents/common/web-search-tool.ts`。配置 `TAVILY_API_KEY` 时优先使用 Tavily Search；未配置时使用 Hacker News Algolia、OpenAlex 等免费公开索引作为无额外搜索依赖的兜底。
 - 联网搜索后端不可用、超时或网络失败时，工具必须返回结构化结果，例如 `results: []` 和 `error` 字段，而不是抛出异常，避免中断 `/api/chat` SSE 流。
 - 转发 `tool-call` 和 `tool-result` 事件时保留 `agentType`，方便后续多 Agent 工具调用在前端按来源展示。
 ## 前端展示补充
 
-- 工具调用明细（包括 `web_search` 结果）应通过 `ToolCallsCard` 以折叠卡片展示在对应助手消息附近。
+- 工具调用明细（包括 `web_search` 结果和授权的知识图谱文件工具调用）应通过 `ToolCallsCard` 以折叠卡片展示在对应助手消息附近。
+- Executor 运行期间通过 Planner DAG 区域展示加载状态；写入知识图谱后展示“已更新至知识图谱”完成卡片。
 - `ToolCallsCard`、`UserInputCard` 和 `RequestAnalysisCard` 默认折叠，让中间数据可追溯但不挤占普通助手正文。
 ## 鑱婂ぉ鍜?Agent 鍗忚
 

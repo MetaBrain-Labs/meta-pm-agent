@@ -1,0 +1,43 @@
+{
+  "executor_id": "executor-gtm",
+  "name": "Go-to-Market Executor",
+  "version": "1.0.0",
+  "description": "Go-to-Market Executor — creates and refines Decision and Component entities in the product design knowledge graph, translating product strategy into actionable launch motions and growth mechanisms.",
+  "domain": "go-to-market",
+  "graph_entity_types": ["Decision", "Component", "Need", "Metric", "Evidence"],
+  "system_prompts": {
+    "chinese": "prompts/system_prompt_cn.md",
+    "english": "prompts/system_prompt_en.md"
+  },
+  "skills": [
+    "gtm-strategy",
+    "beachhead-segment",
+    "ideal-customer-profile",
+    "gtm-motions",
+    "growth-loops",
+    "competitive-battlecard"
+  ],
+  "input_schema": {
+    "task_id": "string",
+    "description": "string",
+    "business_model": {
+      "goals": ["array"],
+      "covered_user_request_ids": ["array"]
+    },
+    "graph_context": {
+      "nodes": ["array"],
+      "edges": ["array"]
+    },
+    "constraints": ["array"]
+  },
+  "output_schema": {
+    "think": "string",
+    "execute": "array of graph directives",
+    "error": "string (optional)"
+  },
+  "dependencies": ["executor-product-strategy", "executor-market-research"],
+  "author": {
+    "name": "Executor Agent System"
+  },
+  "license": "MIT"
+}

@@ -1,4 +1,4 @@
-import type { ConversationStreamEvent } from "../types";
+import type { AgentMessageType, ConversationStreamEvent } from "../types";
 
 interface TaggedBlockOptions {
   startMarker: string;
@@ -17,6 +17,8 @@ export async function* streamTaggedBlock(
   const tagOptions = Array.isArray(options) ? options : [options];
   let blockBuffer = "";
   let pendingText = "";
+  let pendingTextAgentType: AgentMessageType | undefined;
+  let blockAgentType: AgentMessageType | undefined;
   let collecting = false;
   let activeOptions: TaggedBlockOptions | null = null;
 
@@ -33,8 +35,10 @@ export async function* streamTaggedBlock(
     // 根据当前是否正在收集标记块内容，决定将 chunk 内容添加到 blockBuffer 或 pendingText 中
     if (collecting) {
       blockBuffer += chunk.content;
+      blockAgentType ??= chunk.agentType;
     } else {
       pendingText += chunk.content;
+      pendingTextAgentType ??= chunk.agentType;
     }
 
     while (true) {
@@ -52,7 +56,9 @@ export async function* streamTaggedBlock(
         const blockEnd = endIndex + activeOptions.endMarker.length;
         const content = blockBuffer.slice(0, blockEnd);
         pendingText = blockBuffer.slice(blockEnd);
+        pendingTextAgentType = blockAgentType;
         blockBuffer = "";
+        blockAgentType = undefined;
         collecting = false;
 
         yield { type: activeOptions.completeEvent, content };
@@ -65,15 +71,13 @@ export async function* streamTaggedBlock(
       if (match) {
         const textBeforeBlock = pendingText.slice(0, match.startIndex);
         if (textBeforeBlock) {
-          yield {
-            type: "text",
-            content: textBeforeBlock,
-            agentType: chunk.agentType,
-          };
+          yield createTextEvent(textBeforeBlock, pendingTextAgentType);
         }
 
         blockBuffer = pendingText.slice(match.startIndex);
+        blockAgentType = pendingTextAgentType ?? chunk.agentType;
         pendingText = "";
+        pendingTextAgentType = undefined;
         collecting = true;
         activeOptions = match.options;
         yield { type: match.options.startEvent };
@@ -82,12 +86,9 @@ export async function* streamTaggedBlock(
 
       if (!couldEndWithAnyMarkerPrefix(pendingText, tagOptions)) {
         if (pendingText) {
-          yield {
-            type: "text",
-            content: pendingText,
-            agentType: chunk.agentType,
-          };
+          yield createTextEvent(pendingText, pendingTextAgentType);
           pendingText = "";
+          pendingTextAgentType = undefined;
         }
       }
       break;
@@ -95,11 +96,23 @@ export async function* streamTaggedBlock(
   }
 
   if (collecting && blockBuffer) {
-    yield { type: "text", content: blockBuffer, agentType: "conversation" };
+    yield createTextEvent(blockBuffer, blockAgentType);
   }
   if (pendingText) {
-    yield { type: "text", content: pendingText, agentType: "conversation" };
+    yield createTextEvent(pendingText, pendingTextAgentType);
   }
+}
+
+/**
+ * 只在存在归属 Agent 时写入 agentType，避免测试和持久化层收到 undefined 字段。
+ */
+function createTextEvent(
+  content: string,
+  agentType: AgentMessageType | undefined,
+): ConversationStreamEvent {
+  return agentType
+    ? { type: "text", content, agentType }
+    : { type: "text", content };
 }
 
 /**

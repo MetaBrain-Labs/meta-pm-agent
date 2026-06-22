@@ -1,7 +1,10 @@
 import { Annotation } from "@langchain/langgraph";
 import type {
+  ExecutorAgentResult,
+  ProductKnowledgeGraph,
   ProductDirectorWorkflowResult,
   RequestAnalysis,
+  TaskExecutionPlan,
 } from "@repo/shared";
 import type { UserInputRecord } from "../agents/request/user-input";
 
@@ -37,7 +40,25 @@ export const WorkflowGraphState = Annotation.Root({
     default: () => "",
   }),
 
-  // ProductDirector/Planner/Executor 工作流结果，由 LangGraph 的产品工作流节点写入。
+  // 当前产品知识图谱快照，供 Planner、Executor 和 ProductDirector 共享上下文。
+  knowledgeGraph: Annotation<ProductKnowledgeGraph | null>({
+    reducer: (_current, update) => update,
+    default: () => null,
+  }),
+
+  // Planner Agent 生成的 DAG 计划，后续 Executor 节点按该计划执行。
+  plan: Annotation<TaskExecutionPlan | null>({
+    reducer: (_current, update) => update,
+    default: () => null,
+  }),
+
+  // Executor Agent 对 Planner DAG 中每个任务的结构化产出。
+  executorResults: Annotation<ExecutorAgentResult[]>({
+    reducer: (_current, update) => update,
+    default: () => [],
+  }),
+
+  // ProductDirector Agent 对 Planner 和 Executor 结果的最终验收结果。
   productWorkflow: Annotation<ProductDirectorWorkflowResult | null>({
     reducer: (_current, update) => update,
     default: () => null,

@@ -92,7 +92,7 @@ export async function* streamConversation(
     return;
   }
 
-  yield* streamTaggedBlock(
+  for await (const event of streamTaggedBlock(
     streamAgentEvents(toLangChainMessages(messages), options),
     [
       {
@@ -108,7 +108,13 @@ export async function* streamConversation(
         completeEvent: "user-input-complete",
       },
     ],
-  );
+  )) {
+    yield event;
+
+    if (event.type === "user-input-complete") {
+      yield* streamPlanningAfterUserInput(event.content, options);
+    }
+  }
 }
 
 async function* streamUserInputIntegration(
@@ -151,65 +157,76 @@ async function* streamUserInputIntegration(
       content: userInputBlock,
     };
 
-    try {
-      for await (const event of streamWorkflowGraph({
-        productContext: options.productContext,
-        userInputBlock,
-        signal: options.signal,
-      })) {
-        if (
-          event.type === "reasoning" ||
-          event.type === "request-analysis-start" ||
-          event.type === "request-analysis-complete"
-        ) {
-          yield event;
-          continue;
-        }
+    yield* streamPlanningAfterUserInput(userInputBlock, options);
+  }
+}
 
-        if (event.type === "agent-output") {
-          yield {
-            type: "text",
-            content: event.content,
-            agentType: event.agentType,
-          };
-          continue;
-        }
-
-        if (event.type === "complete") {
-          const proposalForm = formatProductWorkflowProposalQuestionForm(
-            event.result,
-          );
-          const questionForm =
-            proposalForm ??
-            formatProductWorkflowConfirmationQuestionForm(event.result);
-
-          // ProductDirector 只发起确认/补充请求，由 Conversation Agent 面向用户提问。
-          yield {
-            type: "text",
-            content: proposalForm
-              ? "ProductDirector Agent 汇总了需要补充确认的信息，我需要你先回答这些问题。"
-              : "ProductDirector Agent 已完成本轮验收，我需要你确认下一步处理方式。",
-            agentType: "conversation_confirmation",
-          };
-          yield {
-            type: "question-form-start",
-            agentType: "conversation_confirmation",
-          };
-          yield {
-            type: "question-form-complete",
-            content: questionForm,
-            agentType: "conversation_confirmation",
-          };
-        }
+/**
+ * Conversation Agent 产出 user_input 后，统一进入 LangGraph 规划流程。
+ */
+async function* streamPlanningAfterUserInput(
+  userInputBlock: string,
+  options: ConversationStreamOptions,
+): AsyncGenerator<ConversationStreamEvent> {
+  try {
+    for await (const event of streamWorkflowGraph({
+      productContext: options.productContext,
+      userInputBlock,
+      signal: options.signal,
+    })) {
+      if (
+        event.type === "reasoning" ||
+        event.type === "request-analysis-start" ||
+        event.type === "request-analysis-complete" ||
+        event.type === "tool-call" ||
+        event.type === "tool-result"
+      ) {
+        yield event;
+        continue;
       }
-    } catch (error) {
-      yield {
-        type: "error",
-        error: getErrorMessage(error),
-        agentType: "request",
-      };
-      return;
+
+      if (event.type === "agent-output") {
+        yield {
+          type: "text",
+          content: event.content,
+          agentType: event.agentType,
+        };
+        continue;
+      }
+
+      if (event.type === "complete") {
+        const proposalForm = formatProductWorkflowProposalQuestionForm(
+          event.result,
+        );
+        const questionForm =
+          proposalForm ??
+          formatProductWorkflowConfirmationQuestionForm(event.result);
+
+        // ProductDirector 只发起确认/补充请求，由 Conversation Agent 面向用户提问。
+        yield {
+          type: "text",
+          content: proposalForm
+            ? "ProductDirector Agent 汇总了需要补充确认的信息，我需要你先回答这些问题。"
+            : "ProductDirector Agent 已完成本轮验收，我需要你确认下一步处理方式。",
+          agentType: "conversation_confirmation",
+        };
+        yield {
+          type: "question-form-start",
+          agentType: "conversation_confirmation",
+        };
+        yield {
+          type: "question-form-complete",
+          content: questionForm,
+          agentType: "conversation_confirmation",
+        };
+      }
     }
+  } catch (error) {
+    yield {
+      type: "error",
+      error: getErrorMessage(error),
+      agentType: "request",
+    };
   }
 }
 
