@@ -22,8 +22,12 @@ import { persistTaskExecutionPlan } from "../repositories/task-execution-reposit
 import { parseRequestAnalysisPayload } from "../utils/request-analysis";
 import { parseTaskExecutionPlanPayload } from "../utils/task-execution";
 import {
+  formatExecutorResultPayload,
+  formatProductWorkflowPayload,
   parseExecutorResultPayload,
   parseProductWorkflowPayload,
+  sanitizeExecutorResultForPersistence,
+  sanitizeProductWorkflowForPersistence,
 } from "../utils/product-workflow";
 import {
   parseUserInputPayload,
@@ -44,6 +48,7 @@ export interface AgentConversationOutput {
     name: string;
     args?: Record<string, unknown>;
     result?: unknown;
+    agentType?: string;
   }>;
 }
 
@@ -160,6 +165,12 @@ export async function persistConversationResult({
   const productWorkflow = productDirectorOutput
     ? parseProductWorkflowPayload(productDirectorOutput.content)
     : null;
+  const sanitizedExecutorResults = executorResults.map(
+    sanitizeExecutorResultForPersistence,
+  );
+  const sanitizedProductWorkflow = productWorkflow
+    ? sanitizeProductWorkflowForPersistence(productWorkflow)
+    : null;
 
   // 每个 Agent 单独落库，message.type 用于前端恢复正确的展示位置。
   for (const output of agentOutputs) {
@@ -169,10 +180,14 @@ export async function persistConversationResult({
     ) {
       continue;
     }
+    const outputContent = sanitizeAgentOutputContent(
+      output,
+      sanitizedProductWorkflow,
+    );
 
     await persistAssistantMessage({
       conversationId,
-      content: output.content,
+      content: outputContent,
       userInput: output.type === "conversation" ? items : null,
       reasoningContent: output.reasoningContent,
       toolCalls: output.toolCalls,
@@ -186,11 +201,11 @@ export async function persistConversationResult({
     requestFormId,
     plan: taskExecutionPlan,
   });
-  await persistExecutorProposalItems(requestFormId, executorResults);
-  await persistProposalDecisionItem(requestFormId, productWorkflow);
+  await persistExecutorProposalItems(requestFormId, sanitizedExecutorResults);
+  await persistProposalDecisionItem(requestFormId, sanitizedProductWorkflow);
   await persistProductWorkflowConfirmationDecision(
     requestFormId,
-    productWorkflow,
+    sanitizedProductWorkflow,
   );
 
   const generatedTitle = buildFirstTurnConversationTitle(items, messages);
@@ -204,6 +219,27 @@ export async function persistConversationResult({
   return updatedConversation
     ? { id: updatedConversation.id, title: updatedConversation.title }
     : null;
+}
+
+/**
+ * 生成可落库的 Agent 输出正文，避免把知识图谱正文写入 message 表。
+ */
+function sanitizeAgentOutputContent(
+  output: AgentConversationOutput,
+  productWorkflow: ReturnType<typeof sanitizeProductWorkflowForPersistence> | null,
+): string {
+  const executorResult = parseExecutorResultPayload(output.content);
+  if (executorResult) {
+    return formatExecutorResultPayload(
+      sanitizeExecutorResultForPersistence(executorResult),
+    );
+  }
+
+  if (output.type === "product_director" && productWorkflow) {
+    return formatProductWorkflowPayload(productWorkflow);
+  }
+
+  return output.content;
 }
 
 /**

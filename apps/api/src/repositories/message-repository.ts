@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "@repo/database";
 import {
   type ChatMessage,
+  type ExecutorAgentResult,
   type ProductDirectorWorkflowResult,
   type RequestAnalysis,
   type TaskExecutionPlan,
@@ -12,7 +13,10 @@ import {
 } from "../utils/user-input";
 import { parseRequestAnalysisPayload } from "../utils/request-analysis";
 import { parseTaskExecutionPlanPayload } from "../utils/task-execution";
-import { parseProductWorkflowPayload } from "../utils/product-workflow";
+import {
+  parseExecutorResultPayload,
+  parseProductWorkflowPayload,
+} from "../utils/product-workflow";
 
 /**
  * 数据库 message 表原始行结构。
@@ -41,6 +45,8 @@ export interface MessageDto {
   userInput?: UserInputRecord[] | null;
   requestAnalysis?: RequestAnalysis | null;
   taskExecutionPlan?: TaskExecutionPlan | null;
+  executorResult?: ExecutorAgentResult | null;
+  executorResults?: ExecutorAgentResult[];
   productWorkflow?: ProductDirectorWorkflowResult | null;
 }
 
@@ -51,6 +57,7 @@ export interface ToolCallDto {
   name: string;
   args?: Record<string, unknown>;
   result?: unknown;
+  agentType?: string;
 }
 
 /**
@@ -94,7 +101,7 @@ export async function listConversationMessages(
       "id" ASC
   `;
 
-  return rows.map(mapMessageRow);
+  return attachExecutorResultsToPlannerMessages(rows.map(mapMessageRow));
 }
 
 /**
@@ -161,6 +168,7 @@ function mapMessageRow(row: MessageRow): MessageDto {
   const inlineUserInput = parseUserInputPayload(row.content);
   const inlineRequestAnalysis = parseRequestAnalysisPayload(row.content);
   const inlineTaskExecutionPlan = parseTaskExecutionPlanPayload(row.content);
+  const inlineExecutorResult = parseExecutorResultPayload(row.content);
   const inlineProductWorkflow = parseProductWorkflowPayload(row.content);
 
   // 正文返回给前端展示时去掉结构化 block，避免 JSON 原文和卡片重复显示。
@@ -207,8 +215,41 @@ function mapMessageRow(row: MessageRow): MessageDto {
       : inlineUserInput,
     requestAnalysis: inlineRequestAnalysis,
     taskExecutionPlan: inlineTaskExecutionPlan,
+    executorResult: inlineExecutorResult,
     productWorkflow: inlineProductWorkflow,
   };
+}
+
+/**
+ * 将后续 Executor 完成结果挂回同一轮 Planner 消息，供刷新后恢复 DAG 状态。
+ */
+function attachExecutorResultsToPlannerMessages(
+  messages: MessageDto[],
+): MessageDto[] {
+  const productWorkflowResults = messages.flatMap((message) =>
+    message.productWorkflow?.executor_results ?? [],
+  );
+
+  return messages.map((message) => {
+    if (!message.taskExecutionPlan) return message;
+
+    const taskIds = new Set(
+      message.taskExecutionPlan.tasks.map((task) => task.task_id),
+    );
+    const executorResults =
+      productWorkflowResults.length > 0
+        ? productWorkflowResults
+        : messages.flatMap((candidate) =>
+            candidate.executorResult ? [candidate.executorResult] : [],
+          );
+
+    return {
+      ...message,
+      executorResults: executorResults.filter((result) =>
+        taskIds.has(result.task_id),
+      ),
+    };
+  });
 }
 
 /**
@@ -314,6 +355,9 @@ function normalizeToolCalls(value: unknown[]): ToolCallDto[] {
         ...(Object.prototype.hasOwnProperty.call(record, "result")
           ? { result: record.result }
           : {}),
+        ...(typeof record.agentType === "string"
+          ? { agentType: record.agentType }
+          : {}),
       },
     ];
   });
@@ -359,7 +403,11 @@ function extractWebSearchToolCalls(content: string): {
     }
 
     cleaned += content.slice(cursor, startIndex);
-    toolCalls.push({ name: "web_search", result: payload });
+    toolCalls.push({
+      name: "web_search",
+      result: payload,
+      agentType: "conversation",
+    });
     cursor = endIndex + 1;
   }
 

@@ -19,6 +19,12 @@ export const WorkflowGraphState = Annotation.Root({
     default: () => "",
   }),
 
+  // 当前会话所属工作区 ID，用于隔离运行时知识图谱文件。
+  workspaceId: Annotation<string | undefined>({
+    reducer: (_current, update) => update,
+    default: () => undefined,
+  }),
+
   // Conversation Agent 输出的原始 <user-input> 内容。
   userInputBlock: Annotation<string>(),
 

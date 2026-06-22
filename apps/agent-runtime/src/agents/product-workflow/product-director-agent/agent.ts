@@ -29,7 +29,10 @@ export async function* streamProductDirectorReview(
   ProductDirectorWorkflowResult,
   void
 > {
-  const fileHandle = createKnowledgeGraphFileHandle(input.knowledgeGraph.markdown);
+  const fileHandle = createKnowledgeGraphFileHandle(
+    input.knowledgeGraph.markdown,
+    input.workspaceId,
+  );
   const tools = createToolsForAgent(
     "product_director",
     getKnowledgeGraphFileToolNames(),

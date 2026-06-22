@@ -33,7 +33,6 @@ export function ProjectCreateModal({
     <Modal
       mask={{ enabled: true, blur: true, closable: true }}
       centered
-      p={true}
       width={610}
       open={open}
       title={null}

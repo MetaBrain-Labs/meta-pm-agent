@@ -68,6 +68,13 @@ export function MessageBubble({
   const requestReasoningBlocks = message.reasoningBlocks?.filter(
     (block) => block.agentType === "request",
   );
+  const conversationToolCalls = getToolCallsForAgent(message, "conversation");
+  const requestToolCalls = getToolCallsForAgent(message, "request");
+  const plannerToolCalls = getToolCallsForAgent(message, "planner");
+  const productDirectorToolCalls = getToolCallsForAgent(
+    message,
+    "product_director",
+  );
   const plannerReasoningBlocks = message.reasoningBlocks?.filter(
     (block) => block.agentType === "planner",
   );
@@ -132,9 +139,7 @@ export function MessageBubble({
         <TodoCard todos={message.todos} />
       )}
 
-      {message.toolCalls && message.toolCalls.length > 0 && (
-        <ToolCallsCard toolCalls={message.toolCalls} />
-      )}
+      <AgentToolCalls toolCalls={conversationToolCalls} />
 
       {message.content && (
         <div className="assistant-bubble">
@@ -172,6 +177,8 @@ export function MessageBubble({
         />
       ))}
 
+      <AgentToolCalls toolCalls={requestToolCalls} />
+
       {message.requestAnalysis && (
         <div>
           {message.requestAnalysis.state === "generating" ? (
@@ -203,6 +210,8 @@ export function MessageBubble({
         />
       ))}
 
+      <AgentToolCalls toolCalls={plannerToolCalls} />
+
       {plannerDagGenerating && <PlannerExecutionLoadingCard />}
 
       {message.plannerExecution && (
@@ -213,15 +222,27 @@ export function MessageBubble({
         />
       )}
 
-      {executorReasoningBlocks?.map((block) => (
-        <ThinkingBox
-          key={block.agentType}
-          agentType={block.agentType}
-          label={getReasoningLabel(block.agentType)}
-          content={block.content}
-          active={streamActive && message.activeAgent === block.agentType}
-        />
-      ))}
+      {EXECUTOR_AGENT_TYPES.map((agentType) => {
+        const block = executorReasoningBlocks?.find(
+          (item) => item.agentType === agentType,
+        );
+        const toolCalls = getToolCallsForAgent(message, agentType);
+        if (!block && toolCalls.length === 0) return null;
+
+        return (
+          <div key={agentType}>
+            {block && (
+              <ThinkingBox
+                agentType={block.agentType}
+                label={getReasoningLabel(block.agentType)}
+                content={block.content}
+                active={streamActive && message.activeAgent === block.agentType}
+              />
+            )}
+            <AgentToolCalls toolCalls={toolCalls} />
+          </div>
+        );
+      })}
 
       {productDirectorReasoningBlocks?.map((block) => (
         <ThinkingBox
@@ -232,6 +253,8 @@ export function MessageBubble({
           active={streamActive && message.activeAgent === block.agentType}
         />
       ))}
+
+      <AgentToolCalls toolCalls={productDirectorToolCalls} />
 
       {otherReasoningBlocks?.map((block) => (
         <ThinkingBox
@@ -312,6 +335,18 @@ export function MessageBubble({
       )}
     </div>
   );
+}
+
+/**
+ * 渲染指定 Agent 的工具调用卡片。
+ */
+function AgentToolCalls({
+  toolCalls,
+}: {
+  toolCalls: NonNullable<Message["toolCalls"]>;
+}) {
+  if (toolCalls.length === 0) return null;
+  return <ToolCallsCard toolCalls={toolCalls} />;
 }
 
 /**
@@ -502,6 +537,19 @@ const AGENT_LABELS: Record<string, string> = {
  */
 function isExecutorAgent(agentType: string): boolean {
   return EXECUTOR_AGENT_TYPES.includes(agentType);
+}
+
+/**
+ * 读取指定 Agent 的工具调用；历史消息缺少 agentType 时回退到 message.type。
+ */
+function getToolCallsForAgent(
+  message: Message,
+  agentType: string,
+): NonNullable<Message["toolCalls"]> {
+  return (message.toolCalls ?? []).filter((toolCall) => {
+    const owner = toolCall.agentType ?? message.type;
+    return owner === agentType;
+  });
 }
 
 /**

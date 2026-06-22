@@ -17,6 +17,10 @@ export type {
   ProductWorkflowStreamEvent,
 } from "./agents/product-workflow/agent";
 export { graph, runWorkflowGraph } from "./graph/workflow";
+export {
+  deleteWorkspaceKnowledgeGraphFile,
+  readWorkspaceKnowledgeGraphFile,
+} from "./agents/common/knowledge-graph-file-tool";
 export type {
   ConversationStreamEvent,
   ConversationStreamOptions,

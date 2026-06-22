@@ -20,15 +20,51 @@ const OVERVIEW_FILES = [
 ];
 
 /**
+ * Agent 运行所需的工作区上下文。
+ */
+export interface ProductRuntimeContext {
+  workspaceId?: string;
+  productContext: string;
+}
+
+/**
+ * 根据会话 ID 加载工作区 ID 与产品概述上下文。
+ */
+export async function loadProductRuntimeContextForConversation(
+  conversationId: string | undefined,
+): Promise<ProductRuntimeContext> {
+  if (!conversationId) {
+    return { productContext: "" };
+  }
+
+  const workspace = await getConversationWorkspace(conversationId);
+  if (!workspace) {
+    return { productContext: "" };
+  }
+
+  return {
+    workspaceId: workspace.workspaceId,
+    productContext: await loadProductContextForWorkspace(workspace),
+  };
+}
+
+/**
  * 根据会话 ID 加载对应工作区的产品概述上下文，供 Request Agent 使用。
  * 只读取预定义的概述性文档，避免将整个工作区文件带入提示词。
  */
 export async function loadProductContextForConversation(
   conversationId: string | undefined,
 ): Promise<string> {
-  if (!conversationId) return "";
+  const context = await loadProductRuntimeContextForConversation(conversationId);
+  return context.productContext;
+}
 
-  const workspace = await getConversationWorkspace(conversationId);
+/**
+ * 从工作区概述文件中拼接产品上下文。
+ */
+async function loadProductContextForWorkspace(
+  workspace: Awaited<ReturnType<typeof getConversationWorkspace>>,
+): Promise<string> {
   if (!workspace?.localPath) return "";
 
   const sections: string[] = [

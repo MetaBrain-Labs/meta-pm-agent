@@ -29,7 +29,12 @@ export function mapPersistedMessageToMessage(
       ? { thinking: message.reasoningContent }
       : {}),
     ...(message.toolCalls && message.toolCalls.length > 0
-      ? { toolCalls: message.toolCalls }
+      ? {
+          toolCalls: message.toolCalls.map((toolCall) => ({
+            ...toolCall,
+            agentType: toolCall.agentType ?? message.type ?? undefined,
+          })),
+        }
       : {}),
     ...(message.userInput
       ? {
@@ -66,6 +71,12 @@ export function mapPersistedMessageToMessage(
       ? {
           executorResults: message.productWorkflow.executor_results,
         }
+      : {}),
+    ...(message.executorResults && message.executorResults.length > 0
+      ? { executorResults: message.executorResults }
+      : {}),
+    ...(message.executorResult
+      ? { executorResults: [message.executorResult] }
       : {}),
   };
 }

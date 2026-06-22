@@ -111,6 +111,7 @@ export function applyStreamEvent(
           {
             name: event.toolName ?? "unknown",
             args: event.toolArgs,
+            agentType: event.agentType,
           },
         ],
       };
@@ -121,6 +122,7 @@ export function applyStreamEvent(
           message.toolCalls ?? [],
           event.toolName ?? "unknown",
           event.toolResult,
+          event.agentType,
         ),
       };
     case "finish":
@@ -388,11 +390,12 @@ function attachToolResult(
   toolCalls: NonNullable<Message["toolCalls"]>,
   toolName: string,
   toolResult: unknown,
+  agentType?: string,
 ): NonNullable<Message["toolCalls"]> {
-  const targetIndex = findPendingToolCallIndex(toolCalls, toolName);
+  const targetIndex = findPendingToolCallIndex(toolCalls, toolName, agentType);
 
   if (targetIndex === -1) {
-    return [...toolCalls, { name: toolName, result: toolResult }];
+    return [...toolCalls, { name: toolName, result: toolResult, agentType }];
   }
 
   return toolCalls.map((toolCall, index) =>
@@ -406,11 +409,13 @@ function attachToolResult(
 function findPendingToolCallIndex(
   toolCalls: NonNullable<Message["toolCalls"]>,
   toolName: string,
+  agentType?: string,
 ): number {
   for (let index = toolCalls.length - 1; index >= 0; index--) {
     const toolCall = toolCalls[index];
     if (
       toolCall?.name === toolName &&
+      (!agentType || !toolCall.agentType || toolCall.agentType === agentType) &&
       !Object.prototype.hasOwnProperty.call(toolCall, "result")
     ) {
       return index;

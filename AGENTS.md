@@ -8,6 +8,61 @@ Act as a pragmatic software engineering agent for the `meta-pm-agent` monorepo. 
 
 Deliver correct, maintainable changes that integrate with the current pnpm workspace, Turbo build graph, TypeScript configuration, database persistence model, SSE contract, and application boundaries. Complete implementation and appropriate verification whenever the local environment permits.
 
+## Agent Operating Principles
+
+### 1. Clarification First
+
+- Do not assume missing requirements, intent, or architecture.
+- If information is unclear, ask a clarification question before implementation.
+- If running in unattended/autonomous mode:
+  - choose the most reasonable interpretation
+  - proceed
+  - explicitly record assumptions instead of blocking
+
+---
+
+### 2. Simplicity Principle
+
+- Prefer the simplest solution that correctly solves the problem.
+- Avoid premature abstraction or over-engineering.
+- Add flexibility only when there is a clear present need.
+
+---
+
+### 3. Scope Protection
+
+- Do not modify unrelated code.
+- If you discover code smells or design issues:
+  - explicitly surface them
+  - do not fix them unless explicitly requested
+  - propose a separate follow-up task if needed
+
+---
+
+### 4. Uncertainty Handling
+
+- Always explicitly surface uncertainty.
+- If uncertainty can be reduced with a small, safe experiment:
+  - run a localized low-risk experiment
+  - summarize hypothesis + result
+  - present to user for confirmation
+- Confidence should never be implied when it does not exist.
+
+---
+
+### 5. Proactive Improvement Suggestions
+
+- Proactively suggest better approaches when applicable.
+- Include long-term improvements, not only tactical fixes.
+
+#### 5.1 Alternative Approach Rule (NEW)
+
+- If you see a clearly better approach, state it before implementing.
+- Explain the tradeoff in 2–4 bullets.
+- If the current request is still reasonable:
+  - proceed with current approach
+  - unless the alternative avoids serious risk, significant waste, or major rework
+
 ## Important Rules
 
 - Use `pnpm` v11.3.0, as enforced by the root `packageManager` field.
@@ -71,13 +126,15 @@ packages/
 - Planner and ProductDirector use shared JSON DeepAgent execution in `apps/agent-runtime/src/agents/common/run-json-agent.ts`. Agent-specific modules should pass a schema, payload, prompt, model options, and deterministic fallback instead of creating ad hoc JSON runners.
 - Executor Agents use shared text DeepAgent execution in `apps/agent-runtime/src/agents/common/run-text-agent.ts` and must maintain the markdown knowledge graph through authorized file tools instead of final JSON-only output.
 - The ten Executor Agent domains each have their own folder under `apps/agent-runtime/src/agents/product-workflow/executor-agent/`: `product-strategy-executor`, `market-research-executor`, `gtm-executor`, `product-discovery-executor`, `product-execution-executor`, `marketing-growth-executor`, `data-analytics-executor`, `ai-shipping-executor`, `toolkit-executor`, and `interface-craft-executor`.
-- The product knowledge graph file is `apps/agent-runtime/product-knowledge-graph/product-knowledge-graph.md`. The directory is committed with `.gitkeep`; the generated markdown graph itself is runtime state and should not be committed unless explicitly requested.
+- The product knowledge graph file is workspace-scoped at `apps/agent-runtime/product-knowledge-graph/<workspaceId>/product-knowledge-graph.md`. The parent directory is committed with `.gitkeep`; generated workspace graph folders and markdown files are runtime state and should not be committed unless explicitly requested.
+- After the product workflow finishes, archive the workspace graph into the `product_knowledge_graph` table and delete the matching runtime workspace folder only after the database write succeeds.
 - Keep `apps/agent-runtime/src/agents/product-workflow/agent.ts` as workflow orchestration and formatting only. Do not put Planner, Executor, or ProductDirector prompts, fallbacks, or model execution back into that file.
 - `POST /api/chat` may include `enabledTools`, currently user-facing as `["web_search"]`. Validate tool names through shared schemas before passing them to the runtime; internal product-workflow file tools are attached by runtime policy, not exposed as arbitrary user-facing filesystem access.
 - Runtime tool visibility is centrally managed in `apps/agent-runtime/src/agents/common/tool-access.ts`. Today `web_search` is authorized only for the Conversation Agent, and `kg_file_create`, `kg_file_read`, `kg_file_insert`, `kg_file_update`, and `kg_file_delete_content` are authorized only for ProductDirector and the ten Executor Agents.
-- File tools are implemented in `apps/agent-runtime/src/agents/common/knowledge-graph-file-tool.ts` and must stay bound to the product knowledge graph file. Do not wire unrestricted filesystem tools directly inside individual agents.
+- File tools are implemented in `apps/agent-runtime/src/agents/common/knowledge-graph-file-tool.ts` and must stay bound to the current workspace product knowledge graph file. Do not wire unrestricted filesystem tools directly inside individual agents.
 - `web_search` is implemented in `apps/agent-runtime/src/agents/common/web-search-tool.ts`. Search backend/network failures must return structured tool results with `results: []` and an `error` field, not throw, so tool failures do not terminate the SSE stream.
 - Preserve `agentType` on `tool-call` and `tool-result` events so the frontend can attribute future agent tool usage correctly.
+- Only explicitly authorized user-visible tools should be emitted as `tool-call` / `tool-result`. Filter DeepAgents internal tools such as generated task/todo helpers or unscoped file reads before they reach SSE or persistence.
 - When adding future agents, assign a stable `agentType` and use it consistently across runtime events, API persistence, and frontend rendering.
 - `apps/agent-runtime` filters internal DeepAgent/environment noise such as `No files found in /` before emitting user-visible `text`. Do not reintroduce internal tool/environment noise into normal assistant output.
 
@@ -92,6 +149,8 @@ packages/
 - Agent reasoning must be persisted in `message.meta.reasoningContent`.
 - Conversation Agent structured user-input data is stored in `message.user_input`.
 - Request Agent analysis must be written to the request message content and to request-form items.
+- Final workspace knowledge graph markdown must be stored in `product_knowledge_graph`, keyed by `workspace_id`, with optional `conversation_id` and `request_form_id` provenance. Keep the table at one current graph per workspace.
+- Executor Agent graph patches and full graph markdown must not be persisted into `message.content`, `message.meta.toolCalls`, or request-form payloads. Persist only lightweight task/result metadata there; the full graph belongs in `product_knowledge_graph`.
 - `request_form.status` must be updated as the request advances through processing states. Current statuses include `received`, `conversation_consumed`, `request_agent_running`, `request_analyzed`, `workflow_running`, `pending_user_confirmation`, `completed`, `stopped`, and `failed`.
 - `request_form_item.status` must also move with user-visible decisions. When a user submits a proposal confirmation form, mark the matching `decision` item and all referenced `proposal` items as `finish`, and persist the answer metadata in each item's `payload`.
 - Proposal aggregation must preserve source identity. Identical question text from different `source_task_id`/`source_agent` pairs represents distinct pending proposal confirmations and must not be collapsed or hidden by a hard result cap.
@@ -103,7 +162,8 @@ packages/
 - Conversation Agent reasoning appears with the conversation assistant message.
 - Request Agent reasoning appears after "用户输入整理" and before "Request Agent 分析".
 - Future agents should follow the same `agentType`-based placement pattern.
-- Tool-call details, including `web_search` results and authorized knowledge-graph file tool calls, should render through `ToolCallsCard` as a collapsed card near the related assistant message.
+- Tool-call details, including `web_search` results and authorized knowledge-graph file tool calls, should render through `ToolCallsCard` as a collapsed card near the related Agent stage.
+- Do not merge all Executor tool calls into one message-level card. Each Executor Agent should show its own knowledge-graph tool card below that Executor's reasoning/progress area, keyed by `agentType`.
 - Executor progress should render through the Planner DAG surface; after an Executor writes the graph, show the "已更新至知识图谱" completion card.
 - "用户输入整理" and "Request Agent 分析" cards should default to collapsed.
 - Prefer Tailwind utilities for new styling. Do not create new CSS/SCSS/Less/CSS Module files unless explicitly requested or unavoidable.

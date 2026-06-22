@@ -34,7 +34,10 @@ export async function* streamExecutorAgent(
     agentType: definition.agentType,
     content: `${definition.displayName} 正在读取 product-knowledge-graph.md 并准备图谱补丁。\n`,
   };
-  const fileHandle = createKnowledgeGraphFileHandle(input.knowledgeGraph.markdown);
+  const fileHandle = createKnowledgeGraphFileHandle(
+    input.knowledgeGraph.markdown,
+    input.workspaceId,
+  );
   const tools = createToolsForAgent(
     definition.agentType,
     getKnowledgeGraphFileToolNames(),

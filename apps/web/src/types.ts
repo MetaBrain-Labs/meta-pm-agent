@@ -171,7 +171,12 @@ export interface Message {
     message: string;
   };
   todos?: TodoItem[];
-  toolCalls?: Array<{ name: string; args?: Record<string, unknown>; result?: unknown }>;
+  toolCalls?: Array<{
+    name: string;
+    args?: Record<string, unknown>;
+    result?: unknown;
+    agentType?: string;
+  }>;
   usage?: Record<string, unknown>;
   timestamp: number;
 }
@@ -237,5 +242,7 @@ export interface PersistedMessageInfo {
   userInput?: Array<{ index: number; content: string; type: string }> | null;
   requestAnalysis?: RequestAnalysis | null;
   taskExecutionPlan?: TaskExecutionPlan | null;
+  executorResult?: ExecutorAgentResult | null;
+  executorResults?: ExecutorAgentResult[];
   productWorkflow?: ProductDirectorWorkflowResult | null;
 }

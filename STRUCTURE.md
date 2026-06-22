@@ -13,7 +13,7 @@
 | Web | Vite, React, Ant Design 6 | Workspace and chat UI, TypeScript 5.8.3 |
 | Web search | LangChain tool + Tavily/free public indexes | Optional `web_search` runtime tool, centrally authorized per Agent |
 | Worker | BullMQ, Redis | Background queue worker scaffold |
-| Database | PostgreSQL, Prisma | Account, workspace, conversation, message, request-form, task data |
+| Database | PostgreSQL, Prisma | Account, workspace, conversation, message, request-form, task, product knowledge graph data |
 | Build | Turborepo | Workspace task graph |
 | Package manager | pnpm 11.3.0 | Enforced by root `packageManager` |
 
@@ -117,8 +117,8 @@ Current product-workflow additions:
 
 | Path | Purpose |
 | --- | --- |
-| `apps/agent-runtime/product-knowledge-graph/` | Runtime-owned folder for `product-knowledge-graph.md`; only `.gitkeep` is committed |
-| `apps/agent-runtime/src/agents/common/knowledge-graph-file-tool.ts` | Controlled DeepAgents file tools bound to the product knowledge graph file |
+| `apps/agent-runtime/product-knowledge-graph/` | Runtime-owned workspace folders for `product-knowledge-graph.md`; only `.gitkeep` is committed |
+| `apps/agent-runtime/src/agents/common/knowledge-graph-file-tool.ts` | Controlled DeepAgents file tools bound to the current workspace knowledge graph file |
 | `apps/agent-runtime/src/agents/common/run-text-agent.ts` | Shared text/markdown DeepAgent runner used by Executor Agents |
 | `apps/agent-runtime/src/agents/product-workflow/executor-agent/*-executor/` | Ten independent Executor Agent profile folders, one per executor domain |
 
@@ -206,7 +206,9 @@ Each product workflow Agent keeps its prompt beside its implementation in `promp
 
 Executor Agent domains are implemented as independent folders under `executor-agent/`: `product-strategy-executor`, `market-research-executor`, `gtm-executor`, `product-discovery-executor`, `product-execution-executor`, `marketing-growth-executor`, `data-analytics-executor`, `ai-shipping-executor`, `toolkit-executor`, and `interface-craft-executor`.
 
-Executor Agents maintain `apps/agent-runtime/product-knowledge-graph/product-knowledge-graph.md`. The first Executor creates the graph when it is missing; later Executors must read the current graph and apply scoped changes. ProductDirector also reads the same file before reviewing the workflow. The generated markdown graph is runtime state and is not committed.
+Executor Agents maintain `apps/agent-runtime/product-knowledge-graph/<workspaceId>/product-knowledge-graph.md`. The first Executor for a workspace creates the graph when it is missing; later Executors in the same workspace must read the current graph and apply scoped changes. ProductDirector also reads the same workspace-scoped file before reviewing the workflow. The generated markdown graph is runtime state and is not committed.
+
+After the product workflow finishes, the API archives the final markdown into `product_knowledge_graph`, keyed by `workspace_id`, and deletes the corresponding runtime workspace folder. Executor and ProductDirector message/request-form persistence must not duplicate full graph markdown or graph patches; those heavyweight graph contents belong in `product_knowledge_graph`.
 
 The ProductDirector workflow may produce proposal slots from multiple executor tasks. Proposal slot aggregation must preserve `source_task_id` and `source_agent`; identical question text from different tasks is not a duplicate. Do not reintroduce text-only de-duplication or hard caps that hide valid pending proposal items.
 
@@ -223,7 +225,9 @@ Tool visibility is managed centrally in `apps/agent-runtime/src/agents/common/to
 
 `apps/agent-runtime/src/agents/common/web-search-tool.ts` implements the `web_search` LangChain tool. It uses `TAVILY_API_KEY` when configured and falls back to free public indexes such as Hacker News Algolia and OpenAlex without extra search dependencies. Search backend failures are returned as structured tool results with `results: []` and `error` instead of throwing, so a network timeout does not terminate the chat stream.
 
-`apps/agent-runtime/src/agents/common/knowledge-graph-file-tool.ts` implements the knowledge-graph file tools. These tools are bound to `apps/agent-runtime/product-knowledge-graph/product-knowledge-graph.md` and must not expose arbitrary filesystem access.
+`apps/agent-runtime/src/agents/common/knowledge-graph-file-tool.ts` implements the knowledge-graph file tools. These tools are bound to `apps/agent-runtime/product-knowledge-graph/<workspaceId>/product-knowledge-graph.md` and must not expose arbitrary filesystem access.
+
+The shared DeepAgent runners only forward explicitly authorized user-visible tools into SSE. Internal DeepAgents tools such as generated task/todo helpers or unscoped file reads are kept out of `tool-call`/`tool-result`, so they do not appear as stuck UI cards or leak internal filesystem errors.
 
 ## API
 
@@ -259,7 +263,8 @@ The API exposes account, workspace, chat, message, and SSE routes:
 - `request_form.status` tracks high-level processing state such as `received`, `conversation_consumed`, `request_agent_running`, `request_analyzed`, `workflow_running`, `pending_user_confirmation`, `completed`, `stopped`, and `failed`.
 - `request_form_item.status` tracks item-level progress. Proposal confirmation forms are represented by `decision` items; when a user submits a proposal decision, the corresponding `decision` and all referenced `proposal` items must be marked `finish` and record the answer in `payload`.
 - Pending proposal decision restoration must merge current pending `proposal` items into the visible question form, preserving distinct `source_task_id`/`source_agent` rows even when question text is identical.
-- `GET /api/chats/:id/messages` returns message `type`, `reasoningContent`, `userInput`, and `requestAnalysis` so the frontend can restore the correct display order.
+- `product_knowledge_graph` stores the final markdown graph for each workspace. It has one current row per `workspace_id`, optional `conversation_id` / `request_form_id` provenance, text `content`, and incrementing `version`.
+- `GET /api/chats/:id/messages` returns message `type`, `reasoningContent`, `userInput`, `requestAnalysis`, Planner DAG data, executor completion results, and tool calls so the frontend can restore the correct display order.
 
 ## Frontend Rendering Order
 
@@ -267,16 +272,18 @@ Message rendering is staged:
 
 1. Conversation Agent reasoning.
 2. Todo updates.
-3. Tool calls, including `web_search` and authorized knowledge-graph file tools, in a collapsed `ToolCallsCard`.
+3. Conversation Agent tool calls, such as `web_search`, in a collapsed `ToolCallsCard`.
 4. Visible assistant prose.
 5. Question form.
 6. 用户输入整理 card.
-7. Request Agent reasoning.
+7. Request Agent reasoning and Request Agent tool calls.
 8. Request Agent 分析 card.
-9. Executor DAG progress and completion cards, including "已更新至知识图谱" after an Executor writes the graph.
-10. Future agent-specific reasoning blocks.
+9. Planner reasoning, Planner DAG progress, and Planner tool calls.
+10. Each Executor Agent reasoning block followed by that Executor's own knowledge-graph tool card.
+11. ProductDirector reasoning and ProductDirector tool calls.
+12. Future agent-specific reasoning blocks.
 
-`ToolCallsCard`, `UserInputCard`, and `RequestAnalysisCard` default to collapsed so detailed intermediate data stays available without pushing normal assistant prose out of view.
+`ToolCallsCard`, `UserInputCard`, and `RequestAnalysisCard` default to collapsed so detailed intermediate data stays available without pushing normal assistant prose out of view. Tool calls must preserve `agentType`; the frontend uses it to avoid merging all Executor tool calls into a single card.
 
 ## Development Workflow
 
@@ -310,3 +317,4 @@ Useful commands:
 6. Preserve `message.type` and SSE `agentType` when adding new agents so reasoning and results can be displayed in the right stage.
 7. Standard browser folder selection may not expose full absolute paths. Keep manual path entry and host-provided path handling intact.
 8. Keep runtime tool access centralized in `tool-access.ts`; do not grant tools directly inside individual agents unless the centralized policy is updated.
+9. Apply the `product_knowledge_graph` SQL before running workflows that need final knowledge-graph archival.

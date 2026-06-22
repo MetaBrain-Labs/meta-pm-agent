@@ -31,6 +31,7 @@ export async function plannerAgentNode(
     state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
   const plan = await consumeProductWorkflowStream(
     streamPlannerAgent({
+      workspaceId: state.workspaceId,
       productContext: state.productContext,
       requestAnalysis: state.requestAnalysis,
       userInput: state.userInput,
@@ -156,6 +157,7 @@ async function executeExecutorAgentTask(
       task,
       plan: state.plan,
       knowledgeGraph,
+      workspaceId: state.workspaceId,
       productContext: state.productContext,
       requestAnalysis: state.requestAnalysis,
       userInput: state.userInput,
@@ -196,6 +198,7 @@ export async function productDirectorAgentNode(
     state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
   const workflowResult = await consumeProductWorkflowStream(
     streamProductDirectorReview({
+      workspaceId: state.workspaceId,
       productContext: state.productContext,
       requestAnalysis: state.requestAnalysis,
       plan: state.plan,

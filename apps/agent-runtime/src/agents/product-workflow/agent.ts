@@ -60,6 +60,7 @@ export async function* streamProductDirectorWorkflow(
       task,
       plan,
       knowledgeGraph,
+      workspaceId: input.workspaceId,
       productContext: input.productContext,
       requestAnalysis: input.requestAnalysis,
       userInput: input.userInput,
@@ -83,6 +84,7 @@ export async function* streamProductDirectorWorkflow(
   }
 
   const workflowResult = yield* streamProductDirectorReview({
+    workspaceId: input.workspaceId,
     productContext: input.productContext,
     requestAnalysis: input.requestAnalysis,
     plan,
