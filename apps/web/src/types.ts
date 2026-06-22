@@ -120,6 +120,8 @@ export interface ExecutorAgentResult {
     passed: boolean;
     notes: string;
   };
+  knowledge_graph_patch?: string;
+  knowledge_graph_markdown?: string;
 }
 
 export interface ProductDirectorWorkflowResult {
@@ -137,6 +139,7 @@ export interface ProductDirectorWorkflowResult {
   knowledge_graph_update: {
     entities: Array<Record<string, unknown>>;
     relations: Array<Record<string, unknown>>;
+    markdown?: string;
     notes: string[];
   };
   confirmation_message: string;

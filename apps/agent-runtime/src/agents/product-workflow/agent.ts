@@ -13,7 +13,10 @@ import type {
   ProductWorkflowStreamEvent,
 } from "./types";
 
-export { createProductWorkflowKnowledgeGraph } from "./common/knowledge-graph";
+export {
+  appendKnowledgeGraphPatch,
+  createProductWorkflowKnowledgeGraph,
+} from "./common/knowledge-graph";
 export { orderTasksBySequence } from "./common/tasks";
 export { streamExecutorAgent } from "./executor-agent/agent";
 export { streamPlannerAgent } from "./planner-agent/agent";
@@ -32,7 +35,7 @@ export type {
 export async function* streamProductDirectorWorkflow(
   input: ProductDirectorWorkflowInput,
 ): AsyncGenerator<ProductWorkflowStreamEvent> {
-  const knowledgeGraph = createProductWorkflowKnowledgeGraph();
+  let knowledgeGraph = createProductWorkflowKnowledgeGraph();
 
   yield {
     type: "reasoning",
@@ -56,12 +59,21 @@ export async function* streamProductDirectorWorkflow(
     const result = yield* streamExecutorAgent({
       task,
       plan,
+      knowledgeGraph,
       productContext: input.productContext,
       requestAnalysis: input.requestAnalysis,
       userInput: input.userInput,
       previousResults: executorResults,
       signal: input.signal,
     });
+    knowledgeGraph = {
+      ...knowledgeGraph,
+      markdown: result.knowledge_graph_markdown ?? knowledgeGraph.markdown,
+      notes: [
+        ...knowledgeGraph.notes,
+        `${result.task_id} 已由 ${result.agent_type} 更新至 product-knowledge-graph.md。`,
+      ],
+    };
     executorResults.push(result);
     yield {
       type: "agent-output",

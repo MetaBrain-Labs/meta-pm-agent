@@ -177,7 +177,9 @@ async function* streamPlanningAfterUserInput(
       if (
         event.type === "reasoning" ||
         event.type === "request-analysis-start" ||
-        event.type === "request-analysis-complete"
+        event.type === "request-analysis-complete" ||
+        event.type === "tool-call" ||
+        event.type === "tool-result"
       ) {
         yield event;
         continue;

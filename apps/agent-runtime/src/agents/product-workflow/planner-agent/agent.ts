@@ -37,6 +37,7 @@ export async function* streamPlannerAgent(
     },
     schema: TaskExecutionPlanSchema,
     fallback: () => createFallbackPlan(input.requestAnalysis),
+    suppressInvalidJsonReasoning: true,
     signal: input.signal,
   });
 }

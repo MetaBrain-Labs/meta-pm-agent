@@ -3,36 +3,34 @@ import {
   HumanMessage,
   ToolMessage,
   type BaseMessage,
-  type StructuredTool,
 } from "langchain";
 import { createDeepAgent } from "deepagents";
+import type { StructuredTool } from "langchain";
 import { createChatModel, type ChatModelOptions } from "./model";
-import { parseJsonObject } from "../../utils/json";
 import {
   getReasoningContent,
   getTextContent,
 } from "../../utils/message-adapter";
 
 /**
- * 只输出 JSON 的 DeepAgent 默认模型参数，供结构化 Agent 复用。
+ * 文本 Agent 默认模型参数，供非 JSON 结构化产出的 Agent 使用。
  */
-export const JSON_AGENT_MODEL_OPTIONS = {
+export const TEXT_AGENT_MODEL_OPTIONS = {
   enableThinking: false,
-  responseFormat: "json_object",
   temperature: 0,
 } satisfies Omit<ChatModelOptions, "maxTokens">;
 
 /**
- * JSON Agent 在解析最终 JSON 前允许透传的推理事件。
+ * 文本 Agent 在最终文本前允许透传的推理事件。
  */
-export interface JsonAgentReasoningEvent<AgentType extends string> {
+export interface TextAgentReasoningEvent<AgentType extends string> {
   type: "reasoning";
   agentType: AgentType;
   content: string;
 }
 
-export type JsonAgentEvent<AgentType extends string> =
-  | JsonAgentReasoningEvent<AgentType>
+export type TextAgentEvent<AgentType extends string> =
+  | TextAgentReasoningEvent<AgentType>
   | {
       type: "tool-call";
       toolName: string;
@@ -47,42 +45,33 @@ export type JsonAgentEvent<AgentType extends string> =
     };
 
 /**
- * 结构化 JSON Agent 的运行配置。
+ * 文本 Agent 的运行配置。
  */
-export interface RunJsonAgentOptions<T, AgentType extends string> {
+export interface RunTextAgentOptions<AgentType extends string> {
   agentType: AgentType;
   agentLabel: string;
   name: string;
   modelOptions?: ChatModelOptions;
   systemPrompt: string;
   tools?: StructuredTool[];
-  /** DeepAgents 技能目录 sources；不是单个技能名称。 */
-  skills?: string[];
   payload: unknown;
-  schema: {
-    safeParse(
-      value: unknown,
-    ): { success: true; data: T } | { success: false; error: unknown };
-  };
-  fallback: (reason: string) => T;
-  suppressInvalidJsonReasoning?: boolean;
+  fallback: (reason: string) => string;
   signal?: AbortSignal;
 }
 
 /**
- * 运行只输出 JSON 的 DeepAgent，并在模型失败或格式错误时回退到确定性结果。
+ * 运行输出自由文本的 DeepAgent，适用于 markdown 知识图谱补丁。
  */
-export async function* runJsonAgent<T, AgentType extends string>(
-  options: RunJsonAgentOptions<T, AgentType>,
-): AsyncGenerator<JsonAgentEvent<AgentType>, T, void> {
+export async function* runTextAgent<AgentType extends string>(
+  options: RunTextAgentOptions<AgentType>,
+): AsyncGenerator<TextAgentEvent<AgentType>, string, void> {
   try {
     const agent = createDeepAgent({
       model: createChatModel(options.modelOptions) as any,
       systemPrompt: options.systemPrompt,
       tools: options.tools ?? [],
       name: options.name,
-      // 这里接收 DeepAgents 技能目录 sources；具体技能名由 source 内的 SKILL.md 声明。
-      skills: options.skills ?? [],
+      skills: [],
     });
 
     const run = await agent.stream(
@@ -125,24 +114,14 @@ export async function* runJsonAgent<T, AgentType extends string>(
       responseText += getTextContent(message);
     }
 
-    const parsed = parseJsonObject(responseText);
-    const result = options.schema.safeParse(parsed);
-    if (result.success) return result.data;
-
-    if (!options.suppressInvalidJsonReasoning) {
-      yield {
-        type: "reasoning",
-        agentType: options.agentType,
-        content: `结构化输出校验失败，已使用 ${options.agentLabel} 的 MVP 回退结果。\n`,
-      };
-    }
-    return options.fallback("invalid-json");
+    const patch = responseText.trim();
+    return patch || options.fallback("empty-output");
   } catch (error) {
     const message = getErrorMessage(error);
     yield {
       type: "reasoning",
       agentType: options.agentType,
-      content: `${options.agentLabel} 执行失败，已使用 MVP 回退结果：${message}\n`,
+      content: `${options.agentLabel} 执行失败，已使用知识图谱补丁回退结果：${message}\n`,
     };
     return options.fallback(message);
   }

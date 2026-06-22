@@ -68,6 +68,7 @@ export const KnowledgeGraphRelationSchema = z.object({
 export const ProductKnowledgeGraphSchema = z.object({
   entities: z.array(KnowledgeGraphEntitySchema),
   relations: z.array(KnowledgeGraphRelationSchema),
+  markdown: z.string().default(""),
   notes: z.array(z.string()).default([]),
 });
 
@@ -151,6 +152,8 @@ export const ExecutorAgentResultSchema = z.object({
     passed: z.boolean(),
     notes: z.string(),
   }),
+  knowledge_graph_patch: z.string().optional(),
+  knowledge_graph_markdown: z.string().optional(),
 });
 
 /**

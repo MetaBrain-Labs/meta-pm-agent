@@ -66,12 +66,16 @@ packages/
 - Conversation Agent stream chunks use `agentType: "conversation"`.
 - Request Agent stream chunks use `agentType: "request"`.
 - After Conversation Agent emits `user-input-complete`, subsequent planning must flow through `apps/agent-runtime/src/graph/workflow.ts`. Do not directly wire Request Agent, ProductDirector, Planner, or Executor orchestration inside Conversation Agent.
-- Product workflow routing is LangGraph-owned: `parse_user_input -> request_agent -> product_workflow`. Add future workflow stages as graph nodes/edges instead of ad hoc calls from individual agents.
-- Product workflow model calls are split into independent JSON-only DeepAgents: `apps/agent-runtime/src/agents/product-workflow/planner-agent/`, `executor-agent/`, and `product-director-agent/`. Each folder owns its `agent.ts` and `prompt.ts`; Executor shared definitions live in `executor-agent/definitions.ts`.
-- Keep shared JSON-only DeepAgent execution in `apps/agent-runtime/src/agents/common/run-json-agent.ts`. Agent-specific modules should pass a schema, payload, prompt, model options, and deterministic fallback instead of creating ad hoc JSON runners.
+- Product workflow routing is LangGraph-owned: `parse_user_input -> request_agent -> planner_agent -> executor-* -> product_director_agent`. Add future workflow stages as graph nodes/edges instead of ad hoc calls from individual agents.
+- Product workflow model calls are split into independent DeepAgents: `apps/agent-runtime/src/agents/product-workflow/planner-agent/`, `executor-agent/`, and `product-director-agent/`. Each folder owns its `agent.ts` and `prompt.ts`; Executor shared definitions live in `executor-agent/definitions.ts`.
+- Planner and ProductDirector use shared JSON DeepAgent execution in `apps/agent-runtime/src/agents/common/run-json-agent.ts`. Agent-specific modules should pass a schema, payload, prompt, model options, and deterministic fallback instead of creating ad hoc JSON runners.
+- Executor Agents use shared text DeepAgent execution in `apps/agent-runtime/src/agents/common/run-text-agent.ts` and must maintain the markdown knowledge graph through authorized file tools instead of final JSON-only output.
+- The ten Executor Agent domains each have their own folder under `apps/agent-runtime/src/agents/product-workflow/executor-agent/`: `product-strategy-executor`, `market-research-executor`, `gtm-executor`, `product-discovery-executor`, `product-execution-executor`, `marketing-growth-executor`, `data-analytics-executor`, `ai-shipping-executor`, `toolkit-executor`, and `interface-craft-executor`.
+- The product knowledge graph file is `apps/agent-runtime/product-knowledge-graph/product-knowledge-graph.md`. The directory is committed with `.gitkeep`; the generated markdown graph itself is runtime state and should not be committed unless explicitly requested.
 - Keep `apps/agent-runtime/src/agents/product-workflow/agent.ts` as workflow orchestration and formatting only. Do not put Planner, Executor, or ProductDirector prompts, fallbacks, or model execution back into that file.
-- `POST /api/chat` may include `enabledTools`, currently `["web_search"]`. Validate tool names through shared schemas before passing them to the runtime.
-- Runtime tool visibility is centrally managed in `apps/agent-runtime/src/agents/common/tool-access.ts`. Today `web_search` is only authorized for the Conversation Agent; future agent permissions should be added there instead of directly wiring tools inside individual agents.
+- `POST /api/chat` may include `enabledTools`, currently user-facing as `["web_search"]`. Validate tool names through shared schemas before passing them to the runtime; internal product-workflow file tools are attached by runtime policy, not exposed as arbitrary user-facing filesystem access.
+- Runtime tool visibility is centrally managed in `apps/agent-runtime/src/agents/common/tool-access.ts`. Today `web_search` is authorized only for the Conversation Agent, and `kg_file_create`, `kg_file_read`, `kg_file_insert`, `kg_file_update`, and `kg_file_delete_content` are authorized only for ProductDirector and the ten Executor Agents.
+- File tools are implemented in `apps/agent-runtime/src/agents/common/knowledge-graph-file-tool.ts` and must stay bound to the product knowledge graph file. Do not wire unrestricted filesystem tools directly inside individual agents.
 - `web_search` is implemented in `apps/agent-runtime/src/agents/common/web-search-tool.ts`. Search backend/network failures must return structured tool results with `results: []` and an `error` field, not throw, so tool failures do not terminate the SSE stream.
 - Preserve `agentType` on `tool-call` and `tool-result` events so the frontend can attribute future agent tool usage correctly.
 - When adding future agents, assign a stable `agentType` and use it consistently across runtime events, API persistence, and frontend rendering.
@@ -99,7 +103,8 @@ packages/
 - Conversation Agent reasoning appears with the conversation assistant message.
 - Request Agent reasoning appears after "用户输入整理" and before "Request Agent 分析".
 - Future agents should follow the same `agentType`-based placement pattern.
-- Tool-call details, including `web_search` results, should render through `ToolCallsCard` as a collapsed card near the related assistant message.
+- Tool-call details, including `web_search` results and authorized knowledge-graph file tool calls, should render through `ToolCallsCard` as a collapsed card near the related assistant message.
+- Executor progress should render through the Planner DAG surface; after an Executor writes the graph, show the "已更新至知识图谱" completion card.
 - "用户输入整理" and "Request Agent 分析" cards should default to collapsed.
 - Prefer Tailwind utilities for new styling. Do not create new CSS/SCSS/Less/CSS Module files unless explicitly requested or unavoidable.
 - Do not add global stylesheet rules or inline `<style>` blocks unless the task explicitly requires it.

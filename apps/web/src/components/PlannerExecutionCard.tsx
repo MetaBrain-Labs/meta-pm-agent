@@ -235,7 +235,7 @@ function TaskRow({
         </Typography.Text>
         {result && (
           <Typography.Text className="mt-1 block text-[12px] text-[var(--success)]">
-            运行结果：{result.summary}
+            已更新至知识图谱：{result.summary}
           </Typography.Text>
         )}
       </div>

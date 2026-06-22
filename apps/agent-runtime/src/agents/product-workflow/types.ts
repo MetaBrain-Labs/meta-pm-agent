@@ -32,6 +32,7 @@ export interface PlannerAgentInput extends ProductDirectorWorkflowInput {
 export interface ExecutorAgentInput extends ProductDirectorWorkflowInput {
   task: TaskExecutionNode;
   plan: TaskExecutionPlan;
+  knowledgeGraph: ProductKnowledgeGraph;
   previousResults: ExecutorAgentResult[];
 }
 
@@ -60,5 +61,17 @@ export type ProductWorkflowStreamEvent =
       type: "agent-output";
       agentType: ProductWorkflowAgentType;
       content: string;
+    }
+  | {
+      type: "tool-call";
+      toolName: string;
+      toolArgs?: Record<string, unknown>;
+      agentType: ProductWorkflowAgentType;
+    }
+  | {
+      type: "tool-result";
+      toolName: string;
+      toolResult: unknown;
+      agentType: ProductWorkflowAgentType;
     }
   | { type: "complete"; result: ProductDirectorWorkflowResult };

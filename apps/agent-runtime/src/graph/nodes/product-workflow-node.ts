@@ -148,11 +148,14 @@ async function executeExecutorAgentTask(
   const writer = getWriter(config);
   const task = findNextExecutableTaskForAgent(state, agentType);
   if (!task) return {};
+  const knowledgeGraph =
+    state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
 
   const result = await consumeProductWorkflowStream(
     streamExecutorAgent({
       task,
       plan: state.plan,
+      knowledgeGraph,
       productContext: state.productContext,
       requestAnalysis: state.requestAnalysis,
       userInput: state.userInput,
@@ -161,6 +164,14 @@ async function executeExecutorAgentTask(
     }),
     writer,
   );
+  const nextKnowledgeGraph = {
+    ...knowledgeGraph,
+    markdown: result.knowledge_graph_markdown ?? knowledgeGraph.markdown,
+    notes: [
+      ...knowledgeGraph.notes,
+      `${result.task_id} 已由 ${result.agent_type} 更新至 product-knowledge-graph.md。`,
+    ],
+  };
   const executorResults = [...state.executorResults, result];
   writer?.({
     type: "agent-output",
@@ -168,7 +179,7 @@ async function executeExecutorAgentTask(
     content: formatExecutorResultBlock(result),
   });
 
-  return { executorResults };
+  return { executorResults, knowledgeGraph: nextKnowledgeGraph };
 }
 
 /**
