@@ -1,7 +1,7 @@
-import { PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT } from "./common";
+import { PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT } from "../common/knowledge-graph";
 
 /**
- * 生成 Executor Agent 的英文职责提示词。
+ * 生成 Executor Agent 的职责提示词。
  */
 export function createExecutorAgentPrompt({
   agentType,

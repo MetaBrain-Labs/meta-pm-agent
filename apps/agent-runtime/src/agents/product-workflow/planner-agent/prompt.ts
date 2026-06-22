@@ -1,7 +1,7 @@
-import { PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT } from "./common";
+import { PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT } from "../common/knowledge-graph";
 
 /**
- * Planner Agent 的英文职责提示词。
+ * Planner Agent 的职责提示词。
  */
 export const PLANNER_AGENT_PROMPT = `You are the Planner Agent in a product-management multi-agent workflow.
 

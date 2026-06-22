@@ -1,16 +1,4 @@
 /**
- * 产品知识图谱元模型的公共约束，供产品工作流 Agent 复用。
- */
-export const PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT = `
-Product knowledge graph metamodel:
-- Entity types: Goal, Requirement, Evidence, Decision, Feature, Component, Metric, Custom.
-- Relation types: Drives, Satisfies, Promotes, Produces, Constrains, Implements, Measures, Validates, References, Composes, Custom.
-- Every output must preserve traceability from goals to requirements, decisions, features, components, and metrics whenever the available evidence supports it.
-- Do not invent confirmed business facts. Put uncertainty into open_questions or risks.
-- The current product context and product knowledge graph may be placeholders. Treat them as context, not as confirmed final truth.
-`;
-
-/**
  * Executor Agent 的固定职责定义。
  */
 export const EXECUTOR_DEFINITIONS = [
@@ -57,3 +45,22 @@ export const EXECUTOR_DEFINITIONS = [
     role: "Build the metric layer by defining measurable indicators for goals and core requirements.",
   },
 ] as const;
+
+/**
+ * 单个领域 Executor Agent 的职责配置。
+ */
+export type ExecutorAgentDefinition = (typeof EXECUTOR_DEFINITIONS)[number];
+
+/**
+ * 可被 Planner 分配任务的 Executor Agent 类型。
+ */
+export type ExecutorAgentType = ExecutorAgentDefinition["agentType"];
+
+/**
+ * 获取 Executor Agent 的职责定义。
+ */
+export function getExecutorDefinition(
+  agentType: ExecutorAgentType,
+): ExecutorAgentDefinition {
+  return EXECUTOR_DEFINITIONS.find((item) => item.agentType === agentType)!;
+}

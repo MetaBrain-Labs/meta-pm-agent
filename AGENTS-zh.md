@@ -4,6 +4,9 @@
 
 - `apps/agent-runtime/src/graph/workflow.ts` 是 LangGraph 主图入口。Conversation Agent 产出 `user-input-complete` 后，后续 Request Agent、ProductDirector、Planner 和 Executor 流程必须经由该图编排，不要重新在 Conversation Agent 中直接串联这些 Agent。
 - 当前 LangGraph 主流程为 `parse_user_input -> request_agent -> product_workflow`。新增工作流阶段时，应新增 LangGraph 节点和边，而不是在单个 Agent 目录内硬编码调用链。
+- 产品工作流的模型调用已经拆成独立的 JSON-only DeepAgent 目录：`apps/agent-runtime/src/agents/product-workflow/planner-agent/`、`executor-agent/` 和 `product-director-agent/`。每个目录维护自己的 `agent.ts` 和 `prompt.ts`；Executor 的固定职责定义放在 `executor-agent/definitions.ts`。
+- 只输出 JSON 的 DeepAgent 公共运行逻辑放在 `apps/agent-runtime/src/agents/common/run-json-agent.ts`。具体 Agent 传入 schema、payload、prompt、模型参数和确定性 fallback，不要在各处重复实现 JSON runner。
+- `apps/agent-runtime/src/agents/product-workflow/agent.ts` 只负责产品工作流编排、流事件转发、tagged block 格式化和 question-form 格式化。不要把 Planner、Executor、ProductDirector 的 prompt、fallback 或模型执行逻辑重新塞回该文件。
 - 保留 `/api/chat/stop`。前端点击停止时必须先调用该接口，让 API 触发服务端 `AbortController` 并把 `AbortSignal` 传给模型供应商请求，然后再中止浏览器侧 SSE fetch。
 - `request_form.status` 需要随处理阶段更新，例如 `received`、`conversation_consumed`、`request_agent_running`、`request_analyzed`、`workflow_running`、`pending_user_confirmation`、`completed`、`stopped`、`failed`。
 - `request_form_item.status` 也必须随用户可见决策更新。用户提交补充信息确认表单后，对应 `decision` 条目以及它引用的所有 `proposal` 条目都应标记为 `finish`，并把回答内容写入各自 `payload`。

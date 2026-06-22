@@ -8,7 +8,7 @@
 
 | Layer | Technology | Notes |
 | --- | --- | --- |
-| Agent runtime | LangGraph, LangChain, DeepAgents | Conversation Agent, Request Agent, ProductDirector/Planner/Executor workflow graph |
+| Agent runtime | LangGraph, LangChain, DeepAgents | Conversation Agent, Request Agent, JSON-only Planner/Executor/ProductDirector workflow graph |
 | API | Hono | HTTP API on port 3001, SSE `/api/chat` stream, `/api/chat/stop`, Prisma repositories |
 | Web | Vite, React, Ant Design 6 | Workspace and chat UI, TypeScript 5.8.3 |
 | Web search | LangChain tool + Tavily/free public indexes | Optional `web_search` runtime tool, centrally authorized per Agent |
@@ -28,6 +28,19 @@ meta-pm-agent/
 │  │  │  │  ├─ common/
 │  │  │  │  ├─ conversation/
 │  │  │  │  ├─ product-workflow/
+│  │  │  │  │  ├─ common/
+│  │  │  │  │  ├─ executor-agent/
+│  │  │  │  │  │  ├─ agent.ts
+│  │  │  │  │  │  ├─ definitions.ts
+│  │  │  │  │  │  └─ prompt.ts
+│  │  │  │  │  ├─ planner-agent/
+│  │  │  │  │  │  ├─ agent.ts
+│  │  │  │  │  │  └─ prompt.ts
+│  │  │  │  │  ├─ product-director-agent/
+│  │  │  │  │  │  ├─ agent.ts
+│  │  │  │  │  │  └─ prompt.ts
+│  │  │  │  │  ├─ agent.ts
+│  │  │  │  │  └─ types.ts
 │  │  │  │  └─ request/
 │  │  │  ├─ graph/
 │  │  │  │  └─ nodes/
@@ -168,6 +181,18 @@ parse_user_input -> request_agent -> product_workflow -> END
 ```
 
 `product_workflow` is implemented in `apps/agent-runtime/src/graph/nodes/product-workflow-node.ts`. It invokes the ProductDirector workflow, which streams Planner Agent DAG output, Executor Agent results, and ProductDirector review output. The SSE path uses `streamWorkflowGraph` so intermediate reasoning, Planner DAG cards, executor results, and confirmation forms remain visible while the graph owns the stage transitions.
+
+The workflow stage delegates model work to independent JSON-only DeepAgents:
+
+| Directory | Responsibility |
+| --- | --- |
+| `apps/agent-runtime/src/agents/common/run-json-agent.ts` | Shared DeepAgent runner that enforces JSON object output, validates with Zod-compatible schemas, streams reasoning, and returns MVP fallback data on model or parse failure |
+| `apps/agent-runtime/src/agents/product-workflow/planner-agent/` | Planner Agent implementation and prompt; converts Request Agent analysis plus product context into a persisted `task_execution` DAG |
+| `apps/agent-runtime/src/agents/product-workflow/executor-agent/` | Executor Agent implementation, prompt, and fixed executor definitions; executes one DAG task and emits graph delta suggestions |
+| `apps/agent-runtime/src/agents/product-workflow/product-director-agent/` | ProductDirector Agent implementation and prompt; reviews Planner/Executor outputs and prepares confirmation data |
+| `apps/agent-runtime/src/agents/product-workflow/agent.ts` | Product workflow orchestration, stream event forwarding, tagged block formatting, and question-form formatting only |
+
+Each product workflow Agent keeps its prompt beside its implementation in `prompt.ts`. Do not reintroduce a shared `product-workflow/prompts/` directory for agent-specific prompts.
 
 The ProductDirector workflow may produce proposal slots from multiple executor tasks. Proposal slot aggregation must preserve `source_task_id` and `source_agent`; identical question text from different tasks is not a duplicate. Do not reintroduce text-only de-duplication or hard caps that hide valid pending proposal items.
 
