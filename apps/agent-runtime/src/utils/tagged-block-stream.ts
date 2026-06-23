@@ -1,3 +1,19 @@
+/**
+ * 标记块流式处理
+ *
+ * 将 Conversation Agent 原始文本流按标记块（如 <question-form>...</question-form>、
+ * <user-input>...</user-input>）分段，分别转换为 question-form-start/complete、
+ * user-input-start/complete 事件，标记块之外的文本按原样透传。
+ *
+ * Responsibilities:
+ * - 从 AsyncIterable<ConversationStreamEvent> 中检测并收集标记块
+ * - 按标记块生命周期发出 start/complete 事件
+ * - 保持标记块外文本和 reasoning 事件的流式顺序
+ *
+ * Notes:
+ * - 支持同时监听多个标记块类型
+ */
+
 import type { AgentMessageType, ConversationStreamEvent } from "../types";
 
 interface TaggedBlockOptions {

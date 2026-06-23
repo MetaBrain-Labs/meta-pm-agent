@@ -1,3 +1,19 @@
+/**
+ * Conversation Agent 流式主通道
+ *
+ * 实现从用户消息到完整响应的 SSE 流式管道，包括：
+ * - Conversation Agent 深度对话阶段
+ * - 标记块检测与分段（question-form、user-input）
+ * - user-input 完成后自动触发产品工作流图
+ * - 工作流确认表单的流式转发
+ *
+ * Responsibilities:
+ * - streamConversation()：主入口，接收历史消息和选项，产出 SSE 事件流
+ * - streamAgentEvents()：驱动 Conversation Agent 并过滤仅用户授权的工具事件
+ * - 在 user-input-complete 后驱动 streamWorkflowGraph
+ * - 在工作流完成后格式化并输出最终结果 block
+ */
+
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "langchain";
 import type { ChatMessage } from "@repo/shared";
 import { createConversationAgent } from "./agent";

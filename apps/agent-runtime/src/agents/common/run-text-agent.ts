@@ -1,3 +1,19 @@
+/**
+ * 文本 Agent 通用执行器
+ *
+ * 为非 JSON 输出的 DeepAgent（如 Executor Agent）提供统一的流式执行框架，
+ * 管理消息构建、模型调用、推理和文本内容提取，并过滤内部工具/环境噪声。
+ *
+ * Responsibilities:
+ * - runTextAgent()：创建并驱动 DeepAgent，按事件流提取推理/工具/文本内容
+ * - 定义 TEXT_AGENT_MODEL_OPTIONS 默认模型参数
+ * - 定义 TextAgentEvent / RunTextAgentOptions 等类型
+ * - 过滤 DeepAgent 内部噪声（如 "No files found in /"）
+ *
+ * Notes:
+ * - Executor Agent 使用此执行器产出 markdown 图谱补丁而非 JSON
+ */
+
 import {
   AIMessage,
   HumanMessage,

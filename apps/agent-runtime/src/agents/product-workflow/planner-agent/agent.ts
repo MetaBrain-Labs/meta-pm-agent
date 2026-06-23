@@ -1,3 +1,19 @@
+/**
+ * Planner Agent 实现
+ *
+ * 负责将 Request Agent 的 business_model 分析结果转换为可执行的 DAG 任务计划，
+ * 并在所有 Executor 完成后汇总产出进行最终审查。
+ *
+ * Responsibilities:
+ * - streamPlannerAgent()：生成 DAG 任务计划（基于 JSON DeepAgent）
+ * - streamPlannerWorkflowReview()：汇总 Executor 产出并进行最终审查
+ * - 为 Planner 附加知识图谱文件工具（kg_file_create/read/insert/update/delete_content）
+ *
+ * Notes:
+ * - Planner 使用 runJsonAgent 通用执行器，输出 TaskExecutionPlan
+ * - Planner Review 使用 runJsonAgent 执行器，输出 ProductWorkflowResult
+ */
+
 import {
   ProductWorkflowResultSchema,
   TaskExecutionPlanSchema,

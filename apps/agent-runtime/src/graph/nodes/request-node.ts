@@ -1,3 +1,16 @@
+/**
+ * Request Agent 图节点
+ *
+ * 实现 LangGraph 工作流中的两个节点：
+ * - parseUserInputNode：解析 Conversation Agent 的 <user-input> block 为结构化语句
+ * - requestAgentNode：执行 Request Agent 分类并输出至 SSE writer
+ *
+ * Responsibilities:
+ * - 调用 parseUserInputBlock 提取用户输入
+ * - 驱动 streamRequestAgent 并将分析结果写入图状态
+ * - 通过 LangGraph writer 向前端发出 request-analysis-start/complete 事件
+ */
+
 import { getWriter, type LangGraphRunnableConfig } from "@langchain/langgraph";
 import {
   formatRequestAnalysisBlock,

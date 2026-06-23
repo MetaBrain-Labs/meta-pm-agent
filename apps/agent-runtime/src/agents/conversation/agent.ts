@@ -1,3 +1,16 @@
+/**
+ * Conversation Agent 创建
+ *
+ * 负责创建 Conversation Agent 实例，该 Agent 是用户交互的主入口，
+ * 负责意图路由（项目/闲聊）、维护请求表单生命周期、分解用户输入、
+ * 并可选地启用 web_search 工具。
+ *
+ * Responsibilities:
+ * - createConversationAgent()：根据启用工具创建 DeepAgent 实例
+ * - buildConversationPrompt()：根据工具能力和运行时日期生成 system prompt
+ * - 注入运行时日期上下文，防止 Agent 使用过期年份
+ */
+
 import { createDeepAgent } from "deepagents";
 import type { AgentRuntimeTool } from "@repo/shared";
 import { createToolsForAgent } from "../common/tool-access";

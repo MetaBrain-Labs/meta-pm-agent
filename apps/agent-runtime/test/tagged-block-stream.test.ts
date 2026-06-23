@@ -1,3 +1,16 @@
+/**
+ * tagged-block-stream 单元测试
+ *
+ * 验证 streamTaggedBlock 对 question-form 和 user-input 标记块的
+ * 检测、收集和事件转换逻辑，覆盖基本标记块、嵌套、混合和空白输入场景。
+ *
+ * Responsibilities:
+ * - 测试 question-form 标记块的正确分段
+ * - 测试 user-input 标记块的正确分段
+ * - 测试标记块前导/尾部文本透传
+ * - 测试空输入和缺失闭合标记的边界情况
+ */
+
 import assert from "node:assert/strict";
 import test from "node:test";
 import { streamTaggedBlock } from "../src/utils/tagged-block-stream";

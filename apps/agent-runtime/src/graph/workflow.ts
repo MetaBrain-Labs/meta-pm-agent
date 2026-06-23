@@ -1,3 +1,20 @@
+/**
+ * 产品工作流主图定义
+ *
+ * 使用 LangGraph 构建完整的产品管理工作流图，包含以下节点链：
+ * parse_user_input -> request_agent -> planner_agent -> executor-* -> planner_agent -> END。
+ * 通过 product-workflow-node 中的 Executor 节点和路由逻辑实现 DAG 的动态规划与执行。
+ *
+ * Responsibilities:
+ * - 定义 WorkflowGraphInput / WorkflowGraphResult 接口
+ * - 组装 LangGraph StateGraph，连接所有节点和条件边
+ * - 导出 streamWorkflowGraph() 流式执行入口（从 conversation 流中截取 <user-input> 后驱动）
+ * - 导出 runWorkflowGraph() 同步执行入口
+ *
+ * Notes:
+ * - 此文件是产品工作流的路由中枢，后续扩展流程阶段应在此添加节点和边
+ */
+
 import { END, START, StateGraph } from "@langchain/langgraph";
 import type {
   ExecutorAgentResult,

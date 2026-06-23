@@ -1,3 +1,15 @@
+/**
+ * Agent Runtime LLM 配置管理
+ *
+ * 负责加载环境变量并提供统一的 LLM 配置接口。所有 Agent 的模型创建
+ * 均通过 getLlmConfig() 获取 API Key、Base URL、模型名、温度、超时等参数。
+ *
+ * Responsibilities:
+ * - 从 .env 文件加载环境变量
+ * - 提供 LlmConfig 类型和 getLlmConfig() 工厂函数
+ * - 对缺失的 OPENAI_API_KEY 抛出明确错误
+ */
+
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";

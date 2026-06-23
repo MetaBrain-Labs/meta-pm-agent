@@ -1,3 +1,14 @@
+/**
+ * Go-to-Market Executor 档案
+ *
+ * 定义 Go-to-Market Executor Agent 的职责配置，包括领域、关注层、
+ * 允许的实体/关系类型、技能映射和执行指南。
+ *
+ * Responsibilities:
+ * - 创建和细化 Decision、Component、Requirement、Metric、Evidence 实体
+ * - 将战略转化为上市动作、渠道策略和增长飞轮
+ */
+
 import type { ExecutorAgentProfile } from "../types";
 
 /**

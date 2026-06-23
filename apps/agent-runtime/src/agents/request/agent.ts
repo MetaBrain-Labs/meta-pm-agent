@@ -1,3 +1,20 @@
+/**
+ * Request Agent 实现
+ *
+ * 负责对 Conversation Agent 输出的 user_input 进行业务分类，
+ * 将每条独立语句归类为 business_model、questions 或 chitchat。
+ * 基于 DeepAgent + JSON 输出模式，支持流式推理和结构化分析。
+ *
+ * Responsibilities:
+ * - 创建并配置 Request Agent DeepAgent 实例
+ * - 提供 streamRequestAgent() 流式分析入口
+ * - 提供 runRequestAgent() 同步分析入口（含重试）
+ * - 格式化 Request Agent 分析结果为展示 block
+ *
+ * Notes:
+ * - 最多重试 2 次，失败时通过 markdown text 事件输出错误信息
+ */
+
 import { HumanMessage } from "langchain";
 import { createDeepAgent } from "deepagents";
 import { RequestAnalysisSchema, type RequestAnalysis } from "@repo/shared";

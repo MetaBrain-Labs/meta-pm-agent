@@ -1,3 +1,15 @@
+/**
+ * Planner Agent 提示词定义
+ *
+ * 包含 Planner Agent 和 Planner Workflow Review 的系统指令，
+ * 定义 DAG 任务规划规则、Executor 路由表和质检审核标准。
+ *
+ * Responsibilities:
+ * - 定义 PLANNER_AGENT_PROMPT：任务规划规则
+ * - 定义 PLANNER_WORKFLOW_REVIEW_PROMPT：汇总审查规则
+ * - 动态注入 EXECUTOR_DEFINITIONS 生成路由表和审核表
+ */
+
 import { PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT } from "../common/knowledge-graph";
 import {
   EXECUTOR_DEFINITIONS,

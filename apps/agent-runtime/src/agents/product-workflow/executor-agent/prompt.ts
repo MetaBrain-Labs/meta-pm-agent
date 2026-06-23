@@ -1,3 +1,15 @@
+/**
+ * Executor Agent 提示词生成
+ *
+ * 根据 ExecutorAgentDefinition 动态生成单个 Executor Agent 的系统指令，
+ * 包括领域职责、允许的实体/关系类型、执行指南和知识图谱维护规则。
+ *
+ * Responsibilities:
+ * - createExecutorAgentPrompt()：注入 definition 生成完整 system prompt
+ * - 动态拼接 allowedEntityTypes、allowedRelationTypes、skills、executionGuidelines
+ * - 附加 PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT 公共约束
+ */
+
 import { PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT } from "../common/knowledge-graph";
 import type { ExecutorAgentDefinition } from "./definitions";
 

@@ -1,3 +1,20 @@
+/**
+ * Executor Agent 实现
+ *
+ * 单个 Executor Agent 的流式执行器，负责接收 Planner 分配的任务、
+ * 读取当前知识图谱、通过文件工具维护 product-knowledge-graph.md，
+ * 并输出任务结果和推理过程。
+ *
+ * Responsibilities:
+ * - streamExecutorAgent()：执行单个任务并产出图谱补丁
+ * - 根据 task.assigned_agent 查找对应 ExecutorDefinition 配置
+ * - 为 Executor 附加知识图谱文件工具
+ * - 使用 runTextAgent 通用执行器（文本输出而非 JSON）
+ *
+ * Notes:
+ * - 每个 Executor 只处理分配给自己的任务，不跨越职责边界
+ */
+
 import {
   type ExecutorAgentResult,
   type TaskExecutionNode,

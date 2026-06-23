@@ -1,3 +1,20 @@
+/**
+ * JSON Agent 通用执行器
+ *
+ * 为需要 JSON 结构化输出的 DeepAgent（如 Planner、Request Agent）提供统一的
+ * 流式执行框架，负责消息构建、推理透传、最终 JSON 解析和确定性回退。
+ *
+ * Responsibilities:
+ * - runJsonAgent()：创建并驱动 DeepAgent，解析最终 JSON 输出
+ * - 定义 JSON_AGENT_MODEL_OPTIONS 默认模型参数（responseFormat: json_object）
+ * - 定义 JsonAgentEvent / RunJsonAgentOptions 等类型
+ * - JSON 解析失败时执行确定性 fallback，确保流程不被阻塞
+ *
+ * Notes:
+ * - Planner Agent 和 Planner Workflow Review 使用此执行器
+ * - 支持 Zod schema 校验输出，校验失败时触发 fallback
+ */
+
 import {
   AIMessage,
   HumanMessage,

@@ -1,3 +1,18 @@
+/**
+ * LangGraph 公共状态定义
+ *
+ * 使用 @langchain/langgraph 的 Annotation API 定义产品工作流图的所有跨节点共享状态字段，
+ * 包括用户输入、请求分析、任务计划、执行结果、知识图谱等。
+ *
+ * Responsibilities:
+ * - 定义 WorkflowGraphState 及其类型 WorkflowGraphStateValue
+ * - 为每个状态字段配置 reducer 和默认值
+ * - 作为所有图节点间数据传递的契约
+ *
+ * Notes:
+ * - 后续新增 Agent 节点时，在此文件中扩展共享状态字段
+ */
+
 import { Annotation } from "@langchain/langgraph";
 import type {
   ExecutorAgentResult,

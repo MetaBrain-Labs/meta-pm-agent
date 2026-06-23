@@ -1,3 +1,14 @@
+/**
+ * LangChain 消息适配器
+ *
+ * 提供 ChatMessage（API 层）与 LangChain BaseMessage（Agent 运行时）之间的
+ * 双向转换，以及推理内容和文本内容的提取工具。
+ *
+ * Responsibilities:
+ * - 将 ChatMessage[] 转换为 LangChain HumanMessage / AIMessage
+ * - 从 BaseMessage 中提取 reasoning_content 和纯文本 content
+ */
+
 import { AIMessage, HumanMessage, type BaseMessage } from "langchain";
 import type { ChatMessage } from "@repo/shared";
 

@@ -1,3 +1,17 @@
+/**
+ * 产品工作流图节点
+ *
+ * 实现 Planner Agent 节点和全部 10 个 Executor Agent 的 LangGraph 节点，
+ * 以及 selectNextProductWorkflowNode 条件路由逻辑。每个 Executor 节点按定义
+ * 从 streamExecutorAgent 驱动并输出推理、工具调用和补丁结果。
+ *
+ * Responsibilities:
+ * - 实现 plannerAgentNode：调用 Planner 生成/更新 DAG 并驱动 Executor 执行
+ * - 实现各 Executor 节点：读取知识图谱、执行任务、产出图谱补丁
+ * - 实现 selectNextProductWorkflowNode：按 DAG 依赖顺序调度下一个 Executor
+ * - 管理 executorResults 累积和执行计划状态
+ */
+
 import { getWriter, type LangGraphRunnableConfig } from "@langchain/langgraph";
 import type { ExecutorAgentResult } from "@repo/shared";
 import type { ProductWorkflowStreamEvent } from "../../agents/product-workflow/agent";

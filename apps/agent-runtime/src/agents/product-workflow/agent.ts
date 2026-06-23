@@ -1,3 +1,23 @@
+/**
+ * 产品工作流编排与格式化
+ *
+ * 作为 product-workflow 模块的聚合入口，负责：
+ * - 编排 Planner → Executor → Planner Review 的完整产品工作流流式执行
+ * - 格式化各环节的展示 block（任务计划、执行结果、确认表单等）
+ * - 协调知识图谱的创建、追加与归档
+ *
+ * Responsibilities:
+ * - streamPlannerProductWorkflow()：主工作流编排器
+ * - formatTaskExecutionPlanBlock()：格式化 DAG 展示块
+ * - formatExecutorResultBlock()：格式化单 Executor 结果块
+ * - formatProductWorkflowBlock()：格式化完整产出块
+ * - formatProductWorkflowConfirmationQuestionForm / ProposalQuestionForm：生成确认表单
+ * - 聚合导出子模块（knowledge-graph、tasks、executor-agent、planner-agent）
+ *
+ * Notes:
+ * - 此文件仅做编排与格式化，不包含 Planner/Executor 的 prompt 或模型执行逻辑
+ */
+
 import type {
   ExecutorAgentResult,
   ProductWorkflowResult,

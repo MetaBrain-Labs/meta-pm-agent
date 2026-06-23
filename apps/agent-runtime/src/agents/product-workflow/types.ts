@@ -1,3 +1,15 @@
+/**
+ * 产品工作流类型定义
+ *
+ * 定义产品工作流中 Planner Agent、Executor Agent 和各工作流阶段的
+ * 公共输入输出类型及流事件类型。
+ *
+ * Responsibilities:
+ * - 定义 ProductWorkflowInput / PlannerAgentInput / ExecutorAgentInput 等输入类型
+ * - 定义 ProductWorkflowStreamEvent 流事件联合类型
+ * - 定义 PlannerWorkflowReviewInput 收尾节点输入类型
+ */
+
 import type {
   ExecutorAgentResult,
   ProductWorkflowResult,
