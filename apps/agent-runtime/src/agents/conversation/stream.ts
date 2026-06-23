@@ -16,10 +16,12 @@
 
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "langchain";
 import type { ChatMessage } from "@repo/shared";
+import { calculateCost } from "../../config";
 import { createConversationAgent } from "./agent";
 import {
   getReasoningContent,
   getTextContent,
+  getTokenUsage,
   toLangChainMessages,
 } from "../../utils/message-adapter";
 import { streamTaggedBlock } from "../../utils/tagged-block-stream";
@@ -44,6 +46,9 @@ async function* streamAgentEvents(
   messages: (HumanMessage | AIMessage)[],
   options: ConversationStreamOptions,
 ): AsyncGenerator<ConversationStreamEvent> {
+  const startTime = Date.now();
+  let tokenUsage: ReturnType<typeof getTokenUsage> = null;
+
   const agent = createConversationAgent({
     enabledTools: options.enabledTools,
   });
@@ -95,6 +100,34 @@ async function* streamAgentEvents(
     if (cleanText) {
       yield { type: "text", content: cleanText, agentType: "conversation" };
     }
+
+    // 从每次 AIMessage 中累积 token 用量。
+    const usage = getTokenUsage(message);
+    if (usage) {
+      tokenUsage = usage;
+    }
+  }
+
+  // 在流结束时输出 Conversation Agent 的 token 用量和耗时。
+  if (tokenUsage) {
+    const cost = calculateCost(
+      tokenUsage.cacheMissInputTokens,
+      tokenUsage.cacheHitInputTokens,
+      tokenUsage.outputTokens,
+    );
+    yield {
+      type: "token-usage",
+      agentType: "conversation",
+      inputTokens: tokenUsage.inputTokens,
+      cacheHitInputTokens: tokenUsage.cacheHitInputTokens,
+      cacheMissInputTokens: tokenUsage.cacheMissInputTokens,
+      outputTokens: tokenUsage.outputTokens,
+      totalTokens: tokenUsage.totalTokens,
+      costInput: cost.costInput,
+      costOutput: cost.costOutput,
+      costTotal: cost.costTotal,
+      durationMs: Date.now() - startTime,
+    };
   }
 }
 
@@ -151,7 +184,11 @@ async function* streamUserInputIntegration(
     toLangChainMessages(messages),
     options,
   )) {
-    if (chunk.type === "tool-call" || chunk.type === "tool-result") {
+    if (
+      chunk.type === "tool-call" ||
+      chunk.type === "tool-result" ||
+      chunk.type === "token-usage"
+    ) {
       yield chunk;
       continue;
     }
@@ -203,7 +240,8 @@ async function* streamPlanningAfterUserInput(
         event.type === "request-analysis-start" ||
         event.type === "request-analysis-complete" ||
         event.type === "tool-call" ||
-        event.type === "tool-result"
+        event.type === "tool-result" ||
+        event.type === "token-usage"
       ) {
         yield event;
         continue;

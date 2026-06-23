@@ -265,6 +265,7 @@ function parseRecord(value: unknown): Record<string, unknown> | null {
 
 /**
  * 持久化单个 Agent 的助手消息，同时写入推理内容和结构化用户输入。
+ * 返回生成的消息 ID，供上层关联 token 用量等扩展数据。
  */
 export async function persistAssistantMessage({
   conversationId,
@@ -280,7 +281,9 @@ export async function persistAssistantMessage({
   reasoningContent?: string;
   toolCalls?: ToolCallDto[];
   type: string;
-}): Promise<void> {
+}): Promise<string> {
+  const messageId = randomUUID();
+
   await prisma.$transaction(async (tx) => {
     const meta = JSON.stringify({
       source: `${type}-agent`,
@@ -300,7 +303,7 @@ export async function persistAssistantMessage({
         "type"
       )
       VALUES (
-        ${randomUUID()},
+        ${messageId},
         ${conversationId},
         'assistant',
         ${content},
@@ -316,6 +319,8 @@ export async function persistAssistantMessage({
       WHERE "id" = ${conversationId}
     `;
   });
+
+  return messageId;
 }
 
 /**

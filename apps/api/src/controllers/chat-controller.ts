@@ -29,11 +29,13 @@ import {
 import { writeSse, writeSseDone } from "../utils/sse";
 
 /**
- * SSE 处理期间的 Agent 输出累加器，内部始终保留可写的工具调用数组。
+ * SSE 处理期间的 Agent 输出累加器，内部始终保留可写的工具调用数组和 token 用量。
  */
 type AgentOutputAccumulator = AgentConversationOutput & {
   reasoningContent: string;
   toolCalls: NonNullable<AgentConversationOutput["toolCalls"]>;
+  tokenUsage: Required<NonNullable<AgentConversationOutput["tokenUsage"]>>;
+  durationMs: number;
 };
 
 const activeChatRuns = new Map<string, AbortController>();
@@ -275,6 +277,20 @@ export async function chatStreamHandler(c: Context) {
             getEventAgentType(event),
           );
         }
+        if (event.type === "token-usage") {
+          const output = getAgentOutput(agentOutputs, getEventAgentType(event));
+          output.tokenUsage = {
+            inputTokens: event.inputTokens,
+            cacheHitInputTokens: event.cacheHitInputTokens,
+            cacheMissInputTokens: event.cacheMissInputTokens,
+            outputTokens: event.outputTokens,
+            totalTokens: event.totalTokens,
+            costInput: event.costInput,
+            costOutput: event.costOutput,
+            costTotal: event.costTotal,
+          };
+          output.durationMs = event.durationMs;
+        }
         if (
           "content" in event &&
           event.type !== "reasoning"
@@ -415,6 +431,17 @@ function getAgentOutput(
     content: "",
     reasoningContent: "",
     toolCalls: [],
+    tokenUsage: {
+      inputTokens: 0,
+      cacheHitInputTokens: 0,
+      cacheMissInputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      costInput: 0,
+      costOutput: 0,
+      costTotal: 0,
+    },
+    durationMs: 0,
   };
   outputs.set(type, created);
   return created;

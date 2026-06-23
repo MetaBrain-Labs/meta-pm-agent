@@ -68,6 +68,19 @@ export type ConversationStreamEvent =
       analysis: RequestAnalysis;
       agentType?: AgentMessageType;
     }
+  | {
+      type: "token-usage";
+      agentType: AgentMessageType;
+      inputTokens: number;
+      cacheHitInputTokens: number;
+      cacheMissInputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      costInput: number;
+      costOutput: number;
+      costTotal: number;
+      durationMs: number;
+    }
   | { type: "error"; error: string; agentType?: AgentMessageType };
 
 /**

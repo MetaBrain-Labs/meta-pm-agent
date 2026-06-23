@@ -24,10 +24,12 @@ import {
 } from "langchain";
 import { createDeepAgent } from "deepagents";
 import { createChatModel, type ChatModelOptions } from "./model";
+import { calculateCost } from "../../config";
 import { parseJsonObject } from "../../utils/json";
 import {
   getReasoningContent,
   getTextContent,
+  getTokenUsage,
 } from "../../utils/message-adapter";
 
 /**
@@ -61,6 +63,19 @@ export type JsonAgentEvent<AgentType extends string> =
       toolName: string;
       toolResult: unknown;
       agentType: AgentType;
+    }
+  | {
+      type: "token-usage";
+      agentType: AgentType;
+      inputTokens: number;
+      cacheHitInputTokens: number;
+      cacheMissInputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      costInput: number;
+      costOutput: number;
+      costTotal: number;
+      durationMs: number;
     };
 
 /**
@@ -92,6 +107,9 @@ export interface RunJsonAgentOptions<T, AgentType extends string> {
 export async function* runJsonAgent<T, AgentType extends string>(
   options: RunJsonAgentOptions<T, AgentType>,
 ): AsyncGenerator<JsonAgentEvent<AgentType>, T, void> {
+  const startTime = Date.now();
+  let tokenUsage: ReturnType<typeof getTokenUsage> = null;
+
   try {
     const agent = createDeepAgent({
       model: createChatModel(options.modelOptions) as any,
@@ -149,6 +167,34 @@ export async function* runJsonAgent<T, AgentType extends string>(
         };
       }
       responseText += getTextContent(message);
+
+      // 从每次 AIMessage 中累积 token 用量（最终消息包含完整统计）。
+      const usage = getTokenUsage(message);
+      if (usage) {
+        tokenUsage = usage;
+      }
+    }
+
+    // 在返回结构化结果前，输出该 Agent 的 token 用量和耗时。
+    if (tokenUsage) {
+      const cost = calculateCost(
+        tokenUsage.cacheMissInputTokens,
+        tokenUsage.cacheHitInputTokens,
+        tokenUsage.outputTokens,
+      );
+      yield {
+        type: "token-usage",
+        agentType: options.agentType,
+        inputTokens: tokenUsage.inputTokens,
+        cacheHitInputTokens: tokenUsage.cacheHitInputTokens,
+        cacheMissInputTokens: tokenUsage.cacheMissInputTokens,
+        outputTokens: tokenUsage.outputTokens,
+        totalTokens: tokenUsage.totalTokens,
+        costInput: cost.costInput,
+        costOutput: cost.costOutput,
+        costTotal: cost.costTotal,
+        durationMs: Date.now() - startTime,
+      };
     }
 
     const parsed = parseJsonObject(responseText);

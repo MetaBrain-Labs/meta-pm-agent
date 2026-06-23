@@ -48,6 +48,12 @@ export async function requestAgentNode(
       continue;
     }
 
+    // 透传 token-usage 事件到 SSE，不阻塞流程。
+    if (event.type === "token-usage") {
+      writer?.(event);
+      continue;
+    }
+
     const requestAnalysisBlock = formatRequestAnalysisBlock(event.analysis);
     writer?.({
       type: "request-analysis-complete",

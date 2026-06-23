@@ -19,6 +19,7 @@ import {
   updateRequestFormStatus,
 } from "../repositories/request-form-repository";
 import { persistTaskExecutionPlan } from "../repositories/task-execution-repository";
+import { persistTokenUsage } from "../repositories/token-usage-repository";
 import { parseRequestAnalysisPayload } from "../utils/request-analysis";
 import { parseTaskExecutionPlanPayload } from "../utils/task-execution";
 import {
@@ -50,6 +51,19 @@ export interface AgentConversationOutput {
     result?: unknown;
     agentType?: string;
   }>;
+  /** 该 Agent 本次模型调用的 token 用量 */
+  tokenUsage?: {
+    inputTokens: number;
+    cacheHitInputTokens: number;
+    cacheMissInputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    costInput: number;
+    costOutput: number;
+    costTotal: number;
+  };
+  /** 该 Agent 本次执行的耗时（毫秒） */
+  durationMs?: number;
 }
 
 /**
@@ -173,6 +187,8 @@ export async function persistConversationResult({
     : null;
 
   // 每个 Agent 单独落库，message.type 用于前端恢复正确的展示位置。
+  const messageIds = new Map<string, string>();
+
   for (const output of agentOutputs) {
     if (
       output.content.trim().length === 0 &&
@@ -185,7 +201,7 @@ export async function persistConversationResult({
       sanitizedProductWorkflow,
     );
 
-    await persistAssistantMessage({
+    const messageId = await persistAssistantMessage({
       conversationId,
       content: outputContent,
       userInput: output.type === "conversation" ? items : null,
@@ -193,7 +209,31 @@ export async function persistConversationResult({
       toolCalls: output.toolCalls,
       type: output.type,
     });
+    messageIds.set(output.type, messageId);
   }
+
+  // 持久化各 Agent 的 token 用量记录。
+  const tokenUsageRecords = agentOutputs
+    .filter(
+      (output) =>
+        output.tokenUsage && output.tokenUsage.totalTokens > 0,
+    )
+    .map((output) => ({
+      conversationId,
+      messageId: messageIds.get(output.type) ?? undefined,
+      agentType: output.type,
+      inputTokens: output.tokenUsage!.inputTokens,
+      cacheHitInputTokens: output.tokenUsage!.cacheHitInputTokens,
+      cacheMissInputTokens: output.tokenUsage!.cacheMissInputTokens,
+      outputTokens: output.tokenUsage!.outputTokens,
+      totalTokens: output.tokenUsage!.totalTokens,
+      costInput: output.tokenUsage!.costInput,
+      costOutput: output.tokenUsage!.costOutput,
+      costTotal: output.tokenUsage!.costTotal,
+      durationMs: output.durationMs ?? 0,
+    }));
+
+  await persistTokenUsage(tokenUsageRecords);
 
   await persistRequestAnalysisItems(requestFormId, requestAnalysis);
   await persistTaskExecutionPlan({

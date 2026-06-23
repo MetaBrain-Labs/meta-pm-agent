@@ -33,6 +33,19 @@ export interface LlmConfig {
 }
 
 /**
+ * LLM 定价配置（元/百万tokens）。
+ * 区分缓存命中（cache hit）与缓存未命中（cache miss）的输入 token 定价。
+ */
+export interface LlmPricing {
+  /** 缓存未命中输入 */
+  inputPricePerMillion: number;
+  /** 缓存命中输入（DeepSeek 默认 ¥0.1/M） */
+  cacheHitInputPricePerMillion: number;
+  /** 输出 */
+  outputPricePerMillion: number;
+}
+
+/**
  * 获取LLM配置信息
  */
 export function getLlmConfig(): LlmConfig {
@@ -53,4 +66,50 @@ export function getLlmConfig(): LlmConfig {
     temperature: 0.3,
     timeout: 30_000,
   };
+}
+
+/**
+ * 获取LLM定价配置（元/百万tokens），默认使用 DeepSeek 标准定价。
+ */
+export function getLlmPricing(): LlmPricing {
+  return {
+    inputPricePerMillion: parseFloat(
+      process.env.LLM_INPUT_PRICE_PER_MILLION ?? "1",
+    ),
+    cacheHitInputPricePerMillion: parseFloat(
+      process.env.LLM_CACHE_HIT_INPUT_PRICE_PER_MILLION ?? "0.1",
+    ),
+    outputPricePerMillion: parseFloat(
+      process.env.LLM_OUTPUT_PRICE_PER_MILLION ?? "2",
+    ),
+  };
+}
+
+/**
+ * 根据 token 数量和定价配置计算费用（元）。
+ * 输入侧区分为缓存命中（cacheHitInputTokens）与缓存未命中（cacheMissInputTokens）。
+ */
+export function calculateCost(
+  cacheMissInputTokens: number,
+  cacheHitInputTokens: number,
+  outputTokens: number,
+  pricing?: LlmPricing,
+): { costInput: number; costOutput: number; costTotal: number } {
+  const price = pricing ?? getLlmPricing();
+  const costInput =
+    (cacheMissInputTokens / 1_000_000) * price.inputPricePerMillion +
+    (cacheHitInputTokens / 1_000_000) * price.cacheHitInputPricePerMillion;
+  const costOutput = (outputTokens / 1_000_000) * price.outputPricePerMillion;
+  return {
+    costInput: roundCost(costInput),
+    costOutput: roundCost(costOutput),
+    costTotal: roundCost(costInput + costOutput),
+  };
+}
+
+/**
+ * 成本四舍五入到小数点后第8位，避免浮点精度问题。
+ */
+function roundCost(value: number): number {
+  return Math.round(value * 1e8) / 1e8;
 }

@@ -88,4 +88,17 @@ export type ProductWorkflowStreamEvent =
       toolResult: unknown;
       agentType: ProductWorkflowAgentType;
     }
+  | {
+      type: "token-usage";
+      agentType: ProductWorkflowAgentType;
+      inputTokens: number;
+      cacheHitInputTokens: number;
+      cacheMissInputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      costInput: number;
+      costOutput: number;
+      costTotal: number;
+      durationMs: number;
+    }
   | { type: "complete"; result: ProductWorkflowResult };
