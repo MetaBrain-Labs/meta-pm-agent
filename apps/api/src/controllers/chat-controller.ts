@@ -201,7 +201,7 @@ export async function chatStreamHandler(c: Context) {
       if (pendingDecisionForm) {
         await markStatus("pending_user_confirmation");
         const promptText =
-          "Conversation Agent 正在根据 ProductDirector Agent 的决策项向你确认信息。";
+          "Conversation Agent 正在根据 Planner Agent 的决策项向你确认信息。";
         const output = getAgentOutput(
           agentOutputs,
           "conversation_confirmation",

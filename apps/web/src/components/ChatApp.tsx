@@ -348,7 +348,7 @@ const AGENT_LABELS: Record<string, string> = {
   conversation_confirmation: "Conversation Agent",
   request: "Request Agent",
   planner: "Planner Agent",
-  product_director: "ProductDirector Agent",
+  product_director: "Planner Agent",
   "executor-product-strategy": "Product Strategy Executor",
   "executor-market-research": "Market Research Executor",
   "executor-gtm": "Go-to-Market Executor",

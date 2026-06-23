@@ -1,7 +1,7 @@
 import type {
   ExecutorAgentResult,
   Message,
-  ProductDirectorWorkflowResult,
+  ProductWorkflowResult,
   StreamEvent,
   TaskExecutionPlan,
 } from "../types";
@@ -317,7 +317,7 @@ function applyTextChunk(
   );
 
   if (productWorkflow) {
-    const result = parseJsonFromTaggedBlock<ProductDirectorWorkflowResult>(
+    const result = parseJsonFromTaggedBlock<ProductWorkflowResult>(
       productWorkflow.block,
       "<product-workflow",
       "</product-workflow>",

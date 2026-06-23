@@ -147,10 +147,10 @@
 - Product workflow 顺序固定：
 
   ```
-  parse_user_input → request_agent → planner → executor → director
+  parse_user_input → request_agent → planner → executor → planner → END
   ```
-- Conversation Agent 产出 `user-input-complete` 后，后续 Request Agent、Planner、Executor、ProductDirector 必须继续由 LangGraph 主图编排，不要在 Conversation Agent 中直接串联这些 Agent。
-- Planner 和 ProductDirector 使用 `apps/agent-runtime/src/agents/common/run-json-agent.ts`；Executor 使用 `apps/agent-runtime/src/agents/common/run-text-agent.ts`。
+- Conversation Agent 产出 `user-input-complete` 后，后续 Request Agent、Planner、Executor 必须继续由 LangGraph 主图编排，不要在 Conversation Agent 中直接串联这些 Agent。
+- Planner 使用 `apps/agent-runtime/src/agents/common/run-json-agent.ts`；Executor 使用 `apps/agent-runtime/src/agents/common/run-text-agent.ts`。
 - 只允许显式授权、用户可见的工具进入 `tool-call` / `tool-result` SSE。DeepAgents 内置的任务/todo 工具、未授权文件读取等内部工具事件必须过滤，避免在前端出现长期加载卡片或内部文件错误。
 
 ---
@@ -159,7 +159,7 @@
 
 - 运行时知识图谱按工作区隔离，路径为 `apps/agent-runtime/product-knowledge-graph/<workspaceId>/product-knowledge-graph.md`。
 - `apps/agent-runtime/product-knowledge-graph/` 只提交 `.gitkeep`；工作区子目录和生成的 markdown 图谱属于运行时状态，除非明确要求，不得提交。
-- Executor Agent 和 ProductDirector Agent 只能通过 `apps/agent-runtime/src/agents/common/knowledge-graph-file-tool.ts` 中的受控工具读写当前工作区图谱，不得直接接入任意文件系统工具。
+- Executor Agent 和 Planner Agent 只能通过 `apps/agent-runtime/src/agents/common/knowledge-graph-file-tool.ts` 中的受控工具读写当前工作区图谱，不得直接接入任意文件系统工具。
 - 产品工作流结束后，API 必须将当前工作区最终图谱写入 `product_knowledge_graph` 表；只有数据库写入成功后，才能删除对应工作区的运行时图谱目录。
 - `product_knowledge_graph` 以 `workspace_id` 唯一约束保证一个工作区只有一份当前图谱，并保留可选 `conversation_id`、`request_form_id` 来源信息。
 - Executor 的 `knowledge_graph_patch` 和完整 `knowledge_graph_markdown` 不要写入 `message` 或 `request_form_item.payload`；这些重内容只应进入 `product_knowledge_graph`。
@@ -182,7 +182,7 @@
 - reasoning 显示在对应 agent 阶段附近
 - tool-call 使用 `ToolCallsCard` 折叠卡片展示，并且必须按 `agentType` 放在对应 Agent 阶段附近
 - 不要把所有 Executor 的工具调用合并为一个总卡片；每个 Executor Agent 应在自己的推理/进度区域下方显示自己的知识图谱工具卡片
-- `web_search` 属于 Conversation Agent；知识图谱文件工具属于 ProductDirector 和十个 Executor Agent
+- `web_search` 属于 Conversation Agent；知识图谱文件工具属于 Planner 和十个 Executor Agent
 - Executor 输出通过 DAG 展示
 - UI 默认使用 Tailwind
 - 禁止新增全局 CSS

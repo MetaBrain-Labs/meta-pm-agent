@@ -4,7 +4,6 @@ import { z } from "zod";
  * 产品工作流中可持久化、可展示的稳定 Agent 类型。
  */
 export const ProductWorkflowAgentTypeSchema = z.enum([
-  "product_director",
   "planner",
   "executor-product-strategy",
   "executor-market-research",
@@ -96,7 +95,6 @@ export const TaskExecutionNodeSchema = z.object({
   title: z.string().min(1),
   description: z.string().min(1),
   assigned_agent: ProductWorkflowAgentTypeSchema.exclude([
-    "product_director",
     "planner",
   ]),
   depends_on: z.array(z.string().min(1)),
@@ -129,7 +127,6 @@ export const TaskExecutionPlanSchema = z.object({
 export const ExecutorAgentResultSchema = z.object({
   task_id: z.string().min(1),
   agent_type: ProductWorkflowAgentTypeSchema.exclude([
-    "product_director",
     "planner",
   ]),
   focus_layer: z.enum([
@@ -157,9 +154,9 @@ export const ExecutorAgentResultSchema = z.object({
 });
 
 /**
- * ProductDirector Agent 对完整 MVP 工作流的验收与确认结果。
+ * Planner Agent 对完整 MVP 工作流的汇总与确认结果。
  */
-export const ProductDirectorWorkflowResultSchema = z.object({
+export const ProductWorkflowResultSchema = z.object({
   status: z.enum(["pending_user_confirmation", "completed", "discarded"]),
   confirmation_id: z.string().min(1),
   request_summary: z.string().min(1),
@@ -182,6 +179,4 @@ export type ProductKnowledgeGraph = z.infer<typeof ProductKnowledgeGraphSchema>;
 export type TaskExecutionNode = z.infer<typeof TaskExecutionNodeSchema>;
 export type TaskExecutionPlan = z.infer<typeof TaskExecutionPlanSchema>;
 export type ExecutorAgentResult = z.infer<typeof ExecutorAgentResultSchema>;
-export type ProductDirectorWorkflowResult = z.infer<
-  typeof ProductDirectorWorkflowResultSchema
->;
+export type ProductWorkflowResult = z.infer<typeof ProductWorkflowResultSchema>;

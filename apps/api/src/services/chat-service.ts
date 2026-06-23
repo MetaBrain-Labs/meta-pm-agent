@@ -147,9 +147,6 @@ export async function persistConversationResult({
   );
   const requestOutput = agentOutputs.find((output) => output.type === "request");
   const plannerOutput = agentOutputs.find((output) => output.type === "planner");
-  const productDirectorOutput = agentOutputs.find(
-    (output) => output.type === "product_director",
-  );
   const items = conversationOutput
     ? parseUserInputPayload(conversationOutput.content)
     : null;
@@ -162,9 +159,12 @@ export async function persistConversationResult({
   const executorResults = agentOutputs
     .map((output) => parseExecutorResultPayload(output.content))
     .filter((result) => result !== null);
-  const productWorkflow = productDirectorOutput
-    ? parseProductWorkflowPayload(productDirectorOutput.content)
-    : null;
+  const productWorkflow =
+    parseProductWorkflowPayload(plannerOutput?.content ?? "") ??
+    parseProductWorkflowPayload(
+      agentOutputs.find((output) => output.type === "product_director")
+        ?.content ?? "",
+    );
   const sanitizedExecutorResults = executorResults.map(
     sanitizeExecutorResultForPersistence,
   );
@@ -235,11 +235,40 @@ function sanitizeAgentOutputContent(
     );
   }
 
-  if (output.type === "product_director" && productWorkflow) {
-    return formatProductWorkflowPayload(productWorkflow);
+  if (productWorkflow) {
+    return replaceProductWorkflowPayload(output.content, productWorkflow);
   }
 
   return output.content;
+}
+
+/**
+ * 将消息中的产品工作流结构块替换为已清洗的持久化版本。
+ */
+function replaceProductWorkflowPayload(
+  content: string,
+  productWorkflow: ReturnType<typeof sanitizeProductWorkflowForPersistence>,
+): string {
+  const startMarker = "<product-workflow";
+  const endMarker = "</product-workflow>";
+  const startIndex = content.search(new RegExp(escapeRegExp(startMarker), "i"));
+  if (startIndex === -1) return content;
+
+  const openEnd = content.indexOf(">", startIndex);
+  const endIndex = content.indexOf(endMarker, openEnd + 1);
+  if (openEnd === -1 || endIndex === -1) return content;
+
+  const blockEnd = endIndex + endMarker.length;
+  return `${content.slice(0, startIndex)}${formatProductWorkflowPayload(
+    productWorkflow,
+  )}${content.slice(blockEnd)}`;
+}
+
+/**
+ * 转义正则特殊字符，保证 tagged block marker 按字面量匹配。
+ */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**

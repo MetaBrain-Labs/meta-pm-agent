@@ -124,7 +124,7 @@ export interface ExecutorAgentResult {
   knowledge_graph_markdown?: string;
 }
 
-export interface ProductDirectorWorkflowResult {
+export interface ProductWorkflowResult {
   status: "pending_user_confirmation" | "completed" | "discarded";
   confirmation_id: string;
   request_summary: string;
@@ -244,5 +244,5 @@ export interface PersistedMessageInfo {
   taskExecutionPlan?: TaskExecutionPlan | null;
   executorResult?: ExecutorAgentResult | null;
   executorResults?: ExecutorAgentResult[];
-  productWorkflow?: ProductDirectorWorkflowResult | null;
+  productWorkflow?: ProductWorkflowResult | null;
 }

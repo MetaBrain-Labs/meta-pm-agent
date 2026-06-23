@@ -210,12 +210,12 @@ async function* streamPlanningAfterUserInput(
           proposalForm ??
           formatProductWorkflowConfirmationQuestionForm(event.result);
 
-        // ProductDirector 只发起确认/补充请求，由 Conversation Agent 面向用户提问。
+        // Planner 只发起确认/补充请求，由 Conversation Agent 面向用户提问。
         yield {
           type: "text",
           content: proposalForm
-            ? "ProductDirector Agent 汇总了需要补充确认的信息，我需要你先回答这些问题。"
-            : "ProductDirector Agent 已完成本轮验收，我需要你确认下一步处理方式。",
+            ? "Planner Agent 汇总了需要补充确认的信息，我需要你先回答这些问题。"
+            : "Planner Agent 已完成本轮汇总，我需要你确认下一步处理方式。",
           agentType: "conversation_confirmation",
         };
         yield {

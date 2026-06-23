@@ -3,7 +3,7 @@ import { prisma } from "@repo/database";
 import {
   type ChatMessage,
   type ExecutorAgentResult,
-  type ProductDirectorWorkflowResult,
+  type ProductWorkflowResult,
   type RequestAnalysis,
   type TaskExecutionPlan,
 } from "@repo/shared";
@@ -47,7 +47,7 @@ export interface MessageDto {
   taskExecutionPlan?: TaskExecutionPlan | null;
   executorResult?: ExecutorAgentResult | null;
   executorResults?: ExecutorAgentResult[];
-  productWorkflow?: ProductDirectorWorkflowResult | null;
+  productWorkflow?: ProductWorkflowResult | null;
 }
 
 /**

@@ -1,7 +1,7 @@
 import { END, START, StateGraph } from "@langchain/langgraph";
 import type {
   ExecutorAgentResult,
-  ProductDirectorWorkflowResult,
+  ProductWorkflowResult,
   RequestAnalysis,
   TaskExecutionPlan,
 } from "@repo/shared";
@@ -17,7 +17,6 @@ import {
   productDiscoveryExecutorNode,
   plannerAgentNode,
   productExecutionExecutorNode,
-  productDirectorAgentNode,
   productStrategyExecutorNode,
   selectNextProductWorkflowNode,
   toolkitExecutorNode,
@@ -38,7 +37,7 @@ export interface WorkflowGraphResult {
   userInput: UserInputRecord[];
   plan?: TaskExecutionPlan | null;
   executorResults: ExecutorAgentResult[];
-  productWorkflow?: ProductDirectorWorkflowResult | null;
+  productWorkflow?: ProductWorkflowResult | null;
 }
 
 export type WorkflowGraphStreamEvent =
@@ -66,7 +65,8 @@ const PRODUCT_WORKFLOW_ROUTE_TARGETS = {
   "executor-ai-shipping": "executor-ai-shipping",
   "executor-toolkit": "executor-toolkit",
   "executor-interface-craft": "executor-interface-craft",
-  product_director_agent: "product_director_agent",
+  planner_agent: "planner_agent",
+  end: END,
 } as const;
 
 /**
@@ -90,9 +90,6 @@ export const graph = new StateGraph(WorkflowGraphState)
   .addNode("executor-ai-shipping", aiShippingExecutorNode)
   .addNode("executor-toolkit", toolkitExecutorNode)
   .addNode("executor-interface-craft", interfaceCraftExecutorNode)
-  // ProductDirector Agent 负责验收 Planner 与 Executor 的完整结果。
-  .addNode("product_director_agent", productDirectorAgentNode)
-
   .addEdge(START, "parse_user_input")
   .addEdge("parse_user_input", "request_agent")
   .addConditionalEdges("request_agent", selectNextNodeAfterRequestAgent, {
@@ -110,7 +107,8 @@ export const graph = new StateGraph(WorkflowGraphState)
     "executor-ai-shipping": "executor-ai-shipping",
     "executor-toolkit": "executor-toolkit",
     "executor-interface-craft": "executor-interface-craft",
-    product_director_agent: "product_director_agent",
+    planner_agent: "planner_agent",
+    end: END,
   })
   .addConditionalEdges(
     "executor-product-strategy",
@@ -162,7 +160,6 @@ export const graph = new StateGraph(WorkflowGraphState)
     selectNextProductWorkflowNode,
     PRODUCT_WORKFLOW_ROUTE_TARGETS,
   )
-  .addEdge("product_director_agent", END)
   .compile();
 
 /**

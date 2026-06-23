@@ -3,7 +3,7 @@ import { prisma } from "@repo/database";
 import type {
   ChatMessage,
   ExecutorAgentResult,
-  ProductDirectorWorkflowResult,
+  ProductWorkflowResult,
   RequestAnalysis,
 } from "@repo/shared";
 
@@ -159,11 +159,11 @@ export async function persistExecutorProposalItems(
 }
 
 /**
- * 将 ProductDirector 聚合后的 proposal slots 写入 decision 项，供 Conversation Agent 统一提问。
+ * 将 Planner 聚合后的 proposal slots 写入 decision 项，供 Conversation Agent 统一提问。
  */
 export async function persistProposalDecisionItem(
   requestFormId: string | undefined,
-  result: ProductDirectorWorkflowResult | null,
+  result: ProductWorkflowResult | null,
 ): Promise<void> {
   if (!requestFormId || !result) return;
 
@@ -185,7 +185,7 @@ export async function persistProposalDecisionItem(
       ${requestFormId},
       'decision',
       'pending',
-      'product-director',
+      'planner',
       ${slots[0]?.priority ?? 0},
       ${JSON.stringify({
         question_id: getProposalDecisionId(result),
@@ -196,11 +196,11 @@ export async function persistProposalDecisionItem(
 }
 
 /**
- * 将 ProductDirector Agent 的最终确认请求写入请求表单。
+ * 将 Planner Agent 的最终确认请求写入请求表单。
  */
 export async function persistProductWorkflowConfirmationDecision(
   requestFormId: string | undefined,
-  result: ProductDirectorWorkflowResult | null,
+  result: ProductWorkflowResult | null,
 ): Promise<void> {
   if (!requestFormId || !result) return;
 
@@ -219,7 +219,7 @@ export async function persistProductWorkflowConfirmationDecision(
       ${requestFormId},
       'confirmation_decision',
       'pending',
-      'product-director',
+      'planner',
       100,
       ${JSON.stringify({
         question_id: result.confirmation_id,
@@ -493,9 +493,9 @@ function parseFormAnswer(content: string): { formId: string; content: string } |
 }
 
 /**
- * 汇总、去重、过滤并按优先级排序 ProductDirector 收集到的 proposal slots。
+ * 汇总、去重、过滤并按优先级排序 Planner 收集到的 proposal slots。
  */
-function collectProposalSlots(result: ProductDirectorWorkflowResult): Array<{
+function collectProposalSlots(result: ProductWorkflowResult): Array<{
   id: string;
   question: string;
   source_task_id: string;
@@ -541,7 +541,7 @@ function collectProposalSlots(result: ProductDirectorWorkflowResult): Array<{
 /**
  * 生成 proposal decision 的稳定提问 ID。
  */
-function getProposalDecisionId(result: ProductDirectorWorkflowResult): string {
+function getProposalDecisionId(result: ProductWorkflowResult): string {
   return `${result.confirmation_id}-proposal-decision`;
 }
 
@@ -633,7 +633,7 @@ function buildDecisionQuestionForm(payload: Record<string, unknown>): string | n
 ${JSON.stringify(
   {
     description:
-      "ProductDirector Agent 汇总了 Executor Agent 需要你补充确认的信息。",
+      "Planner Agent 汇总了 Executor Agent 需要你补充确认的信息。",
     questions,
     submitLabel: "提交补充信息",
   },

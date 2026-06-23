@@ -1,18 +1,30 @@
 import {
+  ProductWorkflowResultSchema,
   TaskExecutionPlanSchema,
   type BusinessModelItem,
+  type ExecutorAgentResult,
+  type ProductWorkflowResult,
   type TaskExecutionPlan,
 } from "@repo/shared";
 import {
   JSON_AGENT_MODEL_OPTIONS,
   runJsonAgent,
 } from "../../common/run-json-agent";
+import { createKnowledgeGraphFileHandle } from "../../common/knowledge-graph-file-tool";
+import {
+  createToolsForAgent,
+  getKnowledgeGraphFileToolNames,
+} from "../../common/tool-access";
 import type {
+  PlannerWorkflowReviewInput,
   PlannerAgentInput,
   ProductWorkflowStreamEvent,
 } from "../types";
 import { EXECUTOR_DEFINITIONS } from "../executor-agent/definitions";
-import { PLANNER_AGENT_PROMPT } from "./prompt";
+import {
+  PLANNER_AGENT_PROMPT,
+  PLANNER_WORKFLOW_REVIEW_PROMPT,
+} from "./prompt";
 
 /**
  * Planner Agent：把 Request Agent 的 business_model 转换为可执行 DAG。
@@ -40,6 +52,63 @@ export async function* streamPlannerAgent(
     suppressInvalidJsonReasoning: true,
     signal: input.signal,
   });
+}
+
+/**
+ * Planner Agent：在 Executor 全部完成后汇总工作流结果并生成用户确认数据。
+ */
+export async function* streamPlannerWorkflowReview(
+  input: PlannerWorkflowReviewInput,
+): AsyncGenerator<
+  ProductWorkflowStreamEvent,
+  ProductWorkflowResult,
+  void
+> {
+  const fileHandle = createKnowledgeGraphFileHandle(
+    input.knowledgeGraph.markdown,
+    input.workspaceId,
+  );
+  const tools = createToolsForAgent(
+    "planner",
+    getKnowledgeGraphFileToolNames(),
+    { knowledgeGraphFile: fileHandle },
+  );
+
+  const result = yield* runJsonAgent({
+    agentType: "planner",
+    agentLabel: "Planner Agent",
+    name: "planner-agent-review",
+    modelOptions: {
+      ...JSON_AGENT_MODEL_OPTIONS,
+      maxTokens: 8192,
+    },
+    systemPrompt: PLANNER_WORKFLOW_REVIEW_PROMPT,
+    tools,
+    payload: {
+      product_context: input.productContext || "No product context provided.",
+      request_analysis: input.requestAnalysis,
+      product_knowledge_graph: input.knowledgeGraph,
+      product_knowledge_graph_markdown: input.knowledgeGraph.markdown,
+      planner: input.plan,
+      executor_results: input.executorResults,
+    },
+    schema: ProductWorkflowResultSchema,
+    fallback: () =>
+      createFallbackWorkflowResult(
+        input.plan,
+        input.executorResults,
+        input.knowledgeGraph.markdown,
+      ),
+    signal: input.signal,
+  });
+
+  return {
+    ...result,
+    knowledge_graph_update: {
+      ...result.knowledge_graph_update,
+      markdown: fileHandle.read(),
+    },
+  };
 }
 
 /**
@@ -81,6 +150,40 @@ function createFallbackPlan(
       },
     })),
     assumptions: ["Planner Agent 使用 MVP 回退 DAG，后续可由模型动态调整。"],
+  };
+}
+
+/**
+ * Planner Agent 不可用时生成待用户确认的工作流汇总结果。
+ */
+function createFallbackWorkflowResult(
+  plan: TaskExecutionPlan,
+  executorResults: ExecutorAgentResult[],
+  knowledgeGraphMarkdown: string,
+): ProductWorkflowResult {
+  return {
+    status: "pending_user_confirmation",
+    confirmation_id: "product-workflow-confirmation",
+    request_summary: plan.request_summary,
+    planner: plan,
+    executor_results: executorResults,
+    review: {
+      accepted_task_ids: executorResults.map((item) => item.task_id),
+      rejected_task_ids: [],
+      notes: "Planner Agent 使用 MVP 回退汇总，所有结构化结果等待用户确认。",
+    },
+    product_context_update: [
+      `请求摘要：${plan.request_summary}`,
+      ...executorResults.map((item) => `${item.focus_layer}：${item.summary}`),
+    ].join("\n"),
+    knowledge_graph_update: {
+      entities: executorResults.flatMap((item) => item.entities),
+      relations: executorResults.flatMap((item) => item.relations),
+      markdown: knowledgeGraphMarkdown,
+      notes: ["最终知识图谱以 product_knowledge_graph_markdown 为准。"],
+    },
+    confirmation_message:
+      "我已完成本轮 MVP 规划、执行和汇总。请确认是否接受这些产品上下文与知识图谱更新；确认后再合并，退回则放弃本轮更新。",
   };
 }
 

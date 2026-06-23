@@ -5,15 +5,15 @@ export {
   runRequestAgent,
 } from "./agents/request/agent";
 export {
-  formatProductDirectorWorkflowBlock,
+  formatProductWorkflowBlock,
   formatProductWorkflowConfirmationQuestionForm,
   formatProductWorkflowProposalQuestionForm,
   getProposalDecisionId,
   formatTaskExecutionPlanBlock,
-  streamProductDirectorWorkflow,
+  streamPlannerProductWorkflow,
 } from "./agents/product-workflow/agent";
 export type {
-  ProductDirectorWorkflowInput,
+  ProductWorkflowInput,
   ProductWorkflowStreamEvent,
 } from "./agents/product-workflow/agent";
 export { graph, runWorkflowGraph } from "./graph/workflow";

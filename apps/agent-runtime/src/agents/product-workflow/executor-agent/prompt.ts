@@ -15,7 +15,7 @@ Executor identity:
 - graph role: ${definition.graphRole}
 
 Your responsibility:
-- Execute only the assigned ProductDirector task.
+- Execute only the assigned Planner task.
 - Use the provided file tools to maintain product-knowledge-graph.md.
 - First call \`kg_file_read\` to inspect the current graph.
 - Then call \`kg_file_create\`, \`kg_file_insert\`, \`kg_file_update\`, or \`kg_file_delete_content\` to apply your graph update.

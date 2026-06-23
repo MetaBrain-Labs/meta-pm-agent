@@ -2,7 +2,7 @@ import { Annotation } from "@langchain/langgraph";
 import type {
   ExecutorAgentResult,
   ProductKnowledgeGraph,
-  ProductDirectorWorkflowResult,
+  ProductWorkflowResult,
   RequestAnalysis,
   TaskExecutionPlan,
 } from "@repo/shared";
@@ -46,7 +46,7 @@ export const WorkflowGraphState = Annotation.Root({
     default: () => "",
   }),
 
-  // 当前产品知识图谱快照，供 Planner、Executor 和 ProductDirector 共享上下文。
+  // 当前产品知识图谱快照，供 Planner 和 Executor 共享上下文。
   knowledgeGraph: Annotation<ProductKnowledgeGraph | null>({
     reducer: (_current, update) => update,
     default: () => null,
@@ -64,8 +64,8 @@ export const WorkflowGraphState = Annotation.Root({
     default: () => [],
   }),
 
-  // ProductDirector Agent 对 Planner 和 Executor 结果的最终验收结果。
-  productWorkflow: Annotation<ProductDirectorWorkflowResult | null>({
+  // Planner Agent 对 Planner 和 Executor 结果的最终汇总结果。
+  productWorkflow: Annotation<ProductWorkflowResult | null>({
     reducer: (_current, update) => update,
     default: () => null,
   }),

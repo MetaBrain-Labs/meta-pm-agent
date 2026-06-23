@@ -498,7 +498,7 @@ function getReasoningLabel(agentType: string): string {
   }
   if (agentType === "planner") return "思考过程（Planner Agent）";
   if (agentType === "product_director") {
-    return "思考过程（ProductDirector Agent）";
+    return "思考过程（Planner Agent）";
   }
   return `思考过程（${getAgentLabel(agentType)}）`;
 }
@@ -519,7 +519,7 @@ const EXECUTOR_AGENT_TYPES = [
 const AGENT_LABELS: Record<string, string> = {
   request: "Request Agent",
   planner: "Planner Agent",
-  product_director: "ProductDirector Agent",
+  product_director: "Planner Agent",
   "executor-product-strategy": "Product Strategy Executor",
   "executor-market-research": "Market Research Executor",
   "executor-gtm": "Go-to-Market Executor",

@@ -120,17 +120,17 @@ packages/
 - `thinking` events may include `agentType`. Preserve this field when forwarding or transforming stream events.
 - Conversation Agent stream chunks use `agentType: "conversation"`.
 - Request Agent stream chunks use `agentType: "request"`.
-- After Conversation Agent emits `user-input-complete`, subsequent planning must flow through `apps/agent-runtime/src/graph/workflow.ts`. Do not directly wire Request Agent, ProductDirector, Planner, or Executor orchestration inside Conversation Agent.
-- Product workflow routing is LangGraph-owned: `parse_user_input -> request_agent -> planner_agent -> executor-* -> product_director_agent`. Add future workflow stages as graph nodes/edges instead of ad hoc calls from individual agents.
-- Product workflow model calls are split into independent DeepAgents: `apps/agent-runtime/src/agents/product-workflow/planner-agent/`, `executor-agent/`, and `product-director-agent/`. Each folder owns its `agent.ts` and `prompt.ts`; Executor shared definitions live in `executor-agent/definitions.ts`.
-- Planner and ProductDirector use shared JSON DeepAgent execution in `apps/agent-runtime/src/agents/common/run-json-agent.ts`. Agent-specific modules should pass a schema, payload, prompt, model options, and deterministic fallback instead of creating ad hoc JSON runners.
+- After Conversation Agent emits `user-input-complete`, subsequent planning must flow through `apps/agent-runtime/src/graph/workflow.ts`. Do not directly wire Request Agent, Planner, or Executor orchestration inside Conversation Agent.
+- Product workflow routing is LangGraph-owned: `parse_user_input -> request_agent -> planner_agent -> executor-* -> planner_agent -> END`. Add future workflow stages as graph nodes/edges instead of ad hoc calls from individual agents.
+- Product workflow model calls are split into independent DeepAgents: `apps/agent-runtime/src/agents/product-workflow/planner-agent/` and `executor-agent/`. Each folder owns its `agent.ts` and `prompt.ts`; Executor shared definitions live in `executor-agent/definitions.ts`.
+- Planner uses shared JSON DeepAgent execution in `apps/agent-runtime/src/agents/common/run-json-agent.ts`. Agent-specific modules should pass a schema, payload, prompt, model options, and deterministic fallback instead of creating ad hoc JSON runners.
 - Executor Agents use shared text DeepAgent execution in `apps/agent-runtime/src/agents/common/run-text-agent.ts` and must maintain the markdown knowledge graph through authorized file tools instead of final JSON-only output.
 - The ten Executor Agent domains each have their own folder under `apps/agent-runtime/src/agents/product-workflow/executor-agent/`: `product-strategy-executor`, `market-research-executor`, `gtm-executor`, `product-discovery-executor`, `product-execution-executor`, `marketing-growth-executor`, `data-analytics-executor`, `ai-shipping-executor`, `toolkit-executor`, and `interface-craft-executor`.
 - The product knowledge graph file is workspace-scoped at `apps/agent-runtime/product-knowledge-graph/<workspaceId>/product-knowledge-graph.md`. The parent directory is committed with `.gitkeep`; generated workspace graph folders and markdown files are runtime state and should not be committed unless explicitly requested.
 - After the product workflow finishes, archive the workspace graph into the `product_knowledge_graph` table and delete the matching runtime workspace folder only after the database write succeeds.
-- Keep `apps/agent-runtime/src/agents/product-workflow/agent.ts` as workflow orchestration and formatting only. Do not put Planner, Executor, or ProductDirector prompts, fallbacks, or model execution back into that file.
+- Keep `apps/agent-runtime/src/agents/product-workflow/agent.ts` as workflow orchestration and formatting only. Do not put Planner or Executor prompts, fallbacks, or model execution back into that file.
 - `POST /api/chat` may include `enabledTools`, currently user-facing as `["web_search"]`. Validate tool names through shared schemas before passing them to the runtime; internal product-workflow file tools are attached by runtime policy, not exposed as arbitrary user-facing filesystem access.
-- Runtime tool visibility is centrally managed in `apps/agent-runtime/src/agents/common/tool-access.ts`. Today `web_search` is authorized only for the Conversation Agent, and `kg_file_create`, `kg_file_read`, `kg_file_insert`, `kg_file_update`, and `kg_file_delete_content` are authorized only for ProductDirector and the ten Executor Agents.
+- Runtime tool visibility is centrally managed in `apps/agent-runtime/src/agents/common/tool-access.ts`. Today `web_search` is authorized only for the Conversation Agent, and `kg_file_create`, `kg_file_read`, `kg_file_insert`, `kg_file_update`, and `kg_file_delete_content` are authorized only for Planner and the ten Executor Agents.
 - File tools are implemented in `apps/agent-runtime/src/agents/common/knowledge-graph-file-tool.ts` and must stay bound to the current workspace product knowledge graph file. Do not wire unrestricted filesystem tools directly inside individual agents.
 - `web_search` is implemented in `apps/agent-runtime/src/agents/common/web-search-tool.ts`. Search backend/network failures must return structured tool results with `results: []` and an `error` field, not throw, so tool failures do not terminate the SSE stream.
 - Preserve `agentType` on `tool-call` and `tool-result` events so the frontend can attribute future agent tool usage correctly.
@@ -168,6 +168,28 @@ packages/
 - "用户输入整理" and "Request Agent 分析" cards should default to collapsed.
 - Prefer Tailwind utilities for new styling. Do not create new CSS/SCSS/Less/CSS Module files unless explicitly requested or unavoidable.
 - Do not add global stylesheet rules or inline `<style>` blocks unless the task explicitly requires it.
+
+## File-level Documentation Rules
+
+All `.ts` and `.tsx` files MUST start with a JSDoc-style file header comment.
+
+### Format
+
+```ts
+/**
+ * <模块名称 / 文件职责简述>
+ *
+ * <详细职责说明（1~3段）>
+ *
+ * Responsibilities:
+ * - <职责1>
+ * - <职责2>
+ * - <职责3>
+ *
+ * Notes:
+ * - <边界说明 / 不负责的内容（可选）>
+ */
+```
 
 ## Code Comment Rules
 
