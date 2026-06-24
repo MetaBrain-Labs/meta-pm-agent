@@ -1,98 +1,25 @@
 /**
- * 知识图谱文件工具
+ * 知识图谱工具
  *
- * 提供受控的产品知识图谱 markdown 文件操作工具集，包括一个读取工具和
- * 六个强类型结构化写入工具。所有操作限定在 workspace-scoped
- * product-knowledge-graph.md 文件中。
+ * 提供产品知识图谱的结构化操作工具集，包括一个读取工具和六个强类型写入工具。
+ * 所有操作基于内存中的 ProductKnowledgeGraph 状态对象，不再依赖文件系统 I/O。
+ * 工具直接变更传入的状态对象引用，工具返回 JSON 结构化结果供上层收集与持久化。
  *
  * Responsibilities:
- * - createKnowledgeGraphFileHandle()：创建文件句柄（按 workspaceId 隔离）
- * - createKnowledgeGraphFileTools()：构建 1 个读取 + 6 个结构化写入工具
- * - getKnowledgeGraphFilePath()：计算 workspace-scoped 文件路径
- * - deleteWorkspaceKnowledgeGraphFile()：删除工作区图谱文件
- * - readWorkspaceKnowledgeGraphFile()：读取工作区图谱文件
+ * - createKnowledgeGraphTools()：构建 1 个读取 + 6 个结构化写入工具
+ * - 工具强制 Zod 校验输入参数
+ * - 工具返回 StructuredToolCallResult JSON 字符串
+ * - 工具将已验证的结构化数据追加到传入的 state 对象中
  *
  * Notes:
- * - 文件操作绑定到当前 workspace 的 product-knowledge-graph.md
- * - 工作流完成后由 API 层归档到数据库后删除运行时文件
- * - 结构化工具强制 Zod 校验，写入 markdown 格式保持一致
+ * - 状态对象通过引用传递，同一 Executor 内多次工具调用会累积写入同一 state
+ * - 工作流完成后由 API 层将结构化数据归档到数据库
+ * - 不再写入运行时 markdown 文件
  */
 
+import type { ProductKnowledgeGraph } from "@repo/shared";
 import { tool } from "langchain/tools";
 import { z } from "zod";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-
-export const KNOWLEDGE_GRAPH_FILE_NAME = "product-knowledge-graph.md";
-export const KNOWLEDGE_GRAPH_FILE_DIR = "product-knowledge-graph";
-
-// ============================================================
-// 文件句柄
-// ============================================================
-
-/**
- * 运行期产品知识图谱 markdown 文件句柄。
- */
-export interface KnowledgeGraphFileHandle {
-  path: string;
-  absolutePath: string;
-  workspaceId?: string;
-  read(): string;
-  write(content: string): void;
-}
-
-/**
- * 创建受控的产品知识图谱 markdown 文件句柄。
- */
-export function createKnowledgeGraphFileHandle(
-  initialContent: string,
-  workspaceId?: string,
-): KnowledgeGraphFileHandle {
-  const filePath = getKnowledgeGraphFilePath(workspaceId);
-  const absolutePath = resolveKnowledgeGraphFilePath(workspaceId);
-  mkdirSync(dirname(absolutePath), { recursive: true });
-  if (!existsSync(absolutePath)) {
-    writeFileSync(absolutePath, initialContent, "utf8");
-  }
-
-  return {
-    path: filePath,
-    absolutePath,
-    workspaceId,
-    read: () => readFileSync(absolutePath, "utf8"),
-    write: (content) => {
-      writeFileSync(absolutePath, content, "utf8");
-    },
-  };
-}
-
-/**
- * 读取指定工作区的运行时知识图谱文件。
- */
-export function readWorkspaceKnowledgeGraphFile(
-  workspaceId: string,
-): string | null {
-  const absolutePath = resolveKnowledgeGraphFilePath(workspaceId);
-  if (!existsSync(absolutePath)) return null;
-  return readFileSync(absolutePath, "utf8");
-}
-
-/**
- * 删除指定工作区的运行时知识图谱文件及其工作区目录。
- */
-export function deleteWorkspaceKnowledgeGraphFile(workspaceId: string): void {
-  const absolutePath = resolveKnowledgeGraphFilePath(workspaceId);
-  if (!existsSync(absolutePath)) return;
-
-  rmSync(dirname(absolutePath), { recursive: true, force: true });
-}
 
 // ============================================================
 // 类型常量与 Zod Schemas
@@ -177,33 +104,34 @@ const openQuestionInputSchema = z.object({
     .describe("Question text explaining what needs to be confirmed"),
 });
 
+/**
+ * 工具调用返回的 JSON 结构化结果，供 SSE 透传与持久化层收集。
+ */
 export interface StructuredToolCallResult<T = unknown> {
   action: string;
   count: number;
   items: T[];
-  filePath: string;
-  fileSize: number;
 }
 
 /**
- * 创建知识图谱文件操作工具集。
+ * 创建知识图谱操作工具集（基于内存状态对象，不写文件）。
  */
-export function createKnowledgeGraphFileTools(
-  handle: KnowledgeGraphFileHandle,
+export function createKnowledgeGraphTools(
+  state: ProductKnowledgeGraph,
 ) {
   return [
     // ── 读取 ──
     tool(
       async () => {
-        const content = handle.read();
         return JSON.stringify(
           {
-            path: handle.path,
-            absolutePath: handle.absolutePath,
-            workspaceId: handle.workspaceId,
             action: "read",
-            size: content.length,
-            preview: content.slice(Math.max(0, content.length - 2000)),
+            entities: state.entities,
+            relations: state.relations,
+            decisions: state.decisions,
+            risks: state.risks,
+            open_questions: state.open_questions,
+            summary: state.summary,
           },
           null,
           2,
@@ -212,22 +140,20 @@ export function createKnowledgeGraphFileTools(
       {
         name: "kg_file_read",
         description:
-          "Read the current product-knowledge-graph.md markdown content before planning updates.",
+          "Read the current product knowledge graph state before planning updates.",
         schema: z.object({}),
       },
     ),
     // ── 摘要 ──
     tool(
       async ({ summary }) => {
-        const markdown = `### Summary\n\n${summary.trim()}\n`;
-        appendToFile(handle, markdown);
+        const normalizedSummary = summary.trim();
+        state.summary.push(normalizedSummary);
         return JSON.stringify(
           {
             action: "add_summary",
             count: 1,
-            items: [{ summary: summary.trim() }],
-            filePath: handle.path,
-            fileSize: handle.read().length,
+            items: [{ summary: normalizedSummary }],
           } satisfies StructuredToolCallResult,
           null,
           2,
@@ -249,15 +175,12 @@ export function createKnowledgeGraphFileTools(
     tool(
       async ({ nodes }) => {
         const validated = nodes.map((n) => nodeInputSchema.parse(n));
-        const markdown = buildNodesMarkdownTable(validated);
-        appendToFile(handle, markdown);
+        state.entities.push(...validated);
         return JSON.stringify(
           {
             action: "add_nodes",
             count: validated.length,
             items: validated as unknown[],
-            filePath: handle.path,
-            fileSize: handle.read().length,
           } satisfies StructuredToolCallResult,
           null,
           2,
@@ -279,15 +202,12 @@ export function createKnowledgeGraphFileTools(
     tool(
       async ({ relations }) => {
         const validated = relations.map((r) => relationInputSchema.parse(r));
-        const markdown = buildRelationsMarkdownTable(validated);
-        appendToFile(handle, markdown);
+        state.relations.push(...validated);
         return JSON.stringify(
           {
             action: "add_relations",
             count: validated.length,
             items: validated as unknown[],
-            filePath: handle.path,
-            fileSize: handle.read().length,
           } satisfies StructuredToolCallResult,
           null,
           2,
@@ -311,15 +231,12 @@ export function createKnowledgeGraphFileTools(
     tool(
       async ({ decisions }) => {
         const validated = decisions.map((d) => decisionInputSchema.parse(d));
-        const markdown = buildDecisionsMarkdownList(validated);
-        appendToFile(handle, markdown);
+        state.decisions.push(...validated);
         return JSON.stringify(
           {
             action: "add_decisions",
             count: validated.length,
             items: validated as unknown[],
-            filePath: handle.path,
-            fileSize: handle.read().length,
           } satisfies StructuredToolCallResult,
           null,
           2,
@@ -341,15 +258,12 @@ export function createKnowledgeGraphFileTools(
     tool(
       async ({ risks }) => {
         const validated = risks.map((r) => riskInputSchema.parse(r));
-        const markdown = buildRisksMarkdownList(validated);
-        appendToFile(handle, markdown);
+        state.risks.push(...validated);
         return JSON.stringify(
           {
             action: "add_risks",
             count: validated.length,
             items: validated as unknown[],
-            filePath: handle.path,
-            fileSize: handle.read().length,
           } satisfies StructuredToolCallResult,
           null,
           2,
@@ -373,15 +287,12 @@ export function createKnowledgeGraphFileTools(
         const validated = questions.map((q) =>
           openQuestionInputSchema.parse(q),
         );
-        const markdown = buildOpenQuestionsMarkdownList(validated);
-        appendToFile(handle, markdown);
+        state.open_questions.push(...validated);
         return JSON.stringify(
           {
             action: "add_open_questions",
             count: validated.length,
             items: validated as unknown[],
-            filePath: handle.path,
-            fileSize: handle.read().length,
           } satisfies StructuredToolCallResult,
           null,
           2,
@@ -400,87 +311,4 @@ export function createKnowledgeGraphFileTools(
       },
     ),
   ];
-}
-
-// ============================================================
-// Markdown 序列化辅助函数
-// ============================================================
-
-function buildNodesMarkdownTable(
-  nodes: z.infer<typeof nodeInputSchema>[],
-): string {
-  const header = "| id | type | name | description | source_task_id | status |";
-  const separator = "| --- | --- | --- | --- | --- | --- |";
-  const rows = nodes.map(
-    (n) =>
-      `| ${escapeMdCell(n.id)} | ${escapeMdCell(n.type)} | ${escapeMdCell(n.name)} | ${escapeMdCell(n.description)} | ${escapeMdCell(n.source_task_id)} | ${escapeMdCell(n.status)} |`,
-  );
-  return `### Nodes\n\n${header}\n${separator}\n${rows.join("\n")}\n`;
-}
-
-function buildRelationsMarkdownTable(
-  relations: z.infer<typeof relationInputSchema>[],
-): string {
-  const header =
-    "| id | type | source | target | description | source_task_id |";
-  const separator = "| --- | --- | --- | --- | --- | --- |";
-  const rows = relations.map(
-    (r) =>
-      `| ${escapeMdCell(r.id)} | ${escapeMdCell(r.type)} | ${escapeMdCell(r.source)} | ${escapeMdCell(r.target)} | ${escapeMdCell(r.description)} | ${escapeMdCell(r.source_task_id)} |`,
-  );
-  return `### Relations\n\n${header}\n${separator}\n${rows.join("\n")}\n`;
-}
-
-function buildDecisionsMarkdownList(
-  decisions: z.infer<typeof decisionInputSchema>[],
-): string {
-  const items = decisions.map((d) => `- **${escapeMdCell(d.id)}**：${d.text}`);
-  return `### Decisions\n\n${items.join("\n")}\n`;
-}
-
-function buildRisksMarkdownList(
-  risks: z.infer<typeof riskInputSchema>[],
-): string {
-  const items = risks.map((r) => `- **${escapeMdCell(r.id)}**：${r.text}`);
-  return `### Risks\n\n${items.join("\n")}\n`;
-}
-
-function buildOpenQuestionsMarkdownList(
-  questions: z.infer<typeof openQuestionInputSchema>[],
-): string {
-  const items = questions.map((q) => `- **${escapeMdCell(q.id)}**：${q.text}`);
-  return `### Open Questions\n\n${items.join("\n")}\n`;
-}
-
-function appendToFile(handle: KnowledgeGraphFileHandle, content: string): void {
-  const current = handle.read();
-  const next = `${current.trimEnd()}\n\n${content.trim()}\n`;
-  handle.write(next);
-}
-
-function escapeMdCell(value: string): string {
-  return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
-}
-
-// ============================================================
-// 路径工具
-// ============================================================
-
-function getKnowledgeGraphFilePath(workspaceId?: string): string {
-  const safeWorkspaceId = sanitizeWorkspaceId(workspaceId);
-  return safeWorkspaceId
-    ? `${KNOWLEDGE_GRAPH_FILE_DIR}/${safeWorkspaceId}/${KNOWLEDGE_GRAPH_FILE_NAME}`
-    : `${KNOWLEDGE_GRAPH_FILE_DIR}/${KNOWLEDGE_GRAPH_FILE_NAME}`;
-}
-
-function resolveKnowledgeGraphFilePath(workspaceId?: string): string {
-  const currentFile = fileURLToPath(import.meta.url);
-  const packageRoot = resolve(dirname(currentFile), "../../..");
-  return resolve(packageRoot, getKnowledgeGraphFilePath(workspaceId));
-}
-
-function sanitizeWorkspaceId(workspaceId: string | undefined): string | null {
-  if (!workspaceId) return null;
-  const normalized = workspaceId.trim().replace(/[^a-zA-Z0-9_-]/g, "-");
-  return normalized || null;
 }

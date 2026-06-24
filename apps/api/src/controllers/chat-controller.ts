@@ -16,6 +16,7 @@
 import type { Context } from "hono";
 import { stream } from "hono/streaming";
 import { streamConversation } from "@repo/agent-runtime";
+import type { ProductWorkflowResult } from "@repo/shared";
 import {
   ChatRequestSchema,
   CreateChatRequestSchema,
@@ -259,6 +260,7 @@ export async function chatStreamHandler(c: Context) {
       );
 
       // 启动 agent-runtime 流式对话
+      let productWorkflowResult: unknown = null;
       for await (const event of streamConversation(
         parsed.data.messages,
         {
@@ -268,6 +270,21 @@ export async function chatStreamHandler(c: Context) {
           signal: runtimeController.signal,
         },
       )) {
+        if (event.type === "complete") {
+          // 捕获工作流完整结构化结果，供最终知识图谱归档使用
+          productWorkflowResult = event.result;
+          continue;
+        }
+        if (event.type === "knowledge-graph-update") {
+          // 每个 Executor 完成后增量写入知识图谱，中断时已完成的 Executor 结果不丢失
+          await finalizeWorkspaceKnowledgeGraph({
+            workspaceId: runtimeContext.workspaceId,
+            conversationId: parsed.data.chatId,
+            requestFormId: parsed.data.requestFormId,
+            knowledgeGraph: event.knowledgeGraph,
+          });
+          continue;
+        }
         const nextStatus = getRequestFormStatusForEvent(event);
         if (nextStatus) {
           await markStatus(nextStatus);
@@ -360,6 +377,9 @@ export async function chatStreamHandler(c: Context) {
         workspaceId: runtimeContext.workspaceId,
         conversationId: parsed.data.chatId,
         requestFormId: parsed.data.requestFormId,
+        knowledgeGraph: isProductWorkflowResult(productWorkflowResult)
+          ? productWorkflowResult.knowledge_graph_update
+          : undefined,
       });
 
       if (titleUpdate) {
@@ -536,4 +556,15 @@ function findPendingToolCallIndex(
   }
 
   return -1;
+}
+
+/**
+ * 判断一个 unknown 值是否为 ProductWorkflowResult 类型。
+ */
+function isProductWorkflowResult(value: unknown): value is ProductWorkflowResult {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "knowledge_graph_update" in value
+  );
 }

@@ -44,14 +44,14 @@ export function parseExecutorResultPayload(
 
 /**
  * 生成不包含知识图谱正文的 Executor 持久化结果。
+ * knowledge_graph_markdown 已从 ExecutorAgentResult 中移除，此处保留 knowledge_graph_patch 的剥离。
  */
 export function sanitizeExecutorResultForPersistence(
   result: ExecutorAgentResult,
 ): ExecutorAgentResult {
-  const { knowledge_graph_patch, knowledge_graph_markdown, ...rest } = result;
+  const { knowledge_graph_patch, ...rest } = result;
   void knowledge_graph_patch;
-  void knowledge_graph_markdown;
-  return rest;
+  return { ...rest, knowledge_graph_patch: undefined } as ExecutorAgentResult;
 }
 
 /**

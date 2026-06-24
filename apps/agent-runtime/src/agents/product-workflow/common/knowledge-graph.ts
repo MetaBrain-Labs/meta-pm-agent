@@ -1,13 +1,13 @@
 /**
  * 产品知识图谱公共操作
  *
- * 提供知识图谱元模型约束、占位图构建和 Executor 补丁追加等公共工具，
+ * 提供知识图谱元模型约束、初始状态构建和补丁聚合等公共工具，
  * 供 Planner 和所有 Executor Agent 复用。
  *
  * Responsibilities:
  * - PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT：定义实体/关系类型和可追溯性规则
- * - createProductWorkflowKnowledgeGraph()：创建初始空图谱
- * - appendKnowledgeGraphPatch()：将 Executor 产出的 markdown 补丁追加到图谱
+ * - createProductWorkflowKnowledgeGraph()：创建初始空结构化图谱
+ * - appendKnowledgeGraphPatch()：将 Executor 的产出合并到图谱状态（按类型聚合）
  */
 
 import type { ProductKnowledgeGraph } from "@repo/shared";
@@ -21,50 +21,61 @@ Product knowledge graph metamodel:
 - Relation types: Drives, Satisfies, Promotes, Produces, Constrains, Implements, Measures, Validates, References, Composes, Custom.
 - Every output must preserve traceability from goals to requirements, decisions, features, components, and metrics whenever the available evidence supports it.
 - Do not invent confirmed business facts. Put uncertainty into open_questions or risks.
-- The markdown file product-knowledge-graph.md is the working product knowledge graph.
-- Treat the current markdown graph as the source of truth for follow-up executor updates.
+- The knowledge graph state is a structured JSON object maintained in memory. Read the current state via kg_file_read before making updates.
+- Treat the current knowledge graph state as the source of truth for follow-up executor updates.
 `;
 
 /**
- * 构建当前版本的占位知识图谱上下文。
+ * 构建当前版本的占位知识图谱上下文（结构化，无 markdown 文件）。
  */
 export function createProductWorkflowKnowledgeGraph(): ProductKnowledgeGraph {
   return {
     entities: [],
     relations: [],
-    markdown: [
-      "# Product Knowledge Graph",
-      "",
-      "> 当前文件由 Executor Agent 按任务逐步维护。初始项目为空图谱，后续演化以本文档为上下文。",
-      "",
-      "## Graph Updates",
-      "",
-    ].join("\n"),
+    decisions: [],
+    risks: [],
+    open_questions: [],
+    summary: [],
+    markdown: "",
     notes: ["MVP placeholder: 产品设计知识图谱尚未接入正式存储。"],
   };
 }
 
 /**
- * 将 Executor 产出的 markdown patch 追加到产品知识图谱文件。
+ * 将 Executor 产出的结构化数据合并到知识图谱状态。
  */
 export function appendKnowledgeGraphPatch({
-  markdown,
+  knowledgeGraph,
   taskId,
   agentType,
-  patch,
+  entities,
+  relations,
+  decisions,
+  risks,
+  openQuestions,
+  summary,
 }: {
-  markdown: string;
+  knowledgeGraph: ProductKnowledgeGraph;
   taskId: string;
   agentType: string;
-  patch: string;
-}): string {
-  const normalized = patch.trim() || "- 本轮未产生有效图谱补丁。";
-  return [
-    markdown.trimEnd(),
-    "",
-    `## ${taskId} · ${agentType}`,
-    "",
-    normalized,
-    "",
-  ].join("\n");
+  entities: ProductKnowledgeGraph["entities"];
+  relations: ProductKnowledgeGraph["relations"];
+  decisions: ProductKnowledgeGraph["decisions"];
+  risks: ProductKnowledgeGraph["risks"];
+  openQuestions: ProductKnowledgeGraph["open_questions"];
+  summary: string[];
+}): ProductKnowledgeGraph {
+  return {
+    ...knowledgeGraph,
+    entities: [...knowledgeGraph.entities, ...entities],
+    relations: [...knowledgeGraph.relations, ...relations],
+    decisions: [...knowledgeGraph.decisions, ...decisions],
+    risks: [...knowledgeGraph.risks, ...risks],
+    open_questions: [...knowledgeGraph.open_questions, ...openQuestions],
+    summary: [...knowledgeGraph.summary, ...summary],
+    notes: [
+      ...knowledgeGraph.notes,
+      `${taskId} 已由 ${agentType} 更新至知识图谱。`,
+    ],
+  };
 }

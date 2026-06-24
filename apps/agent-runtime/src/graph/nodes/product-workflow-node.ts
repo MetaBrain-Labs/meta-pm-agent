@@ -22,6 +22,7 @@ import {
 } from "../../agents/product-workflow/executor-agent/definitions";
 import {
   createProductWorkflowKnowledgeGraph,
+  appendKnowledgeGraphPatch,
   formatExecutorResultBlock,
   formatProductWorkflowBlock,
   formatTaskExecutionPlanBlock,
@@ -183,15 +184,23 @@ async function executeExecutorAgentTask(
     }),
     writer,
   );
-  const nextKnowledgeGraph = {
-    ...knowledgeGraph,
-    markdown: result.knowledge_graph_markdown ?? knowledgeGraph.markdown,
-    notes: [
-      ...knowledgeGraph.notes,
-      `${result.task_id} 已由 ${result.agent_type} 更新至 product-knowledge-graph.md。`,
-    ],
-  };
+  const nextKnowledgeGraph = appendKnowledgeGraphPatch({
+    knowledgeGraph,
+    taskId: result.task_id,
+    agentType: result.agent_type,
+    entities: result.entities,
+    relations: result.relations,
+    decisions: result.decisions,
+    risks: result.risks,
+    openQuestions: result.open_questions,
+    summary: [result.summary],
+  });
   const executorResults = [...state.executorResults, result];
+  // 每个 Executor 完成后立刻发出知识图谱更新事件，供 API 增量落库
+  writer?.({
+    type: "knowledge-graph-update",
+    knowledgeGraph: nextKnowledgeGraph,
+  });
   writer?.({
     type: "agent-output",
     agentType: result.agent_type,

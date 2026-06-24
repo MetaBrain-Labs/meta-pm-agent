@@ -241,7 +241,8 @@ async function* streamPlanningAfterUserInput(
         event.type === "request-analysis-complete" ||
         event.type === "tool-call" ||
         event.type === "tool-result" ||
-        event.type === "token-usage"
+        event.type === "token-usage" ||
+        event.type === "knowledge-graph-update"
       ) {
         yield event;
         continue;
@@ -257,6 +258,9 @@ async function* streamPlanningAfterUserInput(
       }
 
       if (event.type === "complete") {
+        // 将结构化工作流结果转发给 API 持久化层，供知识图谱归档
+        yield { type: "complete", result: event.result };
+
         const proposalForm = formatProductWorkflowProposalQuestionForm(
           event.result,
         );

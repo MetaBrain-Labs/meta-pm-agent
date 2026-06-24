@@ -19,6 +19,7 @@ import {
   TaskExecutionPlanSchema,
   type BusinessModelItem,
   type ExecutorAgentResult,
+  type ProductKnowledgeGraph,
   type ProductWorkflowResult,
   type TaskExecutionPlan,
 } from "@repo/shared";
@@ -26,11 +27,6 @@ import {
   JSON_AGENT_MODEL_OPTIONS,
   runJsonAgent,
 } from "../../common/run-json-agent";
-import { createKnowledgeGraphFileHandle } from "../../common/knowledge-graph-file-tool";
-import {
-  createToolsForAgent,
-  getKnowledgeGraphFileToolNames,
-} from "../../common/tool-access";
 import type {
   PlannerWorkflowReviewInput,
   PlannerAgentInput,
@@ -80,16 +76,6 @@ export async function* streamPlannerWorkflowReview(
   ProductWorkflowResult,
   void
 > {
-  const fileHandle = createKnowledgeGraphFileHandle(
-    input.knowledgeGraph.markdown,
-    input.workspaceId,
-  );
-  const tools = createToolsForAgent(
-    "planner",
-    getKnowledgeGraphFileToolNames(),
-    { knowledgeGraphFile: fileHandle },
-  );
-
   const result = yield* runJsonAgent({
     agentType: "planner",
     agentLabel: "Planner Agent",
@@ -99,12 +85,10 @@ export async function* streamPlannerWorkflowReview(
       maxTokens: 8192,
     },
     systemPrompt: PLANNER_WORKFLOW_REVIEW_PROMPT,
-    tools,
     payload: {
       product_context: input.productContext || "No product context provided.",
       request_analysis: input.requestAnalysis,
       product_knowledge_graph: input.knowledgeGraph,
-      product_knowledge_graph_markdown: input.knowledgeGraph.markdown,
       planner: input.plan,
       executor_results: input.executorResults,
     },
@@ -113,18 +97,12 @@ export async function* streamPlannerWorkflowReview(
       createFallbackWorkflowResult(
         input.plan,
         input.executorResults,
-        input.knowledgeGraph.markdown,
+        input.knowledgeGraph,
       ),
     signal: input.signal,
   });
 
-  return {
-    ...result,
-    knowledge_graph_update: {
-      ...result.knowledge_graph_update,
-      markdown: fileHandle.read(),
-    },
-  };
+  return result;
 }
 
 /**
@@ -175,7 +153,7 @@ function createFallbackPlan(
 function createFallbackWorkflowResult(
   plan: TaskExecutionPlan,
   executorResults: ExecutorAgentResult[],
-  knowledgeGraphMarkdown: string,
+  knowledgeGraph: ProductKnowledgeGraph,
 ): ProductWorkflowResult {
   return {
     status: "pending_user_confirmation",
@@ -195,8 +173,12 @@ function createFallbackWorkflowResult(
     knowledge_graph_update: {
       entities: executorResults.flatMap((item) => item.entities),
       relations: executorResults.flatMap((item) => item.relations),
-      markdown: knowledgeGraphMarkdown,
-      notes: ["最终知识图谱以 product_knowledge_graph_markdown 为准。"],
+      decisions: executorResults.flatMap((item) => item.decisions),
+      risks: executorResults.flatMap((item) => item.risks),
+      open_questions: executorResults.flatMap((item) => item.open_questions),
+      summary: executorResults.map((item) => item.summary),
+      markdown: "",
+      notes: ["最终知识图谱以结构化 JSON 为准。"],
     },
     confirmation_message:
       "我已完成本轮 MVP 规划、执行和汇总。请确认是否接受这些产品上下文与知识图谱更新；确认后再合并，退回则放弃本轮更新。",

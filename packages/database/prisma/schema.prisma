@@ -101,7 +101,13 @@ model ProductKnowledgeGraph {
   workspaceId    String    @unique @map("workspace_id") @db.VarChar(36)
   conversationId String?   @map("conversation_id") @db.VarChar(36)
   requestFormId  String?   @map("request_form_id") @db.VarChar(36)
-  content        String
+  content        String                                                          // markdown 文本（由结构化数据按需生成）
+  summary        Json?     @db.JsonB                                             // JSON 数组：string[]
+  nodes          Json?     @db.JsonB                                             // JSON 数组：KnowledgeGraphNodeInput[]
+  relations      Json?     @db.JsonB                                             // JSON 数组：KnowledgeGraphRelationInput[]
+  decisions      Json?     @db.JsonB                                             // JSON 数组：KnowledgeGraphDecisionInput[]
+  risks          Json?     @db.JsonB                                             // JSON 数组：KnowledgeGraphRiskInput[]
+  openQuestions  Json?     @map("open_questions") @db.JsonB                      // JSON 数组：KnowledgeGraphOpenQuestionInput[]
   version        Int       @default(1)
   createdAt      DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime? @default(now()) @map("updated_at") @db.Timestamptz(6)

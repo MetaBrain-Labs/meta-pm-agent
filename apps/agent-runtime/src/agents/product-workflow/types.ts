@@ -101,4 +101,5 @@ export type ProductWorkflowStreamEvent =
       costTotal: number;
       durationMs: number;
     }
-  | { type: "complete"; result: ProductWorkflowResult };
+  | { type: "complete"; result: ProductWorkflowResult }
+  | { type: "knowledge-graph-update"; knowledgeGraph: ProductKnowledgeGraph };
