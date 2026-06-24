@@ -3,20 +3,20 @@
  *
  * 根据 ExecutorAgentDefinition 动态生成单个 Executor Agent 的系统指令，
  * 包括领域职责、允许的实体/关系类型、执行指南和知识图谱维护规则。
- * 引导 Agent 优先使用强类型结构化工具写入图谱节点和关系。
+ * 引导 Agent 优先使用强类型结构化工具写入图谱节点和关系（基于内存状态，不涉及文件系统）。
  *
  * Responsibilities:
  * - createExecutorAgentPrompt()：注入 definition 生成完整 system prompt
  * - 动态拼接 allowedEntityTypes、allowedRelationTypes、skills、executionGuidelines
  * - 附加 PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT 公共约束
- * - 引导使用 kg_file_add_* 系列结构化工具代替自由文本写入
+ * - 引导使用 kg_file_add_* 系列结构化工具
  */
 
 import { PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT } from "../common/knowledge-graph";
 import type { ExecutorAgentDefinition } from "./definitions";
 
 /**
- * 生成单个 Executor Agent 的 markdown 知识图谱维护提示词。
+ * 生成单个 Executor Agent 的知识图谱维护提示词。
  */
 export function createExecutorAgentPrompt(
   definition: ExecutorAgentDefinition,
@@ -30,8 +30,8 @@ Executor identity:
 
 Your responsibility:
 - Execute only the assigned Planner task.
-- Use the provided file tools to maintain product-knowledge-graph.md.
-- First call \`kg_file_read\` to inspect the current graph.
+- Use the provided tools to maintain the product knowledge graph.
+- First call \`kg_file_read\` to inspect the current graph state.
 - Then write your structured output using the strong-typed tools below.
 - Use the local skill mapping when helpful: ${definition.skills.join(", ")}.
 - Do not call or mention filesystem paths for skills or references.
@@ -45,7 +45,7 @@ Executor boundaries:
 
 ${PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT}
 
-Structured graph writing workflow (use these tools instead of free-text markdown):
+Structured graph writing workflow (use these tools instead of free-text):
 1. Call \`kg_file_add_summary\` with a concise execution summary for this task.
 2. Call \`kg_file_add_nodes\` with your entity nodes as a typed JSON array. Every node must have: id, type (${definition.allowedEntityTypes.join("/")}), name, description, source_task_id (the current task ID), and status ("proposed" by default).
 3. Call \`kg_file_add_relations\` with your relation edges as a typed JSON array. Every relation must have: id, type (${definition.allowedRelationTypes.join("/")}), source (a node id from step 2 or prior graph), target (a node id), description, and source_task_id.

@@ -15,7 +15,7 @@
  */
 
 import type { RequestAnalysis } from "@repo/shared";
-import type { AgentRuntimeTool } from "@repo/shared";
+import type { AgentRuntimeTool, ProductWorkflowResult, ProductKnowledgeGraph } from "@repo/shared";
 
 /**
  * 标识当前流式内容所属的 Agent，便于 API 持久化和前端按阶段展示。
@@ -81,7 +81,9 @@ export type ConversationStreamEvent =
       costTotal: number;
       durationMs: number;
     }
-  | { type: "error"; error: string; agentType?: AgentMessageType };
+  | { type: "error"; error: string; agentType?: AgentMessageType }
+  | { type: "complete"; result: ProductWorkflowResult }
+  | { type: "knowledge-graph-update"; knowledgeGraph: ProductKnowledgeGraph };
 
 /**
  * 会话流选项

@@ -144,3 +144,34 @@ export async function stopChatGeneration(threadId: string): Promise<void> {
     keepalive: true,
   });
 }
+
+/**
+ * 产品知识图谱查询结果。
+ */
+export interface WorkspaceKnowledgeGraphData {
+  /** nodes 和 relations 都有数据时为 true，按钮可用 */
+  hasData: boolean;
+  /** 按参考格式生成的 markdown 文本 */
+  markdown: string;
+  version: number;
+  updatedAt: string;
+}
+
+/**
+ * 获取指定工作区的产品知识图谱数据。
+ * 返回 hasData 供前端判断按钮是否可用，以及生成的 markdown 供下载。
+ */
+export async function fetchProductKnowledgeGraph(
+  workspaceId: string,
+): Promise<WorkspaceKnowledgeGraphData> {
+  const response = await fetch(
+    `/api/workspaces/${workspaceId}/knowledge-graph`,
+  );
+
+  if (!response.ok) {
+    throw new Error(`Server error: ${response.status}`);
+  }
+
+  const data = (await response.json()) as WorkspaceKnowledgeGraphData;
+  return data;
+}

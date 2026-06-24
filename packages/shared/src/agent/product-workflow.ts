@@ -132,11 +132,16 @@ export const KnowledgeGraphOpenQuestionInputSchema = z.object({
 });
 
 /**
- * 占位产品知识图谱上下文，当前只承载已知节点与关系快照。
+ * 产品知识图谱结构化上下文，承载节点、关系、决策、风险、待确认问题及摘要等完整图谱快照。
+ * markdown 字段可由结构化数据按需生成，不再作为主存储。
  */
 export const ProductKnowledgeGraphSchema = z.object({
   entities: z.array(KnowledgeGraphEntitySchema),
   relations: z.array(KnowledgeGraphRelationSchema),
+  decisions: z.array(KnowledgeGraphDecisionInputSchema).default([]),
+  risks: z.array(KnowledgeGraphRiskInputSchema).default([]),
+  open_questions: z.array(KnowledgeGraphOpenQuestionInputSchema).default([]),
+  summary: z.array(z.string()).default([]),
   markdown: z.string().default(""),
   notes: z.array(z.string()).default([]),
 });
@@ -212,9 +217,9 @@ export const ExecutorAgentResultSchema = z.object({
   summary: z.string().min(1),
   entities: z.array(KnowledgeGraphEntitySchema),
   relations: z.array(KnowledgeGraphRelationSchema),
-  decisions: z.array(z.string()).default([]),
-  risks: z.array(z.string()).default([]),
-  open_questions: z.array(z.string()).default([]),
+  decisions: z.array(KnowledgeGraphDecisionInputSchema).default([]),
+  risks: z.array(KnowledgeGraphRiskInputSchema).default([]),
+  open_questions: z.array(KnowledgeGraphOpenQuestionInputSchema).default([]),
   quality_result: z.object({
     passed: z.boolean(),
     notes: z.string(),

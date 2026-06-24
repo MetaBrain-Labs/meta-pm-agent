@@ -23,7 +23,7 @@ import type {
   ProductWorkflowResult,
   TaskExecutionPlan,
 } from "@repo/shared";
-import { createProductWorkflowKnowledgeGraph } from "./common/knowledge-graph";
+import { createProductWorkflowKnowledgeGraph, appendKnowledgeGraphPatch } from "./common/knowledge-graph";
 import { orderTasksBySequence } from "./common/tasks";
 import { streamExecutorAgent } from "./executor-agent/agent";
 import {
@@ -91,15 +91,24 @@ export async function* streamPlannerProductWorkflow(
       previousResults: executorResults,
       signal: input.signal,
     });
-    knowledgeGraph = {
-      ...knowledgeGraph,
-      markdown: result.knowledge_graph_markdown ?? knowledgeGraph.markdown,
-      notes: [
-        ...knowledgeGraph.notes,
-        `${result.task_id} 已由 ${result.agent_type} 更新至 product-knowledge-graph.md。`,
-      ],
-    };
+    // 工具调用已直接变更 knowledgeGraph 引用，同时显式合并新增结构化数据以确保状态完整性
+    knowledgeGraph = appendKnowledgeGraphPatch({
+      knowledgeGraph,
+      taskId: result.task_id,
+      agentType: result.agent_type,
+      entities: result.entities,
+      relations: result.relations,
+      decisions: result.decisions,
+      risks: result.risks,
+      openQuestions: result.open_questions,
+      summary: [result.summary],
+    });
     executorResults.push(result);
+    // 每个 Executor 完成后立刻发出增量知识图谱更新事件
+    yield {
+      type: "knowledge-graph-update",
+      knowledgeGraph,
+    };
     yield {
       type: "agent-output",
       agentType: result.agent_type,
@@ -260,7 +269,8 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
 
   for (const executorResult of result.executor_results) {
     executorResult.open_questions.forEach((question, index) => {
-      const normalized = normalizeSlotQuestion(question);
+      const questionText = question.text ?? "";
+      const normalized = normalizeSlotQuestion(questionText);
       if (!normalized) return;
 
       const priority = executorResult.open_questions.length - index;
@@ -274,7 +284,7 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
 
       slots.set(slotKey, {
         id: `slot-${slots.size + 1}`,
-        question,
+        question: questionText,
         source_task_id: executorResult.task_id,
         source_agent: executorResult.agent_type,
         priority,

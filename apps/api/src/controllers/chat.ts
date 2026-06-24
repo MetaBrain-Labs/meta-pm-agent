@@ -8,6 +8,7 @@ import {
   createChatHandler,
   chatStreamHandler,
   stopChatHandler,
+  getWorkspaceKnowledgeGraphHandler,
 } from "./chat-controller";
 
 /**
@@ -24,6 +25,7 @@ export function createChatRoutes() {
   routes.post("/chats", createChatHandler);
   routes.post("/chat", chatStreamHandler);
   routes.post("/chat/stop", stopChatHandler);
+  routes.get("/workspaces/:workspaceId/knowledge-graph", getWorkspaceKnowledgeGraphHandler);
 
   return routes;
 }

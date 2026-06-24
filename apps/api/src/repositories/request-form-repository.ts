@@ -122,9 +122,12 @@ export async function persistExecutorProposalItems(
     for (const result of results) {
       if (result.open_questions.length === 0) continue;
 
+      // open_questions 现在为结构化对象 {id, text}，提取 text 作为显示文本
       const slots = result.open_questions.map((question, index) => ({
         id: `${result.task_id}-slot-${index + 1}`,
-        question,
+        question: typeof question === "object" && question !== null && "text" in question
+          ? String((question as Record<string, unknown>).text)
+          : String(question),
         source_task_id: result.task_id,
         source_agent: result.agent_type,
         priority: result.open_questions.length - index,
@@ -512,7 +515,11 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
 
   for (const executorResult of result.executor_results) {
     executorResult.open_questions.forEach((question, index) => {
-      const normalized = normalizeSlotQuestion(question);
+      // open_questions 现在为结构化对象 {id, text}，提取 text 进行归一化
+      const questionText = typeof question === "object" && question !== null && "text" in question
+        ? String((question as Record<string, unknown>).text)
+        : String(question);
+      const normalized = normalizeSlotQuestion(questionText);
       if (!normalized) return;
 
       const priority = executorResult.open_questions.length - index;
@@ -526,7 +533,7 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
 
       slots.set(slotKey, {
         id: `slot-${slots.size + 1}`,
-        question,
+        question: questionText,
         source_task_id: executorResult.task_id,
         source_agent: executorResult.agent_type,
         priority,

@@ -11,15 +11,15 @@
  *
  * Notes:
  * - web_search 仅授权给 conversation Agent
- * - 知识图谱文件工具（1 读取 + 6 结构化写入）授权给 planner 和全部 10 个 executor Agent
+ * - 知识图谱工具（1 读取 + 6 结构化写入）授权给 planner 和全部 10 个 executor Agent
+ * - 工具基于内存 ProductKnowledgeGraph 状态对象，不再依赖文件系统
  */
 
 import type { StructuredTool } from "langchain";
-import type { AgentRuntimeTool } from "@repo/shared";
+import type { AgentRuntimeTool, ProductKnowledgeGraph } from "@repo/shared";
 import type { AgentMessageType } from "../../types";
 import {
-  createKnowledgeGraphFileTools,
-  type KnowledgeGraphFileHandle,
+  createKnowledgeGraphTools,
   type StructuredToolCallResult,
 } from "./knowledge-graph-file-tool";
 import { createWebSearchTool } from "./web-search-tool";
@@ -62,7 +62,8 @@ const AGENT_TOOL_ACCESS: Record<string, ReadonlySet<AgentRuntimeTool>> = {
 };
 
 interface CreateToolsForAgentOptions {
-  knowledgeGraphFile?: KnowledgeGraphFileHandle;
+  /** 当前产品知识图谱状态对象，工具调用会直接变更该引用。 */
+  knowledgeGraph?: ProductKnowledgeGraph;
 }
 
 /**
@@ -82,12 +83,12 @@ export function createToolsForAgent(
   }
 
   if (
-    options.knowledgeGraphFile &&
+    options.knowledgeGraph &&
     KNOWLEDGE_GRAPH_FILE_TOOLS.some(
       (toolName) => enabledToolSet.has(toolName) && allowedTools.has(toolName),
     )
   ) {
-    tools.push(...createKnowledgeGraphFileTools(options.knowledgeGraphFile));
+    tools.push(...createKnowledgeGraphTools(options.knowledgeGraph));
   }
 
   return tools;

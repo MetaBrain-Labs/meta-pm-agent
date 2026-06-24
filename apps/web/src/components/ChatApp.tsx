@@ -5,9 +5,10 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import { Button, Dropdown, FloatButton, Input, Tooltip } from "antd";
+import { Button, Dropdown, FloatButton, Input, Tooltip, message } from "antd";
 import BorderBeam from "antd/es/border-beam";
 import {
+  ApartmentOutlined,
   ArrowDownOutlined,
   ArrowLeftOutlined,
   ClearOutlined,
@@ -18,6 +19,10 @@ import {
   StopOutlined,
 } from "@ant-design/icons";
 import type { Message } from "../types";
+import {
+  fetchProductKnowledgeGraph,
+  type WorkspaceKnowledgeGraphData,
+} from "../api/chat-api";
 import { MessageBubble } from "./MessageBubble";
 
 const { TextArea } = Input;
@@ -32,6 +37,7 @@ const EXAMPLE_QUERIES = [
 const ACTIVE_MODEL = "DeepSeek V4 Pro";
 
 interface Props {
+  workspaceId: string | null;
   workspaceName: string;
   messages: Message[];
   isLoading: boolean;
@@ -44,6 +50,7 @@ interface Props {
 }
 
 export function ChatApp({
+  workspaceId,
   workspaceName,
   messages,
   isLoading,
@@ -58,6 +65,66 @@ export function ChatApp({
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [userScrolled, setUserScrolled] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // 知识图谱下载状态
+  const [kgData, setKgData] = useState<WorkspaceKnowledgeGraphData | null>(
+    null,
+  );
+  const [kgLoading, setKgLoading] = useState(false);
+
+  // 工作区切换时查询知识图谱数据
+  useEffect(() => {
+    if (!workspaceId) {
+      setKgData(null);
+      return;
+    }
+
+    let cancelled = false;
+    setKgLoading(true);
+
+    fetchProductKnowledgeGraph(workspaceId)
+      .then((data) => {
+        if (cancelled) return;
+        setKgData(data);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error("[kg] Failed to load knowledge graph:", error);
+        setKgData(null);
+      })
+      .finally(() => {
+        if (!cancelled) setKgLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId]);
+
+  // 下载知识图谱 markdown
+  const handleKnowledgeGraphDownload = useCallback(() => {
+    if (!kgData?.hasData || !kgData.markdown) return;
+
+    try {
+      const blob = new Blob([kgData.markdown], {
+        type: "text/markdown;charset=utf-8",
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `product-knowledge-graph-${workspaceId ?? "unknown"}.md`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+      void message.success("知识图谱 Markdown 已下载");
+    } catch {
+      void message.error("下载失败，请重试");
+    }
+  }, [kgData, workspaceId]);
+
+  // 按钮是否可用
+  const kgEnabled = kgData?.hasData === true;
 
   const isAtBottom = useCallback(() => {
     const el = containerRef.current;
@@ -296,6 +363,16 @@ export function ChatApp({
                     aria-pressed={webSearchEnabled}
                     disabled={isLoading || Boolean(disabledReason)}
                     onClick={() => setWebSearchEnabled((enabled) => !enabled)}
+                  />
+                </Tooltip>
+                <Tooltip title={kgEnabled ? "下载知识图谱" : "暂无知识图谱数据"}>
+                  <Button
+                    type="text"
+                    shape="circle"
+                    icon={<ApartmentOutlined />}
+                    disabled={!kgEnabled}
+                    loading={kgLoading}
+                    onClick={handleKnowledgeGraphDownload}
                   />
                 </Tooltip>
                 <Dropdown
