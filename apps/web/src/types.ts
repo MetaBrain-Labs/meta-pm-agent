@@ -1,3 +1,18 @@
+/**
+ * 前端聊天领域类型
+ *
+ * 定义 SSE 事件、聊天消息、工作区和历史消息恢复所需的数据结构。
+ * token 用量以 Agent 单次执行为粒度记录，实时流和历史恢复共用同一结构。
+ *
+ * Responsibilities:
+ * - 描述 API/SSE 与前端状态之间的类型契约
+ * - 定义产品工作流结构化卡片的数据模型
+ * - 定义 token 用量实时展示和历史恢复字段
+ *
+ * Notes:
+ * - 本文件仅包含类型定义，不包含运行时逻辑。
+ */
+
 export type StreamEventType =
   | "start"
   | "thinking"
@@ -12,6 +27,7 @@ export type StreamEventType =
   | "todo-update"
   | "tool-call"
   | "tool-result"
+  | "token-usage"
   | "conversation-title"
   | "step-finish"
   | "finish"
@@ -20,17 +36,45 @@ export type StreamEventType =
 
 export interface StreamEvent {
   type: StreamEventType;
+  id?: string;
   content?: string;
   agentType?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolResult?: unknown;
   usage?: Record<string, unknown>;
+  inputTokens?: number;
+  cacheHitInputTokens?: number;
+  cacheMissInputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  costInput?: number;
+  costOutput?: number;
+  costTotal?: number;
+  durationMs?: number;
+  createdAt?: string;
   error?: unknown;
   chatId?: string;
   title?: string;
   todos?: Array<{ index: number; content: string; status: string }>;
   analysis?: RequestAnalysis;
+}
+
+export interface TokenUsageInfo {
+  id?: string;
+  conversationId?: string;
+  messageId?: string;
+  agentType: string;
+  inputTokens: number;
+  cacheHitInputTokens: number;
+  cacheMissInputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costInput: number;
+  costOutput: number;
+  costTotal: number;
+  durationMs: number;
+  createdAt?: string;
 }
 
 export interface TodoItem {
@@ -178,6 +222,7 @@ export interface Message {
     agentType?: string;
   }>;
   usage?: Record<string, unknown>;
+  tokenUsages?: TokenUsageInfo[];
   timestamp: number;
 }
 
@@ -245,4 +290,5 @@ export interface PersistedMessageInfo {
   executorResult?: ExecutorAgentResult | null;
   executorResults?: ExecutorAgentResult[];
   productWorkflow?: ProductWorkflowResult | null;
+  tokenUsages?: TokenUsageInfo[];
 }

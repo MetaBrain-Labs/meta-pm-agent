@@ -1,9 +1,25 @@
+/**
+ * 聊天流事件 reducer
+ *
+ * 将 API SSE 事件增量应用到当前助手消息，保持正文、推理、工具调用、
+ * 结构化业务卡片和 token 用量展示的状态一致。
+ *
+ * Responsibilities:
+ * - 合并流式文本和推理内容
+ * - 维护工具调用、表单、分析和产品工作流卡片状态
+ * - 追加每个 Agent 结束时产生的 token 用量记录
+ *
+ * Notes:
+ * - 本工具不发起网络请求，只做前端状态转换。
+ */
+
 import type {
   ExecutorAgentResult,
   Message,
   ProductWorkflowResult,
   StreamEvent,
   TaskExecutionPlan,
+  TokenUsageInfo,
 } from "../types";
 
 export function applyStreamEvent(
@@ -125,6 +141,8 @@ export function applyStreamEvent(
           event.agentType,
         ),
       };
+    case "token-usage":
+      return appendTokenUsage(message, event);
     case "finish":
       return { ...message, usage: event.usage, activeAgent: undefined };
     case "error":
@@ -149,6 +167,51 @@ export function applyStreamEvent(
     default:
       return message;
   }
+}
+
+/**
+ * 将单个 Agent 的 token 用量追加到消息上，按记录 ID 去重以兼容流重放。
+ */
+function appendTokenUsage(
+  message: Message,
+  event: StreamEvent,
+): Message {
+  if (!event.agentType || typeof event.totalTokens !== "number") {
+    return message;
+  }
+
+  const usage: TokenUsageInfo = {
+    id: event.id,
+    agentType: event.agentType,
+    inputTokens: event.inputTokens ?? 0,
+    cacheHitInputTokens: event.cacheHitInputTokens ?? 0,
+    cacheMissInputTokens: event.cacheMissInputTokens ?? 0,
+    outputTokens: event.outputTokens ?? 0,
+    totalTokens: event.totalTokens,
+    costInput: event.costInput ?? 0,
+    costOutput: event.costOutput ?? 0,
+    costTotal: event.costTotal ?? 0,
+    durationMs: event.durationMs ?? 0,
+    createdAt: event.createdAt,
+  };
+
+  const existing = message.tokenUsages ?? [];
+  const sameRecordIndex = existing.findIndex((item) =>
+    usage.id
+      ? item.id === usage.id
+      : item.agentType === usage.agentType &&
+        item.createdAt === usage.createdAt,
+  );
+
+  return {
+    ...message,
+    tokenUsages:
+      sameRecordIndex === -1
+        ? [...existing, usage]
+        : existing.map((item, index) =>
+            index === sameRecordIndex ? usage : item,
+          ),
+  };
 }
 
 /**

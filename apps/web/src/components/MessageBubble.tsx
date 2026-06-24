@@ -1,3 +1,18 @@
+/**
+ * 聊天消息气泡组件
+ *
+ * 渲染用户消息、助手消息、Agent 推理过程、结构化业务卡片、工具调用和 token 用量浮层。
+ * 组件按 Agent 类型把运行过程放到对应阶段附近，避免不同 Agent 的信息混在一起。
+ *
+ * Responsibilities:
+ * - 展示用户与助手消息正文
+ * - 渲染 Conversation、Request、Planner 和 Executor 的阶段性卡片
+ * - 展示可折叠的实时 token 用量和费用明细
+ *
+ * Notes:
+ * - 本组件只负责展示和本地交互，不直接请求 API。
+ */
+
 import {
   useCallback,
   useEffect,
@@ -10,7 +25,7 @@ import {
   ReloadOutlined,
   LoadingOutlined,
 } from "@ant-design/icons";
-import type { Message } from "../types";
+import type { Message, TokenUsageInfo } from "../types";
 import { ProseBlock } from "./ProseBlock";
 import {
   PlannerExecutionCard,
@@ -103,6 +118,8 @@ export function MessageBubble({
     streamActive &&
     message.activeAgent === "planner" &&
     !message.plannerExecution;
+  const hasTokenUsage =
+    (message.tokenUsages?.length ?? 0) > 0 || Boolean(message.usage);
   const handleFormSubmit = useCallback(
     (formId: string, text: string) => {
       if (!onFormSubmit) return;
@@ -120,6 +137,15 @@ export function MessageBubble({
 
   return (
     <div className="flex w-full flex-col self-stretch">
+      {hasTokenUsage && (
+        <TokenUsageFloatingBox
+          usages={message.tokenUsages ?? []}
+          legacyUsage={message.usage}
+          open={usageOpen}
+          onToggle={() => setUsageOpen(!usageOpen)}
+        />
+      )}
+
       {message.thinking && (
         <ThinkingBox
           agentType="conversation"
@@ -308,32 +334,102 @@ export function MessageBubble({
           </div>
         )}
 
-      {message.usage && (
-        <div className="mt-1 pl-1 text-[11px] text-[var(--ink-faint)]">
-          <button
-            type="button"
-            className="inline-flex cursor-pointer items-center gap-1 border-none bg-transparent p-0.5 text-[11px] text-[var(--ink-faint)]"
-            onClick={() => setUsageOpen(!usageOpen)}
-          >
-            <CaretRightOutlined
-              style={{
-                fontSize: 10,
-                transition: "transform 0.2s",
-                transform: usageOpen ? "rotate(90deg)" : "rotate(0deg)",
-              }}
-            />
-            <span>Token 用量</span>
-          </button>
-          {usageOpen && (
-            <span className="ml-1.5 text-[var(--ink-mute)]">
-              输入 {String(message.usage?.inputTokens ?? "-")} · 输出{" "}
-              {String(message.usage?.outputTokens ?? "-")} · 合计{" "}
-              {String(message.usage?.totalTokens ?? "-")}
-            </span>
-          )}
+    </div>
+  );
+}
+
+/**
+ * 展示当前助手消息内各 Agent 的 token 和费用用量，可折叠以减少聊天区干扰。
+ */
+function TokenUsageFloatingBox({
+  usages,
+  legacyUsage,
+  open,
+  onToggle,
+}: {
+  usages: TokenUsageInfo[];
+  legacyUsage?: Record<string, unknown>;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const rows =
+    usages.length > 0
+      ? usages
+      : legacyUsage
+        ? [legacyUsageToTokenUsage(legacyUsage)]
+        : [];
+  if (rows.length === 0) return null;
+
+  const totalTokens = rows.reduce((sum, item) => sum + item.totalTokens, 0);
+  const totalCost = rows.reduce((sum, item) => sum + item.costTotal, 0);
+
+  return (
+    <div className="sticky top-2 z-20 mb-2 ml-auto w-fit max-w-full rounded-lg border border-[var(--line-soft)] bg-white/95 shadow-[0_12px_28px_-24px_rgba(15,23,42,0.45)] backdrop-blur">
+      <button
+        type="button"
+        className="flex w-full cursor-pointer items-center gap-2 border-0 bg-transparent px-3 py-2 text-left text-[12px] font-bold text-[var(--ink-mute)]"
+        onClick={onToggle}
+      >
+        <CaretRightOutlined
+          style={{
+            fontSize: 10,
+            transition: "transform 0.2s",
+            transform: open ? "rotate(90deg)" : "rotate(0deg)",
+            color: "var(--primary)",
+          }}
+        />
+        <span>Token 用量</span>
+        <span className="text-[var(--ink)]">
+          {formatCost(totalCost)} yuan
+        </span>
+        <span className="text-[var(--ink-faint)]">
+          {formatTokens(totalTokens)}
+        </span>
+      </button>
+      {open && (
+        <div className="min-w-[280px] max-w-[min(520px,calc(100vw-48px))] border-t border-[var(--line-soft)] px-3 py-2">
+          <div className="grid grid-cols-[minmax(112px,1fr)_auto_auto_auto] gap-x-3 gap-y-1 text-[11px] leading-5 text-[var(--ink-faint)]">
+            <span>Agent</span>
+            <span className="text-right">输入</span>
+            <span className="text-right">输出</span>
+            <span className="text-right">费用</span>
+            {rows.map((usage, index) => (
+              <TokenUsageRow
+                key={usage.id ?? `${usage.agentType}-${usage.createdAt ?? index}`}
+                usage={usage}
+              />
+            ))}
+          </div>
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * 渲染单个 Agent 的 token 用量明细。
+ */
+function TokenUsageRow({ usage }: { usage: TokenUsageInfo }) {
+  return (
+    <>
+      <span className="truncate text-[var(--ink-mute)]">
+        {getAgentLabel(usage.agentType)}
+        {usage.durationMs > 0 && (
+          <span className="ml-1 text-[var(--ink-faint)]">
+            {formatDuration(usage.durationMs)}
+          </span>
+        )}
+      </span>
+      <span className="text-right text-[var(--ink-mute)]">
+        {formatTokens(usage.inputTokens)}
+      </span>
+      <span className="text-right text-[var(--ink-mute)]">
+        {formatTokens(usage.outputTokens)}
+      </span>
+      <span className="text-right font-semibold text-[var(--ink)]">
+        {formatCost(usage.costTotal)}
+      </span>
+    </>
   );
 }
 
@@ -553,8 +649,66 @@ function getToolCallsForAgent(
 }
 
 /**
+ * 兼容旧的 finish.usage 汇总结构，统一转换成 token 用量行。
+ */
+function legacyUsageToTokenUsage(
+  usage: Record<string, unknown>,
+): TokenUsageInfo {
+  return {
+    agentType: "total",
+    inputTokens: toNumber(usage.inputTokens),
+    cacheHitInputTokens: toNumber(usage.cacheHitInputTokens),
+    cacheMissInputTokens: toNumber(usage.cacheMissInputTokens),
+    outputTokens: toNumber(usage.outputTokens),
+    totalTokens: toNumber(usage.totalTokens),
+    costInput: toNumber(usage.costInput),
+    costOutput: toNumber(usage.costOutput),
+    costTotal: toNumber(usage.costTotal),
+    durationMs: toNumber(usage.durationMs),
+  };
+}
+
+/**
+ * 将未知数值字段转换成安全数字，避免异常 payload 撑破展示。
+ */
+function toNumber(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+/**
+ * 格式化 token 数，保持紧凑且可扫读。
+ */
+function formatTokens(value: number): string {
+  return new Intl.NumberFormat("zh-CN").format(value);
+}
+
+/**
+ * 格式化人民币成本，小额费用保留到 8 位。
+ */
+function formatCost(value: number): string {
+  return new Intl.NumberFormat("zh-CN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 8,
+  }).format(value);
+}
+
+/**
+ * 格式化 Agent 执行耗时。
+ */
+function formatDuration(durationMs: number): string {
+  if (durationMs < 1000) return `${durationMs}ms`;
+  return `${(durationMs / 1000).toFixed(1)}s`;
+}
+
+/**
  * 将 Agent 类型转换为展示名。
  */
 function getAgentLabel(agentType: string): string {
+  if (agentType === "total") return "总计";
   return AGENT_LABELS[agentType] ?? `${agentType} Agent`;
 }

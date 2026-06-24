@@ -1,3 +1,18 @@
+/**
+ * 消息持久化仓库
+ *
+ * 负责 message 表的读写，并在读取历史消息时恢复推理内容、结构化业务产物、
+ * 工具调用和 token 用量等前端展示所需的数据。
+ *
+ * Responsibilities:
+ * - 持久化用户消息和各 Agent assistant 消息
+ * - 将数据库行映射为前端 DTO
+ * - 将 token_usage 记录关联回对应的 assistant message
+ *
+ * Notes:
+ * - 本仓库只处理消息和展示恢复，不负责 Agent 运行编排。
+ */
+
 import { randomUUID } from "node:crypto";
 import { prisma } from "@repo/database";
 import {
@@ -17,6 +32,10 @@ import {
   parseExecutorResultPayload,
   parseProductWorkflowPayload,
 } from "../utils/product-workflow";
+import {
+  listTokenUsageByConversation,
+  type TokenUsageDto,
+} from "./token-usage-repository";
 
 /**
  * 数据库 message 表原始行结构。
@@ -48,6 +67,7 @@ export interface MessageDto {
   executorResult?: ExecutorAgentResult | null;
   executorResults?: ExecutorAgentResult[];
   productWorkflow?: ProductWorkflowResult | null;
+  tokenUsages?: TokenUsageDto[];
 }
 
 /**
@@ -101,7 +121,10 @@ export async function listConversationMessages(
       "id" ASC
   `;
 
-  return attachExecutorResultsToPlannerMessages(rows.map(mapMessageRow));
+  const messages = attachExecutorResultsToPlannerMessages(rows.map(mapMessageRow));
+  const tokenUsages = await listTokenUsageByConversation(conversationId);
+
+  return attachTokenUsagesToMessages(messages, tokenUsages);
 }
 
 /**
@@ -250,6 +273,68 @@ function attachExecutorResultsToPlannerMessages(
       ),
     };
   });
+}
+
+/**
+ * 将 token_usage 记录挂回消息 DTO，优先使用 message_id，兼容旧记录的 agent_type 兜底。
+ */
+function attachTokenUsagesToMessages(
+  messages: MessageDto[],
+  tokenUsages: TokenUsageDto[],
+): MessageDto[] {
+  if (tokenUsages.length === 0) return messages;
+
+  const additions = new Map<string, TokenUsageDto[]>();
+
+  for (const usage of tokenUsages) {
+    const target = findTokenUsageMessage(messages, usage);
+    if (!target) continue;
+
+    const existing = additions.get(target.id) ?? [];
+    additions.set(target.id, [...existing, usage]);
+  }
+
+  if (additions.size === 0) return messages;
+
+  return messages.map((message) => {
+    const tokenUsageItems = additions.get(message.id);
+    if (!tokenUsageItems?.length) return message;
+
+    return {
+      ...message,
+      tokenUsages: [
+        ...(message.tokenUsages ?? []),
+        ...tokenUsageItems,
+      ],
+    };
+  });
+}
+
+/**
+ * 查找 token 用量所属消息；旧数据没有 message_id 时，按 Agent 类型和创建时间近似匹配。
+ */
+function findTokenUsageMessage(
+  messages: MessageDto[],
+  usage: TokenUsageDto,
+): MessageDto | null {
+  if (usage.messageId) {
+    return messages.find((message) => message.id === usage.messageId) ?? null;
+  }
+
+  const candidates = messages.filter(
+    (message) =>
+      message.role === "assistant" &&
+      message.type === usage.agentType,
+  );
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0]!;
+
+  const usageTime = Date.parse(usage.createdAt);
+  const firstAfterUsage = candidates.find(
+    (message) => Date.parse(message.timestamp) >= usageTime,
+  );
+
+  return firstAfterUsage ?? candidates[candidates.length - 1]!;
 }
 
 /**

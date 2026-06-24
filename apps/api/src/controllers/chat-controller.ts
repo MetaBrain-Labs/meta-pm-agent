@@ -1,3 +1,18 @@
+/**
+ * 聊天 API 控制器
+ *
+ * 负责账号、工作区、会话和聊天 SSE 请求的 HTTP 入口处理。
+ * 聊天流中会收集 Agent 输出用于最终消息持久化，并在每个 Agent 结束时即时写入 token 用量。
+ *
+ * Responsibilities:
+ * - 校验请求并转发到业务服务
+ * - 管理聊天 SSE 生命周期和停止信号
+ * - 按 Agent 类型聚合输出、工具调用、推理内容与 token 用量
+ *
+ * Notes:
+ * - LangGraph 和 Agent 编排仍由 agent-runtime 负责，本控制器只做 API 边界处理。
+ */
+
 import type { Context } from "hono";
 import { stream } from "hono/streaming";
 import { streamConversation } from "@repo/agent-runtime";
@@ -16,6 +31,7 @@ import {
   listChats,
   loadPendingDecisionQuestionForm,
   markRequestFormStatus,
+  persistAgentTokenUsage,
   persistConversationResult,
   persistConversationStart,
 } from "../services/chat-service";
@@ -36,6 +52,7 @@ type AgentOutputAccumulator = AgentConversationOutput & {
   toolCalls: NonNullable<AgentConversationOutput["toolCalls"]>;
   tokenUsage: Required<NonNullable<AgentConversationOutput["tokenUsage"]>>;
   durationMs: number;
+  tokenUsageRecordIds: string[];
 };
 
 const activeChatRuns = new Map<string, AbortController>();
@@ -278,7 +295,8 @@ export async function chatStreamHandler(c: Context) {
           );
         }
         if (event.type === "token-usage") {
-          const output = getAgentOutput(agentOutputs, getEventAgentType(event));
+          const agentType = getEventAgentType(event);
+          const output = getAgentOutput(agentOutputs, agentType);
           output.tokenUsage = {
             inputTokens: event.inputTokens,
             cacheHitInputTokens: event.cacheHitInputTokens,
@@ -290,6 +308,34 @@ export async function chatStreamHandler(c: Context) {
             costTotal: event.costTotal,
           };
           output.durationMs = event.durationMs;
+
+          const tokenUsageId = await persistAgentTokenUsage(
+            parsed.data.chatId
+              ? {
+                  conversationId: parsed.data.chatId,
+                  agentType,
+                  inputTokens: event.inputTokens,
+                  cacheHitInputTokens: event.cacheHitInputTokens,
+                  cacheMissInputTokens: event.cacheMissInputTokens,
+                  outputTokens: event.outputTokens,
+                  totalTokens: event.totalTokens,
+                  costInput: event.costInput,
+                  costOutput: event.costOutput,
+                  costTotal: event.costTotal,
+                  durationMs: event.durationMs,
+                }
+              : null,
+          );
+          if (tokenUsageId) {
+            output.tokenUsageRecordIds.push(tokenUsageId);
+          }
+
+          await writeSse(writer, {
+            ...toApiEvent(event),
+            id: tokenUsageId ?? undefined,
+            createdAt: new Date().toISOString(),
+          });
+          continue;
         }
         if (
           "content" in event &&
@@ -442,6 +488,7 @@ function getAgentOutput(
       costTotal: 0,
     },
     durationMs: 0,
+    tokenUsageRecordIds: [],
   };
   outputs.set(type, created);
   return created;

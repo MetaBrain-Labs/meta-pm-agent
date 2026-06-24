@@ -1,3 +1,18 @@
+/**
+ * 历史消息恢复映射器
+ *
+ * 将 API 返回的持久化消息转换为聊天组件消费的前端消息模型，
+ * 使刷新后的展示与实时流式展示保持一致。
+ *
+ * Responsibilities:
+ * - 恢复正文、推理、工具调用和结构化业务卡片
+ * - 将持久化 token 用量挂回对应消息
+ * - 兼容不同 Agent 类型的展示位置
+ *
+ * Notes:
+ * - 本文件不负责请求 API，只处理 DTO 到视图模型的转换。
+ */
+
 import type { Message, PersistedMessageInfo } from "../types";
 
 /**
@@ -77,6 +92,9 @@ export function mapPersistedMessageToMessage(
       : {}),
     ...(message.executorResult
       ? { executorResults: [message.executorResult] }
+      : {}),
+    ...(message.tokenUsages && message.tokenUsages.length > 0
+      ? { tokenUsages: message.tokenUsages }
       : {}),
   };
 }
