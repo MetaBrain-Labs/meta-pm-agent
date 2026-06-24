@@ -1,3 +1,22 @@
+/**
+ * 知识图谱文件工具
+ *
+ * 提供受控的产品知识图谱 markdown 文件操作工具集，包括创建、读取、
+ * 插入、更新和删除内容五个工具。所有操作限定在 workspace-scoped
+ * product-knowledge-graph.md 文件中。
+ *
+ * Responsibilities:
+ * - createKnowledgeGraphFileHandle()：创建文件句柄（按 workspaceId 隔离）
+ * - createKnowledgeGraphFileTools()：构建 5 个 LangChain tool 实例
+ * - getKnowledgeGraphFilePath()：计算 workspace-scoped 文件路径
+ * - deleteWorkspaceKnowledgeGraphFile()：删除工作区图谱文件
+ * - readWorkspaceKnowledgeGraphFile()：读取工作区图谱文件
+ *
+ * Notes:
+ * - 文件操作绑定到当前 workspace 的 product-knowledge-graph.md
+ * - 工作流完成后由 API 层归档到数据库后删除运行时文件
+ */
+
 import { tool } from "langchain/tools";
 import { z } from "zod";
 import {
@@ -73,7 +92,9 @@ export function deleteWorkspaceKnowledgeGraphFile(workspaceId: string): void {
 /**
  * 创建仅能操作当前工作区 product-knowledge-graph.md 的文件工具集。
  */
-export function createKnowledgeGraphFileTools(handle: KnowledgeGraphFileHandle) {
+export function createKnowledgeGraphFileTools(
+  handle: KnowledgeGraphFileHandle,
+) {
   return [
     tool(
       async ({ content }) => {
@@ -158,7 +179,10 @@ export function createKnowledgeGraphFileTools(handle: KnowledgeGraphFileHandle) 
         description:
           "Replace exact markdown text inside product-knowledge-graph.md.",
         schema: z.object({
-          oldText: z.string().min(1).describe("Exact existing text to replace."),
+          oldText: z
+            .string()
+            .min(1)
+            .describe("Exact existing text to replace."),
           newText: z.string().describe("Replacement markdown text."),
         }),
       },

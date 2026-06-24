@@ -1,3 +1,17 @@
+/**
+ * 产品工作流图节点
+ *
+ * 实现 Planner Agent 节点和全部 10 个 Executor Agent 的 LangGraph 节点，
+ * 以及 selectNextProductWorkflowNode 条件路由逻辑。每个 Executor 节点按定义
+ * 从 streamExecutorAgent 驱动并输出推理、工具调用和补丁结果。
+ *
+ * Responsibilities:
+ * - 实现 plannerAgentNode：调用 Planner 生成/更新 DAG 并驱动 Executor 执行
+ * - 实现各 Executor 节点：读取知识图谱、执行任务、产出图谱补丁
+ * - 实现 selectNextProductWorkflowNode：按 DAG 依赖顺序调度下一个 Executor
+ * - 管理 executorResults 累积和执行计划状态
+ */
+
 import { getWriter, type LangGraphRunnableConfig } from "@langchain/langgraph";
 import type { ExecutorAgentResult } from "@repo/shared";
 import type { ProductWorkflowStreamEvent } from "../../agents/product-workflow/agent";
@@ -9,11 +23,11 @@ import {
 import {
   createProductWorkflowKnowledgeGraph,
   formatExecutorResultBlock,
-  formatProductDirectorWorkflowBlock,
+  formatProductWorkflowBlock,
   formatTaskExecutionPlanBlock,
   streamExecutorAgent,
   streamPlannerAgent,
-  streamProductDirectorReview,
+  streamPlannerWorkflowReview,
 } from "../../agents/product-workflow/agent";
 import type { WorkflowGraphStateValue } from "../state";
 
@@ -25,6 +39,9 @@ export async function plannerAgentNode(
   config?: LangGraphRunnableConfig,
 ) {
   if (!state.requestAnalysis) return {};
+  if (state.plan && arePlanTasksFinished(state)) {
+    return executePlannerWorkflowReview(state, config);
+  }
 
   const writer = getWriter(config);
   const knowledgeGraph =
@@ -185,9 +202,9 @@ async function executeExecutorAgentTask(
 }
 
 /**
- * 执行 ProductDirector Agent 节点，验收 Planner 与 Executor 结果并生成待用户确认的更新。
+ * 执行 Planner Agent 收尾阶段，汇总 Executor 结果并生成待用户确认的更新。
  */
-export async function productDirectorAgentNode(
+async function executePlannerWorkflowReview(
   state: WorkflowGraphStateValue,
   config?: LangGraphRunnableConfig,
 ) {
@@ -197,7 +214,7 @@ export async function productDirectorAgentNode(
   const knowledgeGraph =
     state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
   const workflowResult = await consumeProductWorkflowStream(
-    streamProductDirectorReview({
+    streamPlannerWorkflowReview({
       workspaceId: state.workspaceId,
       productContext: state.productContext,
       requestAnalysis: state.requestAnalysis,
@@ -209,11 +226,11 @@ export async function productDirectorAgentNode(
     writer,
   );
 
-  // ProductDirector 的完整验收结果用于持久化 request_form 和生成确认表单。
+  // Planner 的完整汇总结果用于持久化 request_form 和生成确认表单。
   writer?.({
     type: "agent-output",
-    agentType: "product_director",
-    content: formatProductDirectorWorkflowBlock(workflowResult),
+    agentType: "planner",
+    content: formatProductWorkflowBlock(workflowResult),
   });
   writer?.({ type: "complete", result: workflowResult });
 
@@ -268,7 +285,7 @@ function findNextExecutableTaskForAgent(
 export function selectNextProductWorkflowNode(
   state: WorkflowGraphStateValue,
 ): string {
-  if (!state.plan) return "product_director_agent";
+  if (state.productWorkflow || !state.plan) return "end";
 
   const completedTaskIds = new Set(
     state.executorResults.map((result) => result.task_id),
@@ -277,7 +294,7 @@ export function selectNextProductWorkflowNode(
     .filter((task) => !completedTaskIds.has(task.task_id))
     .sort((left, right) => left.sequence - right.sequence);
 
-  if (incompleteTasks.length === 0) return "product_director_agent";
+  if (incompleteTasks.length === 0) return "planner_agent";
 
   const readyTask =
     incompleteTasks.find((task) =>
@@ -286,5 +303,17 @@ export function selectNextProductWorkflowNode(
 
   return isExecutorAgentType(readyTask.assigned_agent)
     ? readyTask.assigned_agent
-    : "product_director_agent";
+    : "planner_agent";
+}
+
+/**
+ * 判断 Planner DAG 中的任务是否已经全部由 Executor 回写结果。
+ */
+function arePlanTasksFinished(state: WorkflowGraphStateValue): boolean {
+  if (!state.plan) return false;
+
+  const completedTaskIds = new Set(
+    state.executorResults.map((result) => result.task_id),
+  );
+  return state.plan.tasks.every((task) => completedTaskIds.has(task.task_id));
 }

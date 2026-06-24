@@ -1,3 +1,21 @@
+/**
+ * 联网搜索工具
+ *
+ * 为 Conversation Agent 提供 web_search 工具，优先使用 Tavily API，
+ * 失败时自动回退到 DuckDuckGo 免费搜索。搜索结果以结构化 JSON 返回，
+ * 包含来源编号、标题、URL 和摘要。
+ *
+ * Responsibilities:
+ * - createWebSearchTool()：创建 LangChain tool 实例
+ * - 优先使用 Tavily API（需 TAVILY_API_KEY），回退 DuckDuckGo
+ * - 搜索失败时返回 results: [] 和 error 字段，不抛出异常
+ * - 注入运行时日期到搜索结果中
+ *
+ * Notes:
+ * - 搜索超时 8s，防止阻塞 SSE 流
+ * - 网络/解析失败不终止流，保证用户体验连续性
+ */
+
 import { tool } from "langchain/tools";
 import { z } from "zod";
 import { getRuntimeDateContext } from "./runtime-context";

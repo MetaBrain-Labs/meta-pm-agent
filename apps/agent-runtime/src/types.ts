@@ -1,3 +1,19 @@
+/**
+ * Agent Runtime 公共流事件类型定义
+ *
+ * 定义 Conversation Agent SSE 流中的所有事件形态，包括文本/推理切片、
+ * 工具调用/结果、标记块生命周期（question-form、user-input、request-analysis）、
+ * todo-update 以及流开始/结束事件。
+ *
+ * Responsibilities:
+ * - 定义 StreamChunk、ConversationStreamEvent 等基础流事件类型
+ * - 定义 ConversationStreamOptions 流配置类型
+ * - 统一 AgentMessageType，标识流内容归属的 Agent
+ *
+ * Notes:
+ * - 本文件仅定义类型，不包含运行时逻辑
+ */
+
 import type { RequestAnalysis } from "@repo/shared";
 import type { AgentRuntimeTool } from "@repo/shared";
 
@@ -51,6 +67,19 @@ export type ConversationStreamEvent =
       content: string;
       analysis: RequestAnalysis;
       agentType?: AgentMessageType;
+    }
+  | {
+      type: "token-usage";
+      agentType: AgentMessageType;
+      inputTokens: number;
+      cacheHitInputTokens: number;
+      cacheMissInputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      costInput: number;
+      costOutput: number;
+      costTotal: number;
+      durationMs: number;
     }
   | { type: "error"; error: string; agentType?: AgentMessageType };
 

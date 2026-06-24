@@ -1,15 +1,37 @@
+/**
+ * 产品工作流编排与格式化
+ *
+ * 作为 product-workflow 模块的聚合入口，负责：
+ * - 编排 Planner → Executor → Planner Review 的完整产品工作流流式执行
+ * - 格式化各环节的展示 block（任务计划、执行结果、确认表单等）
+ * - 协调知识图谱的创建、追加与归档
+ *
+ * Responsibilities:
+ * - streamPlannerProductWorkflow()：主工作流编排器
+ * - formatTaskExecutionPlanBlock()：格式化 DAG 展示块
+ * - formatExecutorResultBlock()：格式化单 Executor 结果块
+ * - formatProductWorkflowBlock()：格式化完整产出块
+ * - formatProductWorkflowConfirmationQuestionForm / ProposalQuestionForm：生成确认表单
+ * - 聚合导出子模块（knowledge-graph、tasks、executor-agent、planner-agent）
+ *
+ * Notes:
+ * - 此文件仅做编排与格式化，不包含 Planner/Executor 的 prompt 或模型执行逻辑
+ */
+
 import type {
   ExecutorAgentResult,
-  ProductDirectorWorkflowResult,
+  ProductWorkflowResult,
   TaskExecutionPlan,
 } from "@repo/shared";
 import { createProductWorkflowKnowledgeGraph } from "./common/knowledge-graph";
 import { orderTasksBySequence } from "./common/tasks";
 import { streamExecutorAgent } from "./executor-agent/agent";
-import { streamPlannerAgent } from "./planner-agent/agent";
-import { streamProductDirectorReview } from "./product-director-agent/agent";
+import {
+  streamPlannerAgent,
+  streamPlannerWorkflowReview,
+} from "./planner-agent/agent";
 import type {
-  ProductDirectorWorkflowInput,
+  ProductWorkflowInput,
   ProductWorkflowStreamEvent,
 } from "./types";
 
@@ -19,29 +41,31 @@ export {
 } from "./common/knowledge-graph";
 export { orderTasksBySequence } from "./common/tasks";
 export { streamExecutorAgent } from "./executor-agent/agent";
-export { streamPlannerAgent } from "./planner-agent/agent";
-export { streamProductDirectorReview } from "./product-director-agent/agent";
+export {
+  streamPlannerAgent,
+  streamPlannerWorkflowReview,
+} from "./planner-agent/agent";
 export type {
   ExecutorAgentInput,
   PlannerAgentInput,
-  ProductDirectorReviewInput,
-  ProductDirectorWorkflowInput,
+  PlannerWorkflowReviewInput,
+  ProductWorkflowInput,
   ProductWorkflowStreamEvent,
 } from "./types";
 
 /**
- * ProductDirector 主工作流：负责编排 Planner、Executor 与验收阶段。
+ * Planner 主工作流：负责编排 DAG、Executor 与最终确认阶段。
  */
-export async function* streamProductDirectorWorkflow(
-  input: ProductDirectorWorkflowInput,
+export async function* streamPlannerProductWorkflow(
+  input: ProductWorkflowInput,
 ): AsyncGenerator<ProductWorkflowStreamEvent> {
   let knowledgeGraph = createProductWorkflowKnowledgeGraph();
 
   yield {
     type: "reasoning",
-    agentType: "product_director",
+    agentType: "planner",
     content:
-      "ProductDirector Agent 已读取产品上下文、占位知识图谱和 Request Agent 分析，开始规划后续任务。\n",
+      "Planner Agent 已读取产品上下文、占位知识图谱和 Request Agent 分析，开始规划后续任务。\n",
   };
 
   const plan = yield* streamPlannerAgent({
@@ -83,7 +107,7 @@ export async function* streamProductDirectorWorkflow(
     };
   }
 
-  const workflowResult = yield* streamProductDirectorReview({
+  const workflowResult = yield* streamPlannerWorkflowReview({
     workspaceId: input.workspaceId,
     productContext: input.productContext,
     requestAnalysis: input.requestAnalysis,
@@ -95,8 +119,8 @@ export async function* streamProductDirectorWorkflow(
 
   yield {
     type: "agent-output",
-    agentType: "product_director",
-    content: formatProductDirectorWorkflowBlock(workflowResult),
+    agentType: "planner",
+    content: formatProductWorkflowBlock(workflowResult),
   };
   yield { type: "complete", result: workflowResult };
 }
@@ -104,19 +128,19 @@ export async function* streamProductDirectorWorkflow(
 /**
  * 运行完整产品工作流并返回结构化结果，供非 SSE 场景复用。
  */
-export async function runProductDirectorWorkflow(
-  input: ProductDirectorWorkflowInput,
-): Promise<ProductDirectorWorkflowResult> {
-  let result: ProductDirectorWorkflowResult | null = null;
+export async function runPlannerProductWorkflow(
+  input: ProductWorkflowInput,
+): Promise<ProductWorkflowResult> {
+  let result: ProductWorkflowResult | null = null;
 
-  for await (const event of streamProductDirectorWorkflow(input)) {
+  for await (const event of streamPlannerProductWorkflow(input)) {
     if (event.type === "complete") {
       result = event.result;
     }
   }
 
   if (!result) {
-    throw new Error("Product workflow completed without a director result.");
+    throw new Error("Product workflow completed without a planner result.");
   }
 
   return result;
@@ -137,10 +161,10 @@ export function formatExecutorResultBlock(result: ExecutorAgentResult): string {
 }
 
 /**
- * 生成 ProductDirector Agent 的确认消息和结构化 block。
+ * 生成产品工作流确认消息和结构化 block。
  */
-export function formatProductDirectorWorkflowBlock(
-  result: ProductDirectorWorkflowResult,
+export function formatProductWorkflowBlock(
+  result: ProductWorkflowResult,
 ): string {
   return `<product-workflow>\n${JSON.stringify(result, null, 2)}\n</product-workflow>`;
 }
@@ -149,7 +173,7 @@ export function formatProductDirectorWorkflowBlock(
  * 生成 Conversation Agent 面向用户展示的设计确认表单。
  */
 export function formatProductWorkflowConfirmationQuestionForm(
-  result: ProductDirectorWorkflowResult,
+  result: ProductWorkflowResult,
 ): string {
   const form = {
     description: result.confirmation_message,
@@ -181,14 +205,14 @@ export function formatProductWorkflowConfirmationQuestionForm(
  * 生成 Conversation Agent 面向用户展示的补充信息表单。
  */
 export function formatProductWorkflowProposalQuestionForm(
-  result: ProductDirectorWorkflowResult,
+  result: ProductWorkflowResult,
 ): string | null {
   const slots = collectProposalSlots(result);
   if (slots.length === 0) return null;
 
   const form = {
     description:
-      "ProductDirector Agent 汇总了 Executor Agent 需要你补充确认的信息，请先回答这些高优先级问题。",
+      "Planner Agent 汇总了 Executor Agent 需要你补充确认的信息，请先回答这些高优先级问题。",
     questions: slots.map((slot) => ({
       id: slot.id,
       label: slot.question,
@@ -208,7 +232,7 @@ export function formatProductWorkflowProposalQuestionForm(
  * 生成补充信息决策项 ID，和请求表单 payload 中的 question_id 保持一致。
  */
 export function getProposalDecisionId(
-  result: ProductDirectorWorkflowResult,
+  result: ProductWorkflowResult,
 ): string {
   return `${result.confirmation_id}-proposal-decision`;
 }
@@ -216,7 +240,7 @@ export function getProposalDecisionId(
 /**
  * 汇总、去重并按优先级排序 Executor Agent 提出的补充信息。
  */
-function collectProposalSlots(result: ProductDirectorWorkflowResult): Array<{
+function collectProposalSlots(result: ProductWorkflowResult): Array<{
   id: string;
   question: string;
   source_task_id: string;

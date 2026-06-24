@@ -1,3 +1,18 @@
+/**
+ * 聊天业务服务
+ *
+ * 负责会话列表、消息持久化、请求表单状态推进以及 Agent 输出结果落库。
+ * 流式运行期间的 token 用量会即时写入，最终 assistant message 创建后再补充关联。
+ *
+ * Responsibilities:
+ * - 持久化用户消息和各 Agent assistant 消息
+ * - 解析并保存 Request Agent、Planner 和 Executor 的结构化产物
+ * - 记录并关联每个 Agent 执行结束时产生的 token 用量
+ *
+ * Notes:
+ * - 本文件不直接编排 LangGraph 节点，只处理 API 层业务持久化。
+ */
+
 import type { ChatMessage } from "@repo/shared";
 import {
   createConversationWithInitialRequestForm,
@@ -19,6 +34,11 @@ import {
   updateRequestFormStatus,
 } from "../repositories/request-form-repository";
 import { persistTaskExecutionPlan } from "../repositories/task-execution-repository";
+import {
+  attachTokenUsageRecordsToMessage,
+  persistTokenUsageRecord,
+  type TokenUsageRecord,
+} from "../repositories/token-usage-repository";
 import { parseRequestAnalysisPayload } from "../utils/request-analysis";
 import { parseTaskExecutionPlanPayload } from "../utils/task-execution";
 import {
@@ -50,6 +70,21 @@ export interface AgentConversationOutput {
     result?: unknown;
     agentType?: string;
   }>;
+  /** 该 Agent 本次模型调用的 token 用量 */
+  tokenUsage?: {
+    inputTokens: number;
+    cacheHitInputTokens: number;
+    cacheMissInputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    costInput: number;
+    costOutput: number;
+    costTotal: number;
+  };
+  /** 该 Agent 本次执行的耗时（毫秒） */
+  durationMs?: number;
+  /** 实时写入 token_usage 后返回的记录 ID，用于最终补充 message_id。 */
+  tokenUsageRecordIds?: string[];
 }
 
 /**
@@ -89,6 +124,17 @@ export function markRequestFormStatus(
   status: string,
 ) {
   return updateRequestFormStatus(requestFormId, status);
+}
+
+/**
+ * 在 Agent 结束时立即记录 token 用量，返回 token_usage 主键供后续关联消息。
+ */
+export async function persistAgentTokenUsage(
+  record: TokenUsageRecord | null,
+): Promise<string | null> {
+  if (!record || record.totalTokens <= 0) return null;
+
+  return persistTokenUsageRecord(record);
 }
 
 /**
@@ -147,9 +193,6 @@ export async function persistConversationResult({
   );
   const requestOutput = agentOutputs.find((output) => output.type === "request");
   const plannerOutput = agentOutputs.find((output) => output.type === "planner");
-  const productDirectorOutput = agentOutputs.find(
-    (output) => output.type === "product_director",
-  );
   const items = conversationOutput
     ? parseUserInputPayload(conversationOutput.content)
     : null;
@@ -162,9 +205,12 @@ export async function persistConversationResult({
   const executorResults = agentOutputs
     .map((output) => parseExecutorResultPayload(output.content))
     .filter((result) => result !== null);
-  const productWorkflow = productDirectorOutput
-    ? parseProductWorkflowPayload(productDirectorOutput.content)
-    : null;
+  const productWorkflow =
+    parseProductWorkflowPayload(plannerOutput?.content ?? "") ??
+    parseProductWorkflowPayload(
+      agentOutputs.find((output) => output.type === "product_director")
+        ?.content ?? "",
+    );
   const sanitizedExecutorResults = executorResults.map(
     sanitizeExecutorResultForPersistence,
   );
@@ -185,7 +231,7 @@ export async function persistConversationResult({
       sanitizedProductWorkflow,
     );
 
-    await persistAssistantMessage({
+    const messageId = await persistAssistantMessage({
       conversationId,
       content: outputContent,
       userInput: output.type === "conversation" ? items : null,
@@ -193,6 +239,12 @@ export async function persistConversationResult({
       toolCalls: output.toolCalls,
       type: output.type,
     });
+
+    // token_usage 已在流式事件到达时写入，这里只补充最终 message_id 关联。
+    await attachTokenUsageRecordsToMessage(
+      output.tokenUsageRecordIds ?? [],
+      messageId,
+    );
   }
 
   await persistRequestAnalysisItems(requestFormId, requestAnalysis);
@@ -235,11 +287,40 @@ function sanitizeAgentOutputContent(
     );
   }
 
-  if (output.type === "product_director" && productWorkflow) {
-    return formatProductWorkflowPayload(productWorkflow);
+  if (productWorkflow) {
+    return replaceProductWorkflowPayload(output.content, productWorkflow);
   }
 
   return output.content;
+}
+
+/**
+ * 将消息中的产品工作流结构块替换为已清洗的持久化版本。
+ */
+function replaceProductWorkflowPayload(
+  content: string,
+  productWorkflow: ReturnType<typeof sanitizeProductWorkflowForPersistence>,
+): string {
+  const startMarker = "<product-workflow";
+  const endMarker = "</product-workflow>";
+  const startIndex = content.search(new RegExp(escapeRegExp(startMarker), "i"));
+  if (startIndex === -1) return content;
+
+  const openEnd = content.indexOf(">", startIndex);
+  const endIndex = content.indexOf(endMarker, openEnd + 1);
+  if (openEnd === -1 || endIndex === -1) return content;
+
+  const blockEnd = endIndex + endMarker.length;
+  return `${content.slice(0, startIndex)}${formatProductWorkflowPayload(
+    productWorkflow,
+  )}${content.slice(blockEnd)}`;
+}
+
+/**
+ * 转义正则特殊字符，保证 tagged block marker 按字面量匹配。
+ */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**

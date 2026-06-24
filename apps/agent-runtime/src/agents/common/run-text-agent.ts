@@ -1,3 +1,19 @@
+/**
+ * 文本 Agent 通用执行器
+ *
+ * 为非 JSON 输出的 DeepAgent（如 Executor Agent）提供统一的流式执行框架，
+ * 管理消息构建、模型调用、推理和文本内容提取，并过滤内部工具/环境噪声。
+ *
+ * Responsibilities:
+ * - runTextAgent()：创建并驱动 DeepAgent，按事件流提取推理/工具/文本内容
+ * - 定义 TEXT_AGENT_MODEL_OPTIONS 默认模型参数
+ * - 定义 TextAgentEvent / RunTextAgentOptions 等类型
+ * - 过滤 DeepAgent 内部噪声（如 "No files found in /"）
+ *
+ * Notes:
+ * - Executor Agent 使用此执行器产出 markdown 图谱补丁而非 JSON
+ */
+
 import {
   AIMessage,
   HumanMessage,
@@ -7,9 +23,11 @@ import {
 import { createDeepAgent } from "deepagents";
 import type { StructuredTool } from "langchain";
 import { createChatModel, type ChatModelOptions } from "./model";
+import { calculateCost } from "../../config";
 import {
   getReasoningContent,
   getTextContent,
+  getTokenUsage,
 } from "../../utils/message-adapter";
 
 /**
@@ -42,6 +60,19 @@ export type TextAgentEvent<AgentType extends string> =
       toolName: string;
       toolResult: unknown;
       agentType: AgentType;
+    }
+  | {
+      type: "token-usage";
+      agentType: AgentType;
+      inputTokens: number;
+      cacheHitInputTokens: number;
+      cacheMissInputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      costInput: number;
+      costOutput: number;
+      costTotal: number;
+      durationMs: number;
     };
 
 /**
@@ -65,6 +96,9 @@ export interface RunTextAgentOptions<AgentType extends string> {
 export async function* runTextAgent<AgentType extends string>(
   options: RunTextAgentOptions<AgentType>,
 ): AsyncGenerator<TextAgentEvent<AgentType>, string, void> {
+  const startTime = Date.now();
+  let tokenUsage: ReturnType<typeof getTokenUsage> = null;
+
   try {
     const agent = createDeepAgent({
       model: createChatModel(options.modelOptions) as any,
@@ -121,6 +155,34 @@ export async function* runTextAgent<AgentType extends string>(
         };
       }
       responseText += getTextContent(message);
+
+      // 从每次 AIMessage 中累积 token 用量（最终消息包含完整统计）。
+      const usage = getTokenUsage(message);
+      if (usage) {
+        tokenUsage = usage;
+      }
+    }
+
+    // 在返回最终文本前，输出该 Agent 的 token 用量和耗时。
+    if (tokenUsage) {
+      const cost = calculateCost(
+        tokenUsage.cacheMissInputTokens,
+        tokenUsage.cacheHitInputTokens,
+        tokenUsage.outputTokens,
+      );
+      yield {
+        type: "token-usage",
+        agentType: options.agentType,
+        inputTokens: tokenUsage.inputTokens,
+        cacheHitInputTokens: tokenUsage.cacheHitInputTokens,
+        cacheMissInputTokens: tokenUsage.cacheMissInputTokens,
+        outputTokens: tokenUsage.outputTokens,
+        totalTokens: tokenUsage.totalTokens,
+        costInput: cost.costInput,
+        costOutput: cost.costOutput,
+        costTotal: cost.costTotal,
+        durationMs: Date.now() - startTime,
+      };
     }
 
     const patch = responseText.trim();

@@ -1,3 +1,15 @@
+/**
+ * 聊天模型工厂
+ *
+ * 所有 Agent 共享的 ChatOpenAI 实例创建入口，统一读取 LLM 配置
+ * 并支持单个 Agent 按需覆盖 temperature、maxTokens、responseFormat 等参数。
+ *
+ * Responsibilities:
+ * - createChatModel()：从 getLlmConfig 读取全局配置，允许 Agent 级覆盖
+ * - 管理 thinking（推理模式）和 response_format（JSON 输出）的 modelKwargs
+ * - 定义 ChatModelOptions 接口供各 Agent 传递自定义参数
+ */
+
 import { ChatOpenAI } from "@langchain/openai";
 import { getLlmConfig } from "../../config";
 

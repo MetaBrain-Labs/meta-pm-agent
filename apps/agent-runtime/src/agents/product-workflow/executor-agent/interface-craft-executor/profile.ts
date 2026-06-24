@@ -1,3 +1,15 @@
+/**
+ * Interface Craft Executor 档案
+ *
+ * 定义 Interface Craft Executor Agent 的职责配置，包括领域、关注层、
+ * 允许的实体/关系类型、技能映射和执行指南。
+ *
+ * Responsibilities:
+ * - 创建和细化 Component、Evidence 实体
+ * - 审视 UI 相关组件节点，补全布局、交互、可访问性和视觉工艺约束
+ * - 记录反模式检测依据，不输出独立 UI 审计文档
+ */
+
 import type { ExecutorAgentProfile } from "../types";
 
 /**

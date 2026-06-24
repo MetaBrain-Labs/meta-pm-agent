@@ -1,11 +1,30 @@
+/**
+ * Request Agent 实现
+ *
+ * 负责对 Conversation Agent 输出的 user_input 进行业务分类，
+ * 将每条独立语句归类为 business_model、questions 或 chitchat。
+ * 基于 DeepAgent + JSON 输出模式，支持流式推理和结构化分析。
+ *
+ * Responsibilities:
+ * - 创建并配置 Request Agent DeepAgent 实例
+ * - 提供 streamRequestAgent() 流式分析入口
+ * - 提供 runRequestAgent() 同步分析入口（含重试）
+ * - 格式化 Request Agent 分析结果为展示 block
+ *
+ * Notes:
+ * - 最多重试 2 次，失败时通过 markdown text 事件输出错误信息
+ */
+
 import { HumanMessage } from "langchain";
 import { createDeepAgent } from "deepagents";
 import { RequestAnalysisSchema, type RequestAnalysis } from "@repo/shared";
 import { createChatModel } from "../common/model";
+import { calculateCost } from "../../config";
 import { REQUEST_AGENT_PROMPT } from "./prompt";
 import {
   getReasoningContent,
   getTextContent,
+  getTokenUsage,
 } from "../../utils/message-adapter";
 import { parseJsonObject } from "../../utils/json";
 import type { UserInputRecord } from "./user-input";
@@ -23,7 +42,20 @@ export interface RequestAgentInput {
  */
 export type RequestAgentStreamEvent =
   | { type: "reasoning"; content: string; agentType: "request" }
-  | { type: "complete"; analysis: RequestAnalysis };
+  | { type: "complete"; analysis: RequestAnalysis }
+  | {
+      type: "token-usage";
+      agentType: "request";
+      inputTokens: number;
+      cacheHitInputTokens: number;
+      cacheMissInputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      costInput: number;
+      costOutput: number;
+      costTotal: number;
+      durationMs: number;
+    };
 
 /**
  * 创建真正的 Request Agent，由 DeepAgent 承载 system prompt 和模型调用。
@@ -70,12 +102,12 @@ export async function* streamRequestAgent(
   input: RequestAgentInput,
 ): AsyncGenerator<RequestAgentStreamEvent> {
   let lastError: Error | null = null;
+  const startTime = Date.now();
+  let tokenUsage: ReturnType<typeof getTokenUsage> = null;
 
   for (let attempt = 1; attempt <= REQUEST_AGENT_MAX_ATTEMPTS; attempt++) {
     const agent = createRequestAgent();
 
-    // Request Agent 不直接和用户交互，只读取 Conversation Agent 整理出的
-    // user_input 记录以及可选的产品上下文。
     const run = await agent.stream(
       {
         messages: [
@@ -105,6 +137,12 @@ export async function* streamRequestAgent(
       }
 
       responseText += getTextContent(message);
+
+      // 从每次 AIMessage 中累积 token 用量。
+      const usage = getTokenUsage(message);
+      if (usage) {
+        tokenUsage = usage;
+      }
     }
 
     try {
@@ -118,6 +156,29 @@ export async function* streamRequestAgent(
       }
 
       assertEveryUserInputCovered(result.data, input.userInput);
+
+      // 在返回 complete 前输出 token 用量和耗时。
+      if (tokenUsage) {
+        const cost = calculateCost(
+          tokenUsage.cacheMissInputTokens,
+          tokenUsage.cacheHitInputTokens,
+          tokenUsage.outputTokens,
+        );
+        yield {
+          type: "token-usage",
+          agentType: "request",
+          inputTokens: tokenUsage.inputTokens,
+          cacheHitInputTokens: tokenUsage.cacheHitInputTokens,
+          cacheMissInputTokens: tokenUsage.cacheMissInputTokens,
+          outputTokens: tokenUsage.outputTokens,
+          totalTokens: tokenUsage.totalTokens,
+          costInput: cost.costInput,
+          costOutput: cost.costOutput,
+          costTotal: cost.costTotal,
+          durationMs: Date.now() - startTime,
+        };
+      }
+
       yield { type: "complete", analysis: result.data };
       return;
     } catch (error) {

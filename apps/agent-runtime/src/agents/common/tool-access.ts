@@ -1,3 +1,19 @@
+/**
+ * Agent 工具访问控制
+ *
+ * 集中管理所有 Agent 的工具授权策略。定义每个 Agent 可使用的工具白名单，
+ * 并提供 createToolsForAgent() 按授权表构建可见工具列表。
+ *
+ * Responsibilities:
+ * - 维护 AGENT_TOOL_ACCESS：Agent → 授权工具集合的映射表
+ * - createToolsForAgent()：根据 agentType 和启用的用户工具构建工具数组
+ * - getKnowledgeGraphFileToolNames()：返回知识图谱文件工具名称列表
+ *
+ * Notes:
+ * - web_search 仅授权给 conversation Agent
+ * - 知识图谱文件工具授权给 planner 和全部 10 个 executor Agent
+ */
+
 import type { StructuredTool } from "langchain";
 import type { AgentRuntimeTool } from "@repo/shared";
 import type { AgentMessageType } from "../../types";
@@ -33,7 +49,7 @@ const EXECUTOR_AGENT_TYPES = [
 const AGENT_TOOL_ACCESS: Record<string, ReadonlySet<AgentRuntimeTool>> = {
   conversation: new Set(["web_search"]),
   request: new Set(),
-  product_director: new Set(KNOWLEDGE_GRAPH_FILE_TOOLS),
+  planner: new Set(KNOWLEDGE_GRAPH_FILE_TOOLS),
   ...Object.fromEntries(
     EXECUTOR_AGENT_TYPES.map((agentType) => [
       agentType,
@@ -90,7 +106,7 @@ export function canAgentUseTool(
 }
 
 /**
- * Executor/ProductDirector 内部默认启用的知识图谱文件工具。
+ * Planner/Executor 内部默认启用的知识图谱文件工具。
  */
 export function getKnowledgeGraphFileToolNames(): AgentRuntimeTool[] {
   return [...KNOWLEDGE_GRAPH_FILE_TOOLS];

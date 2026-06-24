@@ -1,3 +1,20 @@
+/**
+ * JSON Agent 通用执行器
+ *
+ * 为需要 JSON 结构化输出的 DeepAgent（如 Planner、Request Agent）提供统一的
+ * 流式执行框架，负责消息构建、推理透传、最终 JSON 解析和确定性回退。
+ *
+ * Responsibilities:
+ * - runJsonAgent()：创建并驱动 DeepAgent，解析最终 JSON 输出
+ * - 定义 JSON_AGENT_MODEL_OPTIONS 默认模型参数（responseFormat: json_object）
+ * - 定义 JsonAgentEvent / RunJsonAgentOptions 等类型
+ * - JSON 解析失败时执行确定性 fallback，确保流程不被阻塞
+ *
+ * Notes:
+ * - Planner Agent 和 Planner Workflow Review 使用此执行器
+ * - 支持 Zod schema 校验输出，校验失败时触发 fallback
+ */
+
 import {
   AIMessage,
   HumanMessage,
@@ -7,10 +24,12 @@ import {
 } from "langchain";
 import { createDeepAgent } from "deepagents";
 import { createChatModel, type ChatModelOptions } from "./model";
+import { calculateCost } from "../../config";
 import { parseJsonObject } from "../../utils/json";
 import {
   getReasoningContent,
   getTextContent,
+  getTokenUsage,
 } from "../../utils/message-adapter";
 
 /**
@@ -44,6 +63,19 @@ export type JsonAgentEvent<AgentType extends string> =
       toolName: string;
       toolResult: unknown;
       agentType: AgentType;
+    }
+  | {
+      type: "token-usage";
+      agentType: AgentType;
+      inputTokens: number;
+      cacheHitInputTokens: number;
+      cacheMissInputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      costInput: number;
+      costOutput: number;
+      costTotal: number;
+      durationMs: number;
     };
 
 /**
@@ -75,6 +107,9 @@ export interface RunJsonAgentOptions<T, AgentType extends string> {
 export async function* runJsonAgent<T, AgentType extends string>(
   options: RunJsonAgentOptions<T, AgentType>,
 ): AsyncGenerator<JsonAgentEvent<AgentType>, T, void> {
+  const startTime = Date.now();
+  let tokenUsage: ReturnType<typeof getTokenUsage> = null;
+
   try {
     const agent = createDeepAgent({
       model: createChatModel(options.modelOptions) as any,
@@ -132,6 +167,34 @@ export async function* runJsonAgent<T, AgentType extends string>(
         };
       }
       responseText += getTextContent(message);
+
+      // 从每次 AIMessage 中累积 token 用量（最终消息包含完整统计）。
+      const usage = getTokenUsage(message);
+      if (usage) {
+        tokenUsage = usage;
+      }
+    }
+
+    // 在返回结构化结果前，输出该 Agent 的 token 用量和耗时。
+    if (tokenUsage) {
+      const cost = calculateCost(
+        tokenUsage.cacheMissInputTokens,
+        tokenUsage.cacheHitInputTokens,
+        tokenUsage.outputTokens,
+      );
+      yield {
+        type: "token-usage",
+        agentType: options.agentType,
+        inputTokens: tokenUsage.inputTokens,
+        cacheHitInputTokens: tokenUsage.cacheHitInputTokens,
+        cacheMissInputTokens: tokenUsage.cacheMissInputTokens,
+        outputTokens: tokenUsage.outputTokens,
+        totalTokens: tokenUsage.totalTokens,
+        costInput: cost.costInput,
+        costOutput: cost.costOutput,
+        costTotal: cost.costTotal,
+        durationMs: Date.now() - startTime,
+      };
     }
 
     const parsed = parseJsonObject(responseText);

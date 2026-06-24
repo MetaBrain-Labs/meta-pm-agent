@@ -1,3 +1,14 @@
+/**
+ * Product Strategy Executor 档案
+ *
+ * 定义 Product Strategy Executor Agent 的职责配置，包括领域、关注层、
+ * 允许的实体/关系类型、技能映射和执行指南。
+ *
+ * Responsibilities:
+ * - 创建和细化 Goal、Decision、Requirement、Evidence 实体
+ * - 建立顶层产品因果链，将战略意图转成可追踪的 Goal 节点
+ */
+
 import type { ExecutorAgentProfile } from "../types";
 
 /**

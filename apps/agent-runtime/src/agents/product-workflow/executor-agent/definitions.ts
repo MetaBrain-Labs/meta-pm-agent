@@ -1,3 +1,19 @@
+/**
+ * Executor Agent 职责定义注册表
+ *
+ * 集中管理全部 10 个 Executor Agent 的静态职责配置（agentType、domain、
+ * 允许的实体/关系类型、技能、执行指南），并导出类型守卫和查找函数。
+ *
+ * Responsibilities:
+ * - 聚合 10 个 profile 组成 EXECUTOR_DEFINITIONS 常量数组
+ * - 定义 ExecutorAgentDefinition / ExecutorAgentType 类型
+ * - 提供 isExecutorAgentType() 类型守卫
+ * - 提供 getExecutorDefinition() / formatExecutorAgentTypeList() 查找工具
+ *
+ * Notes:
+ * - EXECUTOR_DEFINITIONS 的顺序体现默认图谱细化链路
+ */
+
 import { aiShippingExecutorProfile } from "./ai-shipping-executor/profile";
 import { dataAnalyticsExecutorProfile } from "./data-analytics-executor/profile";
 import { gtmExecutorProfile } from "./gtm-executor/profile";

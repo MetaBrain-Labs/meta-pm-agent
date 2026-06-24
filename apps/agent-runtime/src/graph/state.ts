@@ -1,8 +1,23 @@
+/**
+ * LangGraph 公共状态定义
+ *
+ * 使用 @langchain/langgraph 的 Annotation API 定义产品工作流图的所有跨节点共享状态字段，
+ * 包括用户输入、请求分析、任务计划、执行结果、知识图谱等。
+ *
+ * Responsibilities:
+ * - 定义 WorkflowGraphState 及其类型 WorkflowGraphStateValue
+ * - 为每个状态字段配置 reducer 和默认值
+ * - 作为所有图节点间数据传递的契约
+ *
+ * Notes:
+ * - 后续新增 Agent 节点时，在此文件中扩展共享状态字段
+ */
+
 import { Annotation } from "@langchain/langgraph";
 import type {
   ExecutorAgentResult,
   ProductKnowledgeGraph,
-  ProductDirectorWorkflowResult,
+  ProductWorkflowResult,
   RequestAnalysis,
   TaskExecutionPlan,
 } from "@repo/shared";
@@ -46,7 +61,7 @@ export const WorkflowGraphState = Annotation.Root({
     default: () => "",
   }),
 
-  // 当前产品知识图谱快照，供 Planner、Executor 和 ProductDirector 共享上下文。
+  // 当前产品知识图谱快照，供 Planner 和 Executor 共享上下文。
   knowledgeGraph: Annotation<ProductKnowledgeGraph | null>({
     reducer: (_current, update) => update,
     default: () => null,
@@ -64,8 +79,8 @@ export const WorkflowGraphState = Annotation.Root({
     default: () => [],
   }),
 
-  // ProductDirector Agent 对 Planner 和 Executor 结果的最终验收结果。
-  productWorkflow: Annotation<ProductDirectorWorkflowResult | null>({
+  // Planner Agent 对 Planner 和 Executor 结果的最终汇总结果。
+  productWorkflow: Annotation<ProductWorkflowResult | null>({
     reducer: (_current, update) => update,
     default: () => null,
   }),

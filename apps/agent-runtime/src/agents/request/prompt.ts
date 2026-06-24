@@ -1,3 +1,15 @@
+/**
+ * Request Agent 提示词定义
+ *
+ * 包含 Request Agent 的系统指令，规定其输入输出格式、business_model 分类规则、
+ * 以及 JSON 输出约束。
+ *
+ * Responsibilities:
+ * - 定义 Request Agent 的 system prompt 文本
+ * - 约束 JSON 输出格式和字段结构
+ * - 明确分类规则（business_model / questions / chitchat）
+ */
+
 export const REQUEST_AGENT_PROMPT = `# Request Agent directives
 
 You are the Request Agent for a product-management multi-agent system.

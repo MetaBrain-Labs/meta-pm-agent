@@ -75,7 +75,6 @@ export type WorkflowStatus =
   | "failed";
 
 export type AgentType =
-  | "product_director"
   | "planner"
   | "executor-product-strategy"
   | "executor-market-research"

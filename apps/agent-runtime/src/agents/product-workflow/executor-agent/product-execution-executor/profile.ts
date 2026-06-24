@@ -1,3 +1,15 @@
+/**
+ * Product Execution Executor 档案
+ *
+ * 定义 Product Execution Executor Agent 的职责配置，包括领域、关注层、
+ * 允许的实体/关系类型、技能映射和执行指南。
+ *
+ * Responsibilities:
+ * - 创建和细化全部 8 种实体类型
+ * - 将 Feature 逐层拆细为 Component，建立实现层级图谱结构
+ * - 负责 PRD、用户故事、路线图等内容到图谱节点的转译
+ */
+
 import type { ExecutorAgentProfile } from "../types";
 
 /**

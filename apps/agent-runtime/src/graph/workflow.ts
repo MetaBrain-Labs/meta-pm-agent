@@ -1,7 +1,24 @@
+/**
+ * 产品工作流主图定义
+ *
+ * 使用 LangGraph 构建完整的产品管理工作流图，包含以下节点链：
+ * parse_user_input -> request_agent -> planner_agent -> executor-* -> planner_agent -> END。
+ * 通过 product-workflow-node 中的 Executor 节点和路由逻辑实现 DAG 的动态规划与执行。
+ *
+ * Responsibilities:
+ * - 定义 WorkflowGraphInput / WorkflowGraphResult 接口
+ * - 组装 LangGraph StateGraph，连接所有节点和条件边
+ * - 导出 streamWorkflowGraph() 流式执行入口（从 conversation 流中截取 <user-input> 后驱动）
+ * - 导出 runWorkflowGraph() 同步执行入口
+ *
+ * Notes:
+ * - 此文件是产品工作流的路由中枢，后续扩展流程阶段应在此添加节点和边
+ */
+
 import { END, START, StateGraph } from "@langchain/langgraph";
 import type {
   ExecutorAgentResult,
-  ProductDirectorWorkflowResult,
+  ProductWorkflowResult,
   RequestAnalysis,
   TaskExecutionPlan,
 } from "@repo/shared";
@@ -17,7 +34,6 @@ import {
   productDiscoveryExecutorNode,
   plannerAgentNode,
   productExecutionExecutorNode,
-  productDirectorAgentNode,
   productStrategyExecutorNode,
   selectNextProductWorkflowNode,
   toolkitExecutorNode,
@@ -38,7 +54,7 @@ export interface WorkflowGraphResult {
   userInput: UserInputRecord[];
   plan?: TaskExecutionPlan | null;
   executorResults: ExecutorAgentResult[];
-  productWorkflow?: ProductDirectorWorkflowResult | null;
+  productWorkflow?: ProductWorkflowResult | null;
 }
 
 export type WorkflowGraphStreamEvent =
@@ -66,7 +82,8 @@ const PRODUCT_WORKFLOW_ROUTE_TARGETS = {
   "executor-ai-shipping": "executor-ai-shipping",
   "executor-toolkit": "executor-toolkit",
   "executor-interface-craft": "executor-interface-craft",
-  product_director_agent: "product_director_agent",
+  planner_agent: "planner_agent",
+  end: END,
 } as const;
 
 /**
@@ -90,9 +107,6 @@ export const graph = new StateGraph(WorkflowGraphState)
   .addNode("executor-ai-shipping", aiShippingExecutorNode)
   .addNode("executor-toolkit", toolkitExecutorNode)
   .addNode("executor-interface-craft", interfaceCraftExecutorNode)
-  // ProductDirector Agent 负责验收 Planner 与 Executor 的完整结果。
-  .addNode("product_director_agent", productDirectorAgentNode)
-
   .addEdge(START, "parse_user_input")
   .addEdge("parse_user_input", "request_agent")
   .addConditionalEdges("request_agent", selectNextNodeAfterRequestAgent, {
@@ -110,7 +124,8 @@ export const graph = new StateGraph(WorkflowGraphState)
     "executor-ai-shipping": "executor-ai-shipping",
     "executor-toolkit": "executor-toolkit",
     "executor-interface-craft": "executor-interface-craft",
-    product_director_agent: "product_director_agent",
+    planner_agent: "planner_agent",
+    end: END,
   })
   .addConditionalEdges(
     "executor-product-strategy",
@@ -162,7 +177,6 @@ export const graph = new StateGraph(WorkflowGraphState)
     selectNextProductWorkflowNode,
     PRODUCT_WORKFLOW_ROUTE_TARGETS,
   )
-  .addEdge("product_director_agent", END)
   .compile();
 
 /**

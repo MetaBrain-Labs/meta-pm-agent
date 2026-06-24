@@ -1,17 +1,17 @@
 import {
   ExecutorAgentResultSchema,
-  ProductDirectorWorkflowResultSchema,
+  ProductWorkflowResultSchema,
   type ExecutorAgentResult,
-  type ProductDirectorWorkflowResult,
+  type ProductWorkflowResult,
 } from "@repo/shared";
 import { parseJsonObject } from "./json";
 
 /**
- * 从 ProductDirector Agent 消息中解析完整产品工作流结果。
+ * 从产品工作流消息中解析完整产品工作流结果。
  */
 export function parseProductWorkflowPayload(
   text: string,
-): ProductDirectorWorkflowResult | null {
+): ProductWorkflowResult | null {
   const block = extractTaggedBlock(
     text,
     "<product-workflow",
@@ -19,7 +19,7 @@ export function parseProductWorkflowPayload(
   );
   if (!block) return null;
 
-  const result = ProductDirectorWorkflowResultSchema.safeParse(
+  const result = ProductWorkflowResultSchema.safeParse(
     parseJsonObject(block),
   );
   return result.success ? result.data : null;
@@ -55,11 +55,11 @@ export function sanitizeExecutorResultForPersistence(
 }
 
 /**
- * 生成不包含知识图谱正文的 ProductDirector 持久化结果。
+ * 生成不包含知识图谱正文的产品工作流持久化结果。
  */
 export function sanitizeProductWorkflowForPersistence(
-  result: ProductDirectorWorkflowResult,
-): ProductDirectorWorkflowResult {
+  result: ProductWorkflowResult,
+): ProductWorkflowResult {
   return {
     ...result,
     executor_results: result.executor_results.map(
@@ -82,10 +82,10 @@ export function formatExecutorResultPayload(
 }
 
 /**
- * 生成可解析的 ProductDirector 持久化 tagged block。
+ * 生成可解析的产品工作流持久化 tagged block。
  */
 export function formatProductWorkflowPayload(
-  result: ProductDirectorWorkflowResult,
+  result: ProductWorkflowResult,
 ): string {
   return `<product-workflow>\n${JSON.stringify(result, null, 2)}\n</product-workflow>`;
 }

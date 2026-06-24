@@ -1,3 +1,15 @@
+/**
+ * 产品知识图谱公共操作
+ *
+ * 提供知识图谱元模型约束、占位图构建和 Executor 补丁追加等公共工具，
+ * 供 Planner 和所有 Executor Agent 复用。
+ *
+ * Responsibilities:
+ * - PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT：定义实体/关系类型和可追溯性规则
+ * - createProductWorkflowKnowledgeGraph()：创建初始空图谱
+ * - appendKnowledgeGraphPatch()：将 Executor 产出的 markdown 补丁追加到图谱
+ */
+
 import type { ProductKnowledgeGraph } from "@repo/shared";
 
 /**

@@ -1,3 +1,14 @@
+/**
+ * Market Research Executor 档案
+ *
+ * 定义 Market Research Executor Agent 的职责配置，包括领域、关注层、
+ * 允许的实体/关系类型、技能映射和执行指南。
+ *
+ * Responsibilities:
+ * - 创建和细化 Evidence、Requirement、Metric、Custom 实体
+ * - 为决策提供竞品分析、用户画像、市场规模等事实支撑
+ */
+
 import type { ExecutorAgentProfile } from "../types";
 
 /**

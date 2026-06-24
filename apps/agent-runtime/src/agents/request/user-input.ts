@@ -1,3 +1,15 @@
+/**
+ * 用户输入解析
+ *
+ * 定义 UserInputRecord Zod schema，并提供 parseUserInputBlock 函数，
+ * 将 Conversation Agent 输出的 <user-input> tagged block（或裸 JSON）解析为结构化记录。
+ *
+ * Responsibilities:
+ * - 定义 UserInputRecord Schema 和类型
+ * - 从 tagged block 或裸 JSON 提取并校验 user_input 数组
+ * - 对无效输入抛出明确错误
+ */
+
 import { z } from "zod";
 import { parseJsonObject } from "../../utils/json";
 

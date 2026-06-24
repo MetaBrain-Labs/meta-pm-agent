@@ -1,3 +1,14 @@
+/**
+ * Toolkit Executor 档案
+ *
+ * 定义 Toolkit Executor Agent 的职责配置，包括领域、关注层、
+ * 允许的实体/关系类型、技能映射和执行指南。
+ *
+ * Responsibilities:
+ * - 创建和细化 Component、Custom 实体
+ * - 处理辅助性和合规类产物（隐私政策、NDA、语法审视），保持与主链路松耦合
+ */
+
 import type { ExecutorAgentProfile } from "../types";
 
 /**

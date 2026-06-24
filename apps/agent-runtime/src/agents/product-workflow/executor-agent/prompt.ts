@@ -1,3 +1,15 @@
+/**
+ * Executor Agent 提示词生成
+ *
+ * 根据 ExecutorAgentDefinition 动态生成单个 Executor Agent 的系统指令，
+ * 包括领域职责、允许的实体/关系类型、执行指南和知识图谱维护规则。
+ *
+ * Responsibilities:
+ * - createExecutorAgentPrompt()：注入 definition 生成完整 system prompt
+ * - 动态拼接 allowedEntityTypes、allowedRelationTypes、skills、executionGuidelines
+ * - 附加 PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT 公共约束
+ */
+
 import { PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT } from "../common/knowledge-graph";
 import type { ExecutorAgentDefinition } from "./definitions";
 
@@ -15,7 +27,7 @@ Executor identity:
 - graph role: ${definition.graphRole}
 
 Your responsibility:
-- Execute only the assigned ProductDirector task.
+- Execute only the assigned Planner task.
 - Use the provided file tools to maintain product-knowledge-graph.md.
 - First call \`kg_file_read\` to inspect the current graph.
 - Then call \`kg_file_create\`, \`kg_file_insert\`, \`kg_file_update\`, or \`kg_file_delete_content\` to apply your graph update.
