@@ -11,7 +11,7 @@
  *
  * Notes:
  * - web_search 仅授权给 conversation Agent
- * - 知识图谱文件工具授权给 planner 和全部 10 个 executor Agent
+ * - 知识图谱文件工具（1 读取 + 6 结构化写入）授权给 planner 和全部 10 个 executor Agent
  */
 
 import type { StructuredTool } from "langchain";
@@ -20,18 +20,21 @@ import type { AgentMessageType } from "../../types";
 import {
   createKnowledgeGraphFileTools,
   type KnowledgeGraphFileHandle,
+  type StructuredToolCallResult,
 } from "./knowledge-graph-file-tool";
 import { createWebSearchTool } from "./web-search-tool";
 
 type ToolOwningAgent = AgentMessageType;
 
-const KNOWLEDGE_GRAPH_FILE_TOOLS = [
-  "kg_file_create",
+const KNOWLEDGE_GRAPH_FILE_TOOLS: AgentRuntimeTool[] = [
   "kg_file_read",
-  "kg_file_insert",
-  "kg_file_update",
-  "kg_file_delete_content",
-] satisfies AgentRuntimeTool[];
+  "kg_file_add_summary",
+  "kg_file_add_nodes",
+  "kg_file_add_relations",
+  "kg_file_add_decisions",
+  "kg_file_add_risks",
+  "kg_file_add_open_questions",
+];
 
 const EXECUTOR_AGENT_TYPES = [
   "executor-product-strategy",
@@ -74,7 +77,6 @@ export function createToolsForAgent(
   const enabledToolSet = new Set(enabledTools);
   const tools: StructuredTool[] = [];
 
-  // Conversation Agent 的联网搜索仍由用户请求显式启用。
   if (enabledToolSet.has("web_search") && allowedTools.has("web_search")) {
     tools.push(createWebSearchTool());
   }
@@ -106,8 +108,10 @@ export function canAgentUseTool(
 }
 
 /**
- * Planner/Executor 内部默认启用的知识图谱文件工具。
+ * Planner/Executor 内部默认启用的知识图谱文件工具名称列表。
  */
 export function getKnowledgeGraphFileToolNames(): AgentRuntimeTool[] {
   return [...KNOWLEDGE_GRAPH_FILE_TOOLS];
 }
+
+export type { StructuredToolCallResult };
