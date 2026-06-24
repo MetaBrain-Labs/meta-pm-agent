@@ -153,8 +153,36 @@ export interface WorkspaceKnowledgeGraphData {
   hasData: boolean;
   /** 按参考格式生成的 markdown 文本 */
   markdown: string;
+  /** 结构化节点数据 */
+  nodes: KnowledgeGraphNodeData[];
+  /** 结构化关系数据 */
+  relations: KnowledgeGraphRelationData[];
   version: number;
   updatedAt: string;
+}
+
+/**
+ * 知识图谱节点数据（前端视图）。
+ */
+export interface KnowledgeGraphNodeData {
+  id: string;
+  type: "Goal" | "Requirement" | "Evidence" | "Decision" | "Feature" | "Component" | "Metric" | "Custom";
+  name: string;
+  description?: string;
+  source_task_id?: string;
+  status?: "proposed" | "confirmed" | "deprecated";
+}
+
+/**
+ * 知识图谱关系数据（前端视图）。
+ */
+export interface KnowledgeGraphRelationData {
+  id: string;
+  type: "Drives" | "Satisfies" | "Promotes" | "Produces" | "Constrains" | "Implements" | "Measures" | "Validates" | "References" | "Composes" | "Custom";
+  source: string;
+  target: string;
+  description?: string;
+  source_task_id?: string;
 }
 
 /**

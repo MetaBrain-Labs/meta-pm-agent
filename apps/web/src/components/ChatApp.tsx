@@ -5,7 +5,7 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import { Button, Dropdown, FloatButton, Input, Tooltip, message } from "antd";
+import { Button, Dropdown, FloatButton, Input, Tooltip } from "antd";
 import BorderBeam from "antd/es/border-beam";
 import {
   ApartmentOutlined,
@@ -24,6 +24,7 @@ import {
   type WorkspaceKnowledgeGraphData,
 } from "../api/chat-api";
 import { MessageBubble } from "./MessageBubble";
+import { KnowledgeGraphModal } from "./modals/KnowledgeGraphModal";
 
 const { TextArea } = Input;
 
@@ -71,6 +72,7 @@ export function ChatApp({
     null,
   );
   const [kgLoading, setKgLoading] = useState(false);
+  const [kgModalOpen, setKgModalOpen] = useState(false);
 
   // 工作区切换时查询知识图谱数据
   useEffect(() => {
@@ -101,27 +103,10 @@ export function ChatApp({
     };
   }, [workspaceId]);
 
-  // 下载知识图谱 markdown
-  const handleKnowledgeGraphDownload = useCallback(() => {
-    if (!kgData?.hasData || !kgData.markdown) return;
-
-    try {
-      const blob = new Blob([kgData.markdown], {
-        type: "text/markdown;charset=utf-8",
-      });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `product-knowledge-graph-${workspaceId ?? "unknown"}.md`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      document.body.removeChild(anchor);
-      URL.revokeObjectURL(url);
-      void message.success("知识图谱 Markdown 已下载");
-    } catch {
-      void message.error("下载失败，请重试");
-    }
-  }, [kgData, workspaceId]);
+  // 打开知识图谱可视化弹窗
+  const handleOpenKgModal = useCallback(() => {
+    setKgModalOpen(true);
+  }, []);
 
   // 按钮是否可用
   const kgEnabled = kgData?.hasData === true;
@@ -365,14 +350,14 @@ export function ChatApp({
                     onClick={() => setWebSearchEnabled((enabled) => !enabled)}
                   />
                 </Tooltip>
-                <Tooltip title={kgEnabled ? "下载知识图谱" : "暂无知识图谱数据"}>
+                <Tooltip title={kgEnabled ? "查看知识图谱" : "暂无知识图谱数据"}>
                   <Button
                     type="text"
                     shape="circle"
                     icon={<ApartmentOutlined />}
                     disabled={!kgEnabled}
                     loading={kgLoading}
-                    onClick={handleKnowledgeGraphDownload}
+                    onClick={handleOpenKgModal}
                   />
                 </Tooltip>
                 <Dropdown
@@ -416,6 +401,15 @@ export function ChatApp({
           </div>
         </BorderBeam>
       </div>
+
+      <KnowledgeGraphModal
+        open={kgModalOpen}
+        nodes={kgData?.nodes ?? []}
+        relations={kgData?.relations ?? []}
+        markdown={kgData?.markdown ?? ""}
+        workspaceId={workspaceId ?? ""}
+        onClose={() => setKgModalOpen(false)}
+      />
     </div>
   );
 }

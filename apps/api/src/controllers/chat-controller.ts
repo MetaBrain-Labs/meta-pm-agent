@@ -583,7 +583,7 @@ export async function getWorkspaceKnowledgeGraphHandler(c: Context) {
 
   // 数据库无记录，返回空状态让前端禁用按钮
   if (!data) {
-    return c.json({ hasData: false, markdown: "", version: 0, updatedAt: "" });
+    return c.json({ hasData: false, markdown: "", nodes: [], relations: [], version: 0, updatedAt: "" });
   }
 
   return c.json(data);

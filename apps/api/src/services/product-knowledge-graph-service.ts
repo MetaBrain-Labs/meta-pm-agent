@@ -1,4 +1,8 @@
-import type { ProductKnowledgeGraph } from "@repo/shared";
+import type {
+  KnowledgeGraphEntity,
+  KnowledgeGraphRelation,
+  ProductKnowledgeGraph,
+} from "@repo/shared";
 import {
   upsertProductKnowledgeGraph,
   getProductKnowledgeGraphByWorkspaceId,
@@ -164,6 +168,10 @@ export interface WorkspaceKnowledgeGraphData {
   hasData: boolean;
   /** 结构化数据按参考格式生成的 markdown */
   markdown: string;
+  /** 结构化节点数据，供图可视化使用 */
+  nodes: KnowledgeGraphEntity[];
+  /** 结构化关系数据，供图可视化使用 */
+  relations: KnowledgeGraphRelation[];
   version: number;
   updatedAt: string;
 }
@@ -178,8 +186,8 @@ export async function getWorkspaceKnowledgeGraph(
   const row = await getProductKnowledgeGraphByWorkspaceId(workspaceId);
   if (!row) return null;
 
-  const nodes = Array.isArray(row.nodes) ? row.nodes : [];
-  const relations = Array.isArray(row.relations) ? row.relations : [];
+  const nodes = (Array.isArray(row.nodes) ? row.nodes : []) as KnowledgeGraphEntity[];
+  const relations = (Array.isArray(row.relations) ? row.relations : []) as KnowledgeGraphRelation[];
   const hasData = nodes.length > 0 && relations.length > 0;
 
   // 有数据时生成参考格式 markdown；无数据时也返回空字符串供前端判断
@@ -190,6 +198,8 @@ export async function getWorkspaceKnowledgeGraph(
   return {
     hasData,
     markdown,
+    nodes,
+    relations,
     version: row.version,
     updatedAt: row.updatedAt,
   };
