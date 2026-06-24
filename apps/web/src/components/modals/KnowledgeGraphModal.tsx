@@ -184,6 +184,7 @@ export const KnowledgeGraphModal: FC<Props> = ({
         container,
         width,
         height,
+        background: "#ffffff",
         data: { nodes: g6Nodes, edges: g6Edges },
         layout: {
           type: "dagre" as const,
@@ -289,21 +290,6 @@ export const KnowledgeGraphModal: FC<Props> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // 侧边栏宽度变化时通知 G6 重新适应尺寸
-  useEffect(() => {
-    if (!graphRef.current) return;
-    // 等待 CSS transition 完成（300ms）后再更新 G6 尺寸
-    const timer = setTimeout(() => {
-      const container = containerRef.current;
-      if (!container || !graphRef.current) return;
-      const { clientWidth: w, clientHeight: h } = container;
-      if (w > 0 && h > 0) {
-        graphRef.current.setSize(w, h);
-      }
-    }, 350);
-    return () => clearTimeout(timer);
-  }, [selectedNode]);
-
   // 下载知识图谱 Markdown
   const handleDownloadMarkdown = () => {
     try {
@@ -333,7 +319,7 @@ export const KnowledgeGraphModal: FC<Props> = ({
     try {
       const dataURL = await graphRef.current.toDataURL({
         type: "image/png",
-        mode: "viewport",
+        mode: "overall",
       });
       const anchor = document.createElement("a");
       anchor.href = dataURL;
@@ -395,13 +381,28 @@ export const KnowledgeGraphModal: FC<Props> = ({
         </div>
       }
     >
-      <div style={{ display: "flex", height: "100%", gap: 0 }}>
-        {/* 图例 + 详情面板，宽度随选中状态动画过渡 */}
+      <div style={{ position: "relative", height: "100%", background: "#ffffff" }}>
+        {/* 图容器 —— 始终占满整个区域，在侧边栏下方 */}
+        <div
+          ref={containerRef}
+          style={{
+            position: "absolute",
+            inset: 0,
+          }}
+        />
+        {/* 侧边栏 —— 浮动叠加，宽度随选中状态动画过渡，不挤压右侧图 */}
         <div
           style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            bottom: 0,
             width: selectedNode ? 312 : 160,
-            flexShrink: 0,
-            borderRight: "1px solid var(--line-soft, #e8e8e8)",
+            zIndex: 10,
+            background: "#ffffff",
+            boxShadow: selectedNode
+              ? "2px 0 16px rgba(0,0,0,0.1)"
+              : "1px 0 0 var(--line-soft, #e8e8e8)",
             padding: 12,
             overflowY: "auto",
             overflowX: "hidden",
@@ -585,16 +586,6 @@ export const KnowledgeGraphModal: FC<Props> = ({
               </div>
             </div>
           </div>
-        </div>
-        {/* 图容器，使用绝对定位确保尺寸计算可靠 */}
-        <div style={{ flex: 1, minWidth: 0, position: "relative" }}>
-          <div
-            ref={containerRef}
-            style={{
-              position: "absolute",
-              inset: 0,
-            }}
-          />
         </div>
       </div>
     </Modal>
