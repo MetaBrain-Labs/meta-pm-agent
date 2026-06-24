@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@ant-design/icons": "^6.2.5",
+    "@antv/g6": "^5.1.1",
     "antd": "^6.4.4",
     "react": "19.2.4",
     "react-dom": "19.2.4"
