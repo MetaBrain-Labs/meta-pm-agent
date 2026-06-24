@@ -37,7 +37,7 @@ import {
   persistConversationStart,
 } from "../services/chat-service";
 import { loadProductRuntimeContextForConversation } from "../services/product-context-service";
-import { finalizeWorkspaceKnowledgeGraph } from "../services/product-knowledge-graph-service";
+import { finalizeWorkspaceKnowledgeGraph, getWorkspaceKnowledgeGraph } from "../services/product-knowledge-graph-service";
 import {
   createWorkspace,
   getAccount,
@@ -567,4 +567,24 @@ function isProductWorkflowResult(value: unknown): value is ProductWorkflowResult
     value !== null &&
     "knowledge_graph_update" in value
   );
+}
+
+/**
+ * 获取指定工作区的产品知识图谱数据。
+ * 返回 hasData（标识 nodes 和 relations 是否都有数据）和按参考格式生成的 markdown。
+ */
+export async function getWorkspaceKnowledgeGraphHandler(c: Context) {
+  const workspaceId = c.req.param("workspaceId");
+  if (!workspaceId) {
+    return c.json({ error: "缺少工作区 ID" }, 400);
+  }
+
+  const data = await getWorkspaceKnowledgeGraph(workspaceId);
+
+  // 数据库无记录，返回空状态让前端禁用按钮
+  if (!data) {
+    return c.json({ hasData: false, markdown: "", version: 0, updatedAt: "" });
+  }
+
+  return c.json(data);
 }

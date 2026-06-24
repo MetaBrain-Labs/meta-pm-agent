@@ -104,3 +104,86 @@ export async function upsertProductKnowledgeGraph({
       "updated_at" = CURRENT_TIMESTAMP
   `;
 }
+
+/**
+ * 按工作区 ID 查询产品知识图谱记录，返回结构化列数据。
+ * 如果工作区尚无图谱记录则返回 null。
+ */
+export interface ProductKnowledgeGraphRow {
+  summary: unknown[];
+  nodes: unknown[];
+  relations: unknown[];
+  decisions: unknown[];
+  risks: unknown[];
+  openQuestions: unknown[];
+  content: string;
+  version: number;
+  updatedAt: string;
+}
+
+export async function getProductKnowledgeGraphByWorkspaceId(
+  workspaceId: string,
+): Promise<ProductKnowledgeGraphRow | null> {
+  const rows = await prisma.$queryRaw<
+    Array<{
+      summary: unknown;
+      nodes: unknown;
+      relations: unknown;
+      decisions: unknown;
+      risks: unknown;
+      open_questions: unknown;
+      content: string;
+      version: number;
+      updated_at: Date;
+    }>
+  >`
+    SELECT
+      "summary",
+      "nodes",
+      "relations",
+      "decisions",
+      "risks",
+      "open_questions",
+      "content",
+      "version",
+      "updated_at"
+    FROM "product_knowledge_graph"
+    WHERE "workspace_id" = ${workspaceId}
+    LIMIT 1
+  `;
+
+  if (rows.length === 0) return null;
+
+  const row = rows[0];
+  return {
+    summary: parseJsonColumn(row.summary, []),
+    nodes: parseJsonColumn(row.nodes, []),
+    relations: parseJsonColumn(row.relations, []),
+    decisions: parseJsonColumn(row.decisions, []),
+    risks: parseJsonColumn(row.risks, []),
+    openQuestions: parseJsonColumn(row.open_questions, []),
+    content: row.content,
+    version: Number(row.version),
+    updatedAt: row.updated_at instanceof Date
+      ? row.updated_at.toISOString()
+      : String(row.updated_at),
+  };
+}
+
+/**
+ * 安全解析 JSONB 列数据，兼容已经是对象/数组的情况。
+ */
+function parseJsonColumn<T>(value: unknown, fallback: T): T {
+  if (value === null || value === undefined) return fallback;
+  if (Array.isArray(value) || (typeof value === "object" && value !== null)) {
+    return value as unknown as T;
+  }
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+}

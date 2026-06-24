@@ -235,6 +235,7 @@ export function ThreadChatPage({
 
   return (
     <ChatApp
+      workspaceId={workspaceId}
       workspaceName={workspaceName}
       messages={messages}
       isLoading={isLoading}
