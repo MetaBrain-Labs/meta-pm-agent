@@ -10,6 +10,12 @@ export const AgentRuntimeToolSchema = z.enum([
   "kg_file_insert",
   "kg_file_update",
   "kg_file_delete_content",
+  "kg_file_add_summary",
+  "kg_file_add_nodes",
+  "kg_file_add_relations",
+  "kg_file_add_decisions",
+  "kg_file_add_risks",
+  "kg_file_add_open_questions",
 ]);
 
 /**

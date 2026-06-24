@@ -35,6 +35,28 @@ export const KnowledgeGraphEntitySchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
   source_task_id: z.string().optional(),
+  status: z.enum(["proposed", "confirmed", "deprecated"]).optional(),
+});
+
+/**
+ * Executor Agent 写入图谱的结构化节点输入，要求更强的字段约束。
+ */
+export const KnowledgeGraphNodeInputSchema = z.object({
+  id: z.string().min(1).describe("Unique node ID, e.g. G-001, D-003, R-012"),
+  type: z.enum([
+    "Goal",
+    "Requirement",
+    "Evidence",
+    "Decision",
+    "Feature",
+    "Component",
+    "Metric",
+    "Custom",
+  ]).describe("Entity type"),
+  name: z.string().min(1).describe("Node name"),
+  description: z.string().min(1).describe("Node description explaining its business meaning"),
+  source_task_id: z.string().min(1).describe("Executor task ID that produced this node"),
+  status: z.enum(["proposed", "confirmed", "deprecated"]).default("proposed").describe("Node status"),
 });
 
 /**
@@ -59,6 +81,54 @@ export const KnowledgeGraphRelationSchema = z.object({
   target: z.string().min(1),
   description: z.string().optional(),
   source_task_id: z.string().optional(),
+});
+
+/**
+ * Executor Agent 写入图谱的结构化关系输入，要求更强的字段约束。
+ */
+export const KnowledgeGraphRelationInputSchema = z.object({
+  id: z.string().min(1).describe("Unique relation ID, e.g. REL-001"),
+  type: z.enum([
+    "Drives",
+    "Satisfies",
+    "Promotes",
+    "Produces",
+    "Constrains",
+    "Implements",
+    "Measures",
+    "Validates",
+    "References",
+    "Composes",
+    "Custom",
+  ]).describe("Relation type"),
+  source: z.string().min(1).describe("Source node ID"),
+  target: z.string().min(1).describe("Target node ID"),
+  description: z.string().min(1).describe("Relation description explaining the business connection"),
+  source_task_id: z.string().min(1).describe("Executor task ID that produced this relation"),
+});
+
+/**
+ * 结构化决策输入。
+ */
+export const KnowledgeGraphDecisionInputSchema = z.object({
+  id: z.string().min(1).describe("Decision ID, e.g. D-001"),
+  text: z.string().min(1).describe("Decision text including choice, rationale, and risk assessment"),
+});
+
+/**
+ * 结构化风险输入。
+ */
+export const KnowledgeGraphRiskInputSchema = z.object({
+  id: z.string().min(1).describe("Risk ID, e.g. RISK-001"),
+  text: z.string().min(1).describe("Risk description including impact and mitigation"),
+});
+
+/**
+ * 结构化待确认问题输入。
+ */
+export const KnowledgeGraphOpenQuestionInputSchema = z.object({
+  id: z.string().min(1).describe("Question ID, e.g. OQ-001"),
+  text: z.string().min(1).describe("Question text explaining what needs to be confirmed"),
 });
 
 /**
@@ -180,3 +250,22 @@ export type TaskExecutionNode = z.infer<typeof TaskExecutionNodeSchema>;
 export type TaskExecutionPlan = z.infer<typeof TaskExecutionPlanSchema>;
 export type ExecutorAgentResult = z.infer<typeof ExecutorAgentResultSchema>;
 export type ProductWorkflowResult = z.infer<typeof ProductWorkflowResultSchema>;
+export type KnowledgeGraphEntity = z.infer<typeof KnowledgeGraphEntitySchema>;
+export type KnowledgeGraphRelation = z.infer<
+  typeof KnowledgeGraphRelationSchema
+>;
+export type KnowledgeGraphNodeInput = z.infer<
+  typeof KnowledgeGraphNodeInputSchema
+>;
+export type KnowledgeGraphRelationInput = z.infer<
+  typeof KnowledgeGraphRelationInputSchema
+>;
+export type KnowledgeGraphDecisionInput = z.infer<
+  typeof KnowledgeGraphDecisionInputSchema
+>;
+export type KnowledgeGraphRiskInput = z.infer<
+  typeof KnowledgeGraphRiskInputSchema
+>;
+export type KnowledgeGraphOpenQuestionInput = z.infer<
+  typeof KnowledgeGraphOpenQuestionInputSchema
+>;
