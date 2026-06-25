@@ -73,20 +73,13 @@ export async function* streamExecutorAgent(
     content: `${definition.displayName} 正在读取知识图谱状态并准备图谱补丁。\n`,
   };
   // 工具在本轮工作副本上写入，外层节点统一用 appendKnowledgeGraphPatch 合并一次。
+  const baseKnowledgeGraph = cloneKnowledgeGraph(input.knowledgeGraph);
   const toolKnowledgeGraph = cloneKnowledgeGraph(input.knowledgeGraph);
   const tools = createToolsForAgent(
     definition.agentType,
     getKnowledgeGraphFileToolNames(),
     { knowledgeGraph: toolKnowledgeGraph },
   );
-
-  // 从结构化工具调用中收集数据，用于填充 ExecutorAgentResult 的 entities/relations 等字段
-  let collectedSummary: string[] = [];
-  let collectedEntities: KnowledgeGraphEntity[] = [];
-  let collectedRelations: KnowledgeGraphRelation[] = [];
-  let collectedDecisions: KnowledgeGraphDecisionInput[] = [];
-  let collectedRisks: KnowledgeGraphRiskInput[] = [];
-  let collectedQuestions: KnowledgeGraphOpenQuestionInput[] = [];
 
   const textGen = runTextAgent({
     agentType: definition.agentType,
@@ -129,27 +122,24 @@ export async function* streamExecutorAgent(
   while (!genResult.done) {
     const event = genResult.value as TextAgentEvent<string>;
 
-    // 从强类型工具的 tool-call 事件中收集结构化数据
+    yield event as ProductWorkflowStreamEvent;
     if (
-      event.type === "tool-call" &&
+      event.type === "tool-result" &&
       STRUCTURED_TOOL_NAMES.has(event.toolName)
     ) {
-      collectFromToolCall(
-        event.toolName,
-        event.toolArgs ?? {},
-        collectedSummary,
-        collectedEntities,
-        collectedRelations,
-        collectedDecisions,
-        collectedRisks,
-        collectedQuestions,
-      );
+      // 结构化写入工具完成后立即发出累计图谱快照，避免后续中断丢失已完成工具产物。
+      yield {
+        type: "knowledge-graph-update",
+        knowledgeGraph: cloneKnowledgeGraph(toolKnowledgeGraph),
+      };
     }
-
-    yield event as ProductWorkflowStreamEvent;
     genResult = await textGen.next();
   }
   patch = genResult.value;
+  const graphDelta = getKnowledgeGraphDelta(
+    baseKnowledgeGraph,
+    toolKnowledgeGraph,
+  );
 
   return createExecutorResult({
     task: input.task,
@@ -157,12 +147,12 @@ export async function* streamExecutorAgent(
     focusLayer: definition.focusLayer,
     displayName: definition.displayName,
     patch,
-    summary: collectedSummary[0],
-    entities: collectedEntities,
-    relations: collectedRelations,
-    decisions: collectedDecisions,
-    risks: collectedRisks,
-    openQuestions: collectedQuestions,
+    summary: graphDelta.summary[0],
+    entities: graphDelta.entities,
+    relations: graphDelta.relations,
+    decisions: graphDelta.decisions,
+    risks: graphDelta.risks,
+    openQuestions: graphDelta.open_questions,
   });
 }
 
@@ -213,117 +203,6 @@ function createExecutorResult({
 }
 
 /**
- * 从结构化工具调用的参数中提取数据，填充到收集器数组中。
- * 决策/风险/待确认问题现在以结构化对象存储，不再转为 markdown 字符串。
- */
-function collectFromToolCall(
-  toolName: string,
-  args: Record<string, unknown>,
-  summary: string[],
-  entities: KnowledgeGraphEntity[],
-  relations: KnowledgeGraphRelation[],
-  decisions: KnowledgeGraphDecisionInput[],
-  risks: KnowledgeGraphRiskInput[],
-  questions: KnowledgeGraphOpenQuestionInput[],
-): void {
-  try {
-    switch (toolName) {
-      case "kg_file_add_summary": {
-        if (typeof args.summary === "string" && args.summary.trim()) {
-          summary.push(args.summary.trim());
-        }
-        break;
-      }
-      case "kg_file_add_nodes": {
-        const nodes = args.nodes;
-        if (!Array.isArray(nodes)) break;
-        for (const node of nodes) {
-          if (node && typeof node === "object") {
-            const n = node as Record<string, unknown>;
-            entities.push({
-              id: String(n.id ?? ""),
-              type: String(n.type ?? "Custom") as KnowledgeGraphEntity["type"],
-              name: String(n.name ?? ""),
-              description: typeof n.description === "string" ? n.description : "",
-              source_task_id:
-                typeof n.source_task_id === "string" ? n.source_task_id : "",
-              status: typeof n.status === "string"
-                ? (n.status as KnowledgeGraphEntity["status"])
-                : "proposed",
-            });
-          }
-        }
-        break;
-      }
-      case "kg_file_add_relations": {
-        const rels = args.relations;
-        if (!Array.isArray(rels)) break;
-        for (const rel of rels) {
-          if (rel && typeof rel === "object") {
-            const r = rel as Record<string, unknown>;
-            relations.push({
-              id: String(r.id ?? ""),
-              type: String(r.type ?? "Custom") as KnowledgeGraphRelation["type"],
-              source: String(r.source ?? ""),
-              target: String(r.target ?? ""),
-              description:
-                typeof r.description === "string" ? r.description : "",
-              source_task_id:
-                typeof r.source_task_id === "string" ? r.source_task_id : "",
-            });
-          }
-        }
-        break;
-      }
-      case "kg_file_add_decisions": {
-        const decs = args.decisions;
-        if (!Array.isArray(decs)) break;
-        for (const dec of decs) {
-          if (dec && typeof dec === "object") {
-            const d = dec as Record<string, unknown>;
-            decisions.push({
-              id: String(d.id ?? ""),
-              text: String(d.text ?? ""),
-            });
-          }
-        }
-        break;
-      }
-      case "kg_file_add_risks": {
-        const riskArr = args.risks;
-        if (!Array.isArray(riskArr)) break;
-        for (const risk of riskArr) {
-          if (risk && typeof risk === "object") {
-            const r = risk as Record<string, unknown>;
-            risks.push({
-              id: String(r.id ?? ""),
-              text: String(r.text ?? ""),
-            });
-          }
-        }
-        break;
-      }
-      case "kg_file_add_open_questions": {
-        const qs = args.questions;
-        if (!Array.isArray(qs)) break;
-        for (const q of qs) {
-          if (q && typeof q === "object") {
-            const oq = q as Record<string, unknown>;
-            questions.push({
-              id: String(oq.id ?? ""),
-              text: String(oq.text ?? ""),
-            });
-          }
-        }
-        break;
-      }
-    }
-  } catch {
-    // 工具参数解析失败不阻断主流程，结构化数据回退为空
-  }
-}
-
-/**
  * 克隆当前知识图谱，供单个 Executor 内部工具读取和写入，避免工具副作用污染全局状态。
  */
 function cloneKnowledgeGraph(
@@ -338,6 +217,31 @@ function cloneKnowledgeGraph(
     summary: [...knowledgeGraph.summary],
     markdown: knowledgeGraph.markdown,
     notes: [...knowledgeGraph.notes],
+  };
+}
+
+/**
+ * 从工具工作副本中计算本轮 Executor 实际写入的结构化增量。
+ */
+function getKnowledgeGraphDelta(
+  base: ProductKnowledgeGraph,
+  current: ProductKnowledgeGraph,
+): Pick<
+  ProductKnowledgeGraph,
+  | "entities"
+  | "relations"
+  | "decisions"
+  | "risks"
+  | "open_questions"
+  | "summary"
+> {
+  return {
+    entities: current.entities.slice(base.entities.length),
+    relations: current.relations.slice(base.relations.length),
+    decisions: current.decisions.slice(base.decisions.length),
+    risks: current.risks.slice(base.risks.length),
+    open_questions: current.open_questions.slice(base.open_questions.length),
+    summary: current.summary.slice(base.summary.length),
   };
 }
 

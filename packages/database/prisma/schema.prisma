@@ -101,7 +101,7 @@ model ProductKnowledgeGraph {
   workspaceId    String    @unique @map("workspace_id") @db.VarChar(36)
   conversationId String?   @map("conversation_id") @db.VarChar(36)
   requestFormId  String?   @map("request_form_id") @db.VarChar(36)
-  content        String                                                          // markdown 文本（由结构化数据按需生成）
+  content        String                                                          // 遗留字段，保持为空；前端展示 markdown 按结构化列即时生成
   summary        Json?     @db.JsonB                                             // JSON 数组：string[]
   nodes          Json?     @db.JsonB                                             // JSON 数组：KnowledgeGraphNodeInput[]
   relations      Json?     @db.JsonB                                             // JSON 数组：KnowledgeGraphRelationInput[]

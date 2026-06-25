@@ -9,8 +9,8 @@ export interface PersistProductKnowledgeGraphInput {
   workspaceId: string;
   conversationId?: string;
   requestFormId?: string;
-  /** 由结构化数据生成的 markdown 文本 */
-  markdown: string;
+  /** 是否把本次写入计为一轮完成的知识图谱版本。 */
+  advanceVersion?: boolean;
   /** 结构化知识图谱数据：摘要 */
   summary?: unknown[];
   /** 结构化知识图谱数据：节点 */
@@ -33,7 +33,7 @@ export async function upsertProductKnowledgeGraph({
   workspaceId,
   conversationId,
   requestFormId,
-  markdown,
+  advanceVersion = true,
   summary,
   nodes,
   relations,
@@ -80,7 +80,7 @@ export async function upsertProductKnowledgeGraph({
       ${workspaceId},
       ${conversationId ?? null},
       ${requestFormId ?? null},
-      ${markdown},
+      ${""},
       ${summaryJson}::jsonb,
       ${nodesJson}::jsonb,
       ${relationsJson}::jsonb,
@@ -91,8 +91,14 @@ export async function upsertProductKnowledgeGraph({
     )
     ON CONFLICT ("workspace_id") DO UPDATE
     SET
-      "conversation_id" = EXCLUDED."conversation_id",
-      "request_form_id" = EXCLUDED."request_form_id",
+      "conversation_id" = CASE
+        WHEN ${advanceVersion} THEN EXCLUDED."conversation_id"
+        ELSE "product_knowledge_graph"."conversation_id"
+      END,
+      "request_form_id" = CASE
+        WHEN ${advanceVersion} THEN EXCLUDED."request_form_id"
+        ELSE "product_knowledge_graph"."request_form_id"
+      END,
       "content" = EXCLUDED."content",
       "summary" = EXCLUDED."summary",
       "nodes" = EXCLUDED."nodes",
@@ -100,7 +106,12 @@ export async function upsertProductKnowledgeGraph({
       "decisions" = EXCLUDED."decisions",
       "risks" = EXCLUDED."risks",
       "open_questions" = EXCLUDED."open_questions",
-      "version" = "product_knowledge_graph"."version" + 1,
+      "version" = CASE
+        WHEN ${advanceVersion}
+          AND "product_knowledge_graph"."request_form_id" IS DISTINCT FROM EXCLUDED."request_form_id"
+          THEN "product_knowledge_graph"."version" + 1
+        ELSE "product_knowledge_graph"."version"
+      END,
       "updated_at" = CURRENT_TIMESTAMP
   `;
 }

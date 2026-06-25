@@ -161,10 +161,10 @@
 - 运行时知识图谱是工作流内共享的结构化 `ProductKnowledgeGraph` 对象，不再依赖工作区 markdown 文件作为主状态。
 - Executor Agent 和 Planner Agent 只能通过 `apps/agent-runtime/src/agents/common/knowledge-graph-file-tool.ts` 中的受控结构化工具读写当前图谱，不得直接接入任意文件系统工具。
 - 单个 Executor 执行工具时应使用当前图谱的工作副本；Executor 结束后，由 LangGraph 状态通过一次结构化 merge 写回累计图谱，避免节点、关系、决策、风险、开放问题和摘要被重复追加。
-- 每个 Executor 完成后，API 必须将累计图谱快照写入 `product_knowledge_graph` 表；这样即使流程中断，已完成 Executor 的图谱结果也不会丢失。
+- 每个 Executor 完成后，API 必须将累计图谱快照写入 `product_knowledge_graph` 表；这样即使流程中断，已完成 Executor 的图谱结果也不会丢失。中间快照不得递增 `version`，完整流程结束或手动中断收口时才将本轮 `version` 最多递增一次。
 - 产品工作流结束后，最终归档优先使用运行时累计图谱快照，而不是 Planner Review 模型输出的 `knowledge_graph_update`，因为模型汇总可能省略字段或只包含局部结果。
 - `product_knowledge_graph` 以 `workspace_id` 唯一约束保证一个工作区只有一份当前图谱，并保留可选 `conversation_id`、`request_form_id` 来源信息。
-- `product_knowledge_graph` 应保存生成的 markdown `content` 以及结构化 `summary`、`nodes`、`relations`、`decisions`、`risks`、`open_questions`。
+- `product_knowledge_graph` 只应保存结构化 `summary`、`nodes`、`relations`、`decisions`、`risks`、`open_questions`。不要填充历史遗留的重量级 `content` 和 `entities` 字段，这两个字段后续会删除。
 - Executor 的 `knowledge_graph_patch`、完整 `knowledge_graph_markdown` 和大块知识图谱工具结果不要写入 `message` 或 `request_form_item.payload`；这些重内容只应进入 `product_knowledge_graph`，message 中只保留轻量摘要。
 
 ---
