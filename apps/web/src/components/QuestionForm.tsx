@@ -9,6 +9,7 @@ import {
   Card,
   Tag,
   Typography,
+  Divider,
 } from "antd";
 import { QuestionCircleOutlined } from "@ant-design/icons";
 import { formatFormAnswers, QuestionForm } from "../utils/question-form";
@@ -130,8 +131,9 @@ export function QuestionFormView({
       {form.questions.map((q) => {
         const value = answers[q.id];
         return (
-          <div key={q.id} className="mb-3">
+          <div key={q.id}>
             <Form.Item
+              layout="vertical"
               label={
                 <span
                   style={{
@@ -147,8 +149,7 @@ export function QuestionFormView({
                   )}
                 </span>
               }
-              help={q.help}
-              className="mb-0"
+              help={q.help && <div className="mb-4">{q.help}</div>}
             >
               {q.type === "radio" && q.options && (
                 <Radio.Group
@@ -203,12 +204,14 @@ export function QuestionFormView({
                 />
               )}
             </Form.Item>
+
+            <Divider />
           </div>
         );
       })}
 
       {!locked && (
-        <div className="flex justify-end mt-2">
+        <div className="flex justify-end">
           <Button type="primary" onClick={handleSubmit} disabled={!ready}>
             {form.submitLabel ?? "提交"}
           </Button>
@@ -216,7 +219,7 @@ export function QuestionFormView({
       )}
 
       {locked && (
-        <div className="text-right mt-2">
+        <div className="text-right">
           <Text
             style={{
               color: "var(--ink-faint)",

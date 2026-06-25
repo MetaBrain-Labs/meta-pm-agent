@@ -3,21 +3,35 @@
  *
  * 使用 AntV G6 渲染产品知识图谱的节点和关系图。
  * 节点按 entity 类型着色，关系以有向边展示并标注关系类型。
+ * 支持按节点类型筛选，以降低大规模图谱的视觉复杂度。
  *
  * Responsibilities:
- * - 从结构化知识图谱数据构建 G6 图数据
- * - 使用 dagre 布局自动排布节点
- * - 提供节点悬停提示和缩放/平移交互
- * - 提供图谱 Markdown 下载按钮
+ * - 从结构化知识图谱数据构建 G6 图数据，按节点类型过滤
+ * - 使用 dagre 布局自动排布节点，渲染后自动 fitView
+ * - 提供节点类型筛选开关，隐藏无关类型
+ * - 提供图谱 Markdown 和 PNG 下载按钮
  *
  * Notes:
- * - 通过 requestAnimationFrame + 轮询等待容器尺寸就绪后再初始化 G6
- * - 使用 ref 保存最新 nodes/relations，避免闭包捕获过期数据
+ * - 画布尺寸使用容器实际尺寸（dagre 布局不约束于画布边界）
+ * - 渲染完成后调用 fitView 缩放至全部节点可见
+ * - 统一通过 [open, filteredNodes, filteredRelations] 监听初始化和数据变更
+ * - 筛选变更通过 setData + render 增量更新，保留当前视口状态
  * - G6 实例在弹窗关闭或组件卸载时销毁
  */
-import { useCallback, useEffect, useRef, useState, type FC } from "react";
-import { Button, Modal, Tag, Tooltip, message, Space } from "antd";
-import { CameraOutlined, CloseOutlined, DownloadOutlined } from "@ant-design/icons";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FC,
+} from "react";
+import { Button, Modal, Spin, Tag, Tooltip, message, Space } from "antd";
+import {
+  CameraOutlined,
+  CloseOutlined,
+  DownloadOutlined,
+} from "@ant-design/icons";
 import { Graph } from "@antv/g6";
 import type {
   KnowledgeGraphNodeData,
@@ -76,10 +90,46 @@ const RELATION_TYPE_LABELS: Record<string, string> = {
 const MAX_RETRIES = 30;
 /** 每次轮询间隔（ms） */
 const RETRY_INTERVAL = 100;
+/** 节点 name 最大显示字符数，超出则截断 */
+const MAX_NAME_LENGTH = 18;
+
+/**
+ * 截断过长的节点名称。
+ */
+const truncateName = (name: string, maxLen = MAX_NAME_LENGTH): string =>
+  name.length > maxLen ? name.slice(0, maxLen - 1) + "…" : name;
+
+/**
+ * 将 KG 节点转换为 G6 节点数据格式。
+ */
+const toG6Node = (node: KnowledgeGraphNodeData) => ({
+  id: node.id,
+  data: {
+    label: `${node.id}\n${truncateName(node.name)}`,
+    nodeType: node.type,
+    description: node.description ?? "",
+    status: node.status ?? "proposed",
+    sourceTaskId: node.source_task_id ?? "",
+    fullName: node.name,
+  },
+});
+
+/**
+ * 将 KG 关系转换为 G6 边数据格式。
+ */
+const toG6Edge = (rel: KnowledgeGraphRelationData) => ({
+  id: rel.id,
+  source: rel.source,
+  target: rel.target,
+  data: {
+    label: RELATION_TYPE_LABELS[rel.type] ?? rel.type,
+    relType: rel.type,
+    description: rel.description ?? "",
+  },
+});
 
 /**
  * 知识图谱可视化弹窗组件。
- * 使用 AntV G6 渲染结构化节点与关系图，支持缩放平移及 Markdown 下载。
  */
 export const KnowledgeGraphModal: FC<Props> = ({
   open,
@@ -93,17 +143,59 @@ export const KnowledgeGraphModal: FC<Props> = ({
   const graphRef = useRef<Graph | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryCountRef = useRef(0);
+  const initAttemptedRef = useRef(false);
   const [selectedNode, setSelectedNode] =
     useState<KnowledgeGraphNodeData | null>(null);
 
-  // 使用 ref 保存最新数据，避免闭包捕获过期值
-  const nodesRef = useRef(nodes);
-  nodesRef.current = nodes;
-  const relationsRef = useRef(relations);
-  relationsRef.current = relations;
+  // 隐藏的节点类型集合（空 = 全部显示）
+  const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set());
 
-  // 清理所有 timer 和 graph 实例
-  const cleanup = () => {
+  // 弹窗打开时重置筛选状态
+  useEffect(() => {
+    if (open) {
+      setHiddenTypes(new Set());
+      setSelectedNode(null);
+    } else {
+      initAttemptedRef.current = false;
+    }
+  }, [open]);
+
+  // 当前数据中实际存在的节点类型
+  const availableTypes = useMemo(() => {
+    const types = new Set<string>();
+    nodes.forEach((n) => types.add(n.type));
+    return Array.from(types).sort();
+  }, [nodes]);
+
+  // 根据隐藏类型筛选后的节点
+  const filteredNodes = useMemo(
+    () => nodes.filter((n) => !hiddenTypes.has(n.type)),
+    [nodes, hiddenTypes],
+  );
+
+  // 可见节点 ID 集合
+  const visibleNodeIds = useMemo(
+    () => new Set(filteredNodes.map((n) => n.id)),
+    [filteredNodes],
+  );
+
+  // 只保留两端节点均可见的边
+  const filteredRelations = useMemo(
+    () =>
+      relations.filter(
+        (r) => visibleNodeIds.has(r.source) && visibleNodeIds.has(r.target),
+      ),
+    [relations, visibleNodeIds],
+  );
+
+  // 使用 ref 保存最新筛选结果，供异步回调读取
+  const filteredNodesRef = useRef(filteredNodes);
+  filteredNodesRef.current = filteredNodes;
+  const filteredRelationsRef = useRef(filteredRelations);
+  filteredRelationsRef.current = filteredRelations;
+
+  // 清理 timer 与 graph 实例
+  const cleanup = useCallback(() => {
     if (timerRef.current) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
@@ -117,73 +209,28 @@ export const KnowledgeGraphModal: FC<Props> = ({
       }
       graphRef.current = null;
     }
-  };
+  }, []);
 
-  // 弹窗打开时初始化 G6，关闭时清理
-  useEffect(() => {
-    if (!open) {
-      cleanup();
-      return;
-    }
+  /**
+   * 使用当前筛选数据初始化 G6 实例并渲染。
+   * 画布尺寸使用容器实际尺寸；dagre 布局不约束于画布边界。
+   */
+  const buildAndRenderGraph = useCallback(
+    (container: HTMLDivElement) => {
+      const containerWidth = container.clientWidth;
+      const containerHeight = container.clientHeight;
+      const latestNodes = filteredNodesRef.current;
+      const latestRelations = filteredRelationsRef.current;
 
-    const currentNodes = nodesRef.current;
-    if (currentNodes.length === 0) return;
+      if (latestNodes.length === 0) return;
 
-    // 先清理上一轮实例
-    cleanup();
-
-    /**
-     * 初始化 G6 图实例。
-     * 通过轮询确保容器尺寸已就绪，再创建 Graph。
-     */
-    const tryInit = (attempt: number) => {
-      const container = containerRef.current;
-      if (!container) return;
-
-      const width = container.clientWidth;
-      const height = container.clientHeight;
-
-      if (width === 0 || height === 0) {
-        if (attempt < MAX_RETRIES) {
-          timerRef.current = setTimeout(
-            () => tryInit(attempt + 1),
-            RETRY_INTERVAL,
-          );
-        }
-        return;
-      }
-
-      const latestNodes = nodesRef.current;
-      const latestRelations = relationsRef.current;
-
-      // 转换 KG 节点为 G6 节点数据
-      const g6Nodes = latestNodes.map((node) => ({
-        id: node.id,
-        data: {
-          label: `${node.id}\n${node.name}`,
-          nodeType: node.type,
-          description: node.description ?? "",
-          status: node.status ?? "proposed",
-          sourceTaskId: node.source_task_id ?? "",
-        },
-      }));
-
-      // 转换 KG 关系为 G6 边数据
-      const g6Edges = latestRelations.map((rel) => ({
-        id: rel.id,
-        source: rel.source,
-        target: rel.target,
-        data: {
-          label: RELATION_TYPE_LABELS[rel.type] ?? rel.type,
-          relType: rel.type,
-          description: rel.description ?? "",
-        },
-      }));
+      const g6Nodes = latestNodes.map(toG6Node);
+      const g6Edges = latestRelations.map(toG6Edge);
 
       const graph = new Graph({
         container,
-        width,
-        height,
+        width: containerWidth,
+        height: containerHeight,
         background: "#ffffff",
         data: { nodes: g6Nodes, edges: g6Edges },
         layout: {
@@ -198,11 +245,9 @@ export const KnowledgeGraphModal: FC<Props> = ({
             size: (d: { data?: { label?: string } }) => {
               const label = d.data?.label ?? "";
               const lines = label.split("\n");
-              const maxLen = Math.max(
-                ...lines.map((l: string) => l.length),
-              );
+              const maxLen = Math.max(...lines.map((l: string) => l.length));
               return [
-                Math.min(Math.max(maxLen * 14 + 48, 120), 280),
+                Math.min(Math.max(maxLen * 14 + 48, 120), 260),
                 60,
               ];
             },
@@ -224,20 +269,20 @@ export const KnowledgeGraphModal: FC<Props> = ({
             labelLineHeight: 18,
             labelPlacement: "center",
             labelWordWrap: true,
-            labelMaxWidth: 260,
+            labelMaxWidth: 240,
           },
         },
         edge: {
           type: "cubic",
           style: {
             stroke: "#b8b8b8",
-            strokeWidth: 2,
+            strokeWidth: 1.5,
             endArrow: true,
-            endArrowSize: 10,
+            endArrowSize: 8,
             labelText: (d: { data?: { label?: string } }) =>
               d.data?.label ?? "",
             labelFill: "#595959",
-            labelFontSize: 11,
+            labelFontSize: 10,
             labelBackground: true,
             labelBackgroundFill: "#ffffff",
             labelBackgroundOpacity: 0.9,
@@ -249,16 +294,31 @@ export const KnowledgeGraphModal: FC<Props> = ({
         behaviors: [
           "drag-canvas",
           "zoom-canvas",
-          { type: "hover-activate", degree: 1, direction: "both" },
+          {
+            type: "hover-activate",
+            degree: 1,
+            direction: "both",
+          },
         ],
         autoFit: "view",
         animation: false,
       });
 
       graphRef.current = graph;
-      graph.render().catch((err: unknown) => {
-        console.error("[kg-graph] Failed to render G6 graph:", err);
-      });
+
+      // 渲染完成后自动缩放以展示全部节点
+      graph
+        .render()
+        .then(async () => {
+          try {
+            await graph.fitView({ when: "always" });
+          } catch {
+            // fitView 失败不影响使用
+          }
+        })
+        .catch((err: unknown) => {
+          console.error("[kg-graph] Failed to render G6 graph:", err);
+        });
 
       // 点击节点显示详情
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -275,20 +335,128 @@ export const KnowledgeGraphModal: FC<Props> = ({
       graph.on("canvas:click", () => {
         setSelectedNode(null);
       });
+    },
+    [],
+  );
+
+  /**
+   * 仅更新图数据（用于筛选变更，保留当前视口状态）。
+   */
+  const updateGraphData = useCallback(async () => {
+    const graph = graphRef.current;
+    if (!graph) return;
+
+    const latestNodes = filteredNodesRef.current;
+    const latestRelations = filteredRelationsRef.current;
+
+    if (latestNodes.length === 0) {
+      // 全部类型被隐藏时销毁图
+      cleanup();
+      return;
+    }
+
+    const g6Nodes = latestNodes.map(toG6Node);
+    const g6Edges = latestRelations.map(toG6Edge);
+
+    graph.setData({ nodes: g6Nodes, edges: g6Edges });
+    try {
+      await graph.render();
+      await graph.fitView({ when: "always" });
+    } catch (err: unknown) {
+      console.error("[kg-graph] Failed to update G6 graph data:", err);
+    }
+  }, [cleanup]);
+
+  /**
+   * 统一管理图的生命周期：初始化、数据到达、筛选变更。
+   *
+   * - 弹窗关闭时销毁图实例
+   * - 弹窗打开且首次有数据时通过轮询初始化图
+   * - 数据或筛选变更时增量更新图数据
+   */
+  useEffect(() => {
+    if (!open) {
+      initAttemptedRef.current = false;
+      cleanup();
+      return;
+    }
+
+    if (filteredNodes.length === 0) {
+      // 无数据时不做任何操作（等数据到达后 filteredNodes 变化会重进此 effect）
+      return;
+    }
+
+    const graph = graphRef.current;
+
+    // 图实例已存在 → 增量更新数据（筛选变更等场景）
+    if (graph) {
+      updateGraphData();
+      return;
+    }
+
+    // 检查是否已经尝试过初始化（避免同一次渲染中重复尝试）
+    if (initAttemptedRef.current) return;
+
+    const container = containerRef.current;
+    if (!container) return;
+
+    // 先确保没有任何残留实例
+    cleanup();
+    initAttemptedRef.current = true;
+
+    /**
+     * 轮询等待容器尺寸就绪后初始化图。
+     * 处理 Ant Design Modal 的入场动画导致容器尺寸暂时为 0 的情况。
+     */
+    const tryInit = (attempt: number) => {
+      const c = containerRef.current;
+      if (!c) return;
+
+      const width = c.clientWidth;
+      const height = c.clientHeight;
+
+      if (width === 0 || height === 0) {
+        if (attempt < MAX_RETRIES) {
+          timerRef.current = setTimeout(
+            () => tryInit(attempt + 1),
+            RETRY_INTERVAL,
+          );
+        }
+        return;
+      }
+
+      buildAndRenderGraph(c);
     };
 
-    // 使用 rAF 后再开始轮询，确保布局已完成一次渲染
     const rafId = requestAnimationFrame(() => {
       tryInit(0);
     });
 
     return () => {
       cancelAnimationFrame(rafId);
-      cleanup();
     };
-    // 仅以 open 为触发条件；nodes/relations 通过 ref 获取最新值
+    // filteredNodes / filteredRelations 作为 deps 确保数据到达或筛选变更时都会处理
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, filteredNodes, filteredRelations]);
+
+  // 切换节点类型显示/隐藏
+  const toggleType = useCallback((type: string) => {
+    setHiddenTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(type)) {
+        next.delete(type);
+      } else {
+        next.add(type);
+      }
+      return next;
+    });
+  }, []);
+
+  // 获取某类型的节点数量
+  const getTypeCount = useCallback(
+    (type: string) => nodes.filter((n) => n.type === type).length,
+    [nodes],
+  );
 
   // 下载知识图谱 Markdown
   const handleDownloadMarkdown = () => {
@@ -333,12 +501,17 @@ export const KnowledgeGraphModal: FC<Props> = ({
     }
   }, [workspaceId]);
 
+  // 图谱是否正在加载（弹窗已打开但数据未到达）
+  const isGraphLoading = open && nodes.length === 0 && !initAttemptedRef.current;
+  // 是否完全无数据可展示
+  const hasNoData = open && nodes.length === 0 && initAttemptedRef.current;
+
   return (
     <Modal
       centered
       mask={{ enabled: true, blur: true, closable: true }}
       width="90vw"
-      style={{ maxWidth: 1280 }}
+      style={{ maxWidth: 1400 }}
       open={open}
       onCancel={onClose}
       footer={null}
@@ -359,10 +532,24 @@ export const KnowledgeGraphModal: FC<Props> = ({
               知识图谱
             </span>
             <span className="text-xs text-[var(--ink-soft)]">
-              {nodes.length} 节点 · {relations.length} 关系
+              全量 {nodes.length} 节点 · {relations.length} 关系
+              {hiddenTypes.size > 0 && (
+                <span className="ml-1 text-[var(--ink-accent,#1677ff)]">
+                  （显示 {filteredNodes.length} / {filteredRelations.length}）
+                </span>
+              )}
             </span>
           </Space>
           <Space>
+            {hiddenTypes.size > 0 && (
+              <Button
+                type="link"
+                size="small"
+                onClick={() => setHiddenTypes(new Set())}
+              >
+                全部显示
+              </Button>
+            )}
             <Tooltip title="下载图谱图片">
               <Button
                 type="text"
@@ -382,7 +569,41 @@ export const KnowledgeGraphModal: FC<Props> = ({
       }
     >
       <div style={{ position: "relative", height: "100%", background: "#ffffff" }}>
-        {/* 图容器 —— 始终占满整个区域，在侧边栏下方 */}
+        {/* 加载中 / 无数据状态 */}
+        {isGraphLoading && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 5,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "#ffffff",
+            }}
+          >
+            <Spin tip="加载知识图谱数据中…" />
+          </div>
+        )}
+        {hasNoData && (
+          <div
+            style={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 5,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "var(--ink-soft, #8c8c8c)",
+              fontSize: 14,
+              background: "#ffffff",
+            }}
+          >
+            当前工作区暂无知识图谱数据
+          </div>
+        )}
+
+        {/* 图容器 */}
         <div
           ref={containerRef}
           style={{
@@ -390,203 +611,243 @@ export const KnowledgeGraphModal: FC<Props> = ({
             inset: 0,
           }}
         />
-        {/* 侧边栏 —— 浮动叠加，宽度随选中状态动画过渡，不挤压右侧图 */}
-        <div
-          style={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-            bottom: 0,
-            width: selectedNode ? 312 : 160,
-            zIndex: 10,
-            background: "#ffffff",
-            boxShadow: selectedNode
-              ? "2px 0 16px rgba(0,0,0,0.1)"
-              : "1px 0 0 var(--line-soft, #e8e8e8)",
-            padding: 12,
-            overflowY: "auto",
-            overflowX: "hidden",
-            transition: "width 0.3s ease",
-          }}
-        >
-          <div style={{ minWidth: 136 }}>
-            <div
-              style={{
-                fontSize: 12,
-                fontWeight: 500,
-                color: "var(--ink-soft, #8c8c8c)",
-                marginBottom: 8,
-              }}
-            >
-              节点类型
-            </div>
-            {Object.entries(NODE_TYPE_LABELS).map(([type, label]) => (
-              <div
-                key={type}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  marginBottom: 6,
-                  fontSize: 12,
-                }}
-              >
-                <span
-                  style={{
-                    display: "inline-block",
-                    width: 12,
-                    height: 12,
-                    borderRadius: 2,
-                    flexShrink: 0,
-                    background: NODE_COLORS[type] ?? NODE_COLORS.Custom,
-                  }}
-                />
-                <span>{label}</span>
-              </div>
-            ))}
-            <div
-              style={{
-                fontSize: 12,
-                fontWeight: 500,
-                color: "var(--ink-soft, #8c8c8c)",
-                marginTop: 16,
-                marginBottom: 8,
-              }}
-            >
-              交互
-            </div>
-            <div
-              style={{
-                fontSize: 12,
-                color: "var(--ink-soft, #8c8c8c)",
-                lineHeight: 1.6,
-              }}
-            >
-              拖拽平移 · 滚轮缩放
-              <br />
-              点击节点查看详情
-            </div>
-          </div>
 
-          {/* 选中节点详情 —— 始终渲染，通过 max-height/opacity 做展开/收起动画 */}
+        {/* 侧边栏 —— 图例 + 筛选控制 */}
+        {nodes.length > 0 && (
           <div
             style={{
-              maxHeight: selectedNode ? 600 : 0,
-              opacity: selectedNode ? 1 : 0,
-              overflow: "hidden",
-              transition: "max-height 0.35s ease, opacity 0.3s ease, margin 0.3s ease",
-              marginTop: selectedNode ? 16 : 0,
+              position: "absolute",
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: selectedNode ? 312 : 180,
+              zIndex: 10,
+              background: "#ffffff",
+              boxShadow: selectedNode
+                ? "2px 0 16px rgba(0,0,0,0.1)"
+                : "1px 0 0 var(--line-soft, #e8e8e8)",
+              padding: 12,
+              overflowY: "auto",
+              overflowX: "hidden",
+              transition: "width 0.3s ease",
             }}
           >
-            <div
-              style={{
-                padding: 12,
-                borderRadius: 8,
-                background: "var(--fill-soft, #f5f5f5)",
-              }}
-            >
+            <div style={{ minWidth: 156 }}>
               <div
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: "var(--ink-soft, #8c8c8c)",
                   marginBottom: 8,
                 }}
               >
-                <span
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 600,
-                    color: "var(--ink-base, #1f1f1f)",
-                  }}
-                >
-                  节点详情
-                </span>
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<CloseOutlined style={{ fontSize: 10 }} />}
-                  onClick={() => setSelectedNode(null)}
-                />
+                节点类型（点击筛选）
               </div>
-              <div style={{ fontSize: 12, lineHeight: 1.8 }}>
-                <div style={{ color: "var(--ink-soft, #8c8c8c)" }}>ID</div>
-                <div
-                  style={{
-                    fontWeight: 500,
-                    color: "var(--ink-base, #1f1f1f)",
-                    marginBottom: 6,
-                    wordBreak: "break-all",
-                  }}
-                >
-                  {selectedNode?.id ?? ""}
-                </div>
-                <div style={{ color: "var(--ink-soft, #8c8c8c)" }}>
-                  名称
-                </div>
-                <div
-                  style={{
-                    fontWeight: 500,
-                    color: "var(--ink-base, #1f1f1f)",
-                    marginBottom: 6,
-                    wordBreak: "break-all",
-                  }}
-                >
-                  {selectedNode?.name ?? ""}
-                </div>
-                <div style={{ color: "var(--ink-soft, #8c8c8c)" }}>
-                  类型
-                </div>
-                <div style={{ marginBottom: 6 }}>
-                  {selectedNode && (
-                    <Tag
-                      color={
-                        NODE_COLORS[selectedNode.type] ?? NODE_COLORS.Custom
-                      }
-                      style={{ margin: 0, fontSize: 11 }}
-                    >
-                      {NODE_TYPE_LABELS[selectedNode.type] ??
-                        selectedNode.type}
-                    </Tag>
-                  )}
-                </div>
-                {selectedNode?.description && (
-                  <>
-                    <div style={{ color: "var(--ink-soft, #8c8c8c)" }}>
-                      描述
-                    </div>
-                    <div
+              {availableTypes.map((type) => {
+                const isHidden = hiddenTypes.has(type);
+                const count = getTypeCount(type);
+                return (
+                  <div
+                    key={type}
+                    onClick={() => toggleType(type)}
+                    title={
+                      isHidden
+                        ? `点击显示 ${NODE_TYPE_LABELS[type] ?? type}`
+                        : `点击隐藏 ${NODE_TYPE_LABELS[type] ?? type}`
+                    }
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      marginBottom: 4,
+                      padding: "4px 6px",
+                      borderRadius: 4,
+                      fontSize: 12,
+                      cursor: "pointer",
+                      opacity: isHidden ? 0.4 : 1,
+                      transition: "opacity 0.2s, background 0.2s",
+                      textDecoration: isHidden ? "line-through" : "none",
+                    }}
+                    onMouseEnter={(e) => {
+                      (
+                        e.currentTarget as HTMLDivElement
+                      ).style.background = "var(--fill-soft, #f5f5f5)";
+                    }}
+                    onMouseLeave={(e) => {
+                      (
+                        e.currentTarget as HTMLDivElement
+                      ).style.background = "transparent";
+                    }}
+                  >
+                    <span
                       style={{
-                        color: "var(--ink-base, #1f1f1f)",
-                        marginBottom: 6,
-                        wordBreak: "break-all",
-                        lineHeight: 1.6,
+                        display: "inline-block",
+                        width: 12,
+                        height: 12,
+                        borderRadius: 2,
+                        flexShrink: 0,
+                        background:
+                          NODE_COLORS[type] ?? NODE_COLORS.Custom,
+                      }}
+                    />
+                    <span>{NODE_TYPE_LABELS[type] ?? type}</span>
+                    <span
+                      style={{
+                        color: "var(--ink-soft, #8c8c8c)",
+                        marginLeft: "auto",
                       }}
                     >
-                      {selectedNode.description}
-                    </div>
-                  </>
-                )}
-                {selectedNode?.status && (
-                  <>
-                    <div style={{ color: "var(--ink-soft, #8c8c8c)" }}>
-                      状态
-                    </div>
-                    <div style={{ color: "var(--ink-base, #1f1f1f)" }}>
-                      {selectedNode.status === "proposed"
-                        ? "待确认"
-                        : selectedNode.status === "confirmed"
-                          ? "已确认"
-                          : selectedNode.status === "deprecated"
-                            ? "已废弃"
-                            : selectedNode.status}
-                    </div>
-                  </>
-                )}
+                      {count}
+                    </span>
+                  </div>
+                );
+              })}
+
+              <div
+                style={{
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: "var(--ink-soft, #8c8c8c)",
+                  marginTop: 16,
+                  marginBottom: 8,
+                }}
+              >
+                交互
+              </div>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "var(--ink-soft, #8c8c8c)",
+                  lineHeight: 1.6,
+                }}
+              >
+                拖拽平移 · 滚轮缩放
+                <br />
+                点击节点查看详情
+              </div>
+            </div>
+
+            {/* 选中节点详情 */}
+            <div
+              style={{
+                maxHeight: selectedNode ? 600 : 0,
+                opacity: selectedNode ? 1 : 0,
+                overflow: "hidden",
+                transition:
+                  "max-height 0.35s ease, opacity 0.3s ease, margin 0.3s ease",
+                marginTop: selectedNode ? 16 : 0,
+              }}
+            >
+              <div
+                style={{
+                  padding: 12,
+                  borderRadius: 8,
+                  background: "var(--fill-soft, #f5f5f5)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    marginBottom: 8,
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: "var(--ink-base, #1f1f1f)",
+                    }}
+                  >
+                    节点详情
+                  </span>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<CloseOutlined style={{ fontSize: 10 }} />}
+                    onClick={() => setSelectedNode(null)}
+                  />
+                </div>
+                <div style={{ fontSize: 12, lineHeight: 1.8 }}>
+                  <div style={{ color: "var(--ink-soft, #8c8c8c)" }}>ID</div>
+                  <div
+                    style={{
+                      fontWeight: 500,
+                      color: "var(--ink-base, #1f1f1f)",
+                      marginBottom: 6,
+                      wordBreak: "break-all",
+                    }}
+                  >
+                    {selectedNode?.id ?? ""}
+                  </div>
+                  <div style={{ color: "var(--ink-soft, #8c8c8c)" }}>
+                    名称
+                  </div>
+                  <div
+                    style={{
+                      fontWeight: 500,
+                      color: "var(--ink-base, #1f1f1f)",
+                      marginBottom: 6,
+                      wordBreak: "break-all",
+                    }}
+                  >
+                    {selectedNode?.name ?? ""}
+                  </div>
+                  <div style={{ color: "var(--ink-soft, #8c8c8c)" }}>
+                    类型
+                  </div>
+                  <div style={{ marginBottom: 6 }}>
+                    {selectedNode && (
+                      <Tag
+                        color={
+                          NODE_COLORS[selectedNode.type] ?? NODE_COLORS.Custom
+                        }
+                        style={{ margin: 0, fontSize: 11 }}
+                      >
+                        {NODE_TYPE_LABELS[selectedNode.type] ??
+                          selectedNode.type}
+                      </Tag>
+                    )}
+                  </div>
+                  {selectedNode?.description && (
+                    <>
+                      <div style={{ color: "var(--ink-soft, #8c8c8c)" }}>
+                        描述
+                      </div>
+                      <div
+                        style={{
+                          color: "var(--ink-base, #1f1f1f)",
+                          marginBottom: 6,
+                          wordBreak: "break-all",
+                          lineHeight: 1.6,
+                        }}
+                      >
+                        {selectedNode.description}
+                      </div>
+                    </>
+                  )}
+                  {selectedNode?.status && (
+                    <>
+                      <div style={{ color: "var(--ink-soft, #8c8c8c)" }}>
+                        状态
+                      </div>
+                      <div style={{ color: "var(--ink-base, #1f1f1f)" }}>
+                        {selectedNode.status === "proposed"
+                          ? "待确认"
+                          : selectedNode.status === "confirmed"
+                            ? "已确认"
+                            : selectedNode.status === "deprecated"
+                              ? "已废弃"
+                              : selectedNode.status}
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        )}
       </div>
     </Modal>
   );
