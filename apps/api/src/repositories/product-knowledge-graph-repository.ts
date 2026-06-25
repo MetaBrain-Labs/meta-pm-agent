@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@repo/database";
-import type { ProductKnowledgeGraph } from "@repo/shared";
 
 /**
  * 最终产品知识图谱的持久化输入。
@@ -9,8 +8,8 @@ export interface PersistProductKnowledgeGraphInput {
   workspaceId: string;
   conversationId?: string;
   requestFormId?: string;
-  /** 由结构化数据生成的 markdown 文本 */
-  markdown: string;
+  /** 是否把本次写入计为一轮完成的知识图谱版本。 */
+  advanceVersion?: boolean;
   /** 结构化知识图谱数据：摘要 */
   summary?: unknown[];
   /** 结构化知识图谱数据：节点 */
@@ -33,7 +32,7 @@ export async function upsertProductKnowledgeGraph({
   workspaceId,
   conversationId,
   requestFormId,
-  markdown,
+  advanceVersion = true,
   summary,
   nodes,
   relations,
@@ -41,24 +40,18 @@ export async function upsertProductKnowledgeGraph({
   risks,
   openQuestions,
 }: PersistProductKnowledgeGraphInput): Promise<void> {
-  const summaryJson = summary && summary.length > 0
-    ? JSON.stringify(summary)
-    : null;
-  const nodesJson = nodes && nodes.length > 0
-    ? JSON.stringify(nodes)
-    : null;
-  const relationsJson = relations && relations.length > 0
-    ? JSON.stringify(relations)
-    : null;
-  const decisionsJson = decisions && decisions.length > 0
-    ? JSON.stringify(decisions)
-    : null;
-  const risksJson = risks && risks.length > 0
-    ? JSON.stringify(risks)
-    : null;
-  const openQuestionsJson = openQuestions && openQuestions.length > 0
-    ? JSON.stringify(openQuestions)
-    : null;
+  const summaryJson =
+    summary && summary.length > 0 ? JSON.stringify(summary) : null;
+  const nodesJson = nodes && nodes.length > 0 ? JSON.stringify(nodes) : null;
+  const relationsJson =
+    relations && relations.length > 0 ? JSON.stringify(relations) : null;
+  const decisionsJson =
+    decisions && decisions.length > 0 ? JSON.stringify(decisions) : null;
+  const risksJson = risks && risks.length > 0 ? JSON.stringify(risks) : null;
+  const openQuestionsJson =
+    openQuestions && openQuestions.length > 0
+      ? JSON.stringify(openQuestions)
+      : null;
 
   await prisma.$executeRaw`
     INSERT INTO "product_knowledge_graph" (
@@ -66,7 +59,6 @@ export async function upsertProductKnowledgeGraph({
       "workspace_id",
       "conversation_id",
       "request_form_id",
-      "content",
       "summary",
       "nodes",
       "relations",
@@ -80,7 +72,6 @@ export async function upsertProductKnowledgeGraph({
       ${workspaceId},
       ${conversationId ?? null},
       ${requestFormId ?? null},
-      ${markdown},
       ${summaryJson}::jsonb,
       ${nodesJson}::jsonb,
       ${relationsJson}::jsonb,
@@ -91,16 +82,26 @@ export async function upsertProductKnowledgeGraph({
     )
     ON CONFLICT ("workspace_id") DO UPDATE
     SET
-      "conversation_id" = EXCLUDED."conversation_id",
-      "request_form_id" = EXCLUDED."request_form_id",
-      "content" = EXCLUDED."content",
+      "conversation_id" = CASE
+        WHEN ${advanceVersion} THEN EXCLUDED."conversation_id"
+        ELSE "product_knowledge_graph"."conversation_id"
+      END,
+      "request_form_id" = CASE
+        WHEN ${advanceVersion} THEN EXCLUDED."request_form_id"
+        ELSE "product_knowledge_graph"."request_form_id"
+      END,
       "summary" = EXCLUDED."summary",
       "nodes" = EXCLUDED."nodes",
       "relations" = EXCLUDED."relations",
       "decisions" = EXCLUDED."decisions",
       "risks" = EXCLUDED."risks",
       "open_questions" = EXCLUDED."open_questions",
-      "version" = "product_knowledge_graph"."version" + 1,
+      "version" = CASE
+        WHEN ${advanceVersion}
+          AND "product_knowledge_graph"."request_form_id" IS DISTINCT FROM EXCLUDED."request_form_id"
+          THEN "product_knowledge_graph"."version" + 1
+        ELSE "product_knowledge_graph"."version"
+      END,
       "updated_at" = CURRENT_TIMESTAMP
   `;
 }
@@ -116,7 +117,6 @@ export interface ProductKnowledgeGraphRow {
   decisions: unknown[];
   risks: unknown[];
   openQuestions: unknown[];
-  content: string;
   version: number;
   updatedAt: string;
 }
@@ -132,7 +132,6 @@ export async function getProductKnowledgeGraphByWorkspaceId(
       decisions: unknown;
       risks: unknown;
       open_questions: unknown;
-      content: string;
       version: number;
       updated_at: Date;
     }>
@@ -144,7 +143,6 @@ export async function getProductKnowledgeGraphByWorkspaceId(
       "decisions",
       "risks",
       "open_questions",
-      "content",
       "version",
       "updated_at"
     FROM "product_knowledge_graph"
@@ -162,11 +160,11 @@ export async function getProductKnowledgeGraphByWorkspaceId(
     decisions: parseJsonColumn(row.decisions, []),
     risks: parseJsonColumn(row.risks, []),
     openQuestions: parseJsonColumn(row.open_questions, []),
-    content: row.content,
     version: Number(row.version),
-    updatedAt: row.updated_at instanceof Date
-      ? row.updated_at.toISOString()
-      : String(row.updated_at),
+    updatedAt:
+      row.updated_at instanceof Date
+        ? row.updated_at.toISOString()
+        : String(row.updated_at),
   };
 }
 

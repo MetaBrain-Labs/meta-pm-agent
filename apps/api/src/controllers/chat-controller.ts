@@ -16,7 +16,7 @@
 import type { Context } from "hono";
 import { stream } from "hono/streaming";
 import { streamConversation } from "@repo/agent-runtime";
-import type { ProductWorkflowResult } from "@repo/shared";
+import type { ProductKnowledgeGraph, ProductWorkflowResult } from "@repo/shared";
 import {
   ChatRequestSchema,
   CreateChatRequestSchema,
@@ -205,6 +205,9 @@ export async function chatStreamHandler(c: Context) {
 
     let responseLength = 0;
     const agentOutputs = new Map<string, AgentOutputAccumulator>();
+    let productWorkflowResult: unknown = null;
+    let latestKnowledgeGraph: ProductKnowledgeGraph | null = null;
+    let runtimeWorkspaceId: string | undefined;
 
     try {
       // 持久化用户发送的消息
@@ -258,9 +261,9 @@ export async function chatStreamHandler(c: Context) {
       const runtimeContext = await loadProductRuntimeContextForConversation(
         parsed.data.chatId,
       );
+      runtimeWorkspaceId = runtimeContext.workspaceId;
 
       // 启动 agent-runtime 流式对话
-      let productWorkflowResult: unknown = null;
       for await (const event of streamConversation(
         parsed.data.messages,
         {
@@ -276,12 +279,14 @@ export async function chatStreamHandler(c: Context) {
           continue;
         }
         if (event.type === "knowledge-graph-update") {
+          latestKnowledgeGraph = event.knowledgeGraph;
           // 每个 Executor 完成后增量写入知识图谱，中断时已完成的 Executor 结果不丢失
           await finalizeWorkspaceKnowledgeGraph({
             workspaceId: runtimeContext.workspaceId,
             conversationId: parsed.data.chatId,
             requestFormId: parsed.data.requestFormId,
             knowledgeGraph: event.knowledgeGraph,
+            advanceVersion: false,
           });
           continue;
         }
@@ -377,9 +382,13 @@ export async function chatStreamHandler(c: Context) {
         workspaceId: runtimeContext.workspaceId,
         conversationId: parsed.data.chatId,
         requestFormId: parsed.data.requestFormId,
-        knowledgeGraph: isProductWorkflowResult(productWorkflowResult)
-          ? productWorkflowResult.knowledge_graph_update
-          : undefined,
+        advanceVersion: true,
+        // 最终归档优先使用运行时累计快照，避免 Planner Review 的模型汇总覆盖成局部图谱。
+        knowledgeGraph:
+          latestKnowledgeGraph ??
+          (isProductWorkflowResult(productWorkflowResult)
+            ? productWorkflowResult.knowledge_graph_update
+            : undefined),
       });
 
       if (titleUpdate) {
@@ -398,6 +407,20 @@ export async function chatStreamHandler(c: Context) {
         `[chat] Stream complete, response length: ${responseLength}`,
       );
     } catch (error) {
+      if (runtimeWorkspaceId && latestKnowledgeGraph) {
+        try {
+          await finalizeWorkspaceKnowledgeGraph({
+            workspaceId: runtimeWorkspaceId,
+            conversationId: parsed.data.chatId,
+            requestFormId: parsed.data.requestFormId,
+            knowledgeGraph: latestKnowledgeGraph,
+            advanceVersion: true,
+          });
+        } catch (archiveError) {
+          console.error("[chat] Failed to finalize knowledge graph:", archiveError);
+        }
+      }
+
       if (isAbortError(error) || runtimeController.signal.aborted) {
         await markStatus("stopped");
         await writeSse(writer, { type: "abort" });
