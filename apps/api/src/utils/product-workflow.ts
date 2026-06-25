@@ -49,9 +49,14 @@ export function parseExecutorResultPayload(
 export function sanitizeExecutorResultForPersistence(
   result: ExecutorAgentResult,
 ): ExecutorAgentResult {
-  const { knowledge_graph_patch, ...rest } = result;
+  const { knowledge_graph_patch, knowledge_graph_markdown, ...rest } = result;
   void knowledge_graph_patch;
-  return { ...rest, knowledge_graph_patch: undefined } as ExecutorAgentResult;
+  void knowledge_graph_markdown;
+  return {
+    ...rest,
+    knowledge_graph_patch: undefined,
+    knowledge_graph_markdown: undefined,
+  } as ExecutorAgentResult;
 }
 
 /**

@@ -43,7 +43,6 @@ import { parseRequestAnalysisPayload } from "../utils/request-analysis";
 import { parseTaskExecutionPlanPayload } from "../utils/task-execution";
 import {
   formatExecutorResultPayload,
-  formatProductWorkflowPayload,
   parseExecutorResultPayload,
   parseProductWorkflowPayload,
   sanitizeExecutorResultForPersistence,
@@ -236,7 +235,7 @@ export async function persistConversationResult({
       content: outputContent,
       userInput: output.type === "conversation" ? items : null,
       reasoningContent: output.reasoningContent,
-      toolCalls: output.toolCalls,
+      toolCalls: sanitizeToolCallsForPersistence(output.toolCalls),
       type: output.type,
     });
 
@@ -311,9 +310,111 @@ function replaceProductWorkflowPayload(
   if (openEnd === -1 || endIndex === -1) return content;
 
   const blockEnd = endIndex + endMarker.length;
-  return `${content.slice(0, startIndex)}${formatProductWorkflowPayload(
-    productWorkflow,
-  )}${content.slice(blockEnd)}`;
+  const summary = [
+    "Planner Agent 已完成产品工作流汇总，结构化结果已归档。",
+    `确认 ID：${productWorkflow.confirmation_id}`,
+    `状态：${productWorkflow.status}`,
+    `Executor 结果数：${productWorkflow.executor_results.length}`,
+  ].join("\n");
+
+  return `${content.slice(0, startIndex)}${summary}${content.slice(
+    blockEnd,
+  )}`.trim();
+}
+
+/**
+ * 裁剪持久化到 message.meta 的工具调用结果，避免知识图谱全文和大块工具输出重复进入消息表。
+ */
+function sanitizeToolCallsForPersistence(
+  toolCalls: AgentConversationOutput["toolCalls"],
+): AgentConversationOutput["toolCalls"] {
+  if (!toolCalls?.length) return toolCalls;
+
+  return toolCalls.map((toolCall) => ({
+    ...toolCall,
+    result: sanitizeToolResultForPersistence(toolCall.name, toolCall.result),
+  }));
+}
+
+/**
+ * 知识图谱工具只保留可展示摘要；完整图谱以 product_knowledge_graph 表为准。
+ */
+function sanitizeToolResultForPersistence(
+  toolName: string,
+  result: unknown,
+): unknown {
+  if (!toolName.startsWith("kg_file_")) return result;
+
+  const parsed = parseToolResultObject(result);
+  if (!parsed) {
+    return {
+      action: toolName,
+      summary: typeof result === "string" ? truncateText(result, 240) : "",
+    };
+  }
+
+  return {
+    action: typeof parsed.action === "string" ? parsed.action : toolName,
+    count: typeof parsed.count === "number" ? parsed.count : undefined,
+    entityCount: Array.isArray(parsed.entities)
+      ? parsed.entities.length
+      : undefined,
+    relationCount: Array.isArray(parsed.relations)
+      ? parsed.relations.length
+      : undefined,
+    decisionCount: Array.isArray(parsed.decisions)
+      ? parsed.decisions.length
+      : undefined,
+    riskCount: Array.isArray(parsed.risks) ? parsed.risks.length : undefined,
+    openQuestionCount: Array.isArray(parsed.open_questions)
+      ? parsed.open_questions.length
+      : undefined,
+    summaryCount: Array.isArray(parsed.summary) ? parsed.summary.length : undefined,
+    preview: createToolResultPreview(parsed),
+  };
+}
+
+/**
+ * 解析工具结果中的 JSON 对象，兼容 LangChain ToolMessage 的字符串内容。
+ */
+function parseToolResultObject(result: unknown): Record<string, unknown> | null {
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    return result as Record<string, unknown>;
+  }
+
+  if (typeof result !== "string") return null;
+
+  try {
+    const parsed = JSON.parse(result) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 生成工具结果预览，保留调试线索但不写入完整图谱正文。
+ */
+function createToolResultPreview(result: Record<string, unknown>): string {
+  const items = Array.isArray(result.items) ? result.items : [];
+  if (items.length > 0) {
+    return truncateText(JSON.stringify(items.slice(0, 3)), 360);
+  }
+
+  const summary = Array.isArray(result.summary)
+    ? result.summary.slice(-3).join("\n")
+    : "";
+  return truncateText(summary, 360);
+}
+
+/**
+ * 按字符数裁剪文本，避免 meta 字段保存非必要长内容。
+ */
+function truncateText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength).trimEnd()}...`;
 }
 
 /**

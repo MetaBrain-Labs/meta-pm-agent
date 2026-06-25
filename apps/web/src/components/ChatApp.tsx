@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
@@ -73,6 +74,15 @@ export function ChatApp({
   );
   const [kgLoading, setKgLoading] = useState(false);
   const [kgModalOpen, setKgModalOpen] = useState(false);
+  const executorResultRefreshKey = useMemo(
+    () =>
+      messages
+        .flatMap((message) => message.executorResults ?? [])
+        .map((result) => result.task_id)
+        .sort()
+        .join("|"),
+    [messages],
+  );
 
   // 工作区切换时查询知识图谱数据
   useEffect(() => {
@@ -102,6 +112,31 @@ export function ChatApp({
       cancelled = true;
     };
   }, [workspaceId]);
+
+  // 每个 Executor 结果流入前端时，API 已完成对应知识图谱归档，此时刷新按钮可用状态。
+  useEffect(() => {
+    if (!workspaceId || !executorResultRefreshKey) return;
+
+    let cancelled = false;
+    setKgLoading(true);
+
+    fetchProductKnowledgeGraph(workspaceId)
+      .then((data) => {
+        if (cancelled) return;
+        setKgData(data);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error("[kg] Failed to refresh knowledge graph:", error);
+      })
+      .finally(() => {
+        if (!cancelled) setKgLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [executorResultRefreshKey, workspaceId]);
 
   // 打开知识图谱可视化弹窗
   const handleOpenKgModal = useCallback(() => {
