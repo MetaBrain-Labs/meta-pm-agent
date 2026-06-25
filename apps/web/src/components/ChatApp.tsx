@@ -6,7 +6,7 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import { Button, Dropdown, FloatButton, Input, Tooltip } from "antd";
+import { Button, Dropdown, FloatButton, Input, Skeleton, Tooltip } from "antd";
 import BorderBeam from "antd/es/border-beam";
 import {
   ApartmentOutlined,
@@ -43,6 +43,7 @@ interface Props {
   workspaceName: string;
   messages: Message[];
   isLoading: boolean;
+  isMessagesLoading: boolean;
   error: string | null;
   disabledReason?: string | null;
   onSend: (text: string, options?: { webSearchEnabled?: boolean }) => void;
@@ -56,6 +57,7 @@ export function ChatApp({
   workspaceName,
   messages,
   isLoading,
+  isMessagesLoading,
   error,
   disabledReason,
   onSend,
@@ -286,7 +288,7 @@ export function ChatApp({
           onScroll={handleScroll}
           className="chat-scroll scrollbar-none items-center"
         >
-          {messages.length === 0 && (
+          {messages.length === 0 && !isMessagesLoading && (
             <div className="chat-empty">
               <h1>今天想推进什么？</h1>
               <p>围绕需求、计划、文档和风险继续推进项目。</p>
@@ -301,6 +303,28 @@ export function ChatApp({
                     {query}
                   </button>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {isMessagesLoading && messages.length === 0 && (
+            <div className="flex flex-col w-full min-h-[70vh] items-center justify-center gap-8">
+              <div className="flex w-full justify-end">
+                <div className="w-[40%]">
+                  <Skeleton active />
+                </div>
+              </div>
+
+              <div className="flex w-full justify-start">
+                <div className="w-[60%]">
+                  <Skeleton active />
+                </div>
+              </div>
+
+              <div className="flex w-full justify-end">
+                <div className="w-[40%]">
+                  <Skeleton active />
+                </div>
               </div>
             </div>
           )}
@@ -338,7 +362,7 @@ export function ChatApp({
 
         <FloatButton
           icon={<ArrowDownOutlined style={{ color: "#ffffff" }} />}
-          className={`scroll-to-bottom w-8! h-8! ${userScrolled ? "is-visible" : ""}`}
+          className={`scroll-to-bottom w-8! h-8! bg-[#3078b8]! ${userScrolled ? "is-visible" : ""}`}
           onClick={() => {
             scrollToBottom();
             setUserScrolled(false);
@@ -385,7 +409,9 @@ export function ChatApp({
                     onClick={() => setWebSearchEnabled((enabled) => !enabled)}
                   />
                 </Tooltip>
-                <Tooltip title={kgEnabled ? "查看知识图谱" : "暂无知识图谱数据"}>
+                <Tooltip
+                  title={kgEnabled ? "查看知识图谱" : "暂无知识图谱数据"}
+                >
                   <Button
                     type="text"
                     shape="circle"

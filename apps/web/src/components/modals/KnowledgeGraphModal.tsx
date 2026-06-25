@@ -150,13 +150,18 @@ export const KnowledgeGraphModal: FC<Props> = ({
   // 隐藏的节点类型集合（空 = 全部显示）
   const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set());
 
-  // 弹窗打开时重置筛选状态
+  // 图谱是否已完成渲染（用于控制加载动画）
+  const [graphReady, setGraphReady] = useState(false);
+
+  // 弹窗打开/关闭时重置状态
   useEffect(() => {
     if (open) {
       setHiddenTypes(new Set());
       setSelectedNode(null);
+      setGraphReady(false);
     } else {
       initAttemptedRef.current = false;
+      setGraphReady(false);
     }
   }, [open]);
 
@@ -318,6 +323,9 @@ export const KnowledgeGraphModal: FC<Props> = ({
         })
         .catch((err: unknown) => {
           console.error("[kg-graph] Failed to render G6 graph:", err);
+        })
+        .finally(() => {
+          setGraphReady(true);
         });
 
       // 点击节点显示详情
@@ -364,6 +372,8 @@ export const KnowledgeGraphModal: FC<Props> = ({
       await graph.fitView({ when: "always" });
     } catch (err: unknown) {
       console.error("[kg-graph] Failed to update G6 graph data:", err);
+    } finally {
+      setGraphReady(true);
     }
   }, [cleanup]);
 
@@ -382,7 +392,11 @@ export const KnowledgeGraphModal: FC<Props> = ({
     }
 
     if (filteredNodes.length === 0) {
-      // 无数据时不做任何操作（等数据到达后 filteredNodes 变化会重进此 effect）
+      // 全量类型被隐藏或数据为空：销毁已有实例，触发加载状态
+      if (graphRef.current) {
+        cleanup();
+        setGraphReady(false);
+      }
       return;
     }
 
@@ -501,10 +515,8 @@ export const KnowledgeGraphModal: FC<Props> = ({
     }
   }, [workspaceId]);
 
-  // 图谱是否正在加载（弹窗已打开但数据未到达）
-  const isGraphLoading = open && nodes.length === 0 && !initAttemptedRef.current;
-  // 是否完全无数据可展示
-  const hasNoData = open && nodes.length === 0 && initAttemptedRef.current;
+  // 图谱是否正在加载（数据获取或渲染过程中）
+  const showLoadingOverlay = open && !graphReady;
 
   return (
     <Modal
@@ -569,37 +581,27 @@ export const KnowledgeGraphModal: FC<Props> = ({
       }
     >
       <div style={{ position: "relative", height: "100%", background: "#ffffff" }}>
-        {/* 加载中 / 无数据状态 */}
-        {isGraphLoading && (
+        {/* 加载动画 —— 数据获取或 G6 渲染过程中显示 */}
+        {showLoadingOverlay && (
           <div
             style={{
               position: "absolute",
               inset: 0,
-              zIndex: 5,
+              zIndex: 15,
               display: "flex",
+              flexDirection: "column",
               alignItems: "center",
               justifyContent: "center",
+              gap: 16,
               background: "#ffffff",
             }}
           >
-            <Spin tip="加载知识图谱数据中…" />
-          </div>
-        )}
-        {hasNoData && (
-          <div
-            style={{
-              position: "absolute",
-              inset: 0,
-              zIndex: 5,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "var(--ink-soft, #8c8c8c)",
-              fontSize: 14,
-              background: "#ffffff",
-            }}
-          >
-            当前工作区暂无知识图谱数据
+            <Spin size="large" />
+            <span style={{ fontSize: 14, color: "var(--ink-soft, #8c8c8c)" }}>
+              {nodes.length === 0
+                ? "加载知识图谱数据中…"
+                : "正在渲染知识图谱，节点较多请耐心等待…"}
+            </span>
           </div>
         )}
 
