@@ -659,30 +659,6 @@ body {
   padding: 32px max(24px, calc((100% - 1180px) / 2)) 24px;
 }
 
-.chat-empty {
-  display: flex;
-  min-height: 100%;
-  width: min(1180px, 100%);
-  margin: 0 auto;
-  flex-direction: column;
-  justify-content: center;
-  padding-bottom: 120px;
-  text-align: center;
-}
-
-.chat-empty h1 {
-  margin: 0;
-  color: #11161d;
-  font-size: 36px;
-  font-weight: 800;
-}
-
-.chat-empty p {
-  margin: 8px 0 0;
-  color: #9aa0a8;
-  font-size: 16px;
-}
-
 .chat-suggestions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -868,10 +844,6 @@ body {
   .chat-suggestions {
     grid-template-columns: 1fr;
     margin-top: 64px;
-  }
-
-  .chat-empty h1 {
-    font-size: 28px;
   }
 
   .chat-composer {

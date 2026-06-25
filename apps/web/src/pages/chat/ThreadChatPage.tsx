@@ -46,6 +46,7 @@ export function ThreadChatPage({
 }: ThreadChatPageProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isMessagesLoading, setIsMessagesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const workspaceIdRef = useRef<string | null>(workspaceId);
@@ -84,6 +85,7 @@ export function ThreadChatPage({
 
     if (threadId) {
       setMessages([]);
+      setIsMessagesLoading(true);
       let cancelled = false;
 
       fetchChatMessages(threadId)
@@ -93,7 +95,11 @@ export function ThreadChatPage({
           setMessages(serverMessages);
         })
         .catch((error) => {
+          if (cancelled) return;
           console.error("[chat] Failed to load messages:", error);
+        })
+        .finally(() => {
+          if (!cancelled) setIsMessagesLoading(false);
         });
 
       return () => {
@@ -239,6 +245,7 @@ export function ThreadChatPage({
       workspaceName={workspaceName}
       messages={messages}
       isLoading={isLoading}
+      isMessagesLoading={isMessagesLoading}
       error={error}
       disabledReason={workspaceId ? null : NO_WORKSPACE_MESSAGE}
       onSend={sendMessage}
