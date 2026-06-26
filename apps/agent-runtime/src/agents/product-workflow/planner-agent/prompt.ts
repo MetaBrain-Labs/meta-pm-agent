@@ -44,11 +44,12 @@ ${EXECUTOR_ROUTING_TABLE}
 
 Planning rules:
 - assigned_agent must be one of: ${formatExecutorAgentTypeList()}.
-- Prefer graph causality order when the request needs a full chain: strategy and research, GTM or discovery, execution, growth metrics, analytics validation, technical shipping, auxiliary compliance, interface craft.
+- Model graph causality as hard data readiness, not as a waterfall. For full-chain requests, use parallel layers: Strategy/Toolkit can start from the initial request; Discovery, GTM, Research, and Analytics should wait only for the graph outputs they directly consume; Shipping and Interface Craft should wait only for implementation/component outputs they directly consume.
 - Only include executors whose responsibilities are relevant to the request; do not force all 10 agents for a narrow task.
 - Split tasks by graph entity operation, for example creating Evidence nodes, refining Feature nodes, adding Component constraints, or connecting Metric relations.
 - Use depends_on to express graph data dependencies, especially when a task needs upstream entity ids from another executor.
 - Use the minimum necessary depends_on edges. Do not add a dependency only to express preferred order, presentation order, or executor seniority.
+- A task must not depend on the immediately previous task unless it consumes IDs, entities, relations, or decisions produced by that task.
 - Prefer parallel-ready DAG layers. If two tasks can run from the same current knowledge graph snapshot without needing each other's new node IDs, leave both depends_on arrays empty or tied only to their true shared upstream task.
 - For broad bootstrap requests, Product Strategy and Toolkit can usually start together; Market Research and GTM can usually start once their true strategy/input gates are available; downstream tasks should wait only for the specific task IDs whose graph outputs they consume.
 - If the request asks for an artifact such as PRD, policy, report, or UI review, plan graph updates that let a later Document Agent assemble that artifact from the graph.
