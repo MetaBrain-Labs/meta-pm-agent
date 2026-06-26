@@ -20,6 +20,7 @@ import type {
   TaskExecutionNode,
   TaskExecutionPlan,
 } from "@repo/shared";
+import { normalizeTaskExecutionPlan } from "../src/agents/product-workflow/planner-agent/agent";
 import { selectNextProductWorkflowNodes } from "../src/graph/nodes/product-workflow-node";
 import type { WorkflowGraphStateValue } from "../src/graph/state";
 
@@ -69,6 +70,86 @@ test("keeps multiple ready tasks for one executor in separate batches", () => {
     "executor-product-strategy",
     "executor-market-research",
   ]);
+});
+
+test("normalizes waterfall planner DAG into parallel-ready layers", () => {
+  const plan = normalizeTaskExecutionPlan(
+    createPlan([
+      createTask("task-01", 1, "executor-product-strategy", []),
+      createTask("task-02", 2, "executor-product-discovery", ["task-01"]),
+      createTask("task-03", 3, "executor-product-execution", ["task-02"]),
+      createTask("task-04", 4, "executor-data-analytics", ["task-03"]),
+      createTask("task-05", 5, "executor-ai-shipping", ["task-04"]),
+      createTask("task-06", 6, "executor-toolkit", ["task-05"]),
+      createTask("task-07", 7, "executor-interface-craft", ["task-06"]),
+    ]),
+  );
+
+  assert.deepEqual(
+    plan.tasks.map((task) => [task.task_id, task.depends_on]),
+    [
+      ["task-01", []],
+      ["task-02", ["task-01"]],
+      ["task-03", ["task-02"]],
+      ["task-04", ["task-01"]],
+      ["task-05", ["task-03"]],
+      ["task-06", []],
+      ["task-07", ["task-03"]],
+    ],
+  );
+  assert.deepEqual(plan.dag.edges, [
+    { source: "task-01", target: "task-02" },
+    { source: "task-02", target: "task-03" },
+    { source: "task-01", target: "task-04" },
+    { source: "task-03", target: "task-05" },
+    { source: "task-03", target: "task-07" },
+  ]);
+});
+
+test("selects normalized planner roots and downstream parallel batches", () => {
+  const plan = normalizeTaskExecutionPlan(
+    createPlan([
+      createTask("task-01", 1, "executor-product-strategy", []),
+      createTask("task-02", 2, "executor-product-discovery", ["task-01"]),
+      createTask("task-03", 3, "executor-product-execution", ["task-02"]),
+      createTask("task-04", 4, "executor-data-analytics", ["task-03"]),
+      createTask("task-05", 5, "executor-ai-shipping", ["task-04"]),
+      createTask("task-06", 6, "executor-toolkit", ["task-05"]),
+      createTask("task-07", 7, "executor-interface-craft", ["task-06"]),
+    ]),
+  );
+
+  assert.deepEqual(
+    selectNextProductWorkflowNodes(createState({ tasks: plan.tasks })),
+    ["executor-product-strategy", "executor-toolkit"],
+  );
+  assert.deepEqual(
+    selectNextProductWorkflowNodes(
+      createState({
+        tasks: plan.tasks,
+        results: [
+          createResult("task-01", "executor-product-strategy"),
+          createResult("task-06", "executor-toolkit"),
+        ],
+      }),
+    ),
+    ["executor-product-discovery", "executor-data-analytics"],
+  );
+  assert.deepEqual(
+    selectNextProductWorkflowNodes(
+      createState({
+        tasks: plan.tasks,
+        results: [
+          createResult("task-01", "executor-product-strategy"),
+          createResult("task-02", "executor-product-discovery"),
+          createResult("task-03", "executor-product-execution"),
+          createResult("task-04", "executor-data-analytics"),
+          createResult("task-06", "executor-toolkit"),
+        ],
+      }),
+    ),
+    ["executor-ai-shipping", "executor-interface-craft"],
+  );
 });
 
 function createState({

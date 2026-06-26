@@ -21,6 +21,7 @@ import {
   type ExecutorAgentResult,
   type ProductKnowledgeGraph,
   type ProductWorkflowResult,
+  type TaskExecutionNode,
   type TaskExecutionPlan,
 } from "@repo/shared";
 import {
@@ -48,7 +49,7 @@ import {
 export async function* streamPlannerAgent(
   input: PlannerAgentInput,
 ): AsyncGenerator<ProductWorkflowStreamEvent, TaskExecutionPlan, void> {
-  return yield* runJsonAgent({
+  const plan = yield* runJsonAgent({
     agentType: "planner",
     agentLabel: "Planner Agent",
     name: "planner-agent",
@@ -68,6 +69,8 @@ export async function* streamPlannerAgent(
     suppressInvalidJsonReasoning: true,
     signal: input.signal,
   });
+
+  return normalizeTaskExecutionPlan(plan);
 }
 
 /**
@@ -109,6 +112,184 @@ export async function* streamPlannerWorkflowReview(
   return result;
 }
 
+const NORMALIZED_DAG_ASSUMPTION =
+  "Planner DAG 已归一化：仅保留真实图谱数据依赖，移除只表达展示顺序的串行边以支持并行 Executor 执行。";
+
+/**
+ * 归一化 Planner 生成的 Executor DAG。
+ *
+ * Planner 模型容易把“产品工作顺序”写成完整瀑布依赖链。这里将任务依赖收敛为真实
+ * 图谱数据前置关系，并保留同一 Executor 的串行约束，确保 LangGraph 可以调度并行批次。
+ */
+export function normalizeTaskExecutionPlan(
+  plan: TaskExecutionPlan,
+): TaskExecutionPlan {
+  const taskById = new Map(plan.tasks.map((task) => [task.task_id, task]));
+  const tasksByAgent = groupTasksByAgent(plan.tasks);
+  const normalizedTasks = plan.tasks.map((task) => ({
+    ...task,
+    depends_on: normalizeTaskDependencies(task, taskById, tasksByAgent),
+  }));
+  const assumptions = plan.assumptions.includes(NORMALIZED_DAG_ASSUMPTION)
+    ? plan.assumptions
+    : [...plan.assumptions, NORMALIZED_DAG_ASSUMPTION];
+
+  return {
+    ...plan,
+    dag: {
+      nodes: normalizedTasks.map((task) => task.task_id),
+      edges: normalizedTasks.flatMap((task) =>
+        task.depends_on.map((dependency) => ({
+          source: dependency,
+          target: task.task_id,
+        })),
+      ),
+    },
+    tasks: normalizedTasks,
+    assumptions,
+  };
+}
+
+/**
+ * 按 Executor Agent 聚合任务，供依赖归一化时寻找同领域前序任务。
+ */
+function groupTasksByAgent(
+  tasks: TaskExecutionNode[],
+): Map<ExecutorAgentType, TaskExecutionNode[]> {
+  const groups = new Map<ExecutorAgentType, TaskExecutionNode[]>();
+
+  for (const task of tasks) {
+    const agentType = task.assigned_agent as ExecutorAgentType;
+    const group = groups.get(agentType) ?? [];
+    group.push(task);
+    groups.set(agentType, group);
+  }
+
+  for (const group of groups.values()) {
+    group.sort((left, right) => left.sequence - right.sequence);
+  }
+
+  return groups;
+}
+
+/**
+ * 计算单个任务的真实依赖集合。
+ */
+function normalizeTaskDependencies(
+  task: TaskExecutionNode,
+  taskById: Map<string, TaskExecutionNode>,
+  tasksByAgent: Map<ExecutorAgentType, TaskExecutionNode[]>,
+): string[] {
+  const agentType = task.assigned_agent as ExecutorAgentType;
+  const hardDependencyAgents = getHardDependencyAgents(agentType, tasksByAgent);
+  const dependencies = new Set<string>();
+
+  // 同一个 Executor 的多个任务仍然串行，避免同一节点在一个并行批次内重复执行。
+  const previousSameAgentTask = getPreviousTaskForAgent(
+    agentType,
+    task,
+    tasksByAgent,
+  );
+  if (previousSameAgentTask) {
+    dependencies.add(previousSameAgentTask.task_id);
+  }
+
+  // 对跨 Executor 依赖只保留真实的图谱数据前置关系。
+  for (const dependencyId of task.depends_on) {
+    const dependencyTask = taskById.get(dependencyId);
+    if (!dependencyTask || dependencyTask.task_id === task.task_id) continue;
+
+    const dependencyAgent = dependencyTask.assigned_agent as ExecutorAgentType;
+    const isSameAgentPreviousTask =
+      dependencyAgent === agentType &&
+      dependencyTask.sequence < task.sequence;
+    const isHardDependency = hardDependencyAgents.includes(dependencyAgent);
+
+    if (isSameAgentPreviousTask || isHardDependency) {
+      dependencies.add(dependencyTask.task_id);
+    }
+  }
+
+  for (const dependencyAgent of hardDependencyAgents) {
+    const upstreamTask = getLastTaskForAgent(dependencyAgent, tasksByAgent);
+    if (upstreamTask && upstreamTask.task_id !== task.task_id) {
+      dependencies.add(upstreamTask.task_id);
+    }
+  }
+
+  return [...dependencies];
+}
+
+/**
+ * 定义 Executor 之间的硬数据依赖，而不是产品工作流展示顺序。
+ */
+function getHardDependencyAgents(
+  agentType: ExecutorAgentType,
+  tasksByAgent: Map<ExecutorAgentType, TaskExecutionNode[]>,
+): ExecutorAgentType[] {
+  const selectedAgents = new Set(tasksByAgent.keys());
+  const include = (...agents: ExecutorAgentType[]) =>
+    agents.filter((agent) => selectedAgents.has(agent));
+
+  switch (agentType) {
+    case "executor-product-strategy":
+    case "executor-toolkit":
+      return [];
+    case "executor-market-research":
+    case "executor-gtm":
+    case "executor-data-analytics":
+      return include("executor-product-strategy");
+    case "executor-product-discovery":
+      return include("executor-product-strategy");
+    case "executor-product-execution":
+      return include(
+        "executor-product-discovery",
+        "executor-product-strategy",
+      ).slice(0, 1);
+    case "executor-marketing-growth":
+      return include(
+        "executor-gtm",
+        "executor-product-discovery",
+        "executor-product-strategy",
+      ).slice(0, 1);
+    case "executor-ai-shipping":
+    case "executor-interface-craft":
+      return include(
+        "executor-product-execution",
+        "executor-product-discovery",
+        "executor-product-strategy",
+      ).slice(0, 1);
+    default:
+      return [];
+  }
+}
+
+/**
+ * 获取同一 Executor 在当前任务之前的最近任务。
+ */
+function getPreviousTaskForAgent(
+  agentType: ExecutorAgentType,
+  task: TaskExecutionNode,
+  tasksByAgent: Map<ExecutorAgentType, TaskExecutionNode[]>,
+): TaskExecutionNode | null {
+  const tasks = tasksByAgent.get(agentType) ?? [];
+  const previousTasks = tasks.filter(
+    (candidate) => candidate.sequence < task.sequence,
+  );
+
+  return previousTasks.at(-1) ?? null;
+}
+
+/**
+ * 获取某个 Executor 的最后一个任务，代表该 Executor 图谱输出已就绪。
+ */
+function getLastTaskForAgent(
+  agentType: ExecutorAgentType,
+  tasksByAgent: Map<ExecutorAgentType, TaskExecutionNode[]>,
+): TaskExecutionNode | null {
+  return tasksByAgent.get(agentType)?.at(-1) ?? null;
+}
+
 /**
  * 在 Planner Agent 不可用时生成稳定的十 Executor 图谱 DAG。
  */
@@ -122,7 +303,7 @@ function createFallbackPlan(
     sequence: index + 1,
   }));
 
-  return {
+  const plan: TaskExecutionPlan = {
     request_summary: summarizeBusinessModels(analysis.business_model),
     dag: {
       nodes: taskSpecs.map(({ sequence }) => createTaskId(sequence)),
@@ -152,6 +333,8 @@ function createFallbackPlan(
       "Planner Agent 使用相关性回退 DAG，仅调度与当前请求最相关的 Executor。",
     ],
   };
+
+  return normalizeTaskExecutionPlan(plan);
 }
 
 /**
