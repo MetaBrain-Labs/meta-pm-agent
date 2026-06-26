@@ -17,11 +17,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type {
   ExecutorAgentResult,
+  ProductWorkflowResult,
   TaskExecutionNode,
   TaskExecutionPlan,
 } from "@repo/shared";
 import { normalizeTaskExecutionPlan } from "../src/agents/product-workflow/planner-agent/agent";
-import { selectNextProductWorkflowNodes } from "../src/graph/nodes/product-workflow-node";
+import { selectNextExecutorRouterTargets } from "../src/graph/nodes/product-workflow-node";
 import type { WorkflowGraphStateValue } from "../src/graph/state";
 
 test("selects all ready executors for the next parallel batch", () => {
@@ -33,7 +34,7 @@ test("selects all ready executors for the next parallel batch", () => {
     ],
   });
 
-  assert.deepEqual(selectNextProductWorkflowNodes(state), [
+  assert.deepEqual(selectNextExecutorRouterTargets(state), [
     "executor-product-strategy",
     "executor-toolkit",
   ]);
@@ -52,7 +53,7 @@ test("waits for dependencies before selecting downstream executor", () => {
     ],
   });
 
-  assert.deepEqual(selectNextProductWorkflowNodes(state), [
+  assert.deepEqual(selectNextExecutorRouterTargets(state), [
     "executor-product-discovery",
   ]);
 });
@@ -66,7 +67,7 @@ test("keeps multiple ready tasks for one executor in separate batches", () => {
     ],
   });
 
-  assert.deepEqual(selectNextProductWorkflowNodes(state), [
+  assert.deepEqual(selectNextExecutorRouterTargets(state), [
     "executor-product-strategy",
     "executor-market-research",
   ]);
@@ -120,11 +121,11 @@ test("selects normalized planner roots and downstream parallel batches", () => {
   );
 
   assert.deepEqual(
-    selectNextProductWorkflowNodes(createState({ tasks: plan.tasks })),
+    selectNextExecutorRouterTargets(createState({ tasks: plan.tasks })),
     ["executor-product-strategy", "executor-toolkit"],
   );
   assert.deepEqual(
-    selectNextProductWorkflowNodes(
+    selectNextExecutorRouterTargets(
       createState({
         tasks: plan.tasks,
         results: [
@@ -136,7 +137,7 @@ test("selects normalized planner roots and downstream parallel batches", () => {
     ["executor-product-discovery", "executor-data-analytics"],
   );
   assert.deepEqual(
-    selectNextProductWorkflowNodes(
+    selectNextExecutorRouterTargets(
       createState({
         tasks: plan.tasks,
         results: [
@@ -152,15 +153,42 @@ test("selects normalized planner roots and downstream parallel batches", () => {
   );
 });
 
+test("routes completed executor DAG back to planner review", () => {
+  const tasks = [
+    createTask("task-01", 1, "executor-product-strategy", []),
+    createTask("task-02", 2, "executor-toolkit", ["task-01"]),
+  ];
+  const state = createState({
+    tasks,
+    results: [
+      createResult("task-01", "executor-product-strategy"),
+      createResult("task-02", "executor-toolkit"),
+    ],
+  });
+
+  assert.equal(selectNextExecutorRouterTargets(state), "planner_agent");
+});
+
+test("routes to end after planner review has produced the workflow result", () => {
+  const state = createState({
+    tasks: [createTask("task-01", 1, "executor-product-strategy", [])],
+    productWorkflow: {} as ProductWorkflowResult,
+  });
+
+  assert.equal(selectNextExecutorRouterTargets(state), "end");
+});
+
 function createState({
   tasks,
   results = [],
+  productWorkflow = null,
 }: {
   tasks: TaskExecutionNode[];
   results?: ExecutorAgentResult[];
+  productWorkflow?: ProductWorkflowResult | null;
 }): WorkflowGraphStateValue {
   return {
-    productWorkflow: null,
+    productWorkflow,
     plan: createPlan(tasks),
     executorResults: results,
   } as WorkflowGraphStateValue;
