@@ -289,9 +289,11 @@ export function ChatApp({
           className="chat-scroll scrollbar-none items-center"
         >
           {messages.length === 0 && !isMessagesLoading && (
-            <div className="chat-empty">
-              <h1>今天想推进什么？</h1>
-              <p>围绕需求、计划、文档和风险继续推进项目。</p>
+            <div className="flex flex-col w-full items-center justify-center gap-8">
+              <span className="font-bold text-2xl">今天想推进什么？</span>
+              <span className="font-bold text-[#3e3e3e]">
+                围绕需求、计划、文档和风险继续推进项目。
+              </span>
               <div className="chat-suggestions">
                 {EXAMPLE_QUERIES.map((query) => (
                   <button

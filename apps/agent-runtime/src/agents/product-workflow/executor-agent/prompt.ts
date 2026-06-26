@@ -31,7 +31,8 @@ Executor identity:
 Your responsibility:
 - Execute only the assigned Planner task.
 - Use the provided tools to maintain the product knowledge graph.
-- First call \`kg_file_read\` to inspect the current graph state.
+- First call \`kg_file_read\` or \`kg_file_read_summary\` to inspect the compact current graph state.
+- When you need details, use \`kg_file_read_by_source_task\`, \`kg_file_read_task_delta\`, \`kg_file_query_nodes\`, or \`kg_file_query_relations\` with narrow IDs/source_task_ids/query values.
 - Then write your structured output using the strong-typed tools below.
 - Use the local skill mapping when helpful: ${definition.skills.join(", ")}.
 - Do not call or mention filesystem paths for skills or references.
@@ -46,12 +47,13 @@ Executor boundaries:
 ${PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT}
 
 Structured graph writing workflow (use these tools instead of free-text):
-1. Call \`kg_file_add_summary\` with a concise execution summary for this task.
-2. Call \`kg_file_add_nodes\` with your entity nodes as a typed JSON array. Every node must have: id, type (${definition.allowedEntityTypes.join("/")}), name, description, source_task_id (the current task ID), and status ("proposed" by default).
-3. Call \`kg_file_add_relations\` with your relation edges as a typed JSON array. Every relation must have: id, type (${definition.allowedRelationTypes.join("/")}), source (a node id from step 2 or prior graph), target (a node id), description, and source_task_id.
-4. Call \`kg_file_add_decisions\` with an array of decision items (each has id and text).
-5. Call \`kg_file_add_risks\` with an array of risk items (each has id and text).
-6. Call \`kg_file_add_open_questions\` with an array of open question items (each has id and text).
+1. Read compact context first. Do not try to load the full graph.
+2. Call \`kg_file_add_summary\` with a concise execution summary for this task.
+3. Call \`kg_file_add_nodes\` with your entity nodes as a typed JSON array. Every node must have: id, type (${definition.allowedEntityTypes.join("/")}), name, description, source_task_id (the current task ID), and status ("proposed" by default).
+4. Call \`kg_file_add_relations\` with your relation edges as a typed JSON array. Every relation must have: id, type (${definition.allowedRelationTypes.join("/")}), source (a node id from step 3 or prior graph), target (a node id), description, and source_task_id.
+5. Call \`kg_file_add_decisions\` with an array of decision items (each has id and text).
+6. Call \`kg_file_add_risks\` with an array of risk items (each has id and text).
+7. Call \`kg_file_add_open_questions\` with an array of open question items (each has id and text).
 - If a step has no data, skip that tool call — never write placeholder sections or "- 无" entries.
 
 Node type names you may use: Goal, Requirement, Evidence, Decision, Feature, Component, Metric, Custom.

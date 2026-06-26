@@ -21,7 +21,8 @@ Product knowledge graph metamodel:
 - Relation types: Drives, Satisfies, Promotes, Produces, Constrains, Implements, Measures, Validates, References, Composes, Custom.
 - Every output must preserve traceability from goals to requirements, decisions, features, components, and metrics whenever the available evidence supports it.
 - Do not invent confirmed business facts. Put uncertainty into open_questions or risks.
-- The knowledge graph state is a structured JSON object maintained in memory. Read the current state via kg_file_read before making updates.
+- The knowledge graph state is a structured JSON object maintained in memory. Read compact state via kg_file_read or kg_file_read_summary before making updates.
+- Query detailed graph context only when needed via kg_file_query_nodes, kg_file_query_relations, kg_file_read_task_delta, or kg_file_read_by_source_task.
 - Treat the current knowledge graph state as the source of truth for follow-up executor updates.
 `;
 
@@ -39,6 +40,27 @@ export function createProductWorkflowKnowledgeGraph(): ProductKnowledgeGraph {
     markdown: "",
     notes: ["MVP placeholder: 产品设计知识图谱尚未接入正式存储。"],
   };
+}
+
+/**
+ * 按稳定业务键合并图谱元素，后到内容覆盖同键旧内容。
+ */
+function mergeByKey<T>(items: T[], getKey: (item: T) => string): T[] {
+  const merged = new Map<string, T>();
+  for (const item of items) {
+    const key = getKey(item);
+    if (!key) continue;
+    merged.set(key, item);
+  }
+
+  return [...merged.values()];
+}
+
+/**
+ * 合并文本列表，保留首次出现顺序。
+ */
+function mergeTextList(items: string[]): string[] {
+  return [...new Set(items.map((item) => item.trim()).filter(Boolean))];
 }
 
 /**
@@ -67,12 +89,25 @@ export function appendKnowledgeGraphPatch({
 }): ProductKnowledgeGraph {
   return {
     ...knowledgeGraph,
-    entities: [...knowledgeGraph.entities, ...entities],
-    relations: [...knowledgeGraph.relations, ...relations],
-    decisions: [...knowledgeGraph.decisions, ...decisions],
-    risks: [...knowledgeGraph.risks, ...risks],
-    open_questions: [...knowledgeGraph.open_questions, ...openQuestions],
-    summary: [...knowledgeGraph.summary, ...summary],
+    entities: mergeByKey([...knowledgeGraph.entities, ...entities], (item) =>
+      item.id.trim(),
+    ),
+    relations: mergeByKey(
+      [...knowledgeGraph.relations, ...relations],
+      (item) => item.id.trim(),
+    ),
+    decisions: mergeByKey(
+      [...knowledgeGraph.decisions, ...decisions],
+      (item) => item.id.trim(),
+    ),
+    risks: mergeByKey([...knowledgeGraph.risks, ...risks], (item) =>
+      item.id.trim(),
+    ),
+    open_questions: mergeByKey(
+      [...knowledgeGraph.open_questions, ...openQuestions],
+      (item) => item.id.trim(),
+    ),
+    summary: mergeTextList([...knowledgeGraph.summary, ...summary]),
     notes: [
       ...knowledgeGraph.notes,
       `${taskId} 已由 ${agentType} 更新至知识图谱。`,

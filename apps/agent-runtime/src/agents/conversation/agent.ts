@@ -15,6 +15,7 @@ import { createDeepAgent } from "deepagents";
 import type { AgentRuntimeTool } from "@repo/shared";
 import { createToolsForAgent } from "../common/tool-access";
 import { createChatModel } from "../common/model";
+import { createDefaultAgentMiddleware } from "../common/middleware";
 import {
   getRuntimeDateContext,
   type RuntimeDateContext,
@@ -42,6 +43,7 @@ export function createConversationAgent(options: ConversationAgentOptions = {}) 
     tools,
     name: "conversation-agent",
     skills: [],
+    middleware: createDefaultAgentMiddleware() as any,
   });
 }
 

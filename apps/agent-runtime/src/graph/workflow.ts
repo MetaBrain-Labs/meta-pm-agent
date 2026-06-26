@@ -27,6 +27,7 @@ import type { ProductWorkflowStreamEvent } from "../agents/product-workflow/agen
 import {
   aiShippingExecutorNode,
   dataAnalyticsExecutorNode,
+  executorBatchBarrierNode,
   gtmExecutorNode,
   interfaceCraftExecutorNode,
   marketResearchExecutorNode,
@@ -35,7 +36,7 @@ import {
   plannerAgentNode,
   productExecutionExecutorNode,
   productStrategyExecutorNode,
-  selectNextProductWorkflowNode,
+  selectNextProductWorkflowNodes,
   toolkitExecutorNode,
 } from "./nodes/product-workflow-node";
 import { parseUserInputNode, requestAgentNode } from "./nodes/request-node";
@@ -107,13 +108,14 @@ export const graph = new StateGraph(WorkflowGraphState)
   .addNode("executor-ai-shipping", aiShippingExecutorNode)
   .addNode("executor-toolkit", toolkitExecutorNode)
   .addNode("executor-interface-craft", interfaceCraftExecutorNode)
+  .addNode("executor_batch_barrier", executorBatchBarrierNode)
   .addEdge(START, "parse_user_input")
   .addEdge("parse_user_input", "request_agent")
   .addConditionalEdges("request_agent", selectNextNodeAfterRequestAgent, {
     planner_agent: "planner_agent",
     end: END,
   })
-  .addConditionalEdges("planner_agent", selectNextProductWorkflowNode, {
+  .addConditionalEdges("planner_agent", selectNextProductWorkflowNodes, {
     "executor-product-strategy": "executor-product-strategy",
     "executor-market-research": "executor-market-research",
     "executor-gtm": "executor-gtm",
@@ -127,54 +129,19 @@ export const graph = new StateGraph(WorkflowGraphState)
     planner_agent: "planner_agent",
     end: END,
   })
+  .addEdge("executor-product-strategy", "executor_batch_barrier")
+  .addEdge("executor-market-research", "executor_batch_barrier")
+  .addEdge("executor-gtm", "executor_batch_barrier")
+  .addEdge("executor-product-discovery", "executor_batch_barrier")
+  .addEdge("executor-product-execution", "executor_batch_barrier")
+  .addEdge("executor-marketing-growth", "executor_batch_barrier")
+  .addEdge("executor-data-analytics", "executor_batch_barrier")
+  .addEdge("executor-ai-shipping", "executor_batch_barrier")
+  .addEdge("executor-toolkit", "executor_batch_barrier")
+  .addEdge("executor-interface-craft", "executor_batch_barrier")
   .addConditionalEdges(
-    "executor-product-strategy",
-    selectNextProductWorkflowNode,
-    PRODUCT_WORKFLOW_ROUTE_TARGETS,
-  )
-  .addConditionalEdges(
-    "executor-market-research",
-    selectNextProductWorkflowNode,
-    PRODUCT_WORKFLOW_ROUTE_TARGETS,
-  )
-  .addConditionalEdges(
-    "executor-gtm",
-    selectNextProductWorkflowNode,
-    PRODUCT_WORKFLOW_ROUTE_TARGETS,
-  )
-  .addConditionalEdges(
-    "executor-product-discovery",
-    selectNextProductWorkflowNode,
-    PRODUCT_WORKFLOW_ROUTE_TARGETS,
-  )
-  .addConditionalEdges(
-    "executor-product-execution",
-    selectNextProductWorkflowNode,
-    PRODUCT_WORKFLOW_ROUTE_TARGETS,
-  )
-  .addConditionalEdges(
-    "executor-marketing-growth",
-    selectNextProductWorkflowNode,
-    PRODUCT_WORKFLOW_ROUTE_TARGETS,
-  )
-  .addConditionalEdges(
-    "executor-data-analytics",
-    selectNextProductWorkflowNode,
-    PRODUCT_WORKFLOW_ROUTE_TARGETS,
-  )
-  .addConditionalEdges(
-    "executor-ai-shipping",
-    selectNextProductWorkflowNode,
-    PRODUCT_WORKFLOW_ROUTE_TARGETS,
-  )
-  .addConditionalEdges(
-    "executor-toolkit",
-    selectNextProductWorkflowNode,
-    PRODUCT_WORKFLOW_ROUTE_TARGETS,
-  )
-  .addConditionalEdges(
-    "executor-interface-craft",
-    selectNextProductWorkflowNode,
+    "executor_batch_barrier",
+    selectNextProductWorkflowNodes,
     PRODUCT_WORKFLOW_ROUTE_TARGETS,
   )
   .compile();

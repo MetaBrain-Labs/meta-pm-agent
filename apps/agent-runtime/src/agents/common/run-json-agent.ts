@@ -24,6 +24,7 @@ import {
 } from "langchain";
 import { createDeepAgent } from "deepagents";
 import { createChatModel, type ChatModelOptions } from "./model";
+import { createDefaultAgentMiddleware } from "./middleware";
 import { calculateCost } from "../../config";
 import { parseJsonObject } from "../../utils/json";
 import {
@@ -118,6 +119,7 @@ export async function* runJsonAgent<T, AgentType extends string>(
       name: options.name,
       // 这里接收 DeepAgents 技能目录 sources；具体技能名由 source 内的 SKILL.md 声明。
       skills: options.skills ?? [],
+      middleware: createDefaultAgentMiddleware() as any,
     });
 
     const run = await agent.stream(

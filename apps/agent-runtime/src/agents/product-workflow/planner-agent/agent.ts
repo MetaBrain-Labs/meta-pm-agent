@@ -32,7 +32,11 @@ import type {
   PlannerAgentInput,
   ProductWorkflowStreamEvent,
 } from "../types";
-import { EXECUTOR_DEFINITIONS } from "../executor-agent/definitions";
+import {
+  EXECUTOR_DEFINITIONS,
+  type ExecutorAgentDefinition,
+  type ExecutorAgentType,
+} from "../executor-agent/definitions";
 import {
   PLANNER_AGENT_PROMPT,
   PLANNER_WORKFLOW_REVIEW_PROMPT,
@@ -112,7 +116,8 @@ function createFallbackPlan(
   analysis: PlannerAgentInput["requestAnalysis"],
 ): TaskExecutionPlan {
   const coveredIndexes = analysis.business_model.map((item) => item.index);
-  const taskSpecs = EXECUTOR_DEFINITIONS.map((definition, index) => ({
+  const selectedDefinitions = selectFallbackExecutorDefinitions(analysis);
+  const taskSpecs = selectedDefinitions.map((definition, index) => ({
     definition,
     sequence: index + 1,
   }));
@@ -143,8 +148,136 @@ function createFallbackPlan(
         ],
       },
     })),
-    assumptions: ["Planner Agent 使用 MVP 回退 DAG，后续可由模型动态调整。"],
+    assumptions: [
+      "Planner Agent 使用相关性回退 DAG，仅调度与当前请求最相关的 Executor。",
+    ],
   };
+}
+
+/**
+ * 在 Planner 模型不可用时，根据请求关键词选择必要 Executor，避免默认跑满 10 个领域。
+ */
+function selectFallbackExecutorDefinitions(
+  analysis: PlannerAgentInput["requestAnalysis"],
+): ExecutorAgentDefinition[] {
+  const requestText = analysis.business_model
+    .map((item) =>
+      [item.user_goal, ...item.goal_constraints, ...item.missing_information.map((info) => info.description)].join(
+        " ",
+      ),
+    )
+    .join(" ")
+    .toLowerCase();
+  const selected = new Set<ExecutorAgentType>([
+    "executor-product-strategy",
+    "executor-product-discovery",
+    "executor-product-execution",
+  ]);
+
+  addExecutorWhenMatches(selected, requestText, "executor-market-research", [
+    "market",
+    "competitor",
+    "research",
+    "survey",
+    "竞品",
+    "市场",
+    "调研",
+    "用户研究",
+  ]);
+  addExecutorWhenMatches(selected, requestText, "executor-gtm", [
+    "gtm",
+    "launch",
+    "pricing",
+    "sales",
+    "channel",
+    "上市",
+    "定价",
+    "渠道",
+    "销售",
+  ]);
+  addExecutorWhenMatches(selected, requestText, "executor-marketing-growth", [
+    "growth",
+    "marketing",
+    "activation",
+    "retention",
+    "增长",
+    "营销",
+    "留存",
+    "转化",
+  ]);
+  addExecutorWhenMatches(selected, requestText, "executor-data-analytics", [
+    "metric",
+    "analytics",
+    "experiment",
+    "dashboard",
+    "指标",
+    "数据",
+    "实验",
+    "看板",
+  ]);
+  addExecutorWhenMatches(selected, requestText, "executor-ai-shipping", [
+    "ai",
+    "llm",
+    "agent",
+    "model",
+    "technical",
+    "技术",
+    "模型",
+    "智能体",
+    "工程",
+  ]);
+  addExecutorWhenMatches(selected, requestText, "executor-toolkit", [
+    "policy",
+    "compliance",
+    "legal",
+    "workflow",
+    "合规",
+    "政策",
+    "法务",
+    "流程",
+  ]);
+  addExecutorWhenMatches(selected, requestText, "executor-interface-craft", [
+    "ui",
+    "ux",
+    "interface",
+    "screen",
+    "prototype",
+    "界面",
+    "交互",
+    "原型",
+    "页面",
+  ]);
+
+  if (matchesAny(requestText, ["full chain", "end-to-end", "全链路", "完整方案"])) {
+    EXECUTOR_DEFINITIONS.forEach((definition) =>
+      selected.add(definition.agentType),
+    );
+  }
+
+  return EXECUTOR_DEFINITIONS.filter((definition) =>
+    selected.has(definition.agentType),
+  );
+}
+
+/**
+ * 命中关键词时追加对应 Executor。
+ */
+function addExecutorWhenMatches(
+  selected: Set<ExecutorAgentType>,
+  requestText: string,
+  agentType: ExecutorAgentType,
+  keywords: string[],
+): void {
+  if (matchesAny(requestText, keywords)) {
+    selected.add(agentType);
+  }
+}
+
+/**
+ * 判断请求文本是否包含任一相关性关键词。
+ */
+function matchesAny(text: string, keywords: string[]): boolean {
+  return keywords.some((keyword) => text.includes(keyword.toLowerCase()));
 }
 
 /**

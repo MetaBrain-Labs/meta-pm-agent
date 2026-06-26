@@ -36,6 +36,7 @@ export function applyStreamEvent(
             event.content ?? "",
           ),
           activeAgent: event.agentType,
+          activeAgents: addActiveAgent(message.activeAgents, event.agentType),
         };
       }
 
@@ -44,6 +45,10 @@ export function applyStreamEvent(
         thinking:
           (message.thinking ?? "") + (event.content ?? ""),
         activeAgent: event.agentType ?? "conversation",
+        activeAgents: addActiveAgent(
+          message.activeAgents,
+          event.agentType ?? "conversation",
+        ),
       };
     case "text":
       return applyTextChunk(message, event.content ?? "");
@@ -51,6 +56,10 @@ export function applyStreamEvent(
       return {
         ...message,
         activeAgent: event.agentType ?? "conversation",
+        activeAgents: addActiveAgent(
+          message.activeAgents,
+          event.agentType ?? "conversation",
+        ),
         questionForm: { state: "generating" },
       };
     case "question-form-complete":
@@ -62,6 +71,10 @@ export function applyStreamEvent(
           "</question-form>",
         ),
         activeAgent: undefined,
+        activeAgents: removeActiveAgent(
+          message.activeAgents,
+          event.agentType ?? "conversation",
+        ),
         questionForm: {
           state: "complete",
           content: event.content,
@@ -89,6 +102,10 @@ export function applyStreamEvent(
       return {
         ...message,
         activeAgent: event.agentType ?? "request",
+        activeAgents: addActiveAgent(
+          message.activeAgents,
+          event.agentType ?? "request",
+        ),
         requestAnalysis: { state: "generating" },
       };
     case "request-analysis-complete":
@@ -101,6 +118,10 @@ export function applyStreamEvent(
           "</request-analysis>",
         ),
         activeAgent: undefined,
+        activeAgents: removeActiveAgent(
+          message.activeAgents,
+          event.agentType ?? "request",
+        ),
         requestAnalysis: {
           state: "complete",
           content: event.content,
@@ -144,7 +165,12 @@ export function applyStreamEvent(
     case "token-usage":
       return appendTokenUsage(message, event);
     case "finish":
-      return { ...message, usage: event.usage, activeAgent: undefined };
+      return {
+        ...message,
+        usage: event.usage,
+        activeAgent: undefined,
+        activeAgents: [],
+      };
     case "error":
       {
         const failedAgentType = event.agentType ?? message.activeAgent;
@@ -157,6 +183,10 @@ export function applyStreamEvent(
         return {
           ...message,
           activeAgent: undefined,
+          activeAgents: removeActiveAgent(
+            message.activeAgents,
+            failedAgentType,
+          ),
           requestAnalysis,
           agentError: {
             agentType: failedAgentType,
@@ -257,6 +287,27 @@ function appendReasoningBlock(
         : block,
     ),
   };
+}
+
+/**
+ * 将 Agent 加入当前运行集合，供并行 Executor 展示使用。
+ */
+function addActiveAgent(
+  activeAgents: string[] | undefined,
+  agentType: string,
+): string[] {
+  return [...new Set([...(activeAgents ?? []), agentType])];
+}
+
+/**
+ * 从当前运行集合移除已完成或失败的 Agent。
+ */
+function removeActiveAgent(
+  activeAgents: string[] | undefined,
+  agentType?: string,
+): string[] {
+  if (!agentType) return activeAgents ?? [];
+  return (activeAgents ?? []).filter((item) => item !== agentType);
 }
 
 function applyTextChunk(
@@ -364,6 +415,10 @@ function applyTextChunk(
               message.activeAgent === result.agent_type
                 ? undefined
                 : message.activeAgent,
+            activeAgents: removeActiveAgent(
+              message.activeAgents,
+              result.agent_type,
+            ),
             executorResults: upsertExecutorResult(
               message.executorResults ?? [],
               result,
@@ -391,6 +446,7 @@ function applyTextChunk(
       ...(result
         ? {
             activeAgent: undefined,
+            activeAgents: [],
             executorResults: result.executor_results,
           }
         : {}),

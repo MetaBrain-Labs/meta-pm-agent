@@ -37,6 +37,14 @@ import {
   createToolsForAgent,
   getKnowledgeGraphFileToolNames,
 } from "../../common/tool-access";
+import {
+  compactPreviousExecutorResults,
+  compactRequestAnalysisForTask,
+  compactTaskExecutionPlan,
+  compactUserInputForTask,
+  createGraphContextSummary,
+  createTaskRelevantGraphContext,
+} from "../common/context";
 import type { ExecutorAgentInput, ProductWorkflowStreamEvent } from "../types";
 import {
   getExecutorDefinition,
@@ -80,6 +88,13 @@ export async function* streamExecutorAgent(
     getKnowledgeGraphFileToolNames(),
     { knowledgeGraph: toolKnowledgeGraph },
   );
+  // Executor 默认只接收摘要和任务相关子图，完整图谱保留在工具状态中按需查询。
+  const graphContextSummary = createGraphContextSummary(input.knowledgeGraph);
+  const taskRelevantContext = createTaskRelevantGraphContext({
+    knowledgeGraph: input.knowledgeGraph,
+    task: input.task,
+    previousResults: input.previousResults,
+  });
 
   const textGen = runTextAgent({
     agentType: definition.agentType,
@@ -101,16 +116,20 @@ export async function* streamExecutorAgent(
         skills: definition.skills,
       },
       product_context: input.productContext || "No product context provided.",
-      product_knowledge_graph: input.knowledgeGraph,
+      graph_context_summary: graphContextSummary,
+      task_relevant_context: taskRelevantContext,
       task: input.task,
-      plan: input.plan,
-      request_analysis: input.requestAnalysis,
-      user_input: input.userInput,
-      previous_results: input.previousResults.map((result) => ({
-        task_id: result.task_id,
-        agent_type: result.agent_type,
-        summary: result.summary,
-      })),
+      plan_context: compactTaskExecutionPlan(input.plan),
+      request_analysis: compactRequestAnalysisForTask(
+        input.requestAnalysis,
+        input.task,
+      ),
+      user_input: compactUserInputForTask({
+        analysis: input.requestAnalysis,
+        task: input.task,
+        userInput: input.userInput,
+      }),
+      previous_results: compactPreviousExecutorResults(input.previousResults),
     },
     fallback: () => createFallbackKnowledgeGraphPatch(input.task),
     signal: input.signal,

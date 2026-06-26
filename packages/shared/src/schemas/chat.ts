@@ -1,3 +1,17 @@
+/**
+ * 聊天共享 Schema
+ *
+ * 定义运行时可识别的工具名称和基础聊天消息结构，供 API、前端和 Agent Runtime
+ * 共享同一份类型约束。
+ *
+ * Responsibilities:
+ * - 维护用户可见工具和内部 Agent 工具的稳定枚举
+ * - 定义聊天消息 DTO 的基础校验结构
+ *
+ * Notes:
+ * - 知识图谱工具由 runtime 授权策略控制，不作为任意用户文件访问能力暴露。
+ */
+
 import { z } from "zod";
 
 /**
@@ -6,6 +20,11 @@ import { z } from "zod";
 export const AgentRuntimeToolSchema = z.enum([
   "web_search",
   "kg_file_read",
+  "kg_file_read_summary",
+  "kg_file_query_nodes",
+  "kg_file_query_relations",
+  "kg_file_read_task_delta",
+  "kg_file_read_by_source_task",
   "kg_file_add_summary",
   "kg_file_add_nodes",
   "kg_file_add_relations",

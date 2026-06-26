@@ -13,7 +13,7 @@
  */
 
 import { getWriter, type LangGraphRunnableConfig } from "@langchain/langgraph";
-import type { ExecutorAgentResult } from "@repo/shared";
+import type { ExecutorAgentResult, TaskExecutionNode } from "@repo/shared";
 import type { ProductWorkflowStreamEvent } from "../../agents/product-workflow/agent";
 import {
   EXECUTOR_DEFINITIONS,
@@ -143,6 +143,24 @@ export const interfaceCraftExecutorNode = createExecutorAgentNode(
 );
 
 /**
+ * 汇合同一批并行 Executor 的状态更新，并只在合并后归档知识图谱。
+ */
+export async function executorBatchBarrierNode(
+  state: WorkflowGraphStateValue,
+  config?: LangGraphRunnableConfig,
+) {
+  const writer = getWriter(config);
+  if (state.knowledgeGraph) {
+    writer?.({
+      type: "knowledge-graph-update",
+      knowledgeGraph: state.knowledgeGraph,
+    });
+  }
+
+  return {};
+}
+
+/**
  * 创建单个 Executor Agent 节点，按 Planner DAG 执行当前 Agent 的下一个就绪任务。
  */
 function createExecutorAgentNode(agentType: ExecutorAgentType) {
@@ -195,19 +213,14 @@ async function executeExecutorAgentTask(
     openQuestions: result.open_questions,
     summary: [result.summary],
   });
-  const executorResults = [...state.executorResults, result];
-  // 每个 Executor 完成后立刻发出知识图谱更新事件，供 API 增量落库
-  writer?.({
-    type: "knowledge-graph-update",
-    knowledgeGraph: nextKnowledgeGraph,
-  });
+  // Executor 只输出本任务结果，知识图谱归档交给批次 barrier 处理。
   writer?.({
     type: "agent-output",
     agentType: result.agent_type,
     content: formatExecutorResultBlock(result),
   });
 
-  return { executorResults, knowledgeGraph: nextKnowledgeGraph };
+  return { executorResults: [result], knowledgeGraph: nextKnowledgeGraph };
 }
 
 /**
@@ -273,19 +286,15 @@ function findNextExecutableTaskForAgent(
   const completedTaskIds = new Set(
     state.executorResults.map((result) => result.task_id),
   );
-  return state.plan.tasks
+  return (
+    state.plan.tasks
     .filter((task) => task.assigned_agent === agentType)
     .sort((left, right) => left.sequence - right.sequence)
     .find((task) => {
       if (completedTaskIds.has(task.task_id)) return false;
       return task.depends_on.every((taskId) => completedTaskIds.has(taskId));
-    }) ?? state.plan.tasks
-      .filter(
-        (task) =>
-          task.assigned_agent === agentType &&
-          !completedTaskIds.has(task.task_id),
-      )
-      .sort((left, right) => left.sequence - right.sequence)[0] ?? null;
+    }) ?? null
+  );
 }
 
 /**
@@ -294,6 +303,16 @@ function findNextExecutableTaskForAgent(
 export function selectNextProductWorkflowNode(
   state: WorkflowGraphStateValue,
 ): string {
+  const nextNodes = selectNextProductWorkflowNodes(state);
+  return Array.isArray(nextNodes) ? nextNodes[0] ?? "end" : nextNodes;
+}
+
+/**
+ * 根据 DAG 依赖选择下一批可并行运行的 Executor 节点。
+ */
+export function selectNextProductWorkflowNodes(
+  state: WorkflowGraphStateValue,
+): string | string[] {
   if (state.productWorkflow || !state.plan) return "end";
 
   const completedTaskIds = new Set(
@@ -305,14 +324,13 @@ export function selectNextProductWorkflowNode(
 
   if (incompleteTasks.length === 0) return "planner_agent";
 
-  const readyTask =
-    incompleteTasks.find((task) =>
-      task.depends_on.every((taskId) => completedTaskIds.has(taskId)),
-    ) ?? incompleteTasks[0];
+  const readyTasks = incompleteTasks.filter((task) =>
+    task.depends_on.every((taskId) => completedTaskIds.has(taskId)),
+  );
+  const parallelTasks = packParallelExecutorTasks(readyTasks);
+  if (parallelTasks.length === 0) return "planner_agent";
 
-  return isExecutorAgentType(readyTask.assigned_agent)
-    ? readyTask.assigned_agent
-    : "planner_agent";
+  return parallelTasks.map((task) => task.assigned_agent);
 }
 
 /**
@@ -325,4 +343,23 @@ function arePlanTasksFinished(state: WorkflowGraphStateValue): boolean {
     state.executorResults.map((result) => result.task_id),
   );
   return state.plan.tasks.every((task) => completedTaskIds.has(task.task_id));
+}
+
+/**
+ * 同一批只保留每个 Executor 的最早任务，避免同一节点被重复调度。
+ */
+function packParallelExecutorTasks(
+  tasks: TaskExecutionNode[],
+): TaskExecutionNode[] {
+  const selected = new Map<ExecutorAgentType, TaskExecutionNode>();
+
+  for (const task of tasks.sort(
+    (left, right) => left.sequence - right.sequence,
+  )) {
+    if (!isExecutorAgentType(task.assigned_agent)) continue;
+    if (selected.has(task.assigned_agent)) continue;
+    selected.set(task.assigned_agent, task);
+  }
+
+  return [...selected.values()];
 }

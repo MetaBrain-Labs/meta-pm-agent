@@ -210,6 +210,7 @@ export interface Message {
   };
   executorResults?: ExecutorAgentResult[];
   activeAgent?: string;
+  activeAgents?: string[];
   agentError?: {
     agentType?: string;
     message: string;

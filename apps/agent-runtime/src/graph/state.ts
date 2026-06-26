@@ -63,7 +63,7 @@ export const WorkflowGraphState = Annotation.Root({
 
   // 当前产品知识图谱快照，供 Planner 和 Executor 共享上下文。
   knowledgeGraph: Annotation<ProductKnowledgeGraph | null>({
-    reducer: (_current, update) => update,
+    reducer: mergeKnowledgeGraphSnapshots,
     default: () => null,
   }),
 
@@ -75,7 +75,7 @@ export const WorkflowGraphState = Annotation.Root({
 
   // Executor Agent 对 Planner DAG 中每个任务的结构化产出。
   executorResults: Annotation<ExecutorAgentResult[]>({
-    reducer: (_current, update) => update,
+    reducer: mergeExecutorResults,
     default: () => [],
   }),
 
@@ -87,3 +87,71 @@ export const WorkflowGraphState = Annotation.Root({
 });
 
 export type WorkflowGraphStateValue = typeof WorkflowGraphState.State;
+
+/**
+ * 合并并行 Executor 返回的结果，按 task_id 保持幂等。
+ */
+function mergeExecutorResults(
+  current: ExecutorAgentResult[],
+  update: ExecutorAgentResult[],
+): ExecutorAgentResult[] {
+  const merged = new Map(current.map((item) => [item.task_id, item]));
+  for (const item of update) {
+    merged.set(item.task_id, item);
+  }
+
+  return [...merged.values()].sort(
+    (left, right) =>
+      getTaskSortValue(left.task_id) - getTaskSortValue(right.task_id),
+  );
+}
+
+/**
+ * 合并多个 Executor 基于同一图谱快照产出的完整快照，避免并行写覆盖。
+ */
+function mergeKnowledgeGraphSnapshots(
+  current: ProductKnowledgeGraph | null,
+  update: ProductKnowledgeGraph | null,
+): ProductKnowledgeGraph | null {
+  if (!current) return update;
+  if (!update) return current;
+
+  return {
+    ...current,
+    entities: mergeById(current.entities, update.entities),
+    relations: mergeById(current.relations, update.relations),
+    decisions: mergeById(current.decisions, update.decisions),
+    risks: mergeById(current.risks, update.risks),
+    open_questions: mergeById(current.open_questions, update.open_questions),
+    summary: mergeTextList(current.summary, update.summary),
+    markdown: update.markdown || current.markdown,
+    notes: mergeTextList(current.notes, update.notes),
+  };
+}
+
+/**
+ * 按业务 id 合并图谱数组，后到的同 id 项覆盖旧值。
+ */
+function mergeById<T extends { id: string }>(current: T[], update: T[]): T[] {
+  const merged = new Map(current.map((item) => [item.id, item]));
+  for (const item of update) {
+    merged.set(item.id, item);
+  }
+
+  return [...merged.values()];
+}
+
+/**
+ * 合并摘要和备注，保留首次出现顺序。
+ */
+function mergeTextList(current: string[], update: string[]): string[] {
+  return [...new Set([...current, ...update])];
+}
+
+/**
+ * 从 task_id 中提取排序数字，无法提取时保持在尾部。
+ */
+function getTaskSortValue(taskId: string): number {
+  const match = taskId.match(/\d+/);
+  return match ? Number(match[0]) : Number.MAX_SAFE_INTEGER;
+}
