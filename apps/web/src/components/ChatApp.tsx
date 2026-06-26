@@ -1,3 +1,18 @@
+/**
+ * 聊天工作区主视图
+ *
+ * 负责渲染单个工作区内的聊天消息、输入框、工具入口和工作流辅助弹窗。
+ * 页面级数据读写由 ThreadChatPage 和 API 模块提供，本组件只管理浏览器侧交互状态。
+ *
+ * Responsibilities:
+ * - 展示聊天消息流、输入框、停止生成和重试入口
+ * - 管理知识图谱与 LangGraph 可视化弹窗
+ * - 维护自动滚动、联网搜索开关和当前 Agent 定位行为
+ *
+ * Notes:
+ * - 不直接持久化聊天历史；权威数据通过 API 恢复。
+ */
+
 import {
   useCallback,
   useEffect,
@@ -15,6 +30,7 @@ import {
   ClearOutlined,
   DownOutlined,
   PaperClipOutlined,
+  PartitionOutlined,
   SearchOutlined,
   SendOutlined,
   StopOutlined,
@@ -26,6 +42,7 @@ import {
 } from "../api/chat-api";
 import { MessageBubble } from "./MessageBubble";
 import { KnowledgeGraphModal } from "./modals/KnowledgeGraphModal";
+import { LangGraphModal } from "./modals/LangGraphModal";
 
 const { TextArea } = Input;
 
@@ -68,6 +85,7 @@ export function ChatApp({
   const [input, setInput] = useState("");
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [userScrolled, setUserScrolled] = useState(false);
+  const [langGraphModalOpen, setLangGraphModalOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // 知识图谱下载状态
@@ -271,15 +289,25 @@ export function ChatApp({
           </Tooltip>
           <span>{workspaceName}</span>
         </div>
-        {activeAgent && (
-          <div className="ml-auto flex items-center gap-2 rounded-md border border-[var(--line-soft)] bg-white px-2.5 py-1 text-[12px] text-[var(--ink-soft)]">
-            <span className="h-1.5 w-1.5 rounded-full bg-[var(--primary)]" />
-            <span>正在思考：{getAgentLabel(activeAgent)}</span>
-            <Button size="small" type="link" onClick={scrollToActiveThinking}>
-              查看
-            </Button>
-          </div>
-        )}
+        <div className="ml-auto flex min-w-0 items-center gap-2">
+          <Tooltip title="查看 LangGraph">
+            <Button
+              type="text"
+              shape="circle"
+              icon={<PartitionOutlined />}
+              onClick={() => setLangGraphModalOpen(true)}
+            />
+          </Tooltip>
+          {activeAgent && (
+            <div className="flex items-center gap-2 rounded-md border border-[var(--line-soft)] bg-white px-2.5 py-1 text-[12px] text-[var(--ink-soft)]">
+              <span className="h-1.5 w-1.5 rounded-full bg-[var(--primary)]" />
+              <span>正在思考：{getAgentLabel(activeAgent)}</span>
+              <Button size="small" type="link" onClick={scrollToActiveThinking}>
+                查看
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="chat-canvas">
@@ -472,6 +500,10 @@ export function ChatApp({
         markdown={kgData?.markdown ?? ""}
         workspaceId={workspaceId ?? ""}
         onClose={() => setKgModalOpen(false)}
+      />
+      <LangGraphModal
+        open={langGraphModalOpen}
+        onClose={() => setLangGraphModalOpen(false)}
       />
     </div>
   );
