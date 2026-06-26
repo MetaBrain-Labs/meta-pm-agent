@@ -23,6 +23,7 @@ import {
   createGraphContextSummary,
   createTaskRelevantGraphContext,
 } from "../src/agents/product-workflow/common/context";
+import { createKnowledgeGraphTools } from "../src/agents/common/knowledge-graph-file-tool";
 
 const knowledgeGraph: ProductKnowledgeGraph = {
   entities: [
@@ -151,4 +152,25 @@ test("compacts request analysis to current task coverage", () => {
     compacted.business_model.map((item) => item.index),
     [2],
   );
+});
+
+test("clamps oversized graph tool limits without schema failure", async () => {
+  const tool = createKnowledgeGraphTools(knowledgeGraph).find(
+    (item) => item.name === "kg_file_read_by_source_task",
+  );
+  assert.ok(tool);
+
+  const rawResult = await tool.call({
+    source_task_ids: ["task-01"],
+    limit: 40,
+  });
+  const result = JSON.parse(String(rawResult)) as {
+    requested_limit: number;
+    effective_limit: number;
+    nodes: unknown[];
+  };
+
+  assert.equal(result.requested_limit, 40);
+  assert.equal(result.effective_limit, 30);
+  assert.equal(result.nodes.length, 1);
 });

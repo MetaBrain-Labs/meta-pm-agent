@@ -115,7 +115,12 @@ const graphQuerySchema = z.object({
     .optional()
     .describe("Source task IDs to retrieve"),
   query: z.string().optional().describe("Keyword query for names/descriptions"),
-  limit: z.number().int().positive().max(30).default(12),
+  limit: z
+    .number()
+    .int()
+    .positive()
+    .default(12)
+    .describe("Requested result limit. The tool clamps large values internally."),
 });
 
 /**
@@ -207,9 +212,12 @@ export function createKnowledgeGraphTools(
     ),
     tool(
       async ({ task_id, limit = 12 }) => {
+        const effectiveLimit = normalizeLimit(limit);
         return stringifyToolResult({
           action: "read_task_delta",
-          ...readGraphBySourceTasks(state, [task_id], limit),
+          requested_limit: limit,
+          effective_limit: effectiveLimit,
+          ...readGraphBySourceTasks(state, [task_id], effectiveLimit),
         });
       },
       {
@@ -218,15 +226,25 @@ export function createKnowledgeGraphTools(
           "Read the compact graph delta produced by a single source task ID.",
         schema: z.object({
           task_id: z.string().min(1),
-          limit: z.number().int().positive().max(30).default(12),
+          limit: z
+            .number()
+            .int()
+            .positive()
+            .default(12)
+            .describe(
+              "Requested result limit. The tool clamps large values internally.",
+            ),
         }),
       },
     ),
     tool(
       async ({ source_task_ids, limit = 12 }) => {
+        const effectiveLimit = normalizeLimit(limit);
         return stringifyToolResult({
           action: "read_by_source_task",
-          ...readGraphBySourceTasks(state, source_task_ids, limit),
+          requested_limit: limit,
+          effective_limit: effectiveLimit,
+          ...readGraphBySourceTasks(state, source_task_ids, effectiveLimit),
         });
       },
       {
@@ -235,7 +253,14 @@ export function createKnowledgeGraphTools(
           "Read compact graph nodes and relations produced by one or more source task IDs.",
         schema: z.object({
           source_task_ids: z.array(z.string().min(1)).min(1),
-          limit: z.number().int().positive().max(30).default(12),
+          limit: z
+            .number()
+            .int()
+            .positive()
+            .default(12)
+            .describe(
+              "Requested result limit. The tool clamps large values internally.",
+            ),
         }),
       },
     ),
