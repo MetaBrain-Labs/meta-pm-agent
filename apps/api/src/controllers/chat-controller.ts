@@ -301,18 +301,27 @@ export async function chatStreamHandler(c: Context) {
         }
         if (event.type === "tool-call") {
           const output = getAgentOutput(agentOutputs, getEventAgentType(event));
-          output.toolCalls.push({
+          upsertToolCall(output.toolCalls, {
+            id: event.toolCallId,
             name: event.toolName,
             args: event.toolArgs,
             agentType: getEventAgentType(event),
+            status: "running",
           });
         }
         if (event.type === "tool-result") {
           const output = getAgentOutput(agentOutputs, getEventAgentType(event));
           attachToolResult(
             output.toolCalls,
+            event.toolCallId,
             event.toolName,
             event.toolResult,
+            getEventAgentType(event),
+          );
+        }
+        if (event.type === "agent-status" && event.status === "completed") {
+          markPendingToolCallsComplete(
+            getAgentOutput(agentOutputs, getEventAgentType(event)).toolCalls,
             getEventAgentType(event),
           );
         }
@@ -473,7 +482,7 @@ function getRequestFormStatusForEvent(event: {
   if (event.type === "request-analysis-start") return "request_agent_running";
   if (event.type === "request-analysis-complete") return "request_analyzed";
   if (
-    event.type === "reasoning" &&
+    (event.type === "reasoning" || event.type === "agent-status") &&
     event.agentType &&
     event.agentType !== "conversation" &&
     event.agentType !== "request"
@@ -542,21 +551,57 @@ function getAgentOutput(
  */
 function attachToolResult(
   toolCalls: NonNullable<AgentConversationOutput["toolCalls"]>,
+  toolCallId: string | undefined,
   toolName: string,
   toolResult: unknown,
   agentType: string,
 ): void {
-  const targetIndex = findPendingToolCallIndex(toolCalls, toolName, agentType);
+  const targetIndex = findPendingToolCallIndex(
+    toolCalls,
+    toolCallId,
+    toolName,
+    agentType,
+  );
 
   if (targetIndex === -1) {
-    toolCalls.push({ name: toolName, result: toolResult, agentType });
+    toolCalls.push({
+      id: toolCallId,
+      name: toolName,
+      result: toolResult,
+      agentType,
+      status: "complete",
+    });
     return;
   }
 
   toolCalls[targetIndex] = {
     ...toolCalls[targetIndex],
     result: toolResult,
+    status: "complete",
   };
+}
+
+/**
+ * 按工具调用 ID 合并流式 tool-call 事件，避免重复片段落库后显示多条 pending 工具。
+ */
+function upsertToolCall(
+  toolCalls: NonNullable<AgentConversationOutput["toolCalls"]>,
+  nextToolCall: NonNullable<AgentConversationOutput["toolCalls"]>[number],
+): void {
+  if (nextToolCall.id) {
+    const existingIndex = toolCalls.findIndex(
+      (toolCall) => toolCall.id === nextToolCall.id,
+    );
+    if (existingIndex !== -1) {
+      toolCalls[existingIndex] = {
+        ...toolCalls[existingIndex],
+        ...nextToolCall,
+      };
+      return;
+    }
+  }
+
+  toolCalls.push(nextToolCall);
 }
 
 /**
@@ -564,11 +609,19 @@ function attachToolResult(
  */
 function findPendingToolCallIndex(
   toolCalls: NonNullable<AgentConversationOutput["toolCalls"]>,
+  toolCallId: string | undefined,
   toolName: string,
   agentType: string,
 ): number {
   for (let index = toolCalls.length - 1; index >= 0; index--) {
     const toolCall = toolCalls[index];
+    if (
+      toolCallId &&
+      toolCall?.id === toolCallId &&
+      !Object.prototype.hasOwnProperty.call(toolCall, "result")
+    ) {
+      return index;
+    }
     if (
       toolCall?.name === toolName &&
       (!toolCall.agentType || toolCall.agentType === agentType) &&
@@ -579,6 +632,27 @@ function findPendingToolCallIndex(
   }
 
   return -1;
+}
+
+/**
+ * Agent 完成时收敛仍未收到结果的工具调用，避免历史消息恢复后继续显示转圈。
+ */
+function markPendingToolCallsComplete(
+  toolCalls: NonNullable<AgentConversationOutput["toolCalls"]>,
+  agentType: string,
+): void {
+  for (let index = 0; index < toolCalls.length; index++) {
+    const toolCall = toolCalls[index];
+    if (
+      toolCall?.agentType === agentType &&
+      !Object.prototype.hasOwnProperty.call(toolCall, "result")
+    ) {
+      toolCalls[index] = {
+        ...toolCall,
+        status: "complete",
+      };
+    }
+  }
 }
 
 /**

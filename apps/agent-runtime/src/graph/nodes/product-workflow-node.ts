@@ -48,6 +48,12 @@ export async function plannerAgentNode(
   const writer = getWriter(config);
   const knowledgeGraph =
     state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
+  writer?.({
+    type: "agent-status",
+    agentType: "planner",
+    status: "started",
+    phase: "planning",
+  });
   const plan = await consumeProductWorkflowStream(
     streamPlannerAgent({
       workspaceId: state.workspaceId,
@@ -65,6 +71,12 @@ export async function plannerAgentNode(
     type: "agent-output",
     agentType: "planner",
     content: formatTaskExecutionPlanBlock(plan),
+  });
+  writer?.({
+    type: "agent-status",
+    agentType: "planner",
+    status: "completed",
+    phase: "planning",
   });
 
   return { knowledgeGraph, plan };
@@ -203,6 +215,15 @@ async function executeExecutorAgentTask(
   if (!task) return {};
   const knowledgeGraph =
     state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
+  const parallelAgents = getCurrentParallelExecutorAgents(state);
+
+  writer?.({
+    type: "agent-status",
+    agentType,
+    status: "started",
+    phase: "execution",
+    parallelAgents,
+  });
 
   const result = await consumeProductWorkflowStream(
     streamExecutorAgent({
@@ -217,6 +238,7 @@ async function executeExecutorAgentTask(
       signal: config?.signal,
     }),
     writer,
+    { parallelAgents },
   );
   const nextKnowledgeGraph = appendKnowledgeGraphPatch({
     knowledgeGraph,
@@ -235,6 +257,13 @@ async function executeExecutorAgentTask(
     agentType: result.agent_type,
     content: formatExecutorResultBlock(result),
   });
+  writer?.({
+    type: "agent-status",
+    agentType: result.agent_type,
+    status: "completed",
+    phase: "execution",
+    parallelAgents,
+  });
 
   return { executorResults: [result], knowledgeGraph: nextKnowledgeGraph };
 }
@@ -251,6 +280,12 @@ async function executePlannerWorkflowReview(
   const writer = getWriter(config);
   const knowledgeGraph =
     state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
+  writer?.({
+    type: "agent-status",
+    agentType: "planner",
+    status: "started",
+    phase: "review",
+  });
   const workflowResult = await consumeProductWorkflowStream(
     streamPlannerWorkflowReview({
       workspaceId: state.workspaceId,
@@ -270,6 +305,12 @@ async function executePlannerWorkflowReview(
     agentType: "planner",
     content: formatProductWorkflowBlock(workflowResult),
   });
+  writer?.({
+    type: "agent-status",
+    agentType: "planner",
+    status: "completed",
+    phase: "review",
+  });
   writer?.({ type: "complete", result: workflowResult });
 
   return { productWorkflow: workflowResult };
@@ -281,13 +322,35 @@ async function executePlannerWorkflowReview(
 async function consumeProductWorkflowStream<T>(
   stream: AsyncGenerator<ProductWorkflowStreamEvent, T, void>,
   writer: ((chunk: unknown) => void) | undefined,
+  options: { parallelAgents?: ExecutorAgentType[] } = {},
 ): Promise<T> {
   let next = await stream.next();
   while (!next.done) {
-    writer?.(next.value);
+    writer?.(withParallelAgents(next.value, options.parallelAgents));
     next = await stream.next();
   }
   return next.value;
+}
+
+/**
+ * 将当前并行批次信息补到 Executor token 事件，供前端 token 用量展示并行提示。
+ */
+function withParallelAgents(
+  event: ProductWorkflowStreamEvent,
+  parallelAgents?: ExecutorAgentType[],
+): ProductWorkflowStreamEvent {
+  if (
+    event.type !== "token-usage" ||
+    !parallelAgents ||
+    parallelAgents.length <= 1
+  ) {
+    return event;
+  }
+
+  return {
+    ...event,
+    parallelAgents,
+  };
 }
 
 /**
@@ -311,6 +374,18 @@ function findNextExecutableTaskForAgent(
       return task.depends_on.every((taskId) => completedTaskIds.has(taskId));
     }) ?? null
   );
+}
+
+/**
+ * 读取当前 Router 会同时调度的 Executor 集合，用于前端并行运行态展示。
+ */
+function getCurrentParallelExecutorAgents(
+  state: WorkflowGraphStateValue,
+): ExecutorAgentType[] {
+  const targets = selectNextExecutorRouterTargets(state);
+  if (!Array.isArray(targets)) return [];
+
+  return targets.filter(isExecutorAgentType);
 }
 
 /**

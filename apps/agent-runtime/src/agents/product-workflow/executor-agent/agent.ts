@@ -102,7 +102,8 @@ export async function* streamExecutorAgent(
     name: `${definition.agentType}-agent`,
     modelOptions: {
       ...TEXT_AGENT_MODEL_OPTIONS,
-      maxTokens: 8192,
+      // Executor 输出峰值约 5k，6k 预算足够保留图谱补丁且避免过度生成。
+      maxTokens: 6144,
     },
     systemPrompt: createExecutorAgentPrompt(definition),
     tools,

@@ -19,17 +19,19 @@ import {
   useRef,
   useState,
 } from "react";
-import { Spin } from "antd";
+import { Spin, Tooltip } from "antd";
 import {
   CaretRightOutlined,
   ReloadOutlined,
   LoadingOutlined,
+  PartitionOutlined,
 } from "@ant-design/icons";
 import type { Message, TokenUsageInfo } from "../types";
 import { ProseBlock } from "./ProseBlock";
 import {
   PlannerExecutionCard,
   PlannerExecutionLoadingCard,
+  PlannerReviewStatusCard,
 } from "./PlannerExecutionCard";
 import { RequestAnalysisCard } from "./RequestAnalysisCard";
 import { TodoCard } from "./TodoCard";
@@ -249,6 +251,10 @@ export function MessageBubble({
         />
       )}
 
+      {message.plannerReview && (
+        <PlannerReviewStatusCard state={message.plannerReview.state} />
+      )}
+
       {EXECUTOR_AGENT_TYPES.map((agentType) => {
         const block = executorReasoningBlocks?.find(
           (item) => item.agentType === agentType,
@@ -325,6 +331,7 @@ export function MessageBubble({
         !message.userInput &&
         !message.requestAnalysis &&
         !message.plannerExecution &&
+        !message.plannerReview &&
         !message.agentError && (
           <div className="assistant-bubble is-loading">
             <Spin
@@ -355,7 +362,7 @@ function TokenUsageFloatingBox({
 }) {
   const rows =
     usages.length > 0
-      ? usages
+      ? hydrateParallelTokenUsages(usages)
       : legacyUsage
         ? [legacyUsageToTokenUsage(legacyUsage)]
         : [];
@@ -389,7 +396,7 @@ function TokenUsageFloatingBox({
       </button>
       {open && (
         <div className="min-w-[280px] max-w-[min(520px,calc(100vw-48px))] border-t border-[var(--line-soft)] px-3 py-2">
-          <div className="grid grid-cols-[minmax(112px,1fr)_auto_auto_auto] gap-x-3 gap-y-1 text-[11px] leading-5 text-[var(--ink-faint)]">
+          <div className="grid grid-cols-[minmax(132px,1fr)_auto_auto_auto] gap-x-3 gap-y-1 text-[11px] leading-5 text-[var(--ink-faint)]">
             <span>Agent</span>
             <span className="text-right">输入</span>
             <span className="text-right">输出</span>
@@ -411,12 +418,23 @@ function TokenUsageFloatingBox({
  * 渲染单个 Agent 的 token 用量明细。
  */
 function TokenUsageRow({ usage }: { usage: TokenUsageInfo }) {
+  const parallelAgents = (usage.parallelAgents ?? []).filter(
+    (agentType) => agentType !== usage.agentType,
+  );
+
   return (
     <>
-      <span className="truncate text-[var(--ink-mute)]">
-        {getAgentLabel(usage.agentType)}
+      <span className="flex min-w-0 items-center gap-1 text-[var(--ink-mute)]">
+        {parallelAgents.length > 0 && (
+          <Tooltip
+            title={`与 ${parallelAgents.map(getAgentLabel).join("、")} 并行执行`}
+          >
+            <PartitionOutlined className="shrink-0 text-[var(--primary)]" />
+          </Tooltip>
+        )}
+        <span className="truncate">{getAgentLabel(usage.agentType)}</span>
         {usage.durationMs > 0 && (
-          <span className="ml-1 text-[var(--ink-faint)]">
+          <span className="shrink-0 text-[var(--ink-faint)]">
             {formatDuration(usage.durationMs)}
           </span>
         )}
@@ -432,6 +450,60 @@ function TokenUsageRow({ usage }: { usage: TokenUsageInfo }) {
       </span>
     </>
   );
+}
+
+/**
+ * 历史 token 用量没有显式并行批次时，根据执行时间窗口推断重叠 Executor。
+ */
+function hydrateParallelTokenUsages(
+  usages: TokenUsageInfo[],
+): TokenUsageInfo[] {
+  return usages.map((usage) => {
+    if (usage.parallelAgents?.length || !isExecutorAgent(usage.agentType)) {
+      return usage;
+    }
+
+    const interval = getTokenUsageInterval(usage);
+    if (!interval) return usage;
+
+    const parallelAgents = usages
+      .filter((candidate) => {
+        if (candidate === usage || !isExecutorAgent(candidate.agentType)) {
+          return false;
+        }
+        const candidateInterval = getTokenUsageInterval(candidate);
+        return candidateInterval
+          ? intervalsOverlap(interval, candidateInterval)
+          : false;
+      })
+      .map((candidate) => candidate.agentType);
+
+    return parallelAgents.length > 0
+      ? { ...usage, parallelAgents: [usage.agentType, ...parallelAgents] }
+      : usage;
+  });
+}
+
+/**
+ * 根据 token 记录的结束时间和耗时推算执行窗口。
+ */
+function getTokenUsageInterval(
+  usage: TokenUsageInfo,
+): { start: number; end: number } | null {
+  if (!usage.createdAt || usage.durationMs <= 0) return null;
+  const end = Date.parse(usage.createdAt);
+  if (!Number.isFinite(end)) return null;
+  return { start: end - usage.durationMs, end };
+}
+
+/**
+ * 判断两个执行窗口是否有重叠。
+ */
+function intervalsOverlap(
+  left: { start: number; end: number },
+  right: { start: number; end: number },
+): boolean {
+  return left.start <= right.end && right.start <= left.end;
 }
 
 /**

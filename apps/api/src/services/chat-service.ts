@@ -64,10 +64,12 @@ export interface AgentConversationOutput {
   content: string;
   reasoningContent?: string;
   toolCalls?: Array<{
+    id?: string;
     name: string;
     args?: Record<string, unknown>;
     result?: unknown;
     agentType?: string;
+    status?: "running" | "complete";
   }>;
   /** 该 Agent 本次模型调用的 token 用量 */
   tokenUsage?: {

@@ -1,3 +1,15 @@
+/**
+ * 用户输入整理卡片
+ *
+ * 展示 Conversation Agent 从用户消息中整理出的结构化输入项，并保持刷新恢复和实时流式
+ * 完成后的视觉间距一致。
+ *
+ * Responsibilities:
+ * - 解析 user-input tagged block
+ * - 按输入类型渲染标签和正文
+ * - 保持用户输入整理卡片默认折叠
+ */
+
 import { useState } from "react";
 import { Tag, List, Collapse } from "antd";
 import {
@@ -50,7 +62,7 @@ export function UserInputCard({ raw }: Props) {
   if (!items) return null;
 
   return (
-    <div>
+    <div className="mb-2">
       <Collapse
         defaultActiveKey={[]}
         expandIcon={({ isActive }) => (

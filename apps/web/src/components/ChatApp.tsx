@@ -194,7 +194,7 @@ export function ChatApp({
     }
     return -1;
   })();
-  const activeAgent = isLoading ? findActiveAgent(messages) : undefined;
+  const activeAgents = isLoading ? findActiveAgents(messages) : [];
 
   const nextUserContentByAssistantId = (() => {
     const map = new Map<string, string>();
@@ -251,11 +251,11 @@ export function ChatApp({
     setUserScrolled(false);
   };
 
-  const scrollToActiveThinking = useCallback(() => {
+  const scrollToActiveThinking = useCallback((agentType: string) => {
     const container = containerRef.current;
-    if (!activeAgent || !container) return;
+    if (!container) return;
 
-    const targetAgent = getThinkingTargetAgentType(activeAgent);
+    const targetAgent = getThinkingTargetAgentType(agentType);
     const target = container.querySelector<HTMLElement>(
       `[data-agent-thinking="${escapeDataAttributeValue(targetAgent)}"]`,
     );
@@ -273,7 +273,7 @@ export function ChatApp({
 
     container.scrollTo({ top: Math.max(0, nextTop), behavior: "smooth" });
     setUserScrolled(true);
-  }, [activeAgent]);
+  }, []);
 
   return (
     <div className="chat-workspace">
@@ -298,13 +298,21 @@ export function ChatApp({
               onClick={() => setLangGraphModalOpen(true)}
             />
           </Tooltip>
-          {activeAgent && (
-            <div className="flex items-center gap-2 rounded-md border border-[var(--line-soft)] bg-white px-2.5 py-1 text-[12px] text-[var(--ink-soft)]">
+          {activeAgents.length > 0 && (
+            <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-md border border-[var(--line-soft)] bg-white px-2.5 py-1 text-[12px] text-[var(--ink-soft)]">
               <span className="h-1.5 w-1.5 rounded-full bg-[var(--primary)]" />
-              <span>正在思考：{getAgentLabel(activeAgent)}</span>
-              <Button size="small" type="link" onClick={scrollToActiveThinking}>
-                查看
-              </Button>
+              <span>{activeAgents.length > 1 ? "并行思考：" : "正在思考："}</span>
+              {activeAgents.map((agentType) => (
+                <Button
+                  key={agentType}
+                  size="small"
+                  type="link"
+                  className="h-auto! px-0!"
+                  onClick={() => scrollToActiveThinking(agentType)}
+                >
+                  {getAgentLabel(agentType)}
+                </Button>
+              ))}
             </div>
           )}
         </div>
@@ -552,12 +560,19 @@ function getThinkingTargetAgentType(agentType: string): string {
 /**
  * 从最新助手消息中查找当前正在思考的 Agent。
  */
-function findActiveAgent(messages: Message[]): string | undefined {
+function findActiveAgents(messages: Message[]): string[] {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
-    if (message?.role === "agent" && message.activeAgent) {
-      return message.activeAgent;
+    if (message?.role === "agent") {
+      const activeAgents = message.activeAgents?.length
+        ? message.activeAgents
+        : message.activeAgent
+          ? [message.activeAgent]
+          : [];
+      if (activeAgents.length > 0) {
+        return [...new Set(activeAgents)];
+      }
     }
   }
-  return undefined;
+  return [];
 }

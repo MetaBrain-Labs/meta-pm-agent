@@ -64,6 +64,7 @@ export type RequestAgentStreamEvent =
 export function createRequestAgent() {
   const model = createChatModel({
     enableThinking: false,
+    // Request Agent 近期输出峰值约 2.6k，保留 4k 预算避免结构化 JSON 被截断。
     maxTokens: 4096,
     responseFormat: "json_object",
     temperature: 0,

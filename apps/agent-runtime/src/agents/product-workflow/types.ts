@@ -67,6 +67,13 @@ export interface PlannerWorkflowReviewInput {
  */
 export type ProductWorkflowStreamEvent =
   | {
+      type: "agent-status";
+      agentType: ProductWorkflowAgentType;
+      status: "started" | "completed";
+      phase?: "planning" | "execution" | "review";
+      parallelAgents?: ProductWorkflowAgentType[];
+    }
+  | {
       type: "reasoning";
       agentType: ProductWorkflowAgentType;
       content: string;
@@ -78,12 +85,14 @@ export type ProductWorkflowStreamEvent =
     }
   | {
       type: "tool-call";
+      toolCallId?: string;
       toolName: string;
       toolArgs?: Record<string, unknown>;
       agentType: ProductWorkflowAgentType;
     }
   | {
       type: "tool-result";
+      toolCallId?: string;
       toolName: string;
       toolResult: unknown;
       agentType: ProductWorkflowAgentType;
@@ -100,6 +109,7 @@ export type ProductWorkflowStreamEvent =
       costOutput: number;
       costTotal: number;
       durationMs: number;
+      parallelAgents?: ProductWorkflowAgentType[];
     }
   | { type: "complete"; result: ProductWorkflowResult }
   | { type: "knowledge-graph-update"; knowledgeGraph: ProductKnowledgeGraph };

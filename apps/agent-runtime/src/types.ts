@@ -46,13 +46,22 @@ export interface StreamChunk {
 export type ConversationStreamEvent =
   | StreamChunk
   | {
+      type: "agent-status";
+      agentType: AgentMessageType;
+      status: "started" | "completed";
+      phase?: "planning" | "execution" | "review";
+      parallelAgents?: AgentMessageType[];
+    }
+  | {
       type: "tool-call";
+      toolCallId?: string;
       toolName: string;
       toolArgs?: Record<string, unknown>;
       agentType?: AgentMessageType;
     }
   | {
       type: "tool-result";
+      toolCallId?: string;
       toolName: string;
       toolResult: unknown;
       agentType?: AgentMessageType;
@@ -80,6 +89,7 @@ export type ConversationStreamEvent =
       costOutput: number;
       costTotal: number;
       durationMs: number;
+      parallelAgents?: AgentMessageType[];
     }
   | { type: "error"; error: string; agentType?: AgentMessageType }
   | { type: "complete"; result: ProductWorkflowResult }

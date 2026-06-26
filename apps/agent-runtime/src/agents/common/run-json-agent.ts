@@ -55,12 +55,14 @@ export type JsonAgentEvent<AgentType extends string> =
   | JsonAgentReasoningEvent<AgentType>
   | {
       type: "tool-call";
+      toolCallId?: string;
       toolName: string;
       toolArgs?: Record<string, unknown>;
       agentType: AgentType;
     }
   | {
       type: "tool-result";
+      toolCallId?: string;
       toolName: string;
       toolResult: unknown;
       agentType: AgentType;
@@ -139,6 +141,7 @@ export async function* runJsonAgent<T, AgentType extends string>(
       )) {
         yield {
           type: "tool-call",
+          toolCallId: toolCall.id,
           toolName: toolCall.name,
           toolArgs: toolCall.args,
           agentType: options.agentType,
@@ -149,6 +152,7 @@ export async function* runJsonAgent<T, AgentType extends string>(
       if (toolResult && visibleToolNames.has(toolResult.name)) {
         yield {
           type: "tool-result",
+          toolCallId: toolResult.id,
           toolName: toolResult.name,
           toolResult: toolResult.content,
           agentType: options.agentType,
@@ -234,12 +238,13 @@ function getErrorMessage(error: unknown): string {
  */
 function getToolCalls(
   message: BaseMessage,
-): Array<{ name: string; args?: Record<string, unknown> }> {
+): Array<{ id?: string; name: string; args?: Record<string, unknown> }> {
   if (!AIMessage.isInstance(message)) return [];
 
   return (message.tool_calls ?? [])
     .filter((toolCall) => toolCall.name)
     .map((toolCall) => ({
+      id: toolCall.id,
       name: toolCall.name,
       args:
         typeof toolCall.args === "object" && toolCall.args !== null
@@ -253,10 +258,11 @@ function getToolCalls(
  */
 function getToolResult(
   message: BaseMessage,
-): { name: string; content: unknown } | null {
+): { id?: string; name: string; content: unknown } | null {
   if (!ToolMessage.isInstance(message)) return null;
 
   return {
+    id: (message as { tool_call_id?: string }).tool_call_id,
     name: message.name ?? "unknown",
     content: message.content,
   };

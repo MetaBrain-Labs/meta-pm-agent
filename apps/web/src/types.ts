@@ -15,6 +15,7 @@
 
 export type StreamEventType =
   | "start"
+  | "agent-status"
   | "thinking"
   | "thinking-done"
   | "text"
@@ -39,6 +40,10 @@ export interface StreamEvent {
   id?: string;
   content?: string;
   agentType?: string;
+  status?: "started" | "completed";
+  phase?: "planning" | "execution" | "review";
+  parallelAgents?: string[];
+  toolCallId?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolResult?: unknown;
@@ -75,6 +80,7 @@ export interface TokenUsageInfo {
   costTotal: number;
   durationMs: number;
   createdAt?: string;
+  parallelAgents?: string[];
 }
 
 export interface TodoItem {
@@ -208,19 +214,25 @@ export interface Message {
     content?: string;
     plan: TaskExecutionPlan;
   };
+  plannerReview?: {
+    state: "generating" | "complete";
+  };
   executorResults?: ExecutorAgentResult[];
   activeAgent?: string;
   activeAgents?: string[];
+  parallelExecutorAgents?: Record<string, string[]>;
   agentError?: {
     agentType?: string;
     message: string;
   };
   todos?: TodoItem[];
   toolCalls?: Array<{
+    id?: string;
     name: string;
     args?: Record<string, unknown>;
     result?: unknown;
     agentType?: string;
+    status?: "running" | "complete";
   }>;
   usage?: Record<string, unknown>;
   tokenUsages?: TokenUsageInfo[];
