@@ -1,17 +1,21 @@
 /**
- * A pocket-sized markdown renderer for assistant chat messages.
+ * 助手消息 Markdown 渲染器
  *
- * We deliberately avoid a full parser library — chat output rarely uses
- * the long tail of markdown features and a hand-rolled walker keeps the
- * bundle slim. Block-level: ATX headings (# … ###), fenced code (```),
- * ordered (1.) and unordered (- / *) lists, paragraphs, blank-line
- * separation. Inline: backtick code spans, **bold**, *italic* / _italic_,
- * and bare links (autolinked URLs).
+ * 使用 react-markdown 和 remark-gfm 渲染 Agent 输出的 Markdown 内容，并保留
+ * Web Search 引用增强、显式 source 标记、代码块复制按钮和项目现有样式类名。
  *
- * Output is a React fragment of typed elements — no dangerouslySetInnerHTML,
- * so untrusted text can't smuggle markup through.
+ * Responsibilities:
+ * - 渲染 GFM Markdown，包括表格、列表、链接、代码块和行内格式
+ * - 将 [[source:id]] 标记转换成可点击引用图标
+ * - 为可匹配搜索来源的段落和标题追加引用入口
+ *
+ * Notes:
+ * - 不使用 dangerouslySetInnerHTML，Markdown 内容由 React 组件树渲染。
  */
-import { Fragment, useState, useCallback, type ReactNode } from "react";
+
+import { isValidElement, useCallback, useState, type ReactNode } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Button, Tooltip } from "antd";
 import { CopyOutlined, LinkOutlined } from "@ant-design/icons";
 
@@ -32,302 +36,251 @@ interface RenderMarkdownOptions {
   citationSources?: MarkdownCitationSource[];
 }
 
+/**
+ * 渲染 Agent 输出的 Markdown 文本。
+ */
 export function renderMarkdown(
   input: string,
   options: RenderMarkdownOptions = {},
 ): ReactNode {
-  const blocks = parseBlocks(input);
-  return <>{blocks.map((b, i) => renderBlock(b, i, options))}</>;
-}
-
-type Block =
-  | { kind: "p"; text: string }
-  | { kind: "h"; level: 1 | 2 | 3 | 4; text: string }
-  | { kind: "ul"; items: string[] }
-  | { kind: "ol"; items: string[] }
-  | { kind: "table"; headers: string[]; rows: string[][] }
-  | { kind: "code"; lang: string | null; body: string }
-  | { kind: "hr" };
-
-function parseBlocks(input: string): Block[] {
-  const lines = input.replace(/\r\n/g, "\n").split("\n");
-  const out: Block[] = [];
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i] ?? "";
-    if (line.trim() === "") {
-      i++;
-      continue;
-    }
-    // Fenced code block.
-    const fence = /^```(\w[\w+-]*)?\s*$/.exec(line);
-    if (fence) {
-      const lang = fence[1] ?? null;
-      const buf: string[] = [];
-      i++;
-      while (i < lines.length && !/^```\s*$/.test(lines[i] ?? "")) {
-        buf.push(lines[i] ?? "");
-        i++;
-      }
-      // Skip the closing fence (if present).
-      if (i < lines.length) i++;
-      out.push({ kind: "code", lang, body: buf.join("\n") });
-      continue;
-    }
-    // ATX heading.
-    const heading = /^(#{1,4})\s+(.*\S)\s*$/.exec(line);
-    if (heading) {
-      const level = heading[1]!.length as 1 | 2 | 3 | 4;
-      out.push({ kind: "h", level, text: heading[2]! });
-      i++;
-      continue;
-    }
-    // Horizontal rule.
-    if (/^\s*(-{3,}|_{3,}|\*{3,})\s*$/.test(line)) {
-      out.push({ kind: "hr" });
-      i++;
-      continue;
-    }
-    if (isTableStart(lines, i)) {
-      const headers = splitTableRow(lines[i] ?? "");
-      const rows: string[][] = [];
-      i += 2;
-      while (i < lines.length && isTableRow(lines[i] ?? "")) {
-        rows.push(
-          normalizeTableRow(splitTableRow(lines[i] ?? ""), headers.length),
-        );
-        i++;
-      }
-      out.push({ kind: "table", headers, rows });
-      continue;
-    }
-    // Unordered list. Group consecutive items.
-    if (/^\s*[-*+]\s+/.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i] ?? "")) {
-        items.push((lines[i] ?? "").replace(/^\s*[-*+]\s+/, ""));
-        i++;
-      }
-      out.push({ kind: "ul", items });
-      continue;
-    }
-    // Ordered list.
-    if (/^\s*\d+\.\s+/.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i] ?? "")) {
-        items.push((lines[i] ?? "").replace(/^\s*\d+\.\s+/, ""));
-        i++;
-      }
-      out.push({ kind: "ol", items });
-      continue;
-    }
-    // Paragraph: greedy until a blank line or another block-starter.
-    const buf: string[] = [line];
-    i++;
-    while (i < lines.length) {
-      const next = lines[i] ?? "";
-      if (next.trim() === "") break;
-      if (/^```/.test(next)) break;
-      if (/^#{1,4}\s+/.test(next)) break;
-      if (isTableStart(lines, i)) break;
-      if (/^\s*[-*+]\s+/.test(next)) break;
-      if (/^\s*\d+\.\s+/.test(next)) break;
-      buf.push(next);
-      i++;
-    }
-    out.push({ kind: "p", text: buf.join("\n") });
-  }
-  return out;
-}
-
-function renderBlock(
-  block: Block,
-  key: number,
-  options: RenderMarkdownOptions,
-): ReactNode {
-  if (block.kind === "p") {
-    const citation = hasResolvableSourceMarker(
-      block.text,
-      options.citationSources,
-    )
-      ? null
-      : findBestCitation(block.text, options.citationSources);
-    return (
-      <p key={key} className="my-0.5">
-        {renderInline(block.text, options)}
-        {citation && <CitationLink source={citation} />}
-      </p>
-    );
-  }
-  if (block.kind === "h") {
-    const Tag = `h${block.level}` as "h1" | "h2" | "h3" | "h4";
-    const citation = hasResolvableSourceMarker(
-      block.text,
-      options.citationSources,
-    )
-      ? null
-      : findBestCitation(block.text, options.citationSources);
-    return (
-      <Tag
-        key={key}
-        className="my-1.5 leading-tight"
-        style={{
-          fontFamily: 'var(--sans)',
-          fontWeight: block.level <= 2 ? 700 : 600,
-          fontSize:
-            block.level === 1
-              ? 20
-              : block.level === 2
-                ? 17
-                : block.level === 3
-                  ? 15
-                  : 13,
-          color: 'var(--ink)',
-          letterSpacing: '-0.014em',
-          borderBottom:
-            block.level === 1 ? '1px solid var(--line-soft)' : undefined,
-          paddingBottom: block.level === 1 ? 6 : undefined,
-          lineHeight: 1.2,
-        }}
-      >
-        {renderInline(block.text, options)}
-        {citation && <CitationLink source={citation} />}
-      </Tag>
-    );
-  }
-  if (block.kind === "ul") {
-    return (
-      <ul key={key} className="my-0.5 pl-5">
-        {block.items.map((item, i) => {
-          const citation = hasResolvableSourceMarker(
-            item,
-            options.citationSources,
-          )
-            ? null
-            : findBestCitation(item, options.citationSources);
-          return (
-            <li key={i} className="my-0.5">
-              {renderInline(item, options)}
-              {citation && <CitationLink source={citation} />}
-            </li>
-          );
-        })}
-      </ul>
-    );
-  }
-  if (block.kind === "ol") {
-    return (
-      <ol key={key} className="my-0.5 pl-5">
-        {block.items.map((item, i) => {
-          const citation = hasResolvableSourceMarker(
-            item,
-            options.citationSources,
-          )
-            ? null
-            : findBestCitation(item, options.citationSources);
-          return (
-            <li key={i} className="my-0.5">
-              {renderInline(item, options)}
-              {citation && <CitationLink source={citation} />}
-            </li>
-          );
-        })}
-      </ol>
-    );
-  }
-  if (block.kind === "table") {
-    return (
-      <div
-        key={key}
-        className="my-2 max-w-full overflow-x-auto rounded-md border border-[var(--line-soft)]"
-      >
-        <table className="min-w-full border-collapse text-left text-[13px]">
-          <thead className="bg-[var(--surface-muted)]">
-            <tr>
-              {block.headers.map((header, index) => (
-                <th
-                  key={index}
-                  className="border-b border-[var(--line-soft)] px-3 py-2 font-bold text-[var(--ink)]"
-                >
-                  {renderInline(header, options)}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {block.rows.map((row, rowIndex) => (
-              <tr
-                key={rowIndex}
-                className="border-b border-[var(--line-soft)] last:border-b-0"
-              >
-                {block.headers.map((_, cellIndex) => (
-                  <td
-                    key={cellIndex}
-                    className="max-w-[320px] align-top px-3 py-2 text-[var(--ink-soft)]"
-                  >
-                    {renderInline(row[cellIndex] ?? "", options)}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    );
-  }
-  if (block.kind === "code") {
-    return <CodeBlock key={key} lang={block.lang} body={block.body} />;
-  }
-  if (block.kind === "hr") {
-    return <hr key={key} className="md-hr" />;
-  }
-  return null;
+  return <MarkdownContent input={input} options={options} />;
 }
 
 /**
- * 判断当前位置是否是标准 Markdown 表格的开头。
+ * react-markdown 组件壳，集中配置 GFM 插件和自定义元素渲染。
  */
-function isTableStart(lines: string[], index: number): boolean {
-  const header = lines[index] ?? "";
-  const separator = lines[index + 1] ?? "";
-  return isTableRow(header) && isTableSeparator(separator);
-}
+function MarkdownContent({
+  input,
+  options,
+}: {
+  input: string;
+  options: RenderMarkdownOptions;
+}) {
+  const components = createMarkdownComponents(options);
 
-/**
- * 判断一行是否形如 Markdown 表格行。
- */
-function isTableRow(line: string): boolean {
-  const trimmed = line.trim();
-  return trimmed.includes("|") && /^\|?.+\|.+\|?$/.test(trimmed);
-}
-
-/**
- * 判断一行是否是 Markdown 表格分隔行。
- */
-function isTableSeparator(line: string): boolean {
-  const cells = splitTableRow(line);
   return (
-    cells.length > 0 &&
-    cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()))
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={components}
+    >
+      {replaceSourceMarkers(input)}
+    </ReactMarkdown>
   );
 }
 
 /**
- * 拆分 Markdown 表格行，并去掉可选的首尾竖线。
+ * 创建 Markdown 元素到项目 UI 样式的映射。
  */
-function splitTableRow(line: string): string[] {
-  let trimmed = line.trim();
-  if (trimmed.startsWith("|")) trimmed = trimmed.slice(1);
-  if (trimmed.endsWith("|")) trimmed = trimmed.slice(0, -1);
-  return trimmed.split("|").map((cell) => cell.trim());
+function createMarkdownComponents(
+  options: RenderMarkdownOptions,
+): Components {
+  return {
+    p: ({ children }) => (
+      <p className="my-0.5">
+        {children}
+        <ImplicitCitation children={children} options={options} />
+      </p>
+    ),
+    h1: ({ children }) => (
+      <Heading level={1} options={options}>
+        {children}
+      </Heading>
+    ),
+    h2: ({ children }) => (
+      <Heading level={2} options={options}>
+        {children}
+      </Heading>
+    ),
+    h3: ({ children }) => (
+      <Heading level={3} options={options}>
+        {children}
+      </Heading>
+    ),
+    h4: ({ children }) => (
+      <Heading level={4} options={options}>
+        {children}
+      </Heading>
+    ),
+    ul: ({ children }) => <ul className="my-0.5 pl-5">{children}</ul>,
+    ol: ({ children }) => <ol className="my-0.5 pl-5">{children}</ol>,
+    li: ({ children }) => (
+      <li className="my-0.5">
+        {children}
+        <ImplicitCitation children={children} options={options} />
+      </li>
+    ),
+    a: ({ href, children }) => {
+      const source = href?.startsWith("#source:")
+        ? findCitationBySourceId(
+            decodeURIComponent(href.slice("#source:".length)),
+            options.citationSources,
+          )
+        : null;
+
+      if (source) {
+        return <CitationLink source={source} />;
+      }
+
+      return (
+        <a
+          className="md-link"
+          href={href}
+          target="_blank"
+          rel="noreferrer noopener"
+        >
+          {children}
+        </a>
+      );
+    },
+    pre: ({ children }) => {
+      const codeElement = Array.isArray(children) ? children[0] : children;
+      if (isValidElement(codeElement)) {
+        const props = codeElement.props as {
+          className?: string;
+          children?: ReactNode;
+        };
+        const language =
+          /language-([\w+-]+)/.exec(props.className ?? "")?.[1] ?? null;
+        const body = flattenReactText(props.children).replace(/\n$/, "");
+
+        return <CodeBlock lang={language} body={body} />;
+      }
+
+      return <pre className="md-code">{children}</pre>;
+    },
+    code: ({ className, children }) => {
+      return (
+        <code
+          className={className ? `${className} md-inline-code` : "md-inline-code"}
+        >
+          {children}
+        </code>
+      );
+    },
+    table: ({ children }) => (
+      <div className="my-2 max-w-full overflow-x-auto rounded-md border border-[var(--line-soft)]">
+        <table className="min-w-full border-collapse text-left text-[13px]">
+          {children}
+        </table>
+      </div>
+    ),
+    thead: ({ children }) => (
+      <thead className="bg-[var(--surface-muted)]">{children}</thead>
+    ),
+    th: ({ children }) => (
+      <th className="border-b border-[var(--line-soft)] px-3 py-2 font-bold text-[var(--ink)]">
+        {children}
+      </th>
+    ),
+    tr: ({ children }) => (
+      <tr className="border-b border-[var(--line-soft)] last:border-b-0">
+        {children}
+      </tr>
+    ),
+    td: ({ children }) => (
+      <td className="max-w-[320px] align-top px-3 py-2 text-[var(--ink-soft)]">
+        {children}
+      </td>
+    ),
+    hr: () => <hr className="md-hr" />,
+  };
 }
 
 /**
- * 对齐行单元格数量，避免短行导致渲染错位。
+ * 标题组件，统一字号并追加隐式引用入口。
  */
-function normalizeTableRow(row: string[], length: number): string[] {
-  if (row.length >= length) return row.slice(0, length);
-  return [...row, ...Array.from({ length: length - row.length }, () => "")];
+function Heading({
+  level,
+  children,
+  options,
+}: {
+  level: 1 | 2 | 3 | 4;
+  children: ReactNode;
+  options: RenderMarkdownOptions;
+}) {
+  const Tag = `h${level}` as "h1" | "h2" | "h3" | "h4";
+
+  return (
+    <Tag
+      className="my-1.5 leading-tight"
+      style={{
+        fontFamily: "var(--sans)",
+        fontWeight: level <= 2 ? 700 : 600,
+        fontSize: level === 1 ? 20 : level === 2 ? 17 : level === 3 ? 15 : 13,
+        color: "var(--ink)",
+        letterSpacing: "0",
+        borderBottom: level === 1 ? "1px solid var(--line-soft)" : undefined,
+        paddingBottom: level === 1 ? 6 : undefined,
+        lineHeight: 1.2,
+      }}
+    >
+      {children}
+      <ImplicitCitation children={children} options={options} />
+    </Tag>
+  );
+}
+
+/**
+ * 根据当前块文本自动追加最可能的搜索来源。
+ */
+function ImplicitCitation({
+  children,
+  options,
+}: {
+  children: ReactNode;
+  options: RenderMarkdownOptions;
+}) {
+  if (hasSourceCitationChild(children)) return null;
+
+  const citation = findBestCitation(
+    flattenReactText(children),
+    options.citationSources,
+  );
+
+  return citation ? <CitationLink source={citation} /> : null;
+}
+
+/**
+ * 将模型显式来源标记转换成 react-markdown 可解析的普通链接。
+ */
+function replaceSourceMarkers(input: string): string {
+  return input.replace(/\[\[source:([^\]\s]+)\]\]/g, (_match, sourceId) => {
+    return `[↗](#source:${encodeURIComponent(sourceId)})`;
+  });
+}
+
+/**
+ * 判断 React 子树里是否已经包含显式来源链接。
+ */
+function hasSourceCitationChild(node: ReactNode): boolean {
+  if (Array.isArray(node)) return node.some(hasSourceCitationChild);
+  if (!isValidElement(node)) return false;
+
+  const props = node.props as { href?: unknown; children?: ReactNode };
+  if (typeof props.href === "string" && props.href.startsWith("#source:")) {
+    return true;
+  }
+
+  return hasSourceCitationChild(props.children);
+}
+
+/**
+ * 抽取 React 子树中的纯文本，用于来源匹配。
+ */
+function flattenReactText(node: ReactNode): string {
+  if (node === null || node === undefined || typeof node === "boolean") {
+    return "";
+  }
+  if (typeof node === "string" || typeof node === "number") {
+    return String(node);
+  }
+  if (Array.isArray(node)) return node.map(flattenReactText).join(" ");
+  if (isValidElement(node)) {
+    const props = node.props as { children?: ReactNode };
+    return flattenReactText(props.children);
+  }
+
+  return "";
 }
 
 /**
@@ -353,7 +306,10 @@ function findBestCitation(
       return source;
     }
 
-    const titleScore = scoreTokenOverlap(targetTokens, tokenizeForCitation(title));
+    const titleScore = scoreTokenOverlap(
+      targetTokens,
+      tokenizeForCitation(title),
+    );
     const snippetScore =
       scoreTokenOverlap(targetTokens, tokenizeForCitation(snippet)) * 0.6;
     const score = Math.max(titleScore, snippetScore);
@@ -376,21 +332,6 @@ function findCitationBySourceId(
   if (!sources?.length) return null;
 
   return sources.find((source) => source.sourceId === sourceId) ?? null;
-}
-
-/**
- * 判断文本中是否已经包含显式来源标记。
- */
-function hasResolvableSourceMarker(
-  text: string,
-  sources: MarkdownCitationSource[] | undefined,
-): boolean {
-  const markers = text.match(/\[\[source:([^\]\s]+)\]\]/g) ?? [];
-
-  return markers.some((marker) => {
-    const sourceId = /\[\[source:([^\]\s]+)\]\]/.exec(marker)?.[1];
-    return Boolean(sourceId && findCitationBySourceId(sourceId, sources));
-  });
 }
 
 /**
@@ -430,7 +371,7 @@ function normalizeCitationText(text: string): string {
   return text
     .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
     .replace(/https?:\/\/\S+/g, " ")
-    .replace(/[`*_>#|[\](){}:：,，.。!！?？;；"“”'‘’、/\\-]+/g, " ")
+    .replace(/[`*_>#|[\](){}:：，。；？！“”‘’、\\-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
@@ -505,112 +446,9 @@ const CITATION_STOP_WORDS = new Set([
   "your",
 ]);
 
-// Inline pass: tokenize into runs of `code`, **bold**, *italic*, links,
-// and plain text. We walk the string with a regex that matches whichever
-// delimiter shows up next; everything between delimiters becomes a text
-// span (which itself still gets autolink scanning).
-function renderInline(
-  text: string,
-  options: RenderMarkdownOptions = {},
-): ReactNode {
-  const out: ReactNode[] = [];
-  // Order matters: inline code first so its contents are not re-tokenized
-  // as bold/italic.
-  const re =
-    /(`[^`]+`)|(\*\*[^*]+\*\*)|(__[^_]+__)|(\*[^*\n]+\*)|(_[^_\n]+_)|\[([^\]]+)\]\(([^)\s]+)\)|\[\[source:([^\]\s]+)\]\]/g;
-  let lastIndex = 0;
-  let m: RegExpExecArray | null;
-  let key = 0;
-  while ((m = re.exec(text))) {
-    if (m.index > lastIndex) {
-      pushText(out, text.slice(lastIndex, m.index), key++);
-    }
-    if (m[1]) {
-      out.push(
-        <code key={key++} className="md-inline-code">
-          {m[1].slice(1, -1)}
-        </code>,
-      );
-    } else if (m[2]) {
-      out.push(<strong key={key++}>{m[2].slice(2, -2)}</strong>);
-    } else if (m[3]) {
-      out.push(<strong key={key++}>{m[3].slice(2, -2)}</strong>);
-    } else if (m[4]) {
-      out.push(<em key={key++}>{m[4].slice(1, -1)}</em>);
-    } else if (m[5]) {
-      out.push(<em key={key++}>{m[5].slice(1, -1)}</em>);
-    } else if (m[6] && m[7]) {
-      out.push(
-        <a
-          key={key++}
-          className="md-link"
-          href={m[7]}
-          target="_blank"
-          rel="noreferrer noopener"
-        >
-          {m[6]}
-        </a>,
-      );
-    } else if (m[8]) {
-      const citation = findCitationBySourceId(m[8], options.citationSources);
-      if (citation) {
-        out.push(<CitationLink key={key++} source={citation} />);
-      }
-    }
-    lastIndex = re.lastIndex;
-  }
-  if (lastIndex < text.length) {
-    pushText(out, text.slice(lastIndex), key++);
-  }
-  return <Fragment>{out}</Fragment>;
-}
-
-// Walk a plain text run, autolinking bare URLs and preserving the rest as
-// text nodes. Newlines inside a paragraph become explicit <br />s — the
-// upstream parser has already left them in place because chat output
-// often relies on hard line breaks rather than blank-line separation.
-function pushText(out: ReactNode[], text: string, baseKey: number): void {
-  if (!text) return;
-  const urlRe = /(https?:\/\/[^\s)]+)/g;
-  const segments: ReactNode[] = [];
-  let lastIndex = 0;
-  let m: RegExpExecArray | null;
-  let k = 0;
-  while ((m = urlRe.exec(text))) {
-    if (m.index > lastIndex) {
-      segments.push(
-        ...withBreaks(text.slice(lastIndex, m.index), `${baseKey}-${k++}`),
-      );
-    }
-    segments.push(
-      <a
-        key={`${baseKey}-${k++}`}
-        className="md-link"
-        href={m[1]}
-        target="_blank"
-        rel="noreferrer noopener"
-      >
-        {m[1]}
-      </a>,
-    );
-    lastIndex = urlRe.lastIndex;
-  }
-  if (lastIndex < text.length) {
-    segments.push(...withBreaks(text.slice(lastIndex), `${baseKey}-${k++}`));
-  }
-  out.push(<Fragment key={baseKey}>{segments}</Fragment>);
-}
-
-function withBreaks(text: string, baseKey: string): ReactNode[] {
-  const parts = text.split("\n");
-  const out: ReactNode[] = [];
-  parts.forEach((part, i) => {
-    if (i > 0) out.push(<br key={`${baseKey}-br-${i}`} />);
-    if (part) out.push(<Fragment key={`${baseKey}-t-${i}`}>{part}</Fragment>);
-  });
-  return out;
-}
-
+/**
+ * 带复制按钮的代码块。
+ */
 function CodeBlock({ lang, body }: { lang: string | null; body: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -620,14 +458,14 @@ function CodeBlock({ lang, body }: { lang: string | null; body: string }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
     } catch {
-      const ta = document.createElement("textarea");
-      ta.value = body;
-      ta.style.position = "fixed";
-      ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.select();
+      const textarea = document.createElement("textarea");
+      textarea.value = body;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
       document.execCommand("copy");
-      document.body.removeChild(ta);
+      document.body.removeChild(textarea);
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
     }
@@ -644,10 +482,10 @@ function CodeBlock({ lang, body }: { lang: string | null; body: string }) {
           onClick={handleCopy}
           style={{
             fontSize: 11,
-            color: 'var(--ink-faint)',
-            height: 'auto',
-            padding: '0 6px',
-            fontFamily: 'var(--sans)',
+            color: "var(--ink-faint)",
+            height: "auto",
+            padding: "0 6px",
+            fontFamily: "var(--sans)",
           }}
         >
           {copied ? "已复制" : "复制"}

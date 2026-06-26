@@ -46,18 +46,20 @@ export async function finalizeWorkspaceKnowledgeGraph({
 
   if (!hasData) return;
 
+  const normalizedGraph = normalizeKnowledgeGraphForPersistence(knowledgeGraph);
+
   // 仅持久化结构化列；content 保持为空，前端展示时按需生成 markdown。
   await upsertProductKnowledgeGraph({
     workspaceId,
     conversationId,
     requestFormId,
     advanceVersion,
-    summary: knowledgeGraph.summary,
-    nodes: knowledgeGraph.entities,
-    relations: knowledgeGraph.relations,
-    decisions: knowledgeGraph.decisions,
-    risks: knowledgeGraph.risks,
-    openQuestions: knowledgeGraph.open_questions,
+    summary: normalizedGraph.summary,
+    nodes: normalizedGraph.entities,
+    relations: normalizedGraph.relations,
+    decisions: normalizedGraph.decisions,
+    risks: normalizedGraph.risks,
+    openQuestions: normalizedGraph.open_questions,
   });
 }
 
@@ -87,13 +89,18 @@ export async function getWorkspaceKnowledgeGraph(
   const row = await getProductKnowledgeGraphByWorkspaceId(workspaceId);
   if (!row) return null;
 
-  const nodes = (Array.isArray(row.nodes) ? row.nodes : []) as KnowledgeGraphEntity[];
-  const relations = (Array.isArray(row.relations) ? row.relations : []) as KnowledgeGraphRelation[];
+  const normalizedRow = normalizeKnowledgeGraphRow(row);
+  const nodes = (Array.isArray(normalizedRow.nodes)
+    ? normalizedRow.nodes
+    : []) as KnowledgeGraphEntity[];
+  const relations = (Array.isArray(normalizedRow.relations)
+    ? normalizedRow.relations
+    : []) as KnowledgeGraphRelation[];
   const hasData = nodes.length > 0 && relations.length > 0;
 
   // 有数据时生成参考格式 markdown；无数据时也返回空字符串供前端判断
   const markdown = hasData
-    ? generateReferenceMarkdown(row)
+    ? generateReferenceMarkdown(normalizedRow)
     : "";
 
   return {
@@ -237,4 +244,129 @@ function generateReferenceMarkdown(row: ProductKnowledgeGraphRow): string {
  */
 function esc(value: string): string {
   return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+}
+
+/**
+ * 读取时规范化历史图谱行，避免旧重复数据污染展示层。
+ */
+function normalizeKnowledgeGraphRow(
+  row: ProductKnowledgeGraphRow,
+): ProductKnowledgeGraphRow {
+  return {
+    ...row,
+    summary: dedupeUnknownText(row.summary),
+    nodes: dedupeUnknownByKey(row.nodes, (item) => getStringField(item, "id")),
+    relations: dedupeUnknownByKey(
+      row.relations,
+      (item) =>
+        getStringField(item, "id") ||
+        [
+          getStringField(item, "type"),
+          getStringField(item, "source"),
+          getStringField(item, "target"),
+          getStringField(item, "source_task_id"),
+        ].join(":"),
+    ),
+    decisions: dedupeUnknownByKey(row.decisions, (item) =>
+      getStringField(item, "id"),
+    ),
+    risks: dedupeUnknownByKey(row.risks, (item) => getStringField(item, "id")),
+    openQuestions: dedupeUnknownByKey(
+      row.openQuestions,
+      (item) => getStringField(item, "id") || getStringField(item, "text"),
+    ),
+  };
+}
+
+/**
+ * 入库前规范化图谱数组，避免 Executor 重试或并行合并造成重复记录。
+ */
+function normalizeKnowledgeGraphForPersistence(
+  knowledgeGraph: ProductKnowledgeGraph,
+): ProductKnowledgeGraph {
+  return {
+    ...knowledgeGraph,
+    entities: dedupeByKey(knowledgeGraph.entities, (item) => item.id),
+    relations: dedupeByKey(
+      knowledgeGraph.relations,
+      (item) =>
+        item.id ||
+        `${item.type}:${item.source}:${item.target}:${item.source_task_id ?? ""}`,
+    ),
+    decisions: dedupeByKey(knowledgeGraph.decisions, (item) => item.id),
+    risks: dedupeByKey(knowledgeGraph.risks, (item) => item.id),
+    open_questions: dedupeByKey(
+      knowledgeGraph.open_questions,
+      (item) => item.id || item.text,
+    ),
+    summary: dedupeText(knowledgeGraph.summary),
+    notes: dedupeText(knowledgeGraph.notes),
+  };
+}
+
+/**
+ * 按稳定键去重，保留同键最后一次写入的完整对象。
+ */
+function dedupeByKey<T>(items: T[], getKey: (item: T) => string): T[] {
+  const merged = new Map<string, T>();
+  for (const item of items) {
+    const key = getKey(item).trim();
+    if (!key) continue;
+    merged.set(key, item);
+  }
+
+  return [...merged.values()];
+}
+
+/**
+ * 文本数组去重，过滤空白项。
+ */
+function dedupeText(items: string[]): string[] {
+  return [...new Set(items.map((item) => item.trim()).filter(Boolean))];
+}
+
+/**
+ * 对 unknown 数组按业务键去重，兼容数据库历史 JSON 结构。
+ */
+function dedupeUnknownByKey<T>(
+  items: T[],
+  getKey: (item: T) => string,
+): T[] {
+  const merged = new Map<string, T>();
+  for (const item of items) {
+    const key = getKey(item).trim();
+    if (!key) continue;
+    merged.set(key, item);
+  }
+
+  return [...merged.values()];
+}
+
+/**
+ * 对 unknown 文本数组去重，兼容数据库 JSONB 返回值。
+ */
+function dedupeUnknownText(items: unknown[]): unknown[] {
+  const result: unknown[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (typeof item !== "string") {
+      result.push(item);
+      continue;
+    }
+    const normalized = item.trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+
+  return result;
+}
+
+/**
+ * 从未知 JSON 对象里读取字符串字段。
+ */
+function getStringField(item: unknown, field: string): string {
+  if (!item || typeof item !== "object") return "";
+  const value = (item as Record<string, unknown>)[field];
+  return typeof value === "string" ? value : "";
 }
