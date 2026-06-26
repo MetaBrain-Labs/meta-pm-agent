@@ -116,7 +116,7 @@ export function MessageBubble({
   );
   const plannerDagGenerating =
     streamActive &&
-    message.activeAgent === "planner" &&
+    isAgentActive(message, "planner") &&
     !message.plannerExecution;
   const hasTokenUsage =
     (message.tokenUsages?.length ?? 0) > 0 || Boolean(message.usage);
@@ -232,7 +232,7 @@ export function MessageBubble({
           agentType={block.agentType}
           label={getReasoningLabel(block.agentType)}
           content={block.content}
-          active={streamActive && message.activeAgent === block.agentType}
+          active={streamActive && isAgentActive(message, block.agentType)}
         />
       ))}
 
@@ -245,6 +245,7 @@ export function MessageBubble({
           plan={message.plannerExecution.plan}
           executorResults={message.executorResults}
           activeAgent={message.activeAgent}
+          activeAgents={message.activeAgents}
         />
       )}
 
@@ -262,7 +263,7 @@ export function MessageBubble({
                 agentType={block.agentType}
                 label={getReasoningLabel(block.agentType)}
                 content={block.content}
-                active={streamActive && message.activeAgent === block.agentType}
+                active={streamActive && isAgentActive(message, block.agentType)}
               />
             )}
             <AgentToolCalls toolCalls={toolCalls} />
@@ -276,7 +277,7 @@ export function MessageBubble({
           agentType={block.agentType}
           label={getReasoningLabel(block.agentType)}
           content={block.content}
-          active={streamActive && message.activeAgent === block.agentType}
+          active={streamActive && isAgentActive(message, block.agentType)}
         />
       ))}
 
@@ -288,7 +289,7 @@ export function MessageBubble({
           agentType={block.agentType}
           label={getReasoningLabel(block.agentType)}
           content={block.content}
-          active={streamActive && message.activeAgent === block.agentType}
+          active={streamActive && isAgentActive(message, block.agentType)}
         />
       ))}
 
@@ -633,6 +634,16 @@ const AGENT_LABELS: Record<string, string> = {
  */
 function isExecutorAgent(agentType: string): boolean {
   return EXECUTOR_AGENT_TYPES.includes(agentType);
+}
+
+/**
+ * 判断指定 Agent 是否处于当前运行集合中，兼容旧的单 activeAgent 字段。
+ */
+function isAgentActive(message: Message, agentType: string): boolean {
+  return (
+    message.activeAgent === agentType ||
+    (message.activeAgents ?? []).includes(agentType)
+  );
 }
 
 /**

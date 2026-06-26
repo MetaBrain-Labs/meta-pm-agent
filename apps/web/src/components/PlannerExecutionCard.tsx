@@ -19,6 +19,7 @@ interface Props {
   plan: TaskExecutionPlan;
   executorResults?: ExecutorAgentResult[];
   activeAgent?: string;
+  activeAgents?: string[];
 }
 
 type NodeStatus = "completed" | "running" | "waiting";
@@ -43,10 +44,12 @@ export function PlannerExecutionCard({
   plan,
   executorResults = [],
   activeAgent,
+  activeAgents,
 }: Props) {
   const statusByTaskId = useMemo(
-    () => buildTaskStatus(plan.tasks, executorResults, activeAgent),
-    [activeAgent, executorResults, plan.tasks],
+    () =>
+      buildTaskStatus(plan.tasks, executorResults, activeAgent, activeAgents),
+    [activeAgent, activeAgents, executorResults, plan.tasks],
   );
   const completedCount = plan.tasks.filter(
     (task) => statusByTaskId.get(task.task_id) === "completed",
@@ -250,14 +253,20 @@ function buildTaskStatus(
   tasks: TaskExecutionNode[],
   results: ExecutorAgentResult[],
   activeAgent?: string,
+  activeAgents?: string[],
 ): Map<string, NodeStatus> {
   const completedTaskIds = new Set(results.map((item) => item.task_id));
+  const runningAgents = new Set(activeAgents ?? []);
+  if (activeAgent) {
+    runningAgents.add(activeAgent);
+  }
+
   return new Map(
     tasks.map((task) => {
       if (completedTaskIds.has(task.task_id)) {
         return [task.task_id, "completed" as const];
       }
-      if (activeAgent === task.assigned_agent) {
+      if (runningAgents.has(task.assigned_agent)) {
         return [task.task_id, "running" as const];
       }
       return [task.task_id, "waiting" as const];
