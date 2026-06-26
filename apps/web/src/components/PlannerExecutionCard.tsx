@@ -156,7 +156,10 @@ export function PlannerExecutionCard({
  */
 export function PlannerExecutionLoadingCard() {
   return (
-    <div className="mb-2 flex items-center gap-3 rounded-lg border border-[var(--line-soft)] bg-white p-5">
+    <div
+      className="mb-2 flex items-center gap-3 rounded-lg border border-[var(--line-soft)] bg-white p-5"
+      data-agent-thinking="planner"
+    >
       <div
         className="h-5 w-5 rounded-full border-2"
         style={{
@@ -200,7 +203,10 @@ export function PlannerReviewStatusCard({
   const complete = state === "complete";
 
   return (
-    <div className="mb-2 flex items-center gap-3 rounded-lg border border-[var(--line-soft)] bg-white p-5">
+    <div
+      className="mb-2 flex items-center gap-3 rounded-lg border border-[var(--line-soft)] bg-white p-5"
+      data-agent-thinking="planner"
+    >
       <div
         className="flex h-5 w-5 items-center justify-center rounded-full border-2"
         style={{

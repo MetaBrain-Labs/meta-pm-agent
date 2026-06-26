@@ -251,10 +251,6 @@ export function MessageBubble({
         />
       )}
 
-      {message.plannerReview && (
-        <PlannerReviewStatusCard state={message.plannerReview.state} />
-      )}
-
       {EXECUTOR_AGENT_TYPES.map((agentType) => {
         const block = executorReasoningBlocks?.find(
           (item) => item.agentType === agentType,
@@ -276,6 +272,10 @@ export function MessageBubble({
           </div>
         );
       })}
+
+      {message.plannerReview && (
+        <PlannerReviewStatusCard state={message.plannerReview.state} />
+      )}
 
       {productDirectorReasoningBlocks?.map((block) => (
         <ThinkingBox

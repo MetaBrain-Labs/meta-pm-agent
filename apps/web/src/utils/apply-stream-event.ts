@@ -95,6 +95,9 @@ export function applyStreamEvent(
           "<user-input",
           "</user-input>",
         ),
+        activeAgent:
+          message.activeAgent === "conversation" ? undefined : message.activeAgent,
+        activeAgents: removeActiveAgent(message.activeAgents, "conversation"),
         userInput: {
           state: "complete",
           content: event.content,

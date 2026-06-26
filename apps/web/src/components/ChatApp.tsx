@@ -255,24 +255,27 @@ export function ChatApp({
     const container = containerRef.current;
     if (!container) return;
 
+    // 先退出自动贴底模式，再在下一帧计算目标位置，避免底部自动滚动抢回视口。
+    setUserScrolled(true);
+
     const targetAgent = getThinkingTargetAgentType(agentType);
     const target = container.querySelector<HTMLElement>(
       `[data-agent-thinking="${escapeDataAttributeValue(targetAgent)}"]`,
     );
     if (!target) return;
 
-    // 聊天内容在内部容器滚动，直接计算容器内位置比 scrollIntoView 更稳定。
-    const containerRect = container.getBoundingClientRect();
-    const targetRect = target.getBoundingClientRect();
-    const nextTop =
-      container.scrollTop +
-      targetRect.top -
-      containerRect.top -
-      container.clientHeight / 2 +
-      targetRect.height / 2;
+    requestAnimationFrame(() => {
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const nextTop =
+        container.scrollTop +
+        targetRect.top -
+        containerRect.top -
+        container.clientHeight / 2 +
+        targetRect.height / 2;
 
-    container.scrollTo({ top: Math.max(0, nextTop), behavior: "smooth" });
-    setUserScrolled(true);
+      container.scrollTo({ top: Math.max(0, nextTop), behavior: "smooth" });
+    });
   }, []);
 
   return (

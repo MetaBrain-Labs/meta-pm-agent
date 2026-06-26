@@ -115,11 +115,12 @@ packages/
 
 ## Chat And Agent Contracts
 
-- Preserve the `/api/chat` SSE contract. It returns `text/event-stream` and typed events such as `start`, `text`, `thinking`, `question-form-start`, `question-form-complete`, `user-input-start`, `user-input-complete`, `request-analysis-start`, `request-analysis-complete`, `todo-update`, `tool-call`, `tool-result`, `step-finish`, `finish`, and `error`.
+- Preserve the `/api/chat` SSE contract. It returns `text/event-stream` and typed events such as `start`, `agent-status`, `text`, `thinking`, `question-form-start`, `question-form-complete`, `user-input-start`, `user-input-complete`, `request-analysis-start`, `request-analysis-complete`, `todo-update`, `tool-call`, `tool-result`, `token-usage`, `step-finish`, `finish`, and `error`.
 - Preserve `/api/chat/stop`. The frontend stop action must call this endpoint before aborting the browser fetch so the API can abort the server-side runtime and propagate `AbortSignal` to model provider requests.
 - `thinking` events may include `agentType`. Preserve this field when forwarding or transforming stream events.
 - Conversation Agent stream chunks use `agentType: "conversation"`.
 - Request Agent stream chunks use `agentType: "request"`.
+- `agent-status` events are authoritative for frontend active-Agent state. After `user-input-complete`, remove `conversation` from `activeAgents` before Request/Planner/Executor statuses are added, so the top-right indicator does not show completed Conversation Agent alongside later workflow Agents.
 - After Conversation Agent emits `user-input-complete`, subsequent planning must flow through `apps/agent-runtime/src/graph/workflow.ts`. Do not directly wire Request Agent, Planner, or Executor orchestration inside Conversation Agent.
 - Product workflow routing is LangGraph-owned: `parse_user_input -> request_agent -> planner_agent -> executor-* -> planner_agent -> END`. Add future workflow stages as graph nodes/edges instead of ad hoc calls from individual agents.
 - Product workflow model calls are split into independent DeepAgents: `apps/agent-runtime/src/agents/product-workflow/planner-agent/` and `executor-agent/`. Each folder owns its `agent.ts` and `prompt.ts`; Executor shared definitions live in `executor-agent/definitions.ts`.
@@ -166,7 +167,10 @@ packages/
 - Tool-call details, including `web_search` results and authorized knowledge-graph file tool calls, should render through `ToolCallsCard` as a collapsed card near the related Agent stage.
 - Do not merge all Executor tool calls into one message-level card. Each Executor Agent should show its own knowledge-graph tool card below that Executor's reasoning/progress area, keyed by `agentType`.
 - Executor progress should render through the Planner DAG surface; after an Executor writes the graph, show the "已更新至知识图谱" completion card.
+- The Planner Agent Review loading/completed card should render after the Executor Agent sections, not directly below the Planner DAG card.
+- The top-right active-Agent indicator may show multiple parallel Executor Agents. Each Agent label must scroll to a visible reasoning or loading card; when the chat is already stuck to the bottom, disable auto-bottom scrolling before performing the jump.
 - The frontend knowledge-graph viewer availability should refresh after each Executor result is received, because the API archives the cumulative graph after every Executor completion.
+- The knowledge-graph modal must manage the G6 instance lifecycle defensively: retry while the modal container has zero size, never leave the loading overlay visible forever after close/reopen, and reduce dense graph clutter by avoiding overly verbose node/edge labels.
 - "用户输入整理" and "Request Agent 分析" cards should default to collapsed.
 - Prefer Tailwind utilities for new styling. Do not create new CSS/SCSS/Less/CSS Module files unless explicitly requested or unavoidable.
 - Do not add global stylesheet rules or inline `<style>` blocks unless the task explicitly requires it.

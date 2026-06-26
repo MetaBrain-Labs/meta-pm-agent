@@ -105,7 +105,7 @@ const truncateName = (name: string, maxLen = MAX_NAME_LENGTH): string =>
 const toG6Node = (node: KnowledgeGraphNodeData) => ({
   id: node.id,
   data: {
-    label: `${node.id}\n${truncateName(node.name)}`,
+    label: truncateName(node.name),
     nodeType: node.type,
     description: node.description ?? "",
     status: node.status ?? "proposed",
@@ -142,8 +142,6 @@ export const KnowledgeGraphModal: FC<Props> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<Graph | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const retryCountRef = useRef(0);
-  const initAttemptedRef = useRef(false);
   const [selectedNode, setSelectedNode] =
     useState<KnowledgeGraphNodeData | null>(null);
 
@@ -160,7 +158,6 @@ export const KnowledgeGraphModal: FC<Props> = ({
       setSelectedNode(null);
       setGraphReady(false);
     } else {
-      initAttemptedRef.current = false;
       setGraphReady(false);
     }
   }, [open]);
@@ -205,7 +202,6 @@ export const KnowledgeGraphModal: FC<Props> = ({
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-    retryCountRef.current = 0;
     if (graphRef.current) {
       try {
         graphRef.current.destroy();
@@ -231,6 +227,7 @@ export const KnowledgeGraphModal: FC<Props> = ({
 
       const g6Nodes = latestNodes.map(toG6Node);
       const g6Edges = latestRelations.map(toG6Edge);
+      const showEdgeLabels = latestRelations.length <= 40;
 
       const graph = new Graph({
         container,
@@ -240,20 +237,18 @@ export const KnowledgeGraphModal: FC<Props> = ({
         data: { nodes: g6Nodes, edges: g6Edges },
         layout: {
           type: "dagre" as const,
-          rankdir: "TB",
-          nodesep: 60,
-          ranksep: 100,
+          rankdir: latestNodes.length > 18 ? "LR" : "TB",
+          nodesep: latestNodes.length > 40 ? 42 : 64,
+          ranksep: latestNodes.length > 40 ? 96 : 126,
         },
         node: {
           type: "rect",
           style: {
             size: (d: { data?: { label?: string } }) => {
               const label = d.data?.label ?? "";
-              const lines = label.split("\n");
-              const maxLen = Math.max(...lines.map((l: string) => l.length));
               return [
-                Math.min(Math.max(maxLen * 14 + 48, 120), 260),
-                60,
+                Math.min(Math.max(label.length * 9 + 56, 132), 220),
+                58,
               ];
             },
             radius: 8,
@@ -270,22 +265,24 @@ export const KnowledgeGraphModal: FC<Props> = ({
             labelText: (d: { data?: { label?: string } }) =>
               d.data?.label ?? "",
             labelFill: "#1f1f1f",
-            labelFontSize: 12,
-            labelLineHeight: 18,
+            labelFontSize: 13,
+            labelFontWeight: 700,
+            labelLineHeight: 16,
             labelPlacement: "center",
             labelWordWrap: true,
-            labelMaxWidth: 240,
+            labelMaxWidth: 190,
           },
         },
         edge: {
-          type: "cubic",
+          type: "polyline",
           style: {
-            stroke: "#b8b8b8",
-            strokeWidth: 1.5,
+            stroke: "#94a3b8",
+            strokeOpacity: 0.75,
+            strokeWidth: 1.4,
             endArrow: true,
             endArrowSize: 8,
             labelText: (d: { data?: { label?: string } }) =>
-              d.data?.label ?? "",
+              showEdgeLabels ? d.data?.label ?? "" : "",
             labelFill: "#595959",
             labelFontSize: 10,
             labelBackground: true,
@@ -358,8 +355,9 @@ export const KnowledgeGraphModal: FC<Props> = ({
     const latestRelations = filteredRelationsRef.current;
 
     if (latestNodes.length === 0) {
-      // 全部类型被隐藏时销毁图
+      // 全部类型被隐藏时销毁图，但不要保留永久加载遮罩。
       cleanup();
+      setGraphReady(true);
       return;
     }
 
@@ -386,17 +384,16 @@ export const KnowledgeGraphModal: FC<Props> = ({
    */
   useEffect(() => {
     if (!open) {
-      initAttemptedRef.current = false;
       cleanup();
       return;
     }
 
     if (filteredNodes.length === 0) {
-      // 全量类型被隐藏或数据为空：销毁已有实例，触发加载状态
+      // 全量类型被隐藏或数据为空：销毁已有实例，但不显示永久加载状态。
       if (graphRef.current) {
         cleanup();
-        setGraphReady(false);
       }
+      setGraphReady(true);
       return;
     }
 
@@ -408,15 +405,12 @@ export const KnowledgeGraphModal: FC<Props> = ({
       return;
     }
 
-    // 检查是否已经尝试过初始化（避免同一次渲染中重复尝试）
-    if (initAttemptedRef.current) return;
-
     const container = containerRef.current;
     if (!container) return;
 
     // 先确保没有任何残留实例
     cleanup();
-    initAttemptedRef.current = true;
+    setGraphReady(false);
 
     /**
      * 轮询等待容器尺寸就绪后初始化图。
@@ -435,6 +429,8 @@ export const KnowledgeGraphModal: FC<Props> = ({
             () => tryInit(attempt + 1),
             RETRY_INTERVAL,
           );
+        } else {
+          setGraphReady(true);
         }
         return;
       }
