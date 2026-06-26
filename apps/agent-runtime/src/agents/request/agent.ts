@@ -19,6 +19,7 @@ import { HumanMessage } from "langchain";
 import { createDeepAgent } from "deepagents";
 import { RequestAnalysisSchema, type RequestAnalysis } from "@repo/shared";
 import { createChatModel } from "../common/model";
+import { createDefaultAgentMiddleware } from "../common/middleware";
 import { calculateCost } from "../../config";
 import { REQUEST_AGENT_PROMPT } from "./prompt";
 import {
@@ -73,6 +74,7 @@ export function createRequestAgent() {
     tools: [],
     name: "request-agent",
     skills: [],
+    middleware: createDefaultAgentMiddleware() as any,
   });
 }
 

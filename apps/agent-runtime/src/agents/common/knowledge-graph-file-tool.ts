@@ -20,6 +20,10 @@
 import type { ProductKnowledgeGraph } from "@repo/shared";
 import { tool } from "langchain/tools";
 import { z } from "zod";
+import {
+  createGraphContextSummary,
+  readGraphBySourceTasks,
+} from "../product-workflow/common/context";
 
 // ============================================================
 // 类型常量与 Zod Schemas
@@ -104,6 +108,16 @@ const openQuestionInputSchema = z.object({
     .describe("Question text explaining what needs to be confirmed"),
 });
 
+const graphQuerySchema = z.object({
+  ids: z.array(z.string().min(1)).optional().describe("Exact graph item IDs"),
+  source_task_ids: z
+    .array(z.string().min(1))
+    .optional()
+    .describe("Source task IDs to retrieve"),
+  query: z.string().optional().describe("Keyword query for names/descriptions"),
+  limit: z.number().int().positive().max(30).default(12),
+});
+
 /**
  * 工具调用返回的 JSON 结构化结果，供 SSE 透传与持久化层收集。
  */
@@ -123,25 +137,106 @@ export function createKnowledgeGraphTools(
     // ── 读取 ──
     tool(
       async () => {
-        return JSON.stringify(
-          {
-            action: "read",
-            entities: state.entities,
-            relations: state.relations,
-            decisions: state.decisions,
-            risks: state.risks,
-            open_questions: state.open_questions,
-            summary: state.summary,
-          },
-          null,
-          2,
-        );
+        return stringifyToolResult({
+          action: "read_summary",
+          ...createGraphContextSummary(state),
+        });
       },
       {
         name: "kg_file_read",
         description:
-          "Read the current product knowledge graph state before planning updates.",
+          "Read a compact summary of the current product knowledge graph state before planning updates. This does not return the full graph.",
         schema: z.object({}),
+      },
+    ),
+    tool(
+      async () => {
+        return stringifyToolResult({
+          action: "read_summary",
+          ...createGraphContextSummary(state),
+        });
+      },
+      {
+        name: "kg_file_read_summary",
+        description:
+          "Read counts, recent summaries, recent nodes, and recent open questions from the product knowledge graph.",
+        schema: z.object({}),
+      },
+    ),
+    tool(
+      async ({ ids = [], source_task_ids = [], query = "", limit = 12 }) => {
+        const items = queryNodes(state, {
+          ids,
+          source_task_ids,
+          query,
+          limit,
+        });
+        return stringifyToolResult({
+          action: "query_nodes",
+          count: items.length,
+          items,
+        });
+      },
+      {
+        name: "kg_file_query_nodes",
+        description:
+          "Query graph nodes by exact IDs, source task IDs, or a small keyword query. Use this instead of reading the full graph.",
+        schema: graphQuerySchema,
+      },
+    ),
+    tool(
+      async ({ ids = [], source_task_ids = [], query = "", limit = 12 }) => {
+        const items = queryRelations(state, {
+          ids,
+          source_task_ids,
+          query,
+          limit,
+        });
+        return stringifyToolResult({
+          action: "query_relations",
+          count: items.length,
+          items,
+        });
+      },
+      {
+        name: "kg_file_query_relations",
+        description:
+          "Query graph relations by relation IDs, source task IDs, endpoint node IDs, or a small keyword query.",
+        schema: graphQuerySchema,
+      },
+    ),
+    tool(
+      async ({ task_id, limit = 12 }) => {
+        return stringifyToolResult({
+          action: "read_task_delta",
+          ...readGraphBySourceTasks(state, [task_id], limit),
+        });
+      },
+      {
+        name: "kg_file_read_task_delta",
+        description:
+          "Read the compact graph delta produced by a single source task ID.",
+        schema: z.object({
+          task_id: z.string().min(1),
+          limit: z.number().int().positive().max(30).default(12),
+        }),
+      },
+    ),
+    tool(
+      async ({ source_task_ids, limit = 12 }) => {
+        return stringifyToolResult({
+          action: "read_by_source_task",
+          ...readGraphBySourceTasks(state, source_task_ids, limit),
+        });
+      },
+      {
+        name: "kg_file_read_by_source_task",
+        description:
+          "Read compact graph nodes and relations produced by one or more source task IDs.",
+        schema: z.object({
+          source_task_ids: z.array(z.string().min(1)).min(1),
+          limit: z.number().int().positive().max(30).default(12),
+        }),
       },
     ),
     // ── 摘要 ──
@@ -311,4 +406,124 @@ export function createKnowledgeGraphTools(
       },
     ),
   ];
+}
+
+/**
+ * 查询符合条件的节点，默认限制返回数量。
+ */
+function queryNodes(
+  state: ProductKnowledgeGraph,
+  {
+    ids,
+    source_task_ids,
+    query,
+    limit,
+  }: {
+    ids: string[];
+    source_task_ids: string[];
+    query: string;
+    limit: number;
+  },
+) {
+  const idSet = new Set(ids);
+  const sourceTaskIdSet = new Set(source_task_ids);
+  const normalizedQuery = query.trim().toLowerCase();
+
+  return state.entities
+    .filter((entity) => {
+      if (idSet.size > 0 && idSet.has(entity.id)) return true;
+      if (
+        sourceTaskIdSet.size > 0 &&
+        entity.source_task_id &&
+        sourceTaskIdSet.has(entity.source_task_id)
+      ) {
+        return true;
+      }
+      if (!normalizedQuery) {
+        return idSet.size === 0 && sourceTaskIdSet.size === 0;
+      }
+      return matchesQuery(
+        [entity.id, entity.type, entity.name, entity.description ?? ""].join(
+          " ",
+        ),
+        normalizedQuery,
+      );
+    })
+    .slice(0, normalizeLimit(limit));
+}
+
+/**
+ * 查询符合条件的关系，支持按关系 ID、来源任务或端点节点过滤。
+ */
+function queryRelations(
+  state: ProductKnowledgeGraph,
+  {
+    ids,
+    source_task_ids,
+    query,
+    limit,
+  }: {
+    ids: string[];
+    source_task_ids: string[];
+    query: string;
+    limit: number;
+  },
+) {
+  const idSet = new Set(ids);
+  const sourceTaskIdSet = new Set(source_task_ids);
+  const normalizedQuery = query.trim().toLowerCase();
+
+  return state.relations
+    .filter((relation) => {
+      if (
+        idSet.size > 0 &&
+        (idSet.has(relation.id) ||
+          idSet.has(relation.source) ||
+          idSet.has(relation.target))
+      ) {
+        return true;
+      }
+      if (
+        sourceTaskIdSet.size > 0 &&
+        relation.source_task_id &&
+        sourceTaskIdSet.has(relation.source_task_id)
+      ) {
+        return true;
+      }
+      if (!normalizedQuery) {
+        return idSet.size === 0 && sourceTaskIdSet.size === 0;
+      }
+      return matchesQuery(
+        [
+          relation.id,
+          relation.type,
+          relation.source,
+          relation.target,
+          relation.description ?? "",
+        ].join(" "),
+        normalizedQuery,
+      );
+    })
+    .slice(0, normalizeLimit(limit));
+}
+
+/**
+ * 判断文本是否匹配工具查询词。
+ */
+function matchesQuery(text: string, normalizedQuery: string): boolean {
+  return text.toLowerCase().includes(normalizedQuery);
+}
+
+/**
+ * 限制工具查询返回量，避免重新制造大上下文。
+ */
+function normalizeLimit(limit: number): number {
+  return Math.min(Math.max(limit, 1), 30);
+}
+
+/**
+ * 统一格式化工具结果。
+ */
+function stringifyToolResult(value: unknown): string {
+  return JSON.stringify(value, null, 2);
 }

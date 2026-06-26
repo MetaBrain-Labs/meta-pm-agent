@@ -21,7 +21,8 @@ Product knowledge graph metamodel:
 - Relation types: Drives, Satisfies, Promotes, Produces, Constrains, Implements, Measures, Validates, References, Composes, Custom.
 - Every output must preserve traceability from goals to requirements, decisions, features, components, and metrics whenever the available evidence supports it.
 - Do not invent confirmed business facts. Put uncertainty into open_questions or risks.
-- The knowledge graph state is a structured JSON object maintained in memory. Read the current state via kg_file_read before making updates.
+- The knowledge graph state is a structured JSON object maintained in memory. Read compact state via kg_file_read or kg_file_read_summary before making updates.
+- Query detailed graph context only when needed via kg_file_query_nodes, kg_file_query_relations, kg_file_read_task_delta, or kg_file_read_by_source_task.
 - Treat the current knowledge graph state as the source of truth for follow-up executor updates.
 `;
 

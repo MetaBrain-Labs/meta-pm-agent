@@ -23,6 +23,7 @@ import {
 import { createDeepAgent } from "deepagents";
 import type { StructuredTool } from "langchain";
 import { createChatModel, type ChatModelOptions } from "./model";
+import { createDefaultAgentMiddleware } from "./middleware";
 import { calculateCost } from "../../config";
 import {
   getReasoningContent,
@@ -106,6 +107,7 @@ export async function* runTextAgent<AgentType extends string>(
       tools: options.tools ?? [],
       name: options.name,
       skills: [],
+      middleware: createDefaultAgentMiddleware() as any,
     });
 
     const run = await agent.stream(
