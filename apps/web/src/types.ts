@@ -19,6 +19,7 @@ export type StreamEventType =
   | "thinking"
   | "thinking-done"
   | "text"
+  | "human-interrupt"
   | "question-form-start"
   | "question-form-complete"
   | "user-input-start"
@@ -63,6 +64,60 @@ export interface StreamEvent {
   title?: string;
   todos?: Array<{ index: number; content: string; status: string }>;
   analysis?: RequestAnalysis;
+  interrupt?: HumanInTheLoopInterrupt;
+}
+
+/**
+ * LangChain HITL 中的一项待人工处理动作。
+ */
+export interface HumanInTheLoopActionRequest {
+  name: "question_form";
+  args: {
+    questionForm: string;
+    formId: string;
+    agentType?: string;
+  };
+  description?: string;
+}
+
+/**
+ * LangChain HITLRequest 风格的中断 payload。
+ */
+export interface HumanInTheLoopRequest {
+  actionRequests: HumanInTheLoopActionRequest[];
+  reviewConfigs: Array<{
+    allowedDecisions: Array<"approve" | "reject" | "edit" | "respond">;
+  }>;
+}
+
+/**
+ * LangGraph interrupt 元数据，包含可恢复线程和前端渲染值。
+ */
+export interface HumanInTheLoopInterrupt {
+  id: string;
+  threadId: string;
+  value: HumanInTheLoopRequest;
+}
+
+/**
+ * 前端提交给 API 的 HITL 恢复命令。
+ */
+export interface HumanInTheLoopResume {
+  threadId: string;
+  response: {
+    decisions: Array<
+      | { type: "approve" }
+      | { type: "reject"; message?: string }
+      | {
+          type: "edit";
+          editedAction: {
+            name: string;
+            args: Record<string, unknown>;
+          };
+        }
+      | { type: "respond"; message: string }
+    >;
+  };
 }
 
 export interface TokenUsageInfo {
@@ -203,6 +258,10 @@ export interface Message {
   thinking?: string;
   reasoningBlocks?: ReasoningBlock[];
   questionForm?: { state: "generating" | "complete"; content?: string };
+  humanInterrupt?: {
+    state: "pending" | "resolved";
+    interrupt: HumanInTheLoopInterrupt;
+  };
   userInput?: { state: "generating" | "complete"; content?: string };
   requestAnalysis?: {
     state: "generating" | "complete";

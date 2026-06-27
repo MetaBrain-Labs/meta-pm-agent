@@ -31,7 +31,13 @@ import {
   formatProductWorkflowProposalQuestionForm,
 } from "../product-workflow/agent";
 import { streamWorkflowGraph } from "../../graph/workflow";
+import {
+  createHumanInTheLoopThreadId,
+  extractQuestionFormId,
+  releaseQuestionFormHumanInterrupt,
+} from "../../graph/human-in-the-loop";
 import type {
+  AgentMessageType,
   ConversationStreamEvent,
   ConversationStreamOptions,
 } from "../../types";
@@ -169,6 +175,14 @@ export async function* streamConversation(
   )) {
     yield event;
 
+    if (event.type === "question-form-complete") {
+      yield* streamHumanInterruptForQuestionForm(
+        event.content,
+        event.agentType,
+        options,
+      );
+    }
+
     if (event.type === "user-input-complete") {
       yield* streamPlanningAfterUserInput(event.content, options);
     }
@@ -288,6 +302,11 @@ async function* streamPlanningAfterUserInput(
           content: questionForm,
           agentType: "conversation_confirmation",
         };
+        yield* streamHumanInterruptForQuestionForm(
+          questionForm,
+          "conversation_confirmation",
+          options,
+        );
       }
     }
   } catch (error) {
@@ -297,6 +316,33 @@ async function* streamPlanningAfterUserInput(
       agentType: "request",
     };
   }
+}
+
+/**
+ * 将 Question Form 转换为 LangGraph Human-in-the-Loop interrupt 事件。
+ */
+async function* streamHumanInterruptForQuestionForm(
+  questionForm: string,
+  agentType: AgentMessageType | undefined,
+  options: ConversationStreamOptions,
+): AsyncGenerator<ConversationStreamEvent> {
+  const formId = extractQuestionFormId(questionForm);
+  const interrupt = await releaseQuestionFormHumanInterrupt({
+    threadId: createHumanInTheLoopThreadId({
+      scopeId: options.requestFormId ?? options.workspaceId,
+      formId,
+    }),
+    questionForm,
+    agentType,
+  });
+
+  if (!interrupt) return;
+
+  yield {
+    type: "human-interrupt",
+    interrupt,
+    agentType,
+  };
 }
 
 /**

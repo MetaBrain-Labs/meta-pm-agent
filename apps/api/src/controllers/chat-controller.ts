@@ -15,7 +15,13 @@
 
 import type { Context } from "hono";
 import { stream } from "hono/streaming";
-import { streamConversation } from "@repo/agent-runtime";
+import {
+  createHumanInTheLoopThreadId,
+  extractQuestionFormId,
+  releaseQuestionFormHumanInterrupt,
+  resumeQuestionFormHumanInterrupt,
+  streamConversation,
+} from "@repo/agent-runtime";
 import type { ProductKnowledgeGraph, ProductWorkflowResult } from "@repo/shared";
 import {
   ChatRequestSchema,
@@ -210,6 +216,11 @@ export async function chatStreamHandler(c: Context) {
     let runtimeWorkspaceId: string | undefined;
 
     try {
+      if (parsed.data.hitlResume) {
+        // 先恢复 LangGraph HITL 中断，再让现有 Conversation Agent 消费表单答案。
+        await resumeQuestionFormHumanInterrupt(parsed.data.hitlResume);
+      }
+
       // 持久化用户发送的消息
       await persistConversationStart(
         parsed.data.chatId,
@@ -246,6 +257,21 @@ export async function chatStreamHandler(c: Context) {
           content: pendingDecisionForm,
           agentType: "conversation_confirmation",
         });
+        const pendingInterrupt = await releaseQuestionFormHumanInterrupt({
+          threadId: createHumanInTheLoopThreadId({
+            scopeId: parsed.data.requestFormId ?? parsed.data.chatId,
+            formId: extractQuestionFormId(pendingDecisionForm),
+          }),
+          questionForm: pendingDecisionForm,
+          agentType: "conversation_confirmation",
+        });
+        if (pendingInterrupt) {
+          await writeSse(writer, {
+            type: "human-interrupt",
+            interrupt: pendingInterrupt,
+            agentType: "conversation_confirmation",
+          });
+        }
 
         await persistConversationResult({
           conversationId: parsed.data.chatId,
@@ -269,6 +295,7 @@ export async function chatStreamHandler(c: Context) {
         {
           enabledTools: parsed.data.enabledTools,
           workspaceId: runtimeContext.workspaceId,
+          requestFormId: parsed.data.requestFormId,
           productContext: runtimeContext.productContext,
           signal: runtimeController.signal,
         },
@@ -495,6 +522,7 @@ function getRequestFormStatusForEvent(event: {
   ) {
     return "pending_user_confirmation";
   }
+  if (event.type === "human-interrupt") return "pending_user_confirmation";
   return null;
 }
 

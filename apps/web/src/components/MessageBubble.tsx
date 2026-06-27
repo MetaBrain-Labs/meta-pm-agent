@@ -26,7 +26,12 @@ import {
   LoadingOutlined,
   PartitionOutlined,
 } from "@ant-design/icons";
-import type { Message, TokenUsageInfo } from "../types";
+import type {
+  HumanInTheLoopInterrupt,
+  HumanInTheLoopResume,
+  Message,
+  TokenUsageInfo,
+} from "../types";
 import { ProseBlock } from "./ProseBlock";
 import {
   PlannerExecutionCard,
@@ -43,7 +48,7 @@ interface Props {
   isLast: boolean;
   streaming: boolean;
   nextUserContent?: string;
-  onFormSubmit?: (text: string) => void;
+  onFormSubmit?: (text: string, hitlResume?: HumanInTheLoopResume) => void;
   onRetry?: () => void;
 }
 
@@ -123,7 +128,7 @@ export function MessageBubble({
   const hasTokenUsage =
     (message.tokenUsages?.length ?? 0) > 0 || Boolean(message.usage);
   const handleFormSubmit = useCallback(
-    (formId: string, text: string) => {
+    (formId: string, text: string, hitlResume?: HumanInTheLoopResume) => {
       if (!onFormSubmit) return;
 
       // 表单提交后立即进入本地只读态，避免等待历史消息恢复期间重复提交。
@@ -132,7 +137,7 @@ export function MessageBubble({
         next.add(formId);
         return next;
       });
-      onFormSubmit(text);
+      onFormSubmit(text, hitlResume);
     },
     [onFormSubmit],
   );
@@ -299,7 +304,18 @@ export function MessageBubble({
         />
       ))}
 
-      {message.questionForm && (
+      {message.humanInterrupt && (
+        <HumanInterruptBlock
+          interrupt={message.humanInterrupt.interrupt}
+          isLastAssistant={isLast}
+          streaming={streaming}
+          nextUserContent={nextUserContent}
+          locallySubmitted={locallySubmitted}
+          onSubmitForm={handleFormSubmit}
+        />
+      )}
+
+      {message.questionForm && !message.humanInterrupt && (
         <div>
           {message.questionForm.state === "generating" ? (
             <QFGenerating label="正在生成问题表单" />
@@ -328,6 +344,7 @@ export function MessageBubble({
         !message.thinking &&
         !message.reasoningBlocks?.length &&
         !message.questionForm &&
+        !message.humanInterrupt &&
         !message.userInput &&
         !message.requestAnalysis &&
         !message.plannerExecution &&
@@ -516,6 +533,58 @@ function AgentToolCalls({
 }) {
   if (toolCalls.length === 0) return null;
   return <ToolCallsCard toolCalls={toolCalls} />;
+}
+
+/**
+ * 渲染 LangGraph Human-in-the-Loop interrupt 携带的自定义表单。
+ */
+function HumanInterruptBlock({
+  interrupt,
+  isLastAssistant,
+  streaming,
+  nextUserContent,
+  locallySubmitted,
+  onSubmitForm,
+}: {
+  interrupt: HumanInTheLoopInterrupt;
+  isLastAssistant: boolean;
+  streaming: boolean;
+  nextUserContent?: string;
+  locallySubmitted: Set<string>;
+  onSubmitForm: (
+    formId: string,
+    text: string,
+    hitlResume?: HumanInTheLoopResume,
+  ) => void;
+}) {
+  const questionForm = getQuestionFormFromInterrupt(interrupt);
+  if (!questionForm) return null;
+
+  return (
+    <ProseBlock
+      text={questionForm}
+      isLastAssistant={isLastAssistant}
+      streaming={streaming}
+      nextUserContent={nextUserContent}
+      locallySubmitted={locallySubmitted}
+      onSubmitForm={onSubmitForm}
+      hitlThreadId={interrupt.threadId}
+    />
+  );
+}
+
+/**
+ * 从 HITLRequest 风格 payload 中读取 Question Form 原文。
+ */
+function getQuestionFormFromInterrupt(
+  interrupt: HumanInTheLoopInterrupt,
+): string | null {
+  const action = interrupt.value.actionRequests.find(
+    (item) => item.name === "question_form",
+  );
+  return typeof action?.args.questionForm === "string"
+    ? action.args.questionForm
+    : null;
 }
 
 /**

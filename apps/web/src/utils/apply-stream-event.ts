@@ -82,6 +82,20 @@ export function applyStreamEvent(
           content: event.content,
         },
       };
+    case "human-interrupt":
+      if (!event.interrupt) return message;
+      return {
+        ...message,
+        activeAgent: undefined,
+        activeAgents: removeActiveAgent(
+          message.activeAgents,
+          event.agentType ?? "conversation",
+        ),
+        humanInterrupt: {
+          state: "pending",
+          interrupt: event.interrupt,
+        },
+      };
     case "user-input-start":
       return {
         ...message,

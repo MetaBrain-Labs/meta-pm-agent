@@ -35,7 +35,7 @@ import {
   SendOutlined,
   StopOutlined,
 } from "@ant-design/icons";
-import type { Message } from "../types";
+import type { HumanInTheLoopResume, Message } from "../types";
 import {
   fetchProductKnowledgeGraph,
   type WorkspaceKnowledgeGraphData,
@@ -63,7 +63,13 @@ interface Props {
   isMessagesLoading: boolean;
   error: string | null;
   disabledReason?: string | null;
-  onSend: (text: string, options?: { webSearchEnabled?: boolean }) => void;
+  onSend: (
+    text: string,
+    options?: {
+      webSearchEnabled?: boolean;
+      hitlResume?: HumanInTheLoopResume;
+    },
+  ) => void;
   onStop: () => void;
   onClear: () => void;
   onBack: () => void;
@@ -381,7 +387,9 @@ export function ChatApp({
                 message.role === "agent"
               }
               nextUserContent={nextUserContentByAssistantId.get(message.id)}
-              onFormSubmit={(text) => onSend(text, { webSearchEnabled })}
+              onFormSubmit={(text, hitlResume) =>
+                onSend(text, { webSearchEnabled, hitlResume })
+              }
               onRetry={() => retryAssistantMessage(message.id)}
             />
           ))}

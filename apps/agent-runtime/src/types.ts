@@ -16,6 +16,7 @@
 
 import type { RequestAnalysis } from "@repo/shared";
 import type { AgentRuntimeTool, ProductWorkflowResult, ProductKnowledgeGraph } from "@repo/shared";
+import type { HumanInTheLoopInterrupt } from "./graph/human-in-the-loop";
 
 /**
  * 标识当前流式内容所属的 Agent，便于 API 持久化和前端按阶段展示。
@@ -68,6 +69,11 @@ export type ConversationStreamEvent =
     }
   | { type: "question-form-start"; agentType?: AgentMessageType }
   | { type: "question-form-complete"; content: string; agentType?: AgentMessageType }
+  | {
+      type: "human-interrupt";
+      interrupt: HumanInTheLoopInterrupt;
+      agentType?: AgentMessageType;
+    }
   | { type: "user-input-start" }
   | { type: "user-input-complete"; content: string }
   | { type: "request-analysis-start"; agentType?: AgentMessageType }
@@ -101,6 +107,7 @@ export type ConversationStreamEvent =
 export interface ConversationStreamOptions {
   enabledTools?: AgentRuntimeTool[];
   workspaceId?: string;
+  requestFormId?: string;
   productContext?: string;
   signal?: AbortSignal;
 }

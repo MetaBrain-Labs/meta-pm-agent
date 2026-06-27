@@ -30,6 +30,17 @@ export type {
   ProductWorkflowStreamEvent,
 } from "./agents/product-workflow/agent";
 export { graph, runWorkflowGraph } from "./graph/workflow";
+export {
+  createHumanInTheLoopThreadId,
+  extractQuestionFormId,
+  releaseQuestionFormHumanInterrupt,
+  resumeQuestionFormHumanInterrupt,
+} from "./graph/human-in-the-loop";
+export type {
+  HumanInTheLoopInterrupt,
+  HumanInTheLoopRequest,
+  HumanInTheLoopResponse,
+} from "./graph/human-in-the-loop";
 export type {
   ConversationStreamEvent,
   ConversationStreamOptions,
