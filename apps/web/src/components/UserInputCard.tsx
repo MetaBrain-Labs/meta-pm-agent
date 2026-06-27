@@ -10,7 +10,6 @@
  * - 保持用户输入整理卡片默认折叠
  */
 
-import { useState } from "react";
 import { Tag, List, Collapse } from "antd";
 import {
   CaretRightOutlined,
@@ -57,7 +56,6 @@ const TYPE_CONFIG: Record<
  * 展示 Conversation Agent 整理后的用户输入，默认折叠明细。
  */
 export function UserInputCard({ raw }: Props) {
-  const [open, setOpen] = useState(false);
   const items = parseUserInputBlock(raw);
   if (!items) return null;
 

@@ -14,7 +14,7 @@
  */
 
 import { getWriter, type LangGraphRunnableConfig } from "@langchain/langgraph";
-import type { ExecutorAgentResult, TaskExecutionNode } from "@repo/shared";
+import type { TaskExecutionNode } from "@repo/shared";
 import type { ProductWorkflowStreamEvent } from "../../agents/product-workflow/agent";
 import {
   EXECUTOR_DEFINITIONS,

@@ -146,7 +146,7 @@ export function Sidebar({
         {!collapsed && threads.length > 0 && (
           <>
             <div className="chat-history-date">{TEXT.today}</div>
-            {threads.map((thread, index) => (
+            {threads.map((thread) => (
               <button
                 key={thread.id}
                 type="button"

@@ -34,9 +34,7 @@ src/
 │   ├── QuestionForm.tsx     # Question-Form 表单组件
 │   ├── UserInputCard.tsx    # User-Input 整理结果卡片
 │   ├── TodoCard.tsx         # 任务列表卡片
-│   └── Icon.tsx             # SVG 图标集
 ├── hooks/
-│   └── useChat.ts           # 聊天状态 Hook（保留未使用）
 └── utils/
     ├── markdown.tsx          # Markdown → JSX 渲染器
     ├── question-form.ts     # <question-form> 解析器

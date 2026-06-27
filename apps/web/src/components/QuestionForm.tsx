@@ -29,7 +29,7 @@ import {
 import { QuestionCircleOutlined } from "@ant-design/icons";
 import { formatFormAnswers, QuestionForm } from "../utils/question-form";
 
-const { Text, Title } = Typography;
+const { Text } = Typography;
 const { TextArea } = Input;
 
 interface Props {

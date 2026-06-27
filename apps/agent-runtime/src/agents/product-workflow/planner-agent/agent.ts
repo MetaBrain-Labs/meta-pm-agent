@@ -19,7 +19,6 @@ import {
   TaskExecutionPlanSchema,
   type BusinessModelItem,
   type ExecutorAgentResult,
-  type ProductKnowledgeGraph,
   type ProductWorkflowResult,
   type TaskExecutionNode,
   type TaskExecutionPlan,
@@ -106,7 +105,6 @@ export async function* streamPlannerWorkflowReview(
       createFallbackWorkflowResult(
         input.plan,
         input.executorResults,
-        input.knowledgeGraph,
       ),
     signal: input.signal,
   });
@@ -471,7 +469,6 @@ function matchesAny(text: string, keywords: string[]): boolean {
 function createFallbackWorkflowResult(
   plan: TaskExecutionPlan,
   executorResults: ExecutorAgentResult[],
-  knowledgeGraph: ProductKnowledgeGraph,
 ): ProductWorkflowResult {
   return {
     status: "pending_user_confirmation",
