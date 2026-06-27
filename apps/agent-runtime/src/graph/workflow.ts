@@ -1,9 +1,9 @@
 /**
  * 产品工作流主图定义
  *
- * 使用 LangGraph 构建完整的产品管理工作流图，包含以下节点链：
- * parse_user_input -> request_agent -> planner_agent -> executor-* -> planner_agent -> END。
- * 通过 product-workflow-node 中的 Executor 节点和路由逻辑实现 DAG 的动态规划与执行。
+ * 使用 LangGraph 构建完整的产品管理工作流图，包含固定骨架：
+ * parse_user_input -> request_agent -> planner_agent -> executor_router -> executor-* -> executor_aggregator -> END。
+ * 通过 Router 条件边和 Executor 节点内部任务选择实现 DAG 的动态规划与执行。
  *
  * Responsibilities:
  * - 定义 WorkflowGraphInput / WorkflowGraphResult 接口
@@ -27,7 +27,8 @@ import type { ProductWorkflowStreamEvent } from "../agents/product-workflow/agen
 import {
   aiShippingExecutorNode,
   dataAnalyticsExecutorNode,
-  executorBatchBarrierNode,
+  executorAggregatorNode,
+  executorRouterNode,
   gtmExecutorNode,
   interfaceCraftExecutorNode,
   marketResearchExecutorNode,
@@ -36,7 +37,7 @@ import {
   plannerAgentNode,
   productExecutionExecutorNode,
   productStrategyExecutorNode,
-  selectNextProductWorkflowNodes,
+  selectNextExecutorRouterTargets,
   toolkitExecutorNode,
 } from "./nodes/product-workflow-node";
 import { parseUserInputNode, requestAgentNode } from "./nodes/request-node";
@@ -70,7 +71,7 @@ export type WorkflowGraphStreamEvent =
   | ProductWorkflowStreamEvent;
 
 /**
- * Executor 节点完成后可继续路由的 LangGraph 目标集合。
+ * Executor Router 可继续路由的 LangGraph 目标集合。
  */
 const PRODUCT_WORKFLOW_ROUTE_TARGETS = {
   "executor-product-strategy": "executor-product-strategy",
@@ -97,6 +98,8 @@ export const graph = new StateGraph(WorkflowGraphState)
   .addNode("request_agent", requestAgentNode)
   // Planner Agent 负责把业务建模项规划为可执行 DAG。
   .addNode("planner_agent", plannerAgentNode)
+  // Router 在固定图内根据 Planner DAG 动态选择下一批 Executor 分支。
+  .addNode("executor_router", executorRouterNode)
   // 10 个 Executor Agent 分别负责各自领域的图谱增量。
   .addNode("executor-product-strategy", productStrategyExecutorNode)
   .addNode("executor-market-research", marketResearchExecutorNode)
@@ -108,42 +111,32 @@ export const graph = new StateGraph(WorkflowGraphState)
   .addNode("executor-ai-shipping", aiShippingExecutorNode)
   .addNode("executor-toolkit", toolkitExecutorNode)
   .addNode("executor-interface-craft", interfaceCraftExecutorNode)
-  .addNode("executor_batch_barrier", executorBatchBarrierNode)
+  // Aggregator 汇合同一批 Executor 写入的状态，再把调度权交回 Router。
+  .addNode("executor_aggregator", executorAggregatorNode)
+
   .addEdge(START, "parse_user_input")
   .addEdge("parse_user_input", "request_agent")
   .addConditionalEdges("request_agent", selectNextNodeAfterRequestAgent, {
     planner_agent: "planner_agent",
     end: END,
   })
-  .addConditionalEdges("planner_agent", selectNextProductWorkflowNodes, {
-    "executor-product-strategy": "executor-product-strategy",
-    "executor-market-research": "executor-market-research",
-    "executor-gtm": "executor-gtm",
-    "executor-product-discovery": "executor-product-discovery",
-    "executor-product-execution": "executor-product-execution",
-    "executor-marketing-growth": "executor-marketing-growth",
-    "executor-data-analytics": "executor-data-analytics",
-    "executor-ai-shipping": "executor-ai-shipping",
-    "executor-toolkit": "executor-toolkit",
-    "executor-interface-craft": "executor-interface-craft",
-    planner_agent: "planner_agent",
-    end: END,
-  })
-  .addEdge("executor-product-strategy", "executor_batch_barrier")
-  .addEdge("executor-market-research", "executor_batch_barrier")
-  .addEdge("executor-gtm", "executor_batch_barrier")
-  .addEdge("executor-product-discovery", "executor_batch_barrier")
-  .addEdge("executor-product-execution", "executor_batch_barrier")
-  .addEdge("executor-marketing-growth", "executor_batch_barrier")
-  .addEdge("executor-data-analytics", "executor_batch_barrier")
-  .addEdge("executor-ai-shipping", "executor_batch_barrier")
-  .addEdge("executor-toolkit", "executor_batch_barrier")
-  .addEdge("executor-interface-craft", "executor_batch_barrier")
+  .addEdge("planner_agent", "executor_router")
   .addConditionalEdges(
-    "executor_batch_barrier",
-    selectNextProductWorkflowNodes,
+    "executor_router",
+    selectNextExecutorRouterTargets,
     PRODUCT_WORKFLOW_ROUTE_TARGETS,
   )
+  .addEdge("executor-product-strategy", "executor_aggregator")
+  .addEdge("executor-market-research", "executor_aggregator")
+  .addEdge("executor-gtm", "executor_aggregator")
+  .addEdge("executor-product-discovery", "executor_aggregator")
+  .addEdge("executor-product-execution", "executor_aggregator")
+  .addEdge("executor-marketing-growth", "executor_aggregator")
+  .addEdge("executor-data-analytics", "executor_aggregator")
+  .addEdge("executor-ai-shipping", "executor_aggregator")
+  .addEdge("executor-toolkit", "executor_aggregator")
+  .addEdge("executor-interface-craft", "executor_aggregator")
+  .addEdge("executor_aggregator", "executor_router")
   .compile();
 
 /**
@@ -199,7 +192,5 @@ export async function* streamWorkflowGraph(
  * 根据 Request Agent 是否识别到业务建模项，决定是否进入产品工作流。
  */
 function selectNextNodeAfterRequestAgent(state: WorkflowGraphStateValue) {
-  return state.requestAnalysis?.business_model.length
-    ? "planner_agent"
-    : "end";
+  return state.requestAnalysis?.business_model.length ? "planner_agent" : "end";
 }

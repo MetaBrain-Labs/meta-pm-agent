@@ -1,3 +1,18 @@
+/**
+ * Human-in-the-Loop 表单卡片。
+ *
+ * 渲染由 LangGraph interrupt payload 携带的 Question Form，并在提交时把结构化答案
+ * 交给上层转换为 Command(resume) 所需的 HITL response。
+ *
+ * Responsibilities:
+ * - 渲染单选、多选、下拉、文本和长文本问题
+ * - 校验必填项并输出稳定的答案文本
+ * - 在历史消息中以只读方式展示已提交答案
+ *
+ * Notes:
+ * - 本组件不直接调用 API；LangGraph resume 由页面层随 `/api/chat` 请求提交。
+ */
+
 import { useMemo, useState } from "react";
 import {
   Button,
@@ -14,7 +29,7 @@ import {
 import { QuestionCircleOutlined } from "@ant-design/icons";
 import { formatFormAnswers, QuestionForm } from "../utils/question-form";
 
-const { Text, Title } = Typography;
+const { Text } = Typography;
 const { TextArea } = Input;
 
 interface Props {
@@ -98,7 +113,7 @@ export function QuestionFormView({
                 : "var(--primary)",
             }}
           >
-            {locked ? (submittedAnswers ? "已提交" : "只读") : "待填写"}
+            {locked ? (submittedAnswers ? "HITL 已提交" : "HITL 只读") : "HITL 待处理"}
           </Tag>
         </div>
       }
@@ -227,7 +242,7 @@ export function QuestionFormView({
               fontFamily: "var(--body)",
             }}
           >
-            {submittedAnswers ? "表单已提交" : "历史记录（只读）"}
+            {submittedAnswers ? "人审决策已提交" : "历史人审记录（只读）"}
           </Text>
         </div>
       )}

@@ -1,11 +1,30 @@
+/**
+ * 助手正文与 HITL 表单渲染器。
+ *
+ * 将助手正文拆分为 Markdown 文本、系统提示和 Question Form 片段。表单片段会按
+ * Human-in-the-Loop 交互提交，向上层同时返回普通答案文本和 LangGraph resume payload。
+ *
+ * Responsibilities:
+ * - 渲染 Markdown 正文和引用来源
+ * - 将 question-form tagged block 渲染为 HITL 表单卡片
+ * - 为表单提交生成 Command(resume) 兼容 payload
+ *
+ * Notes:
+ * - 该组件只负责浏览器侧展示，不直接发起网络请求。
+ */
+
 import { Fragment, useMemo, useState } from "react";
 import { Button } from "antd";
 import { SettingOutlined, CaretRightOutlined, CaretDownOutlined } from "@ant-design/icons";
 import { parseSubmittedAnswers, QuestionFormView } from "./QuestionForm";
-import { QuestionForm, splitOnQuestionForms } from "../utils/question-form";
+import {
+  formatHumanInTheLoopResume,
+  QuestionForm,
+  splitOnQuestionForms,
+} from "../utils/question-form";
 import { renderMarkdown } from "../utils/markdown";
 import { collectWebSearchCitationSources } from "../utils/citations";
-import type { ToolCallInfo } from "../types";
+import type { HumanInTheLoopResume, ToolCallInfo } from "../types";
 
 export function ProseBlock({
   text,
@@ -15,6 +34,7 @@ export function ProseBlock({
   nextUserContent,
   locallySubmitted,
   onSubmitForm,
+  hitlThreadId,
 }: {
   text: string;
   toolCalls?: ToolCallInfo[];
@@ -22,7 +42,12 @@ export function ProseBlock({
   streaming: boolean;
   nextUserContent?: string;
   locallySubmitted: Set<string>;
-  onSubmitForm: (formId: string, text: string) => void;
+  onSubmitForm: (
+    formId: string,
+    text: string,
+    hitlResume?: HumanInTheLoopResume,
+  ) => void;
+  hitlThreadId?: string;
 }) {
   const cleaned = useMemo(() => stripArtifact(text), [text]);
   const segments = useMemo(() => splitOnQuestionForms(cleaned), [cleaned]);
@@ -88,6 +113,7 @@ export function ProseBlock({
             nextUserContent={nextUserContent}
             locallySubmitted={locallySubmitted}
             onSubmitForm={onSubmitForm}
+            hitlThreadId={hitlThreadId}
           />
         );
       })}
@@ -170,13 +196,19 @@ function FormBlock({
   nextUserContent,
   locallySubmitted,
   onSubmitForm,
+  hitlThreadId,
 }: {
   form: QuestionForm;
   isLastAssistant: boolean;
   streaming: boolean;
   nextUserContent?: string;
   locallySubmitted: Set<string>;
-  onSubmitForm: (formId: string, text: string) => void;
+  onSubmitForm: (
+    formId: string,
+    text: string,
+    hitlResume?: HumanInTheLoopResume,
+  ) => void;
+  hitlThreadId?: string;
 }) {
   const submittedFromHistory = useMemo(() => {
     if (!nextUserContent) return null;
@@ -194,7 +226,15 @@ function FormBlock({
       form={form}
       interactive={interactive}
       submittedAnswers={submittedFromHistory ?? undefined}
-      onSubmit={(text) => onSubmitForm(form.id, text)}
+      onSubmit={(text, answers) =>
+        onSubmitForm(
+          form.id,
+          text,
+          hitlThreadId
+            ? formatHumanInTheLoopResume(hitlThreadId, form, answers)
+            : undefined,
+        )
+      }
     />
   );
 }

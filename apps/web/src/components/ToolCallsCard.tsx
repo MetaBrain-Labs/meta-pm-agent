@@ -1,3 +1,15 @@
+/**
+ * 工具调用卡片
+ *
+ * 以折叠卡片展示用户可见工具调用，支持联网搜索和知识图谱工具的摘要化结果。
+ * 实时流和历史消息共用同一完成态判断，避免缺少工具结果时一直显示加载。
+ *
+ * Responsibilities:
+ * - 汇总工具调用完成/失败数量
+ * - 渲染联网搜索结果和知识图谱工具摘要
+ * - 对未知工具输出做安全兜底展示
+ */
+
 import { Collapse, Empty, List, Tag, Typography } from "antd";
 import {
   CaretRightOutlined,
@@ -45,6 +57,12 @@ const TOOL_NAME_LABELS: Record<string, string> = {
   kg_file_insert: "知识图谱文件",
   kg_file_update: "知识图谱文件",
   kg_file_delete_content: "知识图谱文件",
+  kg_file_add_summary: "知识图谱文件",
+  kg_file_add_nodes: "知识图谱文件",
+  kg_file_add_relations: "知识图谱文件",
+  kg_file_add_decisions: "知识图谱文件",
+  kg_file_add_risks: "知识图谱文件",
+  kg_file_add_open_questions: "知识图谱文件",
 };
 
 const KG_TOOL_TYPE_LABELS: Record<string, string> = {
@@ -53,6 +71,12 @@ const KG_TOOL_TYPE_LABELS: Record<string, string> = {
   kg_file_insert: "插入",
   kg_file_update: "更新",
   kg_file_delete_content: "删除",
+  kg_file_add_summary: "摘要",
+  kg_file_add_nodes: "节点",
+  kg_file_add_relations: "关系",
+  kg_file_add_decisions: "决策",
+  kg_file_add_risks: "风险",
+  kg_file_add_open_questions: "问题",
 };
 
 /**
@@ -62,7 +86,7 @@ export function ToolCallsCard({ toolCalls }: Props) {
   if (toolCalls.length === 0) return null;
 
   const completedCount = toolCalls.filter(
-    (toolCall) => toolCall.result !== undefined,
+    (toolCall) => isToolCallComplete(toolCall),
   ).length;
   const failedCount = toolCalls.filter((toolCall) => {
     const payload = parseWebSearchPayload(toolCall.result);
@@ -141,7 +165,7 @@ export function ToolCallsCard({ toolCalls }: Props) {
  * 展示单个工具调用，根据工具类型选择更具体的结果视图。
  */
 function ToolCallItem({ toolCall }: { toolCall: ToolCall }) {
-  const completed = toolCall.result !== undefined;
+  const completed = isToolCallComplete(toolCall);
   const searchPayload =
     toolCall.name === "web_search"
       ? parseWebSearchPayload(toolCall.result)
@@ -227,7 +251,7 @@ function WebSearchResultView({
   toolCall: ToolCall;
   payload: WebSearchPayload | null;
 }) {
-  const completed = toolCall.result !== undefined;
+  const completed = isToolCallComplete(toolCall);
   const query = payload?.query ?? readQueryFromArgs(toolCall.args);
   const results = payload?.results ?? [];
 
@@ -322,7 +346,7 @@ function KnowledgeGraphToolResultView({
   toolCall: ToolCall;
   payload: KnowledgeGraphToolPayload | null;
 }) {
-  const completed = toolCall.result !== undefined;
+  const completed = isToolCallComplete(toolCall);
   const path = payload?.path ?? readStringArg(toolCall.args, "path");
 
   return (
@@ -371,6 +395,13 @@ function GenericToolResult({ toolCall }: { toolCall: ToolCall }) {
         : stringifyUnknown(toolCall.args)}
     </pre>
   );
+}
+
+/**
+ * 判断工具调用是否已结束；部分工具只通过 Agent 完成事件收敛，没有独立结果消息。
+ */
+function isToolCallComplete(toolCall: ToolCall): boolean {
+  return toolCall.result !== undefined || toolCall.status === "complete";
 }
 
 /**

@@ -139,9 +139,10 @@
 
 - 保持 `/api/chat` SSE 流协议
 - 支持事件类型：
-  - start / text / thinking / tool-call / tool-result / finish 等
+  - start / agent-status / text / thinking / tool-call / tool-result / token-usage / finish 等
 
 - 必须保持 `agentType` 字段贯穿
+- `agent-status` 是前端 active Agent 状态的权威来源。`user-input-complete` 后必须把 `conversation` 从 `activeAgents` 中移除，避免后续 Request / Planner / Executor 运行时右上角仍显示已结束的 Conversation Agent。
 - Conversation / Request Agent 分离执行
 - Workflow 由 LangGraph 管理（禁止手动串联 agent）
 - Product workflow 顺序固定：
@@ -189,7 +190,10 @@
 - 不要把所有 Executor 的工具调用合并为一个总卡片；每个 Executor Agent 应在自己的推理/进度区域下方显示自己的知识图谱工具卡片
 - `web_search` 属于 Conversation Agent；知识图谱文件工具属于 Planner 和十个 Executor Agent
 - Executor 输出通过 DAG 展示
+- Planner Agent Review 的加载/完成卡片应展示在 Executor Agent 区域之后，而不是直接放在 Planner DAG 卡片下面。
+- 右上角运行状态在并行 Executor 场景下可以同时展示多个 Agent；每个 Agent 标签都必须能跳转到对应的推理或加载卡片。聊天区位于底部时，跳转前应先退出自动贴底状态，避免滚动被自动贴底逻辑抵消。
 - 每个 Executor 结果到达前端后，应重新查询当前工作区知识图谱，让“查看知识图谱”按钮在单个 Executor 完成后即可变为可用。
+- 知识图谱弹窗必须稳健管理 G6 实例生命周期：Modal 容器尺寸为 0 时重试初始化；关闭后再次打开不得永久停留在“正在渲染知识图谱”；节点和边较多时应减少冗余标签以保持布局可读。
 - UI 默认使用 Tailwind
 - 禁止新增全局 CSS
 

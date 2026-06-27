@@ -19,7 +19,6 @@ import {
   TaskExecutionPlanSchema,
   type BusinessModelItem,
   type ExecutorAgentResult,
-  type ProductKnowledgeGraph,
   type ProductWorkflowResult,
   type TaskExecutionNode,
   type TaskExecutionPlan,
@@ -55,7 +54,8 @@ export async function* streamPlannerAgent(
     name: "planner-agent",
     modelOptions: {
       ...JSON_AGENT_MODEL_OPTIONS,
-      maxTokens: 4096,
+      // Planner DAG 近期命中 4k 输出上限，提升到 6k 为任务计划保留余量。
+      maxTokens: 6144,
     },
     systemPrompt: PLANNER_AGENT_PROMPT,
     payload: {
@@ -89,7 +89,8 @@ export async function* streamPlannerWorkflowReview(
     name: "planner-agent-review",
     modelOptions: {
       ...JSON_AGENT_MODEL_OPTIONS,
-      maxTokens: 8192,
+      // 收尾汇总近期约 5.1k 输出，7k 预算覆盖补充问题和确认表单。
+      maxTokens: 7168,
     },
     systemPrompt: PLANNER_WORKFLOW_REVIEW_PROMPT,
     payload: {
@@ -104,7 +105,6 @@ export async function* streamPlannerWorkflowReview(
       createFallbackWorkflowResult(
         input.plan,
         input.executorResults,
-        input.knowledgeGraph,
       ),
     signal: input.signal,
   });
@@ -469,7 +469,6 @@ function matchesAny(text: string, keywords: string[]): boolean {
 function createFallbackWorkflowResult(
   plan: TaskExecutionPlan,
   executorResults: ExecutorAgentResult[],
-  knowledgeGraph: ProductKnowledgeGraph,
 ): ProductWorkflowResult {
   return {
     status: "pending_user_confirmation",

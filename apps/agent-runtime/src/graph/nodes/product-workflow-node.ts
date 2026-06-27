@@ -1,19 +1,20 @@
 /**
  * 产品工作流图节点
  *
- * 实现 Planner Agent 节点和全部 10 个 Executor Agent 的 LangGraph 节点，
- * 以及 selectNextProductWorkflowNode 条件路由逻辑。每个 Executor 节点按定义
+ * 实现 Planner Agent、Executor Router、Executor Aggregator 和全部 10 个 Executor Agent 的 LangGraph 节点。
+ * Router 根据 Planner 生成的 DAG 动态选择下一批 Executor 分支，每个 Executor 节点按定义
  * 从 streamExecutorAgent 驱动并输出推理、工具调用和补丁结果。
  *
  * Responsibilities:
- * - 实现 plannerAgentNode：调用 Planner 生成/更新 DAG 并驱动 Executor 执行
+ * - 实现 plannerAgentNode：调用 Planner 生成 DAG，并在 Executor 全部完成后执行 Planner Review
  * - 实现各 Executor 节点：读取知识图谱、执行任务、产出图谱补丁
- * - 实现 selectNextProductWorkflowNode：按 DAG 依赖顺序调度下一个 Executor
+ * - 实现 executorRouterNode / selectNextExecutorRouterTargets：按 DAG 依赖顺序调度下一批 Executor
+ * - 实现 executorAggregatorNode：汇合同批 Executor 状态并发出知识图谱更新
  * - 管理 executorResults 累积和执行计划状态
  */
 
 import { getWriter, type LangGraphRunnableConfig } from "@langchain/langgraph";
-import type { ExecutorAgentResult, TaskExecutionNode } from "@repo/shared";
+import type { TaskExecutionNode } from "@repo/shared";
 import type { ProductWorkflowStreamEvent } from "../../agents/product-workflow/agent";
 import {
   EXECUTOR_DEFINITIONS,
@@ -47,6 +48,12 @@ export async function plannerAgentNode(
   const writer = getWriter(config);
   const knowledgeGraph =
     state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
+  writer?.({
+    type: "agent-status",
+    agentType: "planner",
+    status: "started",
+    phase: "planning",
+  });
   const plan = await consumeProductWorkflowStream(
     streamPlannerAgent({
       workspaceId: state.workspaceId,
@@ -64,6 +71,12 @@ export async function plannerAgentNode(
     type: "agent-output",
     agentType: "planner",
     content: formatTaskExecutionPlanBlock(plan),
+  });
+  writer?.({
+    type: "agent-status",
+    agentType: "planner",
+    status: "completed",
+    phase: "planning",
   });
 
   return { knowledgeGraph, plan };
@@ -143,9 +156,19 @@ export const interfaceCraftExecutorNode = createExecutorAgentNode(
 );
 
 /**
+ * 固定骨架中的 Executor Router 节点。
+ *
+ * 节点本身不修改状态，后续条件边会根据 Planner 生成的 DAG、已完成任务和最终汇总状态，
+ * 动态选择下一批 Executor、回到 Planner Review，或结束工作流。
+ */
+export async function executorRouterNode() {
+  return {};
+}
+
+/**
  * 汇合同一批并行 Executor 的状态更新，并只在合并后归档知识图谱。
  */
-export async function executorBatchBarrierNode(
+export async function executorAggregatorNode(
   state: WorkflowGraphStateValue,
   config?: LangGraphRunnableConfig,
 ) {
@@ -159,6 +182,11 @@ export async function executorBatchBarrierNode(
 
   return {};
 }
+
+/**
+ * 兼容旧命名：历史上该节点承担并行批次屏障职责，现在语义上是固定骨架中的 Aggregator。
+ */
+export const executorBatchBarrierNode = executorAggregatorNode;
 
 /**
  * 创建单个 Executor Agent 节点，按 Planner DAG 执行当前 Agent 的下一个就绪任务。
@@ -187,6 +215,15 @@ async function executeExecutorAgentTask(
   if (!task) return {};
   const knowledgeGraph =
     state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
+  const parallelAgents = getCurrentParallelExecutorAgents(state);
+
+  writer?.({
+    type: "agent-status",
+    agentType,
+    status: "started",
+    phase: "execution",
+    parallelAgents,
+  });
 
   const result = await consumeProductWorkflowStream(
     streamExecutorAgent({
@@ -201,6 +238,7 @@ async function executeExecutorAgentTask(
       signal: config?.signal,
     }),
     writer,
+    { parallelAgents },
   );
   const nextKnowledgeGraph = appendKnowledgeGraphPatch({
     knowledgeGraph,
@@ -219,6 +257,13 @@ async function executeExecutorAgentTask(
     agentType: result.agent_type,
     content: formatExecutorResultBlock(result),
   });
+  writer?.({
+    type: "agent-status",
+    agentType: result.agent_type,
+    status: "completed",
+    phase: "execution",
+    parallelAgents,
+  });
 
   return { executorResults: [result], knowledgeGraph: nextKnowledgeGraph };
 }
@@ -235,6 +280,12 @@ async function executePlannerWorkflowReview(
   const writer = getWriter(config);
   const knowledgeGraph =
     state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
+  writer?.({
+    type: "agent-status",
+    agentType: "planner",
+    status: "started",
+    phase: "review",
+  });
   const workflowResult = await consumeProductWorkflowStream(
     streamPlannerWorkflowReview({
       workspaceId: state.workspaceId,
@@ -254,6 +305,12 @@ async function executePlannerWorkflowReview(
     agentType: "planner",
     content: formatProductWorkflowBlock(workflowResult),
   });
+  writer?.({
+    type: "agent-status",
+    agentType: "planner",
+    status: "completed",
+    phase: "review",
+  });
   writer?.({ type: "complete", result: workflowResult });
 
   return { productWorkflow: workflowResult };
@@ -265,13 +322,35 @@ async function executePlannerWorkflowReview(
 async function consumeProductWorkflowStream<T>(
   stream: AsyncGenerator<ProductWorkflowStreamEvent, T, void>,
   writer: ((chunk: unknown) => void) | undefined,
+  options: { parallelAgents?: ExecutorAgentType[] } = {},
 ): Promise<T> {
   let next = await stream.next();
   while (!next.done) {
-    writer?.(next.value);
+    writer?.(withParallelAgents(next.value, options.parallelAgents));
     next = await stream.next();
   }
   return next.value;
+}
+
+/**
+ * 将当前并行批次信息补到 Executor token 事件，供前端 token 用量展示并行提示。
+ */
+function withParallelAgents(
+  event: ProductWorkflowStreamEvent,
+  parallelAgents?: ExecutorAgentType[],
+): ProductWorkflowStreamEvent {
+  if (
+    event.type !== "token-usage" ||
+    !parallelAgents ||
+    parallelAgents.length <= 1
+  ) {
+    return event;
+  }
+
+  return {
+    ...event,
+    parallelAgents,
+  };
 }
 
 /**
@@ -298,19 +377,31 @@ function findNextExecutableTaskForAgent(
 }
 
 /**
+ * 读取当前 Router 会同时调度的 Executor 集合，用于前端并行运行态展示。
+ */
+function getCurrentParallelExecutorAgents(
+  state: WorkflowGraphStateValue,
+): ExecutorAgentType[] {
+  const targets = selectNextExecutorRouterTargets(state);
+  if (!Array.isArray(targets)) return [];
+
+  return targets.filter(isExecutorAgentType);
+}
+
+/**
  * 根据 Planner DAG 和已完成结果选择下一个 LangGraph Executor 节点。
  */
 export function selectNextProductWorkflowNode(
   state: WorkflowGraphStateValue,
 ): string {
-  const nextNodes = selectNextProductWorkflowNodes(state);
+  const nextNodes = selectNextExecutorRouterTargets(state);
   return Array.isArray(nextNodes) ? nextNodes[0] ?? "end" : nextNodes;
 }
 
 /**
  * 根据 DAG 依赖选择下一批可并行运行的 Executor 节点。
  */
-export function selectNextProductWorkflowNodes(
+export function selectNextExecutorRouterTargets(
   state: WorkflowGraphStateValue,
 ): string | string[] {
   if (state.productWorkflow || !state.plan) return "end";
@@ -332,6 +423,11 @@ export function selectNextProductWorkflowNodes(
 
   return parallelTasks.map((task) => task.assigned_agent);
 }
+
+/**
+ * 兼容旧命名：Executor Router 的条件边目标选择器。
+ */
+export const selectNextProductWorkflowNodes = selectNextExecutorRouterTargets;
 
 /**
  * 判断 Planner DAG 中的任务是否已经全部由 Executor 回写结果。

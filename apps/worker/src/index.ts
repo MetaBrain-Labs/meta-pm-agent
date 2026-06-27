@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
-import { Queue, Worker, type Job } from "bullmq";
+import { Worker, type Job } from "bullmq";
 
 dotenv.config({
   path: path.resolve(
@@ -24,12 +24,6 @@ const connection = {
   },
   ...(process.env.REDIS_TLS === "true" ? { tls: {} } : {}),
 };
-
-/**
- * 创建队列
- *   生产者入口——其他服务可以往这个队列里丢任务
- */
-const queue = new Queue("chat", { connection });
 
 /**
  * 创建消费者

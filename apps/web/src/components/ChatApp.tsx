@@ -1,3 +1,18 @@
+/**
+ * 聊天工作区主视图
+ *
+ * 负责渲染单个工作区内的聊天消息、输入框、工具入口和工作流辅助弹窗。
+ * 页面级数据读写由 ThreadChatPage 和 API 模块提供，本组件只管理浏览器侧交互状态。
+ *
+ * Responsibilities:
+ * - 展示聊天消息流、输入框、停止生成和重试入口
+ * - 管理知识图谱与 LangGraph 可视化弹窗
+ * - 维护自动滚动、联网搜索开关和当前 Agent 定位行为
+ *
+ * Notes:
+ * - 不直接持久化聊天历史；权威数据通过 API 恢复。
+ */
+
 import {
   useCallback,
   useEffect,
@@ -15,17 +30,19 @@ import {
   ClearOutlined,
   DownOutlined,
   PaperClipOutlined,
+  PartitionOutlined,
   SearchOutlined,
   SendOutlined,
   StopOutlined,
 } from "@ant-design/icons";
-import type { Message } from "../types";
+import type { HumanInTheLoopResume, Message } from "../types";
 import {
   fetchProductKnowledgeGraph,
   type WorkspaceKnowledgeGraphData,
 } from "../api/chat-api";
 import { MessageBubble } from "./MessageBubble";
 import { KnowledgeGraphModal } from "./modals/KnowledgeGraphModal";
+import { LangGraphModal } from "./modals/LangGraphModal";
 
 const { TextArea } = Input;
 
@@ -46,7 +63,13 @@ interface Props {
   isMessagesLoading: boolean;
   error: string | null;
   disabledReason?: string | null;
-  onSend: (text: string, options?: { webSearchEnabled?: boolean }) => void;
+  onSend: (
+    text: string,
+    options?: {
+      webSearchEnabled?: boolean;
+      hitlResume?: HumanInTheLoopResume;
+    },
+  ) => void;
   onStop: () => void;
   onClear: () => void;
   onBack: () => void;
@@ -68,6 +91,7 @@ export function ChatApp({
   const [input, setInput] = useState("");
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [userScrolled, setUserScrolled] = useState(false);
+  const [langGraphModalOpen, setLangGraphModalOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // 知识图谱下载状态
@@ -176,7 +200,7 @@ export function ChatApp({
     }
     return -1;
   })();
-  const activeAgent = isLoading ? findActiveAgent(messages) : undefined;
+  const activeAgents = isLoading ? findActiveAgents(messages) : [];
 
   const nextUserContentByAssistantId = (() => {
     const map = new Map<string, string>();
@@ -233,29 +257,32 @@ export function ChatApp({
     setUserScrolled(false);
   };
 
-  const scrollToActiveThinking = useCallback(() => {
+  const scrollToActiveThinking = useCallback((agentType: string) => {
     const container = containerRef.current;
-    if (!activeAgent || !container) return;
+    if (!container) return;
 
-    const targetAgent = getThinkingTargetAgentType(activeAgent);
+    // 先退出自动贴底模式，再在下一帧计算目标位置，避免底部自动滚动抢回视口。
+    setUserScrolled(true);
+
+    const targetAgent = getThinkingTargetAgentType(agentType);
     const target = container.querySelector<HTMLElement>(
       `[data-agent-thinking="${escapeDataAttributeValue(targetAgent)}"]`,
     );
     if (!target) return;
 
-    // 聊天内容在内部容器滚动，直接计算容器内位置比 scrollIntoView 更稳定。
-    const containerRect = container.getBoundingClientRect();
-    const targetRect = target.getBoundingClientRect();
-    const nextTop =
-      container.scrollTop +
-      targetRect.top -
-      containerRect.top -
-      container.clientHeight / 2 +
-      targetRect.height / 2;
+    requestAnimationFrame(() => {
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const nextTop =
+        container.scrollTop +
+        targetRect.top -
+        containerRect.top -
+        container.clientHeight / 2 +
+        targetRect.height / 2;
 
-    container.scrollTo({ top: Math.max(0, nextTop), behavior: "smooth" });
-    setUserScrolled(true);
-  }, [activeAgent]);
+      container.scrollTo({ top: Math.max(0, nextTop), behavior: "smooth" });
+    });
+  }, []);
 
   return (
     <div className="chat-workspace">
@@ -271,15 +298,33 @@ export function ChatApp({
           </Tooltip>
           <span>{workspaceName}</span>
         </div>
-        {activeAgent && (
-          <div className="ml-auto flex items-center gap-2 rounded-md border border-[var(--line-soft)] bg-white px-2.5 py-1 text-[12px] text-[var(--ink-soft)]">
-            <span className="h-1.5 w-1.5 rounded-full bg-[var(--primary)]" />
-            <span>正在思考：{getAgentLabel(activeAgent)}</span>
-            <Button size="small" type="link" onClick={scrollToActiveThinking}>
-              查看
-            </Button>
-          </div>
-        )}
+        <div className="ml-auto flex min-w-0 items-center gap-2">
+          <Tooltip title="查看 LangGraph">
+            <Button
+              type="text"
+              shape="circle"
+              icon={<PartitionOutlined />}
+              onClick={() => setLangGraphModalOpen(true)}
+            />
+          </Tooltip>
+          {activeAgents.length > 0 && (
+            <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-md border border-[var(--line-soft)] bg-white px-2.5 py-1 text-[12px] text-[var(--ink-soft)]">
+              <span className="h-1.5 w-1.5 rounded-full bg-[var(--primary)]" />
+              <span>{activeAgents.length > 1 ? "并行思考：" : "正在思考："}</span>
+              {activeAgents.map((agentType) => (
+                <Button
+                  key={agentType}
+                  size="small"
+                  type="link"
+                  className="h-auto! px-0!"
+                  onClick={() => scrollToActiveThinking(agentType)}
+                >
+                  {getAgentLabel(agentType)}
+                </Button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="chat-canvas">
@@ -342,7 +387,9 @@ export function ChatApp({
                 message.role === "agent"
               }
               nextUserContent={nextUserContentByAssistantId.get(message.id)}
-              onFormSubmit={(text) => onSend(text, { webSearchEnabled })}
+              onFormSubmit={(text, hitlResume) =>
+                onSend(text, { webSearchEnabled, hitlResume })
+              }
               onRetry={() => retryAssistantMessage(message.id)}
             />
           ))}
@@ -473,6 +520,10 @@ export function ChatApp({
         workspaceId={workspaceId ?? ""}
         onClose={() => setKgModalOpen(false)}
       />
+      <LangGraphModal
+        open={langGraphModalOpen}
+        onClose={() => setLangGraphModalOpen(false)}
+      />
     </div>
   );
 }
@@ -520,12 +571,19 @@ function getThinkingTargetAgentType(agentType: string): string {
 /**
  * 从最新助手消息中查找当前正在思考的 Agent。
  */
-function findActiveAgent(messages: Message[]): string | undefined {
+function findActiveAgents(messages: Message[]): string[] {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
-    if (message?.role === "agent" && message.activeAgent) {
-      return message.activeAgent;
+    if (message?.role === "agent") {
+      const activeAgents = message.activeAgents?.length
+        ? message.activeAgents
+        : message.activeAgent
+          ? [message.activeAgent]
+          : [];
+      if (activeAgents.length > 0) {
+        return [...new Set(activeAgents)];
+      }
     }
   }
-  return undefined;
+  return [];
 }

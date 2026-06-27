@@ -16,7 +16,12 @@ import {
   DEFAULT_CHAT_TITLE,
   NO_WORKSPACE_MESSAGE,
 } from "../../constants/app";
-import type { Message, StreamEvent, ThreadInfo } from "../../types";
+import type {
+  HumanInTheLoopResume,
+  Message,
+  StreamEvent,
+  ThreadInfo,
+} from "../../types";
 import { mapErrorToChinese } from "../../utils/errors";
 import { applyStreamEvent } from "../../utils/apply-stream-event";
 
@@ -126,7 +131,13 @@ export function ThreadChatPage({
   }, []);
 
   const sendMessage = useCallback(
-    async (text: string, options?: { webSearchEnabled?: boolean }) => {
+    async (
+      text: string,
+      options?: {
+        webSearchEnabled?: boolean;
+        hitlResume?: HumanInTheLoopResume;
+      },
+    ) => {
       if (!text.trim() || isLoading) return;
 
       const currentWorkspaceId = workspaceIdRef.current;
@@ -200,6 +211,7 @@ export function ThreadChatPage({
             chatId: threadId,
             enabledTools: options?.webSearchEnabled ? ["web_search"] : [],
             requestFormId: requestFormIdRef.current,
+            hitlResume: options?.hitlResume,
             messages: requestMessages,
           }),
           signal: controller.signal,

@@ -74,10 +74,12 @@ export interface MessageDto {
  * 前端展示工具调用卡片所需的最小结构。
  */
 export interface ToolCallDto {
+  id?: string;
   name: string;
   args?: Record<string, unknown>;
   result?: unknown;
   agentType?: string;
+  status?: "running" | "complete";
 }
 
 /**
@@ -440,6 +442,7 @@ function normalizeToolCalls(value: unknown[]): ToolCallDto[] {
 
     return [
       {
+        ...(typeof record.id === "string" ? { id: record.id } : {}),
         name: record.name,
         ...(isRecord(record.args) ? { args: record.args } : {}),
         ...(Object.prototype.hasOwnProperty.call(record, "result")
@@ -447,6 +450,9 @@ function normalizeToolCalls(value: unknown[]): ToolCallDto[] {
           : {}),
         ...(typeof record.agentType === "string"
           ? { agentType: record.agentType }
+          : {}),
+        ...(record.status === "complete" || record.status === "running"
+          ? { status: record.status }
           : {}),
       },
     ];

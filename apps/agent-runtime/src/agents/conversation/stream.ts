@@ -31,7 +31,13 @@ import {
   formatProductWorkflowProposalQuestionForm,
 } from "../product-workflow/agent";
 import { streamWorkflowGraph } from "../../graph/workflow";
+import {
+  createHumanInTheLoopThreadId,
+  extractQuestionFormId,
+  releaseQuestionFormHumanInterrupt,
+} from "../../graph/human-in-the-loop";
 import type {
+  AgentMessageType,
   ConversationStreamEvent,
   ConversationStreamOptions,
 } from "../../types";
@@ -64,6 +70,7 @@ async function* streamAgentEvents(
     )) {
       yield {
         type: "tool-call",
+        toolCallId: toolCall.id,
         toolName: toolCall.name,
         toolArgs: toolCall.args,
         agentType: "conversation",
@@ -74,6 +81,7 @@ async function* streamAgentEvents(
     if (toolResult && visibleToolNames.has(toolResult.name)) {
       yield {
         type: "tool-result",
+        toolCallId: toolResult.id,
         toolName: toolResult.name,
         toolResult: toolResult.content,
         agentType: "conversation",
@@ -167,6 +175,14 @@ export async function* streamConversation(
   )) {
     yield event;
 
+    if (event.type === "question-form-complete") {
+      yield* streamHumanInterruptForQuestionForm(
+        event.content,
+        event.agentType,
+        options,
+      );
+    }
+
     if (event.type === "user-input-complete") {
       yield* streamPlanningAfterUserInput(event.content, options);
     }
@@ -236,6 +252,7 @@ async function* streamPlanningAfterUserInput(
       signal: options.signal,
     })) {
       if (
+        event.type === "agent-status" ||
         event.type === "reasoning" ||
         event.type === "request-analysis-start" ||
         event.type === "request-analysis-complete" ||
@@ -285,6 +302,11 @@ async function* streamPlanningAfterUserInput(
           content: questionForm,
           agentType: "conversation_confirmation",
         };
+        yield* streamHumanInterruptForQuestionForm(
+          questionForm,
+          "conversation_confirmation",
+          options,
+        );
       }
     }
   } catch (error) {
@@ -294,6 +316,33 @@ async function* streamPlanningAfterUserInput(
       agentType: "request",
     };
   }
+}
+
+/**
+ * 将 Question Form 转换为 LangGraph Human-in-the-Loop interrupt 事件。
+ */
+async function* streamHumanInterruptForQuestionForm(
+  questionForm: string,
+  agentType: AgentMessageType | undefined,
+  options: ConversationStreamOptions,
+): AsyncGenerator<ConversationStreamEvent> {
+  const formId = extractQuestionFormId(questionForm);
+  const interrupt = await releaseQuestionFormHumanInterrupt({
+    threadId: createHumanInTheLoopThreadId({
+      scopeId: options.requestFormId ?? options.workspaceId,
+      formId,
+    }),
+    questionForm,
+    agentType,
+  });
+
+  if (!interrupt) return;
+
+  yield {
+    type: "human-interrupt",
+    interrupt,
+    agentType,
+  };
 }
 
 /**
@@ -329,12 +378,13 @@ function getErrorMessage(error: unknown): string {
  */
 function getToolCalls(
   message: BaseMessage,
-): Array<{ name: string; args?: Record<string, unknown> }> {
+): Array<{ id?: string; name: string; args?: Record<string, unknown> }> {
   if (!AIMessage.isInstance(message)) return [];
 
   return (message.tool_calls ?? [])
     .filter((toolCall) => toolCall.name)
     .map((toolCall) => ({
+      id: toolCall.id,
       name: toolCall.name,
       args:
         typeof toolCall.args === "object" && toolCall.args !== null
@@ -348,10 +398,11 @@ function getToolCalls(
  */
 function getToolResult(
   message: BaseMessage,
-): { name: string; content: unknown } | null {
+): { id?: string; name: string; content: unknown } | null {
   if (!ToolMessage.isInstance(message)) return null;
 
   return {
+    id: (message as { tool_call_id?: string }).tool_call_id,
     name: message.name ?? "unknown",
     content: message.content,
   };

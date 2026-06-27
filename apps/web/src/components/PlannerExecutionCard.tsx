@@ -1,3 +1,15 @@
+/**
+ * Planner 执行计划卡片
+ *
+ * 展示 Planner Agent 生成的任务 DAG、Executor 实时运行状态，以及 Planner 收尾阶段
+ * 对补充问题和确认表单的汇总状态。
+ *
+ * Responsibilities:
+ * - 渲染任务 DAG、节点状态和 Executor 结果
+ * - 展示 Planner DAG 生成中的加载态
+ * - 展示 Planner Review 生成和完成状态
+ */
+
 import { useMemo, type ReactNode } from "react";
 import { Collapse, Empty, List, Space, Tag, Typography } from "antd";
 import {
@@ -57,6 +69,7 @@ export function PlannerExecutionCard({
 
   return (
     <Collapse
+      className="mb-2"
       defaultActiveKey={["1"]}
       expandIcon={({ isActive }) => <RightOutlined rotate={isActive ? 90 : 0} />}
       items={[
@@ -143,7 +156,10 @@ export function PlannerExecutionCard({
  */
 export function PlannerExecutionLoadingCard() {
   return (
-    <div className="mb-2 flex items-center gap-3 rounded-lg border border-[var(--line-soft)] bg-white p-5">
+    <div
+      className="mb-2 flex items-center gap-3 rounded-lg border border-[var(--line-soft)] bg-white p-5"
+      data-agent-thinking="planner"
+    >
       <div
         className="h-5 w-5 rounded-full border-2"
         style={{
@@ -172,6 +188,61 @@ export function PlannerExecutionLoadingCard() {
           />
         ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * 展示所有 Executor 完成后 Planner Agent 汇总补充问题的状态。
+ */
+export function PlannerReviewStatusCard({
+  state,
+}: {
+  state: "generating" | "complete";
+}) {
+  const complete = state === "complete";
+
+  return (
+    <div
+      className="mb-2 flex items-center gap-3 rounded-lg border border-[var(--line-soft)] bg-white p-5"
+      data-agent-thinking="planner"
+    >
+      <div
+        className="flex h-5 w-5 items-center justify-center rounded-full border-2"
+        style={{
+          borderColor: complete ? "var(--success)" : "var(--primary)",
+          animation: complete ? undefined : "qf-pulse 1.4s ease-out infinite",
+        }}
+      >
+        {complete && (
+          <CheckCircleOutlined className="text-[11px] text-[var(--success)]" />
+        )}
+      </div>
+      <div className="min-w-0">
+        <div className="flex items-center gap-2 text-[13px] font-extrabold text-[var(--ink)]">
+          <PartitionOutlined
+            style={{ color: complete ? "var(--success)" : "var(--primary)" }}
+          />
+          <span>Planner Agent Review</span>
+        </div>
+        <div className="mt-1 text-[12px] font-bold text-[var(--ink-faint)]">
+          {complete ? "已完成补充问题整理" : "正在思考补充问题"}
+        </div>
+      </div>
+      {!complete && (
+        <div className="ml-auto flex gap-1">
+          {[0, 1, 2].map((index) => (
+            <span
+              key={index}
+              className="h-1.5 w-1.5 rounded-full bg-[var(--primary)]"
+              style={{
+                animation: "qf-bounce 1.2s ease-in-out infinite",
+                animationDelay: `${index * 0.2}s`,
+              }}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -1,3 +1,15 @@
+/**
+ * Request Agent 分析卡片
+ *
+ * 展示 Request Agent 对用户输入的业务建模、缺失信息、问答和闲聊分类结果。
+ * 历史恢复和实时流式完成后共用同一展示结构。
+ *
+ * Responsibilities:
+ * - 解析 request-analysis tagged block
+ * - 渲染业务模型、约束和缺失信息
+ * - 保持结构化分析卡片默认折叠
+ */
+
 import { useState, type ReactNode } from "react";
 import { Collapse, Empty, List, Progress, Space, Tag, Typography } from "antd";
 import {
@@ -23,6 +35,7 @@ export function RequestAnalysisCard({ raw, analysis }: Props) {
 
   return (
     <Collapse
+      className="mb-2"
       defaultActiveKey={[]}
       expandIcon={({ isActive }) => (
         <CaretRightOutlined rotate={isActive ? 90 : 0} />

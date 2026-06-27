@@ -240,11 +240,13 @@ The API exposes account, workspace, chat, message, and SSE routes:
 | `POST` | `/api/chat/stop` | Abort the current running Agent stream for a chat |
 | `GET` | `/api/workspaces/:workspaceId/knowledge-graph` | Load the latest persisted product knowledge graph for a workspace |
 
-`POST /api/chat` returns `text/event-stream` and uses typed events including `start`, `thinking`, `text`, `question-form-start`, `question-form-complete`, `user-input-start`, `user-input-complete`, `request-analysis-start`, `request-analysis-complete`, `todo-update`, `tool-call`, `tool-result`, `step-finish`, `finish`, `abort`, and `error`, followed by `[DONE]`.
+`POST /api/chat` returns `text/event-stream` and uses typed events including `start`, `agent-status`, `thinking`, `text`, `question-form-start`, `question-form-complete`, `user-input-start`, `user-input-complete`, `request-analysis-start`, `request-analysis-complete`, `todo-update`, `tool-call`, `tool-result`, `token-usage`, `step-finish`, `finish`, `abort`, and `error`, followed by `[DONE]`.
 
 `POST /api/chat` may include `enabledTools: ["web_search"]`. The shared schema also knows the internal knowledge-graph file tool names, but runtime authorization still decides which agents may actually see each enabled or internally attached tool.
 
 `thinking` events may include `agentType`. The frontend uses that field to place reasoning next to the corresponding stage.
+
+`agent-status` events are the authoritative realtime source for `activeAgent` / `activeAgents`. The frontend must remove `conversation` from the active set after `user-input-complete`, and must not keep a completed Agent in the top-right "正在思考 / 并行思考" indicator while later workflow Agents run.
 
 `POST /api/chat/stop` aborts the server-side runtime `AbortController` for the current `chatId`. Frontend stop handling should call this endpoint before aborting the browser fetch so the model provider request is cancelled, not merely hidden in the UI.
 
@@ -278,11 +280,16 @@ Message rendering is staged:
 8. Request Agent 分析 card.
 9. Planner reasoning, Planner DAG progress, and Planner tool calls.
 10. Each Executor Agent reasoning block followed by that Executor's own knowledge-graph tool card.
-11. Future agent-specific reasoning blocks.
+11. Planner Agent Review status card, shown after the Executor Agent sections once all Executors have finished and Planner is thinking about follow-up questions.
+12. Future agent-specific reasoning blocks.
 
 `ToolCallsCard`, `UserInputCard`, and `RequestAnalysisCard` default to collapsed so detailed intermediate data stays available without pushing normal assistant prose out of view. Tool calls must preserve `agentType`; the frontend uses it to avoid merging all Executor tool calls into a single card.
 
 `ChatApp` refreshes `GET /api/workspaces/:workspaceId/knowledge-graph` whenever a new Executor result appears in the active message. This makes the knowledge-graph viewer button available after each completed Executor, not only after the full workflow ends.
+
+The top-right active-Agent indicator may show multiple entries during parallel Executor execution. Each entry must scroll to the related visible reasoning/loading card. When the chat viewport is already at the bottom, the click handler should first disable auto-stick-to-bottom behavior and then scroll on the next animation frame so the automatic bottom lock does not cancel the jump.
+
+The knowledge-graph modal in `apps/web/src/components/modals/KnowledgeGraphModal.tsx` owns G6 graph lifecycle. It should retry initialization while the Ant Design modal container reports zero dimensions, avoid one-shot initialization latches that can leave the modal permanently in "正在渲染知识图谱", and hide edge labels for dense graphs to keep the layout readable.
 
 ## Development Workflow
 

@@ -13,8 +13,6 @@ interface ProjectCreateModalProps {
   onCancel: () => void;
 }
 
-const { Search } = Input;
-
 /**
  * 创建本地项目的弹窗，封装路径选择和表单展示。
  */

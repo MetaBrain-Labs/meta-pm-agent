@@ -75,6 +75,16 @@ export interface QuestionForm {
   submitLabel?: string;
 }
 
+/**
+ * 前端提交给 API 的 LangGraph HITL 恢复命令。
+ */
+export interface HumanInTheLoopResume {
+  threadId: string;
+  response: {
+    decisions: Array<{ type: "respond"; message: string }>;
+  };
+}
+
 export type FormSegment =
   | { kind: "text"; text: string }
   | { kind: "form"; form: QuestionForm; raw: string };
@@ -308,7 +318,7 @@ export function formatFormAnswers(
   answers: Record<string, string | string[]>,
 ): string {
   const lines: string[] = [];
-  lines.push(`[form answers — ${form.id}]`);
+  lines.push(`[form answers - ${form.id}]`);
   for (const q of form.questions) {
     const v = answers[q.id];
     let display: string;
@@ -319,4 +329,25 @@ export function formatFormAnswers(
     lines.push(`- ${q.label}: ${display}`);
   }
   return lines.join("\n");
+}
+
+/**
+ * 将 Question Form 答案转换为 LangChain HITL 的 respond 决策。
+ */
+export function formatHumanInTheLoopResume(
+  threadId: string,
+  form: QuestionForm,
+  answers: Record<string, string | string[]>,
+): HumanInTheLoopResume {
+  return {
+    threadId,
+    response: {
+      decisions: [
+        {
+          type: "respond",
+          message: formatFormAnswers(form, answers),
+        },
+      ],
+    },
+  };
 }

@@ -27,6 +27,8 @@ export function applyStreamEvent(
   event: StreamEvent,
 ): Message {
   switch (event.type) {
+    case "agent-status":
+      return applyAgentStatus(message, event);
     case "thinking":
       if (event.agentType && event.agentType !== "conversation") {
         return {
@@ -80,6 +82,20 @@ export function applyStreamEvent(
           content: event.content,
         },
       };
+    case "human-interrupt":
+      if (!event.interrupt) return message;
+      return {
+        ...message,
+        activeAgent: undefined,
+        activeAgents: removeActiveAgent(
+          message.activeAgents,
+          event.agentType ?? "conversation",
+        ),
+        humanInterrupt: {
+          state: "pending",
+          interrupt: event.interrupt,
+        },
+      };
     case "user-input-start":
       return {
         ...message,
@@ -93,6 +109,9 @@ export function applyStreamEvent(
           "<user-input",
           "</user-input>",
         ),
+        activeAgent:
+          message.activeAgent === "conversation" ? undefined : message.activeAgent,
+        activeAgents: removeActiveAgent(message.activeAgents, "conversation"),
         userInput: {
           state: "complete",
           content: event.content,
@@ -141,22 +160,13 @@ export function applyStreamEvent(
         })),
       };
     case "tool-call":
-      return {
-        ...message,
-        toolCalls: [
-          ...(message.toolCalls ?? []),
-          {
-            name: event.toolName ?? "unknown",
-            args: event.toolArgs,
-            agentType: event.agentType,
-          },
-        ],
-      };
+      return appendToolCall(message, event);
     case "tool-result":
       return {
         ...message,
         toolCalls: attachToolResult(
           message.toolCalls ?? [],
+          event.toolCallId,
           event.toolName ?? "unknown",
           event.toolResult,
           event.agentType,
@@ -223,6 +233,9 @@ function appendTokenUsage(
     costTotal: event.costTotal ?? 0,
     durationMs: event.durationMs ?? 0,
     createdAt: event.createdAt,
+    parallelAgents:
+      event.parallelAgents ??
+      message.parallelExecutorAgents?.[event.agentType],
   };
 
   const existing = message.tokenUsages ?? [];
@@ -241,6 +254,57 @@ function appendTokenUsage(
         : existing.map((item, index) =>
             index === sameRecordIndex ? usage : item,
           ),
+  };
+}
+
+/**
+ * 应用 Agent 显式运行状态，避免只依赖推理文本驱动加载态。
+ */
+function applyAgentStatus(message: Message, event: StreamEvent): Message {
+  if (!event.agentType || !event.status) return message;
+
+  if (event.status === "started") {
+    return {
+      ...message,
+      activeAgent: event.agentType,
+      activeAgents: addActiveAgent(message.activeAgents, event.agentType),
+      parallelExecutorAgents: rememberParallelExecutors(message, event),
+      ...(event.agentType === "planner" && event.phase === "review"
+        ? { plannerReview: { state: "generating" as const } }
+        : {}),
+    };
+  }
+
+  return {
+    ...message,
+    activeAgent:
+      message.activeAgent === event.agentType ? undefined : message.activeAgent,
+    activeAgents: removeActiveAgent(message.activeAgents, event.agentType),
+    toolCalls: markAgentToolsComplete(message.toolCalls ?? [], event.agentType),
+    ...(event.agentType === "planner" && event.phase === "review"
+      ? { plannerReview: { state: "complete" as const } }
+      : {}),
+  };
+}
+
+/**
+ * 记录本轮并行 Executor 批次，供稍后到达的 token 用量事件补充 tooltip。
+ */
+function rememberParallelExecutors(
+  message: Message,
+  event: StreamEvent,
+): Message["parallelExecutorAgents"] {
+  if (
+    !event.parallelAgents ||
+    event.parallelAgents.length <= 1 ||
+    !event.agentType
+  ) {
+    return message.parallelExecutorAgents;
+  }
+
+  return {
+    ...(message.parallelExecutorAgents ?? {}),
+    [event.agentType]: event.parallelAgents,
   };
 }
 
@@ -297,6 +361,51 @@ function addActiveAgent(
   agentType: string,
 ): string[] {
   return [...new Set([...(activeAgents ?? []), agentType])];
+}
+
+/**
+ * 追加工具调用并按 toolCallId 去重，避免同一工具调用流片段被重复展示。
+ */
+function appendToolCall(message: Message, event: StreamEvent): Message {
+  const nextToolCall = {
+    id: event.toolCallId,
+    name: event.toolName ?? "unknown",
+    args: event.toolArgs,
+    agentType: event.agentType,
+    status: "running" as const,
+  };
+  const existing = message.toolCalls ?? [];
+  const existingIndex = findExistingToolCallIndex(existing, nextToolCall);
+
+  return {
+    ...message,
+    toolCalls:
+      existingIndex === -1
+        ? [...existing, nextToolCall]
+        : existing.map((toolCall, index) =>
+            index === existingIndex ? { ...toolCall, ...nextToolCall } : toolCall,
+          ),
+  };
+}
+
+/**
+ * 优先按工具调用 ID 去重；缺少 ID 时用同名同 Agent 的未完成调用兜底。
+ */
+function findExistingToolCallIndex(
+  toolCalls: NonNullable<Message["toolCalls"]>,
+  nextToolCall: NonNullable<Message["toolCalls"]>[number],
+): number {
+  if (nextToolCall.id) {
+    const index = toolCalls.findIndex((toolCall) => toolCall.id === nextToolCall.id);
+    if (index !== -1) return index;
+  }
+
+  return findPendingToolCallIndex(
+    toolCalls,
+    undefined,
+    nextToolCall.name,
+    nextToolCall.agentType,
+  );
 }
 
 /**
@@ -448,6 +557,7 @@ function applyTextChunk(
             activeAgent: undefined,
             activeAgents: [],
             executorResults: result.executor_results,
+            plannerReview: { state: "complete" as const },
           }
         : {}),
     };
@@ -507,18 +617,35 @@ function escapeRegExp(text: string): string {
  */
 function attachToolResult(
   toolCalls: NonNullable<Message["toolCalls"]>,
+  toolCallId: string | undefined,
   toolName: string,
   toolResult: unknown,
   agentType?: string,
 ): NonNullable<Message["toolCalls"]> {
-  const targetIndex = findPendingToolCallIndex(toolCalls, toolName, agentType);
+  const targetIndex = findPendingToolCallIndex(
+    toolCalls,
+    toolCallId,
+    toolName,
+    agentType,
+  );
 
   if (targetIndex === -1) {
-    return [...toolCalls, { name: toolName, result: toolResult, agentType }];
+    return [
+      ...toolCalls,
+      {
+        id: toolCallId,
+        name: toolName,
+        result: toolResult,
+        agentType,
+        status: "complete",
+      },
+    ];
   }
 
   return toolCalls.map((toolCall, index) =>
-    index === targetIndex ? { ...toolCall, result: toolResult } : toolCall,
+    index === targetIndex
+      ? { ...toolCall, result: toolResult, status: "complete" }
+      : toolCall,
   );
 }
 
@@ -527,11 +654,19 @@ function attachToolResult(
  */
 function findPendingToolCallIndex(
   toolCalls: NonNullable<Message["toolCalls"]>,
+  toolCallId: string | undefined,
   toolName: string,
   agentType?: string,
 ): number {
   for (let index = toolCalls.length - 1; index >= 0; index--) {
     const toolCall = toolCalls[index];
+    if (
+      toolCallId &&
+      toolCall?.id === toolCallId &&
+      !Object.prototype.hasOwnProperty.call(toolCall, "result")
+    ) {
+      return index;
+    }
     if (
       toolCall?.name === toolName &&
       (!agentType || !toolCall.agentType || toolCall.agentType === agentType) &&
@@ -542,6 +677,21 @@ function findPendingToolCallIndex(
   }
 
   return -1;
+}
+
+/**
+ * Agent 完成时收敛未返回独立结果的工具调用，防止 UI 一直显示加载中。
+ */
+function markAgentToolsComplete(
+  toolCalls: NonNullable<Message["toolCalls"]>,
+  agentType: string,
+): NonNullable<Message["toolCalls"]> {
+  return toolCalls.map((toolCall) =>
+    toolCall.agentType === agentType &&
+    !Object.prototype.hasOwnProperty.call(toolCall, "result")
+      ? { ...toolCall, status: "complete" as const }
+      : toolCall,
+  );
 }
 
 function removeTaggedBlock(
