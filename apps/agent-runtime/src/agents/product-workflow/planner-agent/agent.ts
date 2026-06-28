@@ -304,6 +304,7 @@ function createFallbackPlan(
   }));
 
   const plan: TaskExecutionPlan = {
+    status: "initial",
     request_summary: summarizeBusinessModels(analysis.business_model),
     dag: {
       nodes: taskSpecs.map(({ sequence }) => createTaskId(sequence)),

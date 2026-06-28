@@ -53,7 +53,7 @@ export function applyStreamEvent(
         ),
       };
     case "text":
-      return applyTextChunk(message, event.content ?? "");
+      return applyTextChunk(message, event);
     case "question-form-start":
       return {
         ...message,
@@ -421,8 +421,19 @@ function removeActiveAgent(
 
 function applyTextChunk(
   message: Message,
-  chunk: string,
+  event: StreamEvent,
 ): Message {
+  const chunk = event.content ?? "";
+  if (isWorkflowCompletionText(event)) {
+    return {
+      ...message,
+      workflowCompletion: {
+        state: "complete",
+        content: chunk,
+      },
+    };
+  }
+
   const content = message.content + chunk;
   const questionForm = extractTaggedBlock(
     content,
@@ -724,4 +735,15 @@ function extractTaggedBlock(
     remainingText:
       content.slice(0, startIndex) + content.slice(blockEnd),
   };
+}
+
+/**
+ * 判断是否为产品工作流最终完成提示，用于渲染独立完成卡片。
+ */
+function isWorkflowCompletionText(event: StreamEvent): boolean {
+  return (
+    event.agentType === "conversation_confirmation" &&
+    typeof event.content === "string" &&
+    event.content.includes("本轮产品工作流已正式结束")
+  );
 }

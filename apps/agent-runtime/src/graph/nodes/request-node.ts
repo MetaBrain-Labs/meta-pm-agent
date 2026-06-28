@@ -36,7 +36,7 @@ export async function requestAgentNode(
   config?: LangGraphRunnableConfig,
 ) {
   const writer = getWriter(config);
-  if (state.requestAnalysis && state.plan) {
+  if (state.requestAnalysis) {
     const requestAnalysisBlock = formatRequestAnalysisBlock(
       state.requestAnalysis,
     );

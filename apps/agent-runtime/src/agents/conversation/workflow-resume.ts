@@ -21,9 +21,11 @@ import {
   type ChatMessage,
   type ProductKnowledgeGraph,
 } from "@repo/shared";
+import { getFormAnswerId } from "../../utils/form-parser";
 import type { WorkflowResumeContext } from "../product-workflow/types";
 
 const EXECUTOR_BLOCKER_FORM_PREFIX = "executor-blocker-";
+const PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID = "product-workflow-confirmation";
 
 /**
  * 基于历史消息和最新知识图谱构建 workflow 恢复上下文。
@@ -71,6 +73,7 @@ export function createWorkflowResumeContextFromMessages({
     executorResults,
     knowledgeGraph: knowledgeGraph ?? null,
     rerunTaskIds: inferRerunTaskIds(formId, executorResults),
+    forceSupplementPlan: isPlannerConfirmationFormId(formId),
   };
 }
 
@@ -81,9 +84,7 @@ function parseLatestFormAnswerId(messages: ChatMessage[]): string | null {
   const latestUserMessage = messages
     .filter((message) => message.role === "user")
     .at(-1);
-  const firstLine = latestUserMessage?.content.split("\n")[0]?.trim() ?? "";
-  const match = /^\[form answers\s*-\s*([^\]]+)\]/i.exec(firstLine);
-  return match?.[1]?.trim() || null;
+  return latestUserMessage ? getFormAnswerId(latestUserMessage.content) : null;
 }
 
 /**
@@ -98,16 +99,39 @@ function inferRerunTaskIds(
   }
 
   if (formId.endsWith("-proposal-decision")) {
-    return [
-      ...new Set(
-        executorResults
-          .filter((result) => result.open_questions.length > 0)
-          .map((result) => result.task_id),
-      ),
-    ];
+    return inferOpenQuestionTaskIds(executorResults);
+  }
+
+  if (formId === PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID) {
+    return inferOpenQuestionTaskIds(executorResults);
   }
 
   return [];
+}
+
+/**
+ * Planner 汇总后的问题表单答案需要重新进入 Planner，生成补充 DAG。
+ */
+function isPlannerConfirmationFormId(formId: string): boolean {
+  return (
+    formId === PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID ||
+    formId.endsWith("-proposal-decision")
+  );
+}
+
+/**
+ * 根据 Executor 尚未关闭的 open questions 定位需要基于用户补充信息重跑的任务。
+ */
+function inferOpenQuestionTaskIds(
+  executorResults: ReturnType<typeof collectExecutorResults>,
+): string[] {
+  return [
+    ...new Set(
+      executorResults
+        .filter((result) => result.open_questions.length > 0)
+        .map((result) => result.task_id),
+    ),
+  ];
 }
 
 /**

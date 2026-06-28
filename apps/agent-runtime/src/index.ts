@@ -46,4 +46,4 @@ export type {
   ConversationStreamOptions,
   StreamChunk,
 } from "./types";
-export { isFormAnswer } from "./utils/form-parser";
+export { getFormAnswerId, isFormAnswer } from "./utils/form-parser";

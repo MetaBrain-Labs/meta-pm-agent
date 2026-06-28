@@ -18,6 +18,7 @@ import { stream } from "hono/streaming";
 import {
   createHumanInTheLoopThreadId,
   extractQuestionFormId,
+  getFormAnswerId,
   releaseQuestionFormHumanInterrupt,
   resumeQuestionFormHumanInterrupt,
   streamConversation,
@@ -214,6 +215,9 @@ export async function chatStreamHandler(c: Context) {
     let productWorkflowResult: unknown = null;
     let latestKnowledgeGraph: ProductKnowledgeGraph | null = null;
     let runtimeWorkspaceId: string | undefined;
+    const shouldFinalizeWorkflowRound = isProductWorkflowFinalConfirmationAnswer(
+      parsed.data.messages,
+    );
 
     try {
       if (parsed.data.hitlResume) {
@@ -229,9 +233,9 @@ export async function chatStreamHandler(c: Context) {
       );
       await markStatus("received");
 
-      const pendingDecisionForm = await loadPendingDecisionQuestionForm(
-        parsed.data.requestFormId,
-      );
+      const pendingDecisionForm = shouldFinalizeWorkflowRound
+        ? null
+        : await loadPendingDecisionQuestionForm(parsed.data.requestFormId);
       if (pendingDecisionForm) {
         await markStatus("pending_user_confirmation");
         const promptText =
@@ -413,6 +417,7 @@ export async function chatStreamHandler(c: Context) {
         requestFormId: parsed.data.requestFormId,
         agentOutputs: [...agentOutputs.values()],
         messages: parsed.data.messages,
+        skipPendingDecisionItems: shouldFinalizeWorkflowRound,
       });
 
       await finalizeWorkspaceKnowledgeGraph({
@@ -696,8 +701,23 @@ function isProductWorkflowResult(value: unknown): value is ProductWorkflowResult
 }
 
 /**
+ * 判断本轮用户消息是否为产品工作流最终确认，用于避免恢复执行完成后再次生成待确认条目。
+ */
+function isProductWorkflowFinalConfirmationAnswer(
+  messages: { role: string; content: string }[],
+): boolean {
+  const latestUserMessage = messages
+    .filter((message) => message.role === "user")
+    .at(-1);
+  return (
+    getFormAnswerId(latestUserMessage?.content ?? "") ===
+    "product-workflow-confirmation"
+  );
+}
+
+/**
  * 获取指定工作区的产品知识图谱数据。
- * 返回 hasData（标识 nodes 和 relations 是否都有数据）和按参考格式生成的 markdown。
+ * 返回 hasData、结构化图谱数据和按参考格式生成的 markdown。
  */
 export async function getWorkspaceKnowledgeGraphHandler(c: Context) {
   const workspaceId = c.req.param("workspaceId");

@@ -38,6 +38,7 @@ export interface WorkflowResumeContext {
   executorResults?: ExecutorAgentResult[];
   knowledgeGraph?: ProductKnowledgeGraph | null;
   rerunTaskIds?: string[];
+  forceSupplementPlan?: boolean;
 }
 
 /**

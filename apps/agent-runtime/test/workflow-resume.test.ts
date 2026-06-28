@@ -34,6 +34,14 @@ test("restores proposal context for executors with open questions", () => {
   assert.deepEqual(context?.rerunTaskIds, ["task-01"]);
 });
 
+test("restores final confirmation context for executors with open questions", () => {
+  const context = createWorkflowResumeContextFromMessages({
+    messages: createMessages("[form answers - product-workflow-confirmation]\n- 你希望如何处理当前结果？: 确认接受\n- 补充说明: (skipped)"),
+  });
+
+  assert.deepEqual(context?.rerunTaskIds, ["task-01"]);
+});
+
 function createMessages(latestAnswer: string): ChatMessage[] {
   return [
     message("u1", "user", "Build MVP"),

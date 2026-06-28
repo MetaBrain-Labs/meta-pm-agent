@@ -196,13 +196,15 @@ function selectNextNodeAfterRequestAgent(state: WorkflowGraphStateValue) {
  */
 function createWorkflowInitialState(input: WorkflowGraphInput) {
   const resume = input.resumeContext;
-  const plan = resume?.plan ?? null;
+  const plan = resume?.forceSupplementPlan ? null : resume?.plan ?? null;
   const rerunTaskIds = new Set(resume?.rerunTaskIds ?? []);
-  const executorResults = filterExecutorResultsForResume(
-    resume?.executorResults ?? [],
-    plan,
-    rerunTaskIds,
-  );
+  const executorResults = resume?.forceSupplementPlan
+    ? []
+    : filterExecutorResultsForResume(
+        resume?.executorResults ?? [],
+        plan,
+        rerunTaskIds,
+      );
 
   return {
     productContext: input.productContext ?? "",

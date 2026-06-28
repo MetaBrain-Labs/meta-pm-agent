@@ -202,6 +202,7 @@ export interface TaskExecutionNode {
 }
 
 export interface TaskExecutionPlan {
+  status?: "initial" | "supplement";
   request_summary: string;
   dag: {
     nodes: string[];
@@ -275,6 +276,10 @@ export interface Message {
   };
   plannerReview?: {
     state: "generating" | "complete";
+  };
+  workflowCompletion?: {
+    state: "complete";
+    content: string;
   };
   executorResults?: ExecutorAgentResult[];
   activeAgent?: string;

@@ -1,3 +1,18 @@
+/**
+ * 线程聊天页面容器
+ *
+ * 负责会话消息恢复、新会话创建、用户消息提交以及 `/api/chat` SSE 流消费。
+ * 发送请求时会把前端拆分展示的结构化卡片还原为 tagged block，确保后端可以恢复 LangGraph 工作流上下文。
+ *
+ * Responsibilities:
+ * - 管理线程消息、本地加载状态和停止生成动作
+ * - 创建聊天记录并提交用户消息到 API
+ * - 消费 SSE 事件并增量更新当前助手消息
+ *
+ * Notes:
+ * - 本文件只做页面级状态编排，不直接实现具体消息卡片展示。
+ */
+
 import {
   useCallback,
   useEffect,
@@ -198,7 +213,7 @@ export function ThreadChatPage({
             message.role === "agent"
               ? ("assistant" as const)
               : ("user" as const),
-          content: message.content || message.userInput?.content || "",
+          content: serializeMessageContentForRequest(message),
           timestamp: new Date(message.timestamp).toISOString(),
           sessionId: "local",
           ...(message.thinking ? { reasoningContent: message.thinking } : {}),
@@ -315,4 +330,43 @@ async function readChatStream(
       }
     }
   }
+}
+
+/**
+ * 将前端拆分展示的结构化卡片还原为后端恢复工作流所需的 tagged block 历史。
+ */
+function serializeMessageContentForRequest(message: Message): string {
+  if (message.role === "user") return message.content;
+
+  const parts = [message.content.trim()].filter(Boolean);
+  appendTaggedContent(parts, "user-input", message.userInput?.content);
+  appendTaggedContent(parts, "request-analysis", message.requestAnalysis?.content);
+  appendTaggedContent(parts, "task-execution", message.plannerExecution?.content);
+
+  for (const result of message.executorResults ?? []) {
+    parts.push(
+      `<executor-result>\n${JSON.stringify(result, null, 2)}\n</executor-result>`,
+    );
+  }
+
+  return parts.join("\n\n");
+}
+
+/**
+ * 兼容实时流和历史恢复两种来源：已有标签则原样保留，纯 JSON 则补齐标签。
+ */
+function appendTaggedContent(
+  parts: string[],
+  tagName: string,
+  content: string | undefined,
+): void {
+  const trimmed = content?.trim();
+  if (!trimmed) return;
+
+  if (new RegExp(`^<${tagName}\\b`, "i").test(trimmed)) {
+    parts.push(trimmed);
+    return;
+  }
+
+  parts.push(`<${tagName}>\n${trimmed}\n</${tagName}>`);
 }

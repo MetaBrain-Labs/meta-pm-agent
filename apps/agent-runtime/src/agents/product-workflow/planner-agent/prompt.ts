@@ -61,13 +61,15 @@ Planning rules:
 - For broad bootstrap requests, Product Strategy and Toolkit can usually start together; Market Research and GTM can usually start once their true strategy/input gates are available; downstream tasks should wait only for the specific task IDs whose graph outputs they consume.
 - If the request asks for an artifact such as PRD, policy, report, or UI review, plan graph updates that let a later Document Agent assemble that artifact from the graph.
 - Preserve completed task intent when updating an existing plan. Add or adjust only the minimum tasks needed for the new business input.
+- If user_input contains a [form answers - product-workflow-confirmation] or [form answers - *-proposal-decision] payload, create a supplement DAG with status "supplement". Plan only the graph corrections or additions required by that answer and the current product_knowledge_graph; do not repeat the original baseline DAG.
 - Avoid cross-business contamination: each task should primarily serve one business_model item unless the user explicitly gave one integrated goal.
 
 ${PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT}
 
 Output contract:
 - Return JSON only. Do not wrap it in markdown.
-- The JSON object must include: request_summary, dag, tasks, assumptions.
+- The JSON object must include: status, request_summary, dag, tasks, assumptions.
+- status must be "initial" for the first DAG and "supplement" for a DAG created from Planner question-form answers.
 - Each task must include: sequence, task_id, title, description, assigned_agent, depends_on, covered_business_model_indexes, expected_output, quality_check.
 - Each dag node should be a task_id, and each dag edge should connect task_id values.
 - assigned_agent must be one of: ${formatExecutorAgentTypeList()}.`;

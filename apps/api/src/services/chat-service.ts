@@ -181,11 +181,13 @@ export async function persistConversationResult({
   requestFormId,
   agentOutputs,
   messages,
+  skipPendingDecisionItems = false,
 }: {
   conversationId?: string;
   requestFormId?: string;
   agentOutputs: AgentConversationOutput[];
   messages: ChatMessage[];
+  skipPendingDecisionItems?: boolean;
 }): Promise<ConversationTitleUpdate | null> {
   if (!conversationId || agentOutputs.length === 0) return null;
 
@@ -254,12 +256,15 @@ export async function persistConversationResult({
     requestFormId,
     plan: taskExecutionPlan,
   });
-  await persistExecutorProposalItems(requestFormId, sanitizedExecutorResults);
-  await persistProposalDecisionItem(requestFormId, sanitizedProductWorkflow);
-  await persistProductWorkflowConfirmationDecision(
-    requestFormId,
-    sanitizedProductWorkflow,
-  );
+  // 终局确认恢复执行完成后，本轮已经结束，不能再生成新的待用户确认条目。
+  if (!skipPendingDecisionItems) {
+    await persistExecutorProposalItems(requestFormId, sanitizedExecutorResults);
+    await persistProposalDecisionItem(requestFormId, sanitizedProductWorkflow);
+    await persistProductWorkflowConfirmationDecision(
+      requestFormId,
+      sanitizedProductWorkflow,
+    );
+  }
 
   const generatedTitle = buildFirstTurnConversationTitle(items, messages);
   if (!generatedTitle) return null;

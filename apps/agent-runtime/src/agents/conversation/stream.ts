@@ -25,7 +25,7 @@ import {
   toLangChainMessages,
 } from "../../utils/message-adapter";
 import { streamTaggedBlock } from "../../utils/tagged-block-stream";
-import { isFormAnswer } from "../../utils/form-parser";
+import { getFormAnswerId, isFormAnswer } from "../../utils/form-parser";
 import {
   formatProductWorkflowConfirmationQuestionForm,
   formatProductWorkflowProposalQuestionForm,
@@ -46,6 +46,9 @@ import type {
   ConversationStreamEvent,
   ConversationStreamOptions,
 } from "../../types";
+
+const PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID = "product-workflow-confirmation";
+const EXECUTOR_BLOCKER_FORM_PREFIX = "executor-blocker-";
 
 /**
  * 流式获取 Conversation Agent 的原始消息事件。
@@ -157,6 +160,12 @@ export async function* streamConversation(
   }
 
   if (lastMessage.role === "user" && isFormAnswer(lastMessage.content)) {
+    const formId = getFormAnswerId(lastMessage.content);
+    if (formId && isProductWorkflowResumeFormId(formId)) {
+      yield* streamWorkflowResumeAfterFormAnswer(messages, options, formId);
+      return;
+    }
+
     yield* streamUserInputIntegration(messages, options);
     return;
   }
@@ -243,25 +252,72 @@ async function* streamUserInputIntegration(
 }
 
 /**
+ * 产品工作流表单答案不再交给 Conversation Agent 重新整理，直接恢复原 DAG 上下文继续执行。
+ */
+async function* streamWorkflowResumeAfterFormAnswer(
+  messages: ChatMessage[],
+  options: ConversationStreamOptions,
+  formId: string,
+): AsyncGenerator<ConversationStreamEvent> {
+  const resumeContext = createWorkflowResumeContextFromMessages({
+    messages,
+    knowledgeGraph: options.knowledgeGraph,
+  });
+
+  if (!resumeContext) {
+    yield* streamUserInputIntegration(messages, options);
+    return;
+  }
+
+  const latestUserMessage = messages.at(-1);
+  const userInputBlock = createFormAnswerUserInputBlock(
+    latestUserMessage?.content ?? "",
+  );
+
+  yield* streamPlanningAfterUserInput(userInputBlock, options, messages, {
+    resumeContext,
+    suppressRestoredRequestAnalysis: true,
+    finalizeOnComplete: formId === PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID,
+  });
+}
+
+/**
  * Conversation Agent 产出 user_input 后，统一进入 LangGraph 规划流程。
  */
 async function* streamPlanningAfterUserInput(
   userInputBlock: string,
   options: ConversationStreamOptions,
   messages: ChatMessage[] = [],
+  resumeOptions: {
+    resumeContext?: ReturnType<typeof createWorkflowResumeContextFromMessages>;
+    suppressRestoredRequestAnalysis?: boolean;
+    finalizeOnComplete?: boolean;
+  } = {},
 ): AsyncGenerator<ConversationStreamEvent> {
   try {
+    const resumeContext =
+      resumeOptions.resumeContext ??
+      createWorkflowResumeContextFromMessages({
+        messages,
+        knowledgeGraph: options.knowledgeGraph,
+      }) ??
+      undefined;
+
     for await (const event of streamWorkflowGraph({
       workspaceId: options.workspaceId,
       productContext: options.productContext,
       knowledgeGraph: options.knowledgeGraph,
       userInputBlock,
-      resumeContext: createWorkflowResumeContextFromMessages({
-        messages,
-        knowledgeGraph: options.knowledgeGraph,
-      }) ?? undefined,
+      resumeContext,
       signal: options.signal,
     })) {
+      if (
+        resumeOptions.suppressRestoredRequestAnalysis &&
+        event.type === "request-analysis-complete"
+      ) {
+        continue;
+      }
+
       if (
         event.type === "agent-status" ||
         event.type === "reasoning" ||
@@ -288,6 +344,16 @@ async function* streamPlanningAfterUserInput(
       if (event.type === "complete") {
         // 将结构化工作流结果转发给 API 持久化层，供知识图谱归档
         yield { type: "complete", result: event.result };
+
+        if (resumeOptions.finalizeOnComplete) {
+          yield {
+            type: "text",
+            content:
+              "本轮产品工作流已正式结束，相关 Executor Agent 的知识图谱修正/补充已完成并归档。",
+            agentType: "conversation_confirmation",
+          };
+          continue;
+        }
 
         const proposalForm = formatProductWorkflowProposalQuestionForm(
           event.result,
@@ -489,4 +555,34 @@ function getToolResult(
     name: message.name ?? "unknown",
     content: message.content,
   };
+}
+
+/**
+ * 判断表单答案是否属于产品工作流恢复路径，而不是普通 Conversation 问答表单。
+ */
+function isProductWorkflowResumeFormId(formId: string): boolean {
+  return (
+    formId === PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID ||
+    formId.endsWith("-proposal-decision") ||
+    formId.startsWith(EXECUTOR_BLOCKER_FORM_PREFIX)
+  );
+}
+
+/**
+ * 将原始表单答案包装成合法 user_input，供恢复后的 Executor Agent 读取用户补充信息。
+ */
+function createFormAnswerUserInputBlock(content: string): string {
+  return `<user-input>\n${JSON.stringify(
+    {
+      user_input: [
+        {
+          index: 1,
+          content: content.trim(),
+          type: "表单答复",
+        },
+      ],
+    },
+    null,
+    2,
+  )}\n</user-input>`;
 }
