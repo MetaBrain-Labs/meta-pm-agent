@@ -30,6 +30,11 @@ import {
   formatProductWorkflowConfirmationQuestionForm,
   formatProductWorkflowProposalQuestionForm,
 } from "../product-workflow/agent";
+import {
+  isExecutorHumanInputRequiredError,
+  type ExecutorHumanInputRequired,
+} from "../product-workflow/executor-agent/agent";
+import { createWorkflowResumeContextFromMessages } from "./workflow-resume";
 import { streamWorkflowGraph } from "../../graph/workflow";
 import {
   createHumanInTheLoopThreadId,
@@ -184,7 +189,7 @@ export async function* streamConversation(
     }
 
     if (event.type === "user-input-complete") {
-      yield* streamPlanningAfterUserInput(event.content, options);
+      yield* streamPlanningAfterUserInput(event.content, options, messages);
     }
   }
 }
@@ -233,7 +238,7 @@ async function* streamUserInputIntegration(
       content: userInputBlock,
     };
 
-    yield* streamPlanningAfterUserInput(userInputBlock, options);
+    yield* streamPlanningAfterUserInput(userInputBlock, options, messages);
   }
 }
 
@@ -243,12 +248,18 @@ async function* streamUserInputIntegration(
 async function* streamPlanningAfterUserInput(
   userInputBlock: string,
   options: ConversationStreamOptions,
+  messages: ChatMessage[] = [],
 ): AsyncGenerator<ConversationStreamEvent> {
   try {
     for await (const event of streamWorkflowGraph({
       workspaceId: options.workspaceId,
       productContext: options.productContext,
+      knowledgeGraph: options.knowledgeGraph,
       userInputBlock,
+      resumeContext: createWorkflowResumeContextFromMessages({
+        messages,
+        knowledgeGraph: options.knowledgeGraph,
+      }) ?? undefined,
       signal: options.signal,
     })) {
       if (
@@ -310,6 +321,32 @@ async function* streamPlanningAfterUserInput(
       }
     }
   } catch (error) {
+    if (isExecutorHumanInputRequiredError(error)) {
+      const questionForm = formatExecutorHumanInputQuestionForm(
+        error.interrupt,
+      );
+      yield {
+        type: "text",
+        content:
+          "Planner Agent 暂停了当前 Executor 批次，需要先由你补充阻塞信息后再继续运行。",
+        agentType: "conversation_confirmation",
+      };
+      yield {
+        type: "question-form-start",
+        agentType: "conversation_confirmation",
+      };
+      yield {
+        type: "question-form-complete",
+        content: questionForm,
+        agentType: "conversation_confirmation",
+      };
+      yield* streamHumanInterruptForQuestionForm(
+        questionForm,
+        "conversation_confirmation",
+        options,
+      );
+      return;
+    }
     yield {
       type: "error",
       error: getErrorMessage(error),
@@ -348,6 +385,42 @@ async function* streamHumanInterruptForQuestionForm(
 /**
  * 格式化为 <user-input> 块，如果已经是该块则直接返回。
  */
+/**
+ * 将 Executor 硬阻塞转换为 Conversation Agent 对用户展示的 HITL 表单。
+ */
+function formatExecutorHumanInputQuestionForm(
+  interrupt: ExecutorHumanInputRequired,
+): string {
+  const form = {
+    description: [
+      `来源：${interrupt.displayName} / ${interrupt.taskId}`,
+      `类型：${interrupt.category}`,
+      `详情：${interrupt.details}`,
+    ].join("\n"),
+    questions: [
+      {
+        id: "resolution",
+        label: interrupt.neededUserInput,
+        type: "textarea",
+        required: true,
+        placeholder: "请补充事实、取舍或修正信息，提交后系统会基于已有上下文继续运行。",
+      },
+    ],
+    submitLabel: "提交并继续运行",
+  };
+
+  return `<question-form id="${escapeAttribute(
+    `executor-blocker-${interrupt.taskId}`,
+  )}" title="${escapeAttribute(interrupt.title)}">\n${JSON.stringify(
+    form,
+    null,
+    2,
+  )}\n</question-form>`;
+}
+
+/**
+ * 格式化为 <user-input> 块，如果已经是该块则直接返回。
+ */
 function ensureUserInputBlock(content: string): string {
   const trimmed = content.trim();
   if (/^<user-input\b/i.test(trimmed)) {
@@ -371,6 +444,16 @@ function stripInternalNoise(content: string): string {
  */
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 从模型消息中提取已完成的工具调用。
+ */
+/**
+ * 转义 tagged block 属性值，避免标题或 ID 破坏 question-form 标签。
+ */
+function escapeAttribute(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
 
 /**

@@ -1,6 +1,15 @@
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
+import type {
+  KnowledgeGraphDecisionInput,
+  KnowledgeGraphEntity,
+  KnowledgeGraphOpenQuestionInput,
+  KnowledgeGraphRelation,
+  KnowledgeGraphRiskInput,
+  ProductKnowledgeGraph,
+} from "@repo/shared";
 import { getConversationWorkspace } from "../repositories/chat-repository";
+import { getProductKnowledgeGraphByWorkspaceId } from "../repositories/product-knowledge-graph-repository";
 
 const MAX_CONTEXT_CHARS = 24_000;
 
@@ -25,6 +34,7 @@ const OVERVIEW_FILES = [
 export interface ProductRuntimeContext {
   workspaceId?: string;
   productContext: string;
+  knowledgeGraph?: ProductKnowledgeGraph | null;
 }
 
 /**
@@ -45,7 +55,49 @@ export async function loadProductRuntimeContextForConversation(
   return {
     workspaceId: workspace.workspaceId,
     productContext: await loadProductContextForWorkspace(workspace),
+    knowledgeGraph: await loadProductKnowledgeGraphForWorkspace(
+      workspace.workspaceId,
+    ),
   };
+}
+
+/**
+ * 加载工作区当前结构化知识图谱，供 runtime 恢复和后续规划使用。
+ */
+async function loadProductKnowledgeGraphForWorkspace(
+  workspaceId: string,
+): Promise<ProductKnowledgeGraph | null> {
+  const row = await getProductKnowledgeGraphByWorkspaceId(workspaceId);
+  if (!row) return null;
+
+  return {
+    entities: asArray<KnowledgeGraphEntity>(row.nodes),
+    relations: asArray<KnowledgeGraphRelation>(row.relations),
+    decisions: asArray<KnowledgeGraphDecisionInput>(row.decisions),
+    risks: asArray<KnowledgeGraphRiskInput>(row.risks),
+    open_questions: asArray<KnowledgeGraphOpenQuestionInput>(
+      row.openQuestions,
+    ),
+    summary: asStringArray(row.summary),
+    markdown: "",
+    notes: [],
+  };
+}
+
+/**
+ * 将 JSONB 读取结果约束为数组。
+ */
+function asArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : [];
+}
+
+/**
+ * 仅保留字符串摘要。
+ */
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 /**

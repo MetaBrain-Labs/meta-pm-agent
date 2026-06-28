@@ -31,6 +31,7 @@ export const AgentRuntimeToolSchema = z.enum([
   "kg_file_add_decisions",
   "kg_file_add_risks",
   "kg_file_add_open_questions",
+  "kg_file_raise_blocker",
 ]);
 
 /**

@@ -18,12 +18,14 @@
 import { END, START, StateGraph } from "@langchain/langgraph";
 import type {
   ExecutorAgentResult,
+  ProductKnowledgeGraph,
   ProductWorkflowResult,
   RequestAnalysis,
   TaskExecutionPlan,
 } from "@repo/shared";
 import type { UserInputRecord } from "../agents/request/user-input";
 import type { ProductWorkflowStreamEvent } from "../agents/product-workflow/agent";
+import type { WorkflowResumeContext } from "../agents/product-workflow/types";
 import {
   aiShippingExecutorNode,
   dataAnalyticsExecutorNode,
@@ -46,7 +48,9 @@ import { WorkflowGraphState, type WorkflowGraphStateValue } from "./state";
 export interface WorkflowGraphInput {
   workspaceId?: string;
   productContext?: string;
+  knowledgeGraph?: ProductKnowledgeGraph | null;
   userInputBlock: string;
+  resumeContext?: WorkflowResumeContext;
   signal?: AbortSignal;
 }
 
@@ -146,11 +150,7 @@ export async function runWorkflowGraph(
   input: WorkflowGraphInput,
 ): Promise<WorkflowGraphResult> {
   const result = await graph.invoke(
-    {
-      productContext: input.productContext ?? "",
-      workspaceId: input.workspaceId,
-      userInputBlock: input.userInputBlock,
-    },
+    createWorkflowInitialState(input),
     { signal: input.signal },
   );
 
@@ -175,11 +175,7 @@ export async function* streamWorkflowGraph(
   input: WorkflowGraphInput,
 ): AsyncGenerator<WorkflowGraphStreamEvent> {
   const stream = await graph.stream(
-    {
-      productContext: input.productContext ?? "",
-      workspaceId: input.workspaceId,
-      userInputBlock: input.userInputBlock,
-    },
+    createWorkflowInitialState(input),
     { signal: input.signal, streamMode: "custom" },
   );
 
@@ -193,4 +189,66 @@ export async function* streamWorkflowGraph(
  */
 function selectNextNodeAfterRequestAgent(state: WorkflowGraphStateValue) {
   return state.requestAnalysis?.business_model.length ? "planner_agent" : "end";
+}
+
+/**
+ * 根据普通输入或恢复上下文构造 LangGraph 初始状态。
+ */
+function createWorkflowInitialState(input: WorkflowGraphInput) {
+  const resume = input.resumeContext;
+  const plan = resume?.plan ?? null;
+  const rerunTaskIds = new Set(resume?.rerunTaskIds ?? []);
+  const executorResults = filterExecutorResultsForResume(
+    resume?.executorResults ?? [],
+    plan,
+    rerunTaskIds,
+  );
+
+  return {
+    productContext: input.productContext ?? "",
+    workspaceId: input.workspaceId,
+    userInputBlock: input.userInputBlock,
+    requestAnalysis: resume?.requestAnalysis ?? null,
+    plan,
+    executorResults,
+    knowledgeGraph: resume?.knowledgeGraph ?? input.knowledgeGraph ?? null,
+  };
+}
+
+/**
+ * 恢复运行时移除受影响任务及其下游结果，保留其他 Executor 上下文以减少重跑。
+ */
+function filterExecutorResultsForResume(
+  results: ExecutorAgentResult[],
+  plan: TaskExecutionPlan | null,
+  rerunTaskIds: Set<string>,
+): ExecutorAgentResult[] {
+  if (!plan || rerunTaskIds.size === 0) return results;
+
+  const blocked = collectDownstreamTaskIds(plan, rerunTaskIds);
+  return results.filter((result) => !blocked.has(result.task_id));
+}
+
+/**
+ * 计算需要重跑的任务集合，包含直接受影响任务和依赖它们的下游任务。
+ */
+function collectDownstreamTaskIds(
+  plan: TaskExecutionPlan,
+  initialTaskIds: Set<string>,
+): Set<string> {
+  const affected = new Set(initialTaskIds);
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    for (const task of plan.tasks) {
+      if (affected.has(task.task_id)) continue;
+      if (task.depends_on.some((taskId) => affected.has(taskId))) {
+        affected.add(task.task_id);
+        changed = true;
+      }
+    }
+  }
+
+  return affected;
 }

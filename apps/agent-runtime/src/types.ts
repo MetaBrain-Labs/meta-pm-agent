@@ -109,5 +109,6 @@ export interface ConversationStreamOptions {
   workspaceId?: string;
   requestFormId?: string;
   productContext?: string;
+  knowledgeGraph?: ProductKnowledgeGraph | null;
   signal?: AbortSignal;
 }

@@ -36,6 +36,23 @@ export async function requestAgentNode(
   config?: LangGraphRunnableConfig,
 ) {
   const writer = getWriter(config);
+  if (state.requestAnalysis && state.plan) {
+    const requestAnalysisBlock = formatRequestAnalysisBlock(
+      state.requestAnalysis,
+    );
+    writer?.({
+      type: "request-analysis-complete",
+      content: requestAnalysisBlock,
+      analysis: state.requestAnalysis,
+      agentType: "request",
+    });
+
+    return {
+      requestAnalysis: state.requestAnalysis,
+      requestAnalysisBlock,
+    };
+  }
+
   writer?.({ type: "request-analysis-start", agentType: "request" });
 
   for await (const event of streamRequestAgent({

@@ -108,6 +108,21 @@ const openQuestionInputSchema = z.object({
     .describe("Question text explaining what needs to be confirmed"),
 });
 
+const blockerInputSchema = z.object({
+  category: z
+    .enum(["hard_conflict", "runtime_error"])
+    .describe("Hard blocker type that requires human input before continuing"),
+  title: z.string().min(1).describe("Short blocker title"),
+  details: z
+    .string()
+    .min(1)
+    .describe("Concrete contradiction or execution error details"),
+  needed_user_input: z
+    .string()
+    .min(1)
+    .describe("The exact user information needed to unblock this task"),
+});
+
 const graphQuerySchema = z.object({
   ids: z.array(z.string().min(1)).optional().describe("Exact graph item IDs"),
   source_task_ids: z
@@ -428,6 +443,22 @@ export function createKnowledgeGraphTools(
             .min(1)
             .describe("Array of questions to write"),
         }),
+      },
+    ),
+    tool(
+      async (input) => {
+        const blocker = blockerInputSchema.parse(input);
+        return stringifyToolResult({
+          action: "raise_blocker",
+          count: 1,
+          items: [blocker],
+        });
+      },
+      {
+        name: "kg_file_raise_blocker",
+        description:
+          "Raise a hard conflict or program/runtime blocker that cannot be resolved by assumptions. Use this only when execution must pause for Human-in-the-Loop input.",
+        schema: blockerInputSchema,
       },
     ),
   ];

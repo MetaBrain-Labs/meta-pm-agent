@@ -91,6 +91,8 @@ export interface RunTextAgentOptions<AgentType extends string> {
   payload: unknown;
   fallback: (reason: string) => string;
   signal?: AbortSignal;
+  /** 是否把模型/工具运行时异常继续上抛，交给上层 workflow 决定是否 HITL。 */
+  throwOnError?: boolean;
 }
 
 /**
@@ -195,6 +197,9 @@ export async function* runTextAgent<AgentType extends string>(
     return patch || options.fallback("empty-output");
   } catch (error) {
     const message = getErrorMessage(error);
+    if (options.throwOnError) {
+      throw error;
+    }
     yield {
       type: "reasoning",
       agentType: options.agentType,

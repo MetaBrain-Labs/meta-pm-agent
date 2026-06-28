@@ -297,6 +297,7 @@ export async function chatStreamHandler(c: Context) {
           workspaceId: runtimeContext.workspaceId,
           requestFormId: parsed.data.requestFormId,
           productContext: runtimeContext.productContext,
+          knowledgeGraph: runtimeContext.knowledgeGraph,
           signal: runtimeController.signal,
         },
       )) {
