@@ -152,7 +152,12 @@
   ```
 - Conversation Agent 产出 `user-input-complete` 后，后续 Request Agent、Planner、Executor 必须继续由 LangGraph 主图编排，不要在 Conversation Agent 中直接串联这些 Agent。
 - Planner 使用 `apps/agent-runtime/src/agents/common/run-json-agent.ts`；Executor 使用 `apps/agent-runtime/src/agents/common/run-text-agent.ts`。
+- 产品工作流确认表单或 proposal 决策表单的回复属于工作流恢复，不是新的产品请求。必须通过 `apps/agent-runtime/src/agents/conversation/workflow-resume.ts` 恢复前一轮 Request Analysis、Planner DAG、Executor 结果和知识图谱，再交给 LangGraph 让 Planner 生成 `status: "supplement"` 的补充 DAG，只规划必要的图谱修正/补充。
+- `TaskExecutionPlan.status` 是工作流协议的一部分：首次根据 Request Agent 分析生成的 DAG 使用 `"initial"`，根据 Planner 问题表单或 proposal 确认回复生成的补充 DAG 使用 `"supplement"`。
 - Executor 必须通过授权的 `kg_file_*` 结构化工具维护当前工作流的 `ProductKnowledgeGraph`，不要把完整图谱作为最终 JSON 或 markdown 正文直接塞回 message。
+- Executor 的领域 skill 存放在 `references/executor/<executor-domain>/skills/<skill-name>/SKILL.md`。Executor definition 只声明需要的 skill 名称，运行时解析为目录并通过 DeepAgents 的 `skills` 参数传入 `run-text-agent.ts`；不要改成手工拼接 prompt，也不要把任意文件系统工具暴露给 Agent。
+- 硬性矛盾、程序错误或重试恢复时，已经完成的 Executor 结果必须保持已完成展示；恢复已有 plan 时要回放已完成的 Executor 输出，避免 DAG 节点退回等待状态。
+- 用户可见错误信息必须精简，只展示关键 blocker、受影响 Agent/task 和下一步动作；不要把 provider stack trace、大段 JSON 或重复重试细节输出到聊天界面。
 - 只允许显式授权、用户可见的工具进入 `tool-call` / `tool-result` SSE。DeepAgents 内置的任务/todo 工具、未授权文件读取等内部工具事件必须过滤，避免在前端出现长期加载卡片或内部文件错误。
 
 ---
@@ -167,6 +172,7 @@
 - `product_knowledge_graph` 以 `workspace_id` 唯一约束保证一个工作区只有一份当前图谱，并保留可选 `conversation_id`、`request_form_id` 来源信息。
 - `product_knowledge_graph` 只应保存结构化 `summary`、`nodes`、`relations`、`decisions`、`risks`、`open_questions`。不要填充历史遗留的重量级 `content` 和 `entities` 字段，这两个字段后续会删除。
 - Executor 的 `knowledge_graph_patch`、完整 `knowledge_graph_markdown` 和大块知识图谱工具结果不要写入 `message` 或 `request_form_item.payload`；这些重内容只应进入 `product_knowledge_graph`，message 中只保留轻量摘要。
+- 补充 DAG 完成后，必须把最终累计图谱归档到 `product_knowledge_graph`，并把本轮 request_form 更新为完成状态；恢复历史聊天时应显示本轮已正式结束，而不是重新进入 Request Agent 分析。
 
 ---
 
@@ -178,7 +184,7 @@
 - 产品工作流的完整 tagged payload 不应长期保存在 `message.content`；结构化结果落到对应业务表后，message 中保留短摘要即可。
 - `message.meta.toolCalls` 中的知识图谱工具结果必须裁剪为可展示摘要，避免重复保存完整图谱。
 - request_form 必须跟踪状态流转
-- proposal 必须保留来源信息（不能合并丢失）
+- proposal 问题展示可以合并重复或近似重复问题，但必须在 `sources` 中保留所有来源信息；用户一次确认可以关闭所有关联 proposal，不能因为合并或数量上限丢失来源。
 - 修改持久化协议时，必须同步更新 API schema、repository、service、controller、前端 type、历史消息恢复和渲染逻辑。
 
 ---
@@ -190,7 +196,9 @@
 - 不要把所有 Executor 的工具调用合并为一个总卡片；每个 Executor Agent 应在自己的推理/进度区域下方显示自己的知识图谱工具卡片
 - `web_search` 属于 Conversation Agent；知识图谱文件工具属于 Planner 和十个 Executor Agent
 - Executor 输出通过 DAG 展示
+- supplement 恢复或错误重试时，已完成 Executor 节点必须继续显示完成，只让新增、失败或未完成的补充任务进入运行态。
 - Planner Agent Review 的加载/完成卡片应展示在 Executor Agent 区域之后，而不是直接放在 Planner DAG 卡片下面。
+- 产品工作流最终确认或补充 DAG 完成后，前端应输出完成状态卡片，告知用户本轮流程正式结束，可以查看完整知识图谱。
 - 右上角运行状态在并行 Executor 场景下可以同时展示多个 Agent；每个 Agent 标签都必须能跳转到对应的推理或加载卡片。聊天区位于底部时，跳转前应先退出自动贴底状态，避免滚动被自动贴底逻辑抵消。
 - 每个 Executor 结果到达前端后，应重新查询当前工作区知识图谱，让“查看知识图谱”按钮在单个 Executor 完成后即可变为可用。
 - 知识图谱弹窗必须稳健管理 G6 实例生命周期：Modal 容器尺寸为 0 时重试初始化；关闭后再次打开不得永久停留在“正在渲染知识图谱”；节点和边较多时应减少冗余标签以保持布局可读。

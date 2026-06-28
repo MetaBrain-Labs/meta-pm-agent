@@ -460,8 +460,8 @@ function formatExecutorHumanInputQuestionForm(
   const form = {
     description: [
       `来源：${interrupt.displayName} / ${interrupt.taskId}`,
-      `类型：${interrupt.category}`,
-      `详情：${interrupt.details}`,
+      `原因：${interrupt.title}`,
+      `关键详情：${compactUserVisibleText(interrupt.details)}`,
     ].join("\n"),
     questions: [
       {
@@ -482,6 +482,20 @@ function formatExecutorHumanInputQuestionForm(
     null,
     2,
   )}\n</question-form>`;
+}
+
+/**
+ * 压缩展示给用户的阻塞详情，只保留关键一行。
+ */
+function compactUserVisibleText(text: string, maxLength = 180): string {
+  const compacted = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean)
+    ?.replace(/\s+/g, " ") ?? "";
+  return compacted.length > maxLength
+    ? `${compacted.slice(0, maxLength).trimEnd()}...`
+    : compacted;
 }
 
 /**

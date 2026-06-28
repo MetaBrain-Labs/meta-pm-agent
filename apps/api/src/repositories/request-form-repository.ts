@@ -328,6 +328,7 @@ interface ProposalQuestion {
   question: string;
   source_task_id: string;
   source_agent: string;
+  sources?: Array<{ source_task_id: string; source_agent: string }>;
   priority: number;
 }
 
@@ -399,14 +400,36 @@ async function syncDecisionPayloadWithPendingProposals(
 
   const byKey = new Map<string, ProposalQuestion>();
   for (const question of [...existingQuestions, ...proposalQuestions]) {
-    byKey.set(
-      createProposalSlotKey({
-        sourceTaskId: question.source_task_id,
-        sourceAgent: question.source_agent,
-        normalizedQuestion: normalizeSlotQuestion(question.question),
-      }),
-      question,
-    );
+    const key = normalizeSlotQuestion(question.question);
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.sources = [
+        ...(existing.sources ?? [
+          {
+            source_task_id: existing.source_task_id,
+            source_agent: existing.source_agent,
+          },
+        ]),
+        ...(question.sources ?? [
+          {
+            source_task_id: question.source_task_id,
+            source_agent: question.source_agent,
+          },
+        ]),
+      ];
+      existing.priority = Math.max(existing.priority, question.priority);
+      continue;
+    }
+
+    byKey.set(key, {
+      ...question,
+      sources: question.sources ?? [
+        {
+          source_task_id: question.source_task_id,
+          source_agent: question.source_agent,
+        },
+      ],
+    });
   }
 
   const questions = [...byKey.values()].sort(
@@ -474,11 +497,37 @@ function parseDecisionQuestions(value: unknown): ProposalQuestion[] {
         question: record.question,
         source_task_id: record.source_task_id,
         source_agent: record.source_agent,
+        sources: parseProposalQuestionSources(record.sources),
         priority:
           typeof record.priority === "number" ? record.priority : 0,
       },
     ];
   });
+}
+
+/**
+ * 解析合并问题保留的来源列表，保证同一答案仍能关闭所有源 proposal。
+ */
+function parseProposalQuestionSources(
+  value: unknown,
+): Array<{ source_task_id: string; source_agent: string }> | undefined {
+  if (!Array.isArray(value)) return undefined;
+
+  const sources = value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const record = item as Record<string, unknown>;
+    return typeof record.source_task_id === "string" &&
+      typeof record.source_agent === "string"
+      ? [
+          {
+            source_task_id: record.source_task_id,
+            source_agent: record.source_agent,
+          },
+        ]
+      : [];
+  });
+
+  return sources.length > 0 ? sources : undefined;
 }
 
 /**
@@ -503,6 +552,7 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
   question: string;
   source_task_id: string;
   source_agent: string;
+  sources: Array<{ source_task_id: string; source_agent: string }>;
   priority: number;
 }> {
   const slots = new Map<string, {
@@ -510,6 +560,7 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
     question: string;
     source_task_id: string;
     source_agent: string;
+    sources: Array<{ source_task_id: string; source_agent: string }>;
     priority: number;
   }>();
 
@@ -523,19 +574,24 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
       if (!normalized) return;
 
       const priority = executorResult.open_questions.length - index;
-      const slotKey = createProposalSlotKey({
-        sourceTaskId: executorResult.task_id,
-        sourceAgent: executorResult.agent_type,
-        normalizedQuestion: normalized,
-      });
+      const slotKey = normalized;
       const existing = slots.get(slotKey);
-      if (existing && existing.priority >= priority) return;
+      const source = {
+        source_task_id: executorResult.task_id,
+        source_agent: executorResult.agent_type,
+      };
+      if (existing) {
+        existing.sources.push(source);
+        existing.priority = Math.max(existing.priority, priority);
+        return;
+      }
 
       slots.set(slotKey, {
         id: `slot-${slots.size + 1}`,
         question: questionText,
         source_task_id: executorResult.task_id,
         source_agent: executorResult.agent_type,
+        sources: [source],
         priority,
       });
     });
@@ -557,21 +613,6 @@ function getProposalDecisionId(result: ProductWorkflowResult): string {
  */
 function normalizeSlotQuestion(question: string): string {
   return question.trim().replace(/\s+/g, " ").toLowerCase();
-}
-
-/**
- * 生成 proposal slot 去重键；相同问题来自不同任务时必须分别确认。
- */
-function createProposalSlotKey({
-  sourceTaskId,
-  sourceAgent,
-  normalizedQuestion,
-}: {
-  sourceTaskId: string;
-  sourceAgent: string;
-  normalizedQuestion: string;
-}): string {
-  return `${sourceTaskId}:${sourceAgent}:${normalizedQuestion}`;
 }
 
 /**
@@ -598,8 +639,23 @@ function extractProposalTaskIds(
         if (!item || typeof item !== "object" || Array.isArray(item)) {
           return [];
         }
-        const taskId = (item as Record<string, unknown>).source_task_id;
-        return typeof taskId === "string" && taskId.trim() ? [taskId] : [];
+        const record = item as Record<string, unknown>;
+        const sourceTaskIds = Array.isArray(record.sources)
+          ? record.sources.flatMap((source) => {
+              if (!source || typeof source !== "object" || Array.isArray(source)) {
+                return [];
+              }
+              const taskId = (source as Record<string, unknown>).source_task_id;
+              return typeof taskId === "string" && taskId.trim()
+                ? [taskId]
+                : [];
+            })
+          : [];
+        const taskId = record.source_task_id;
+        return [
+          ...sourceTaskIds,
+          ...(typeof taskId === "string" && taskId.trim() ? [taskId] : []),
+        ];
       }),
     ),
   ];
@@ -626,9 +682,7 @@ function buildDecisionQuestionForm(payload: Record<string, unknown>): string | n
             label: record.question,
             type: "textarea",
             required: true,
-            help: `来源：${String(record.source_agent ?? "-")} / ${String(
-              record.source_task_id ?? "-",
-            )}`,
+            help: `来源：${formatQuestionSources(record)}`,
           },
         ];
       })
@@ -653,6 +707,22 @@ ${JSON.stringify(
 /**
  * 根据 confirmation_decision 项生成最终确认表单。
  */
+/**
+ * 格式化合并问题的来源说明，避免重复问题在 UI 中拆成多项。
+ */
+function formatQuestionSources(record: Record<string, unknown>): string {
+  const sources = parseProposalQuestionSources(record.sources);
+  if (sources?.length) {
+    return sources
+      .map((source) => `${source.source_agent} / ${source.source_task_id}`)
+      .join("；");
+  }
+
+  return `${String(record.source_agent ?? "-")} / ${String(
+    record.source_task_id ?? "-",
+  )}`;
+}
+
 function buildConfirmationQuestionForm(
   payload: Record<string, unknown>,
 ): string | null {

@@ -51,6 +51,13 @@ export async function plannerAgentNode(
       agentType: "planner",
       content: formatTaskExecutionPlanBlock(state.plan),
     });
+    for (const result of state.executorResults) {
+      writer?.({
+        type: "agent-output",
+        agentType: result.agent_type,
+        content: formatExecutorResultBlock(result),
+      });
+    }
 
     return {
       knowledgeGraph:

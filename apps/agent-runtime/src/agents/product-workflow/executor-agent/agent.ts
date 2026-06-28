@@ -144,6 +144,7 @@ export async function* streamExecutorAgent(
     },
     systemPrompt: createExecutorAgentPrompt(definition),
     tools,
+    skills: getExecutorSkillSources(definition),
     payload: {
       executor_profile: {
         agent_type: definition.agentType,
@@ -216,7 +217,7 @@ export async function* streamExecutorAgent(
       displayName: definition.displayName,
       category: "runtime_error",
       title: "Executor runtime error",
-      details: getErrorMessage(error),
+      details: compactErrorMessage(getErrorMessage(error)),
       neededUserInput:
         "请确认是否重试该 Executor，并补充任何可以帮助绕过当前程序错误或约束冲突的信息。",
     });
@@ -239,6 +240,18 @@ export async function* streamExecutorAgent(
     risks: graphDelta.risks,
     openQuestions: graphDelta.open_questions,
   });
+}
+
+/**
+ * 将 Executor profile 中的技能名映射到 references 下的 DeepAgents skill source 目录。
+ */
+function getExecutorSkillSources(definition: {
+  referencePath: string;
+  skills: readonly string[];
+}): string[] {
+  return definition.skills.map(
+    (skillName) => `${definition.referencePath}/skills/${skillName}`,
+  );
 }
 
 /**
@@ -339,14 +352,36 @@ function parseBlockerToolResult(toolResult: unknown): {
 
   return {
     category,
-    title: getStringField(record, "title") || "Executor hard blocker",
+    title: compactErrorMessage(
+      getStringField(record, "title") || "Executor hard blocker",
+      120,
+    ),
     details:
-      getStringField(record, "details") ||
-      "Executor reported a hard blocker without additional details.",
+      compactErrorMessage(
+        getStringField(record, "details") ||
+          "Executor reported a hard blocker without additional details.",
+      ),
     needed_user_input:
-      getStringField(record, "needed_user_input") ||
-      "请补充能够解除该阻塞的信息。",
+      compactErrorMessage(
+        getStringField(record, "needed_user_input") ||
+          "请补充能够解除该阻塞的信息。",
+      ),
   };
+}
+
+/**
+ * 压缩面向用户展示的异常文本，避免把堆栈、长 JSON 或 provider 细节整段塞进确认表单。
+ */
+function compactErrorMessage(message: string, maxLength = 240): string {
+  const firstMeaningfulLine =
+    message
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line && !line.startsWith("at ")) ?? message.trim();
+  const compacted = firstMeaningfulLine.replace(/\s+/g, " ");
+  return compacted.length > maxLength
+    ? `${compacted.slice(0, maxLength).trimEnd()}...`
+    : compacted;
 }
 
 /**

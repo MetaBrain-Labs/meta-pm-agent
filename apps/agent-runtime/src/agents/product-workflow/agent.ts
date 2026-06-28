@@ -254,6 +254,7 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
   question: string;
   source_task_id: string;
   source_agent: string;
+  sources: Array<{ source_task_id: string; source_agent: string }>;
   priority: number;
 }> {
   const slots = new Map<
@@ -263,6 +264,7 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
       question: string;
       source_task_id: string;
       source_agent: string;
+      sources: Array<{ source_task_id: string; source_agent: string }>;
       priority: number;
     }
   >();
@@ -274,19 +276,24 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
       if (!normalized) return;
 
       const priority = executorResult.open_questions.length - index;
-      const slotKey = createProposalSlotKey({
-        sourceTaskId: executorResult.task_id,
-        sourceAgent: executorResult.agent_type,
-        normalizedQuestion: normalized,
-      });
+      const slotKey = normalized;
       const existing = slots.get(slotKey);
-      if (existing && existing.priority >= priority) return;
+      const source = {
+        source_task_id: executorResult.task_id,
+        source_agent: executorResult.agent_type,
+      };
+      if (existing) {
+        existing.sources.push(source);
+        existing.priority = Math.max(existing.priority, priority);
+        return;
+      }
 
       slots.set(slotKey, {
         id: `slot-${slots.size + 1}`,
         question: questionText,
         source_task_id: executorResult.task_id,
         source_agent: executorResult.agent_type,
+        sources: [source],
         priority,
       });
     });
@@ -300,21 +307,6 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
  */
 function normalizeSlotQuestion(question: string): string {
   return question.trim().replace(/\s+/g, " ").toLowerCase();
-}
-
-/**
- * 生成 proposal slot 去重键；同一问题来自不同任务时必须分别确认。
- */
-function createProposalSlotKey({
-  sourceTaskId,
-  sourceAgent,
-  normalizedQuestion,
-}: {
-  sourceTaskId: string;
-  sourceAgent: string;
-  normalizedQuestion: string;
-}): string {
-  return `${sourceTaskId}:${sourceAgent}:${normalizedQuestion}`;
 }
 
 /**

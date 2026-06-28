@@ -312,13 +312,28 @@ function rememberParallelExecutors(
  * 将 SSE 错误负载转换为简洁可展示的文本。
  */
 function normalizeErrorMessage(error: unknown): string {
-  if (typeof error === "string") return error;
-  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return compactErrorText(error);
+  if (error instanceof Error) return compactErrorText(error.message);
   try {
-    return JSON.stringify(error);
+    return compactErrorText(JSON.stringify(error));
   } catch {
-    return String(error);
+    return compactErrorText(String(error));
   }
+}
+
+/**
+ * 压缩错误卡片文案，只保留最关键的一行。
+ */
+function compactErrorText(text: string, maxLength = 240): string {
+  const firstLine =
+    text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line && !line.startsWith("at ")) ?? text.trim();
+  const compacted = firstLine.replace(/\s+/g, " ");
+  return compacted.length > maxLength
+    ? `${compacted.slice(0, maxLength).trimEnd()}...`
+    : compacted;
 }
 
 /**

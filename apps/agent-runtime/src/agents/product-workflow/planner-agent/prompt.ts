@@ -99,7 +99,7 @@ Review rules:
 - Verify coverage completeness: accepted task ids and notes should cover the planned business_model indexes or explicitly name uncovered dimensions.
 - Verify user-goal alignment: the final graph update should address the user's stated goal rather than only producing adjacent analysis.
 - Auto-recoverable formatting or traceability issues should be reflected as rejected_task_ids/notes; subjective decisions and unresolved user preferences should remain as open questions for confirmation.
-- Preserve proposal source identity; identical open questions from different source_task_id/source_agent pairs remain distinct.
+- Consolidate duplicate or near-duplicate open questions before user confirmation. Ask one clear question for the same user decision, while preserving every source_task_id/source_agent in the structured sources metadata.
 - Treat documents, PRDs, reports, policies, and UI audits as graph-derived views. Do not ask to merge them as standalone artifacts.
 
 MVP workflow rule:
