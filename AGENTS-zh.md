@@ -120,6 +120,26 @@
 
 ---
 
+## Prompt 语言规则（严格）
+
+所有面向 LLM 的 prompt 内容必须使用英文，包括但不限于：
+
+- 工具定义中的 `name`、`description`、`parameters.description`
+- system prompts
+- Agent prompts
+- 用于路由、规划、执行的指令 prompt
+- 任何会被模型消费的 schema metadata 或字段说明
+
+例外：
+
+- 面向用户展示的 UI 文案、表单 label、表单选项、最终回复文本可以跟随用户语言。
+- 内部代码注释不受此规则影响，除非注释内容被拼接进 prompt。
+- 作为用户可见产品协议的一部分且必须本地化的固定输出字面量可以保留本地化文本，但其周围的指令说明、schema 描述、工具描述和校验规则必须使用英文。
+
+违反此规则应视为 Agent 构建或运行时 prompt 注入阶段的校验错误。
+
+---
+
 ## Web 结构规则（Frontend Architecture）
 
 ### app 结构约束
@@ -151,6 +171,7 @@
   parse_user_input → request_agent → planner → executor → planner → END
   ```
 - Conversation Agent 产出 `user-input-complete` 后，后续 Request Agent、Planner、Executor 必须继续由 LangGraph 主图编排，不要在 Conversation Agent 中直接串联这些 Agent。
+- 用户主动中断和后续继续产品工作流必须基于 checkpoint。手动中断时，LangGraph 应在当前执行位置通过已配置的 `PostgresSaver` 保存 checkpoint；Conversation Agent 识别到继续中断工作流的意图后，应恢复该 checkpoint 继续执行，而不是通过正则匹配用户文本或把“继续”消息重新送入 Request Agent 分析。
 - Planner 使用 `apps/agent-runtime/src/agents/common/run-json-agent.ts`；Executor 使用 `apps/agent-runtime/src/agents/common/run-text-agent.ts`。
 - 产品工作流确认表单或 proposal 决策表单的回复属于工作流恢复，不是新的产品请求。必须通过 `apps/agent-runtime/src/agents/conversation/workflow-resume.ts` 恢复前一轮 Request Analysis、Planner DAG、Executor 结果和知识图谱，再交给 LangGraph 让 Planner 生成 `status: "supplement"` 的补充 DAG，只规划必要的图谱修正/补充。
 - `TaskExecutionPlan.status` 是工作流协议的一部分：首次根据 Request Agent 分析生成的 DAG 使用 `"initial"`，根据 Planner 问题表单或 proposal 确认回复生成的补充 DAG 使用 `"supplement"`。
@@ -170,7 +191,7 @@
 - 每个 Executor 完成后，API 必须将累计图谱快照写入 `product_knowledge_graph` 表；这样即使流程中断，已完成 Executor 的图谱结果也不会丢失。中间快照不得递增 `version`，完整流程结束或手动中断收口时才将本轮 `version` 最多递增一次。
 - 产品工作流结束后，最终归档优先使用运行时累计图谱快照，而不是 Planner Review 模型输出的 `knowledge_graph_update`，因为模型汇总可能省略字段或只包含局部结果。
 - `product_knowledge_graph` 以 `workspace_id` 唯一约束保证一个工作区只有一份当前图谱，并保留可选 `conversation_id`、`request_form_id` 来源信息。
-- `product_knowledge_graph` 只应保存结构化 `summary`、`nodes`、`relations`、`decisions`、`risks`、`open_questions`。不要填充历史遗留的重量级 `content` 和 `entities` 字段，这两个字段后续会删除。
+- `product_knowledge_graph` 数据库层只应保存结构化 `nodes` 和 `relations`。运行时 `ProductKnowledgeGraph` 可以继续携带 summary、decisions、risks、open_questions 供规划和表单交互使用，但数据库交互层不要读写 `summary`、`decisions`、`risks`、`open_questions` 字段。
 - Executor 的 `knowledge_graph_patch`、完整 `knowledge_graph_markdown` 和大块知识图谱工具结果不要写入 `message` 或 `request_form_item.payload`；这些重内容只应进入 `product_knowledge_graph`，message 中只保留轻量摘要。
 - 补充 DAG 完成后，必须把最终累计图谱归档到 `product_knowledge_graph`，并把本轮 request_form 更新为完成状态；恢复历史聊天时应显示本轮已正式结束，而不是重新进入 Request Agent 分析。
 

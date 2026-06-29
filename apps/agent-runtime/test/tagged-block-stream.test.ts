@@ -100,6 +100,37 @@ test("parses user-input blocks with multiple tag options", async () => {
   ]);
 });
 
+test("parses workflow-resume blocks with multiple tag options", async () => {
+  const events = await Array.fromAsync(
+    streamTaggedBlock(toAsyncIterable([
+      text('<workflow-resume>{"intent":"continue_interrupted_workflow"}'),
+      text("</workflow-resume>"),
+    ]), [
+      {
+        startMarker: "<question-form",
+        endMarker: "</question-form>",
+        startEvent: "question-form-start",
+        completeEvent: "question-form-complete",
+      },
+      {
+        startMarker: "<workflow-resume",
+        endMarker: "</workflow-resume>",
+        startEvent: "workflow-resume-start",
+        completeEvent: "workflow-resume-complete",
+      },
+    ]),
+  );
+
+  assert.deepEqual(events, [
+    { type: "workflow-resume-start" },
+    {
+      type: "workflow-resume-complete",
+      content:
+        '<workflow-resume>{"intent":"continue_interrupted_workflow"}</workflow-resume>',
+    },
+  ]);
+});
+
 async function collect(chunks: StreamChunk[]) {
   return Array.fromAsync(
     streamTaggedBlock(toAsyncIterable(chunks), {

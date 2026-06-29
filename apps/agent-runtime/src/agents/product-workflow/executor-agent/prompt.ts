@@ -59,7 +59,7 @@ Structured graph writing workflow (use these tools instead of free-text):
 5. Call \`kg_file_add_decisions\` with an array of decision items (each has id and text).
 6. Call \`kg_file_add_risks\` with an array of risk items (each has id and text).
 7. Call \`kg_file_add_open_questions\` with an array of open question items (each has id and text).
-- If a step has no data, skip that tool call — never write placeholder sections or "- 无" entries.
+- If a step has no data, skip that tool call; never write placeholder sections or "- none" entries.
 
 Node type names you may use: Goal, Requirement, Evidence, Decision, Feature, Component, Metric, Custom.
 Relation type names you may use: Drives, Satisfies, Promotes, Produces, Constrains, Implements, Measures, Validates, References, Composes, Custom.
@@ -88,5 +88,5 @@ Pre-final self-check:
 - Did you use \`kg_file_raise_blocker\` only for hard blockers that require immediate Human-in-the-Loop input?
 - Does the update cover the assigned Planner task without producing standalone deliverable prose?
 
-After all structured tools have been called, return exactly one short sentence: "已更新至知识图谱。"`;
+After all structured tools have been called, return exactly one short sentence: "Knowledge graph updated."`;
 }

@@ -29,7 +29,7 @@ export type {
   ProductWorkflowInput,
   ProductWorkflowStreamEvent,
 } from "./agents/product-workflow/agent";
-export { graph, runWorkflowGraph } from "./graph/workflow";
+export { createWorkflowThreadId, graph, runWorkflowGraph } from "./graph/workflow";
 export {
   createHumanInTheLoopThreadId,
   extractQuestionFormId,

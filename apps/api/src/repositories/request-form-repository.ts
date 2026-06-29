@@ -1,3 +1,18 @@
+/**
+ * 请求表单持久化仓储
+ *
+ * 负责维护 request_form 与 request_form_item 的状态流转、问题表单决策项、
+ * Executor proposal 聚合结果以及用户回答后的完成标记。
+ *
+ * Responsibilities:
+ * - 写入 Request Agent 分析结果和 Executor proposal 项
+ * - 生成待 Conversation Agent 展示的 Question Form tagged block
+ * - 在用户提交表单后关闭对应 decision/proposal 条目
+ *
+ * Notes:
+ * - 不负责直接运行 Agent 或修改 LangGraph 状态。
+ */
+
 import { randomUUID } from "node:crypto";
 import { prisma } from "@repo/database";
 import type {
@@ -6,6 +21,7 @@ import type {
   ProductWorkflowResult,
   RequestAnalysis,
 } from "@repo/shared";
+import { inferQuestionFormFieldFromText } from "@repo/shared";
 
 /**
  * 更新请求表单的阶段状态，用于前端和后续调度判断当前表单被哪个阶段消费。
@@ -27,6 +43,7 @@ export async function updateRequestFormStatus(
 
 /**
  * 将 Request Agent 的分析结果写入请求表单条目表。
+ *
  * 业务建模项标记为 pending 待后续 Agent 处理，闲聊项直接标记为 completed。
  */
 export async function persistRequestAnalysisItems(
@@ -35,8 +52,8 @@ export async function persistRequestAnalysisItems(
 ): Promise<void> {
   if (!requestFormId || !analysis) return;
 
-  // Request Agent 负责给当前请求表单分类：业务项继续等待后续 Agent 处理，
-  // 闲聊只做记录并视为已完成。
+  // Request Agent 负责给当前请求表单分类：业务项继续等待后续 Agent 处理。
+  // 闲聊项只做记录并视为已完成。
   await prisma.$transaction(async (tx) => {
     for (const item of analysis.business_model) {
       await tx.$executeRaw`
@@ -122,7 +139,7 @@ export async function persistExecutorProposalItems(
     for (const result of results) {
       if (result.open_questions.length === 0) continue;
 
-      // open_questions 现在为结构化对象 {id, text}，提取 text 作为显示文本
+      // open_questions 现在为结构化对象 {id, text}，提取 text 作为显示文本。
       const slots = result.open_questions.map((question, index) => ({
         id: `${result.task_id}-slot-${index + 1}`,
         question: typeof question === "object" && question !== null && "text" in question
@@ -162,7 +179,7 @@ export async function persistExecutorProposalItems(
 }
 
 /**
- * 将 Planner 聚合后的 proposal slots 写入 decision 项，供 Conversation Agent 统一提问。
+ * 将 Planner 聚合后的 proposal slots 写入 decision 项，由 Conversation Agent 统一提问。
  */
 export async function persistProposalDecisionItem(
   requestFormId: string | undefined,
@@ -377,8 +394,7 @@ export async function getPendingDecisionQuestionForm(
 function toPriority(
   missingInformation: RequestAnalysis["business_model"][number]["missing_information"],
 ): number {
-  // 请求表单条目的 priority 字段是整数，这里把最高欠缺信息重要度压缩成 0-100，
-  // 作为后续调度的粗粒度优先级信号。
+  // request_form_item.priority 是粗粒度调度信号，取最高缺口重要度压缩到 0-100。
   const maxImportance = Math.max(
     0,
     ...missingInformation.map((item) => item.importance),
@@ -531,7 +547,7 @@ function parseProposalQuestionSources(
 }
 
 /**
- * 从 Question Form 提交消息中提取本次提问 ID。
+ * 从 Question Form 提交消息中提取本次提交的 ID。
  */
 function parseFormAnswer(content: string): { formId: string; content: string } | null {
   const firstLine = content.split("\n")[0]?.trim() ?? "";
@@ -566,7 +582,7 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
 
   for (const executorResult of result.executor_results) {
     executorResult.open_questions.forEach((question, index) => {
-      // open_questions 现在为结构化对象 {id, text}，提取 text 进行归一化
+      // open_questions 是结构化对象 {id, text}，提取 text 进行归一化。
       const questionText = typeof question === "object" && question !== null && "text" in question
         ? String((question as Record<string, unknown>).text)
         : String(question);
@@ -602,7 +618,7 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
 }
 
 /**
- * 生成 proposal decision 的稳定提问 ID。
+ * 生成 proposal decision 的稳定提交 ID。
  */
 function getProposalDecisionId(result: ProductWorkflowResult): string {
   return `${result.confirmation_id}-proposal-decision`;
@@ -676,12 +692,14 @@ function buildDecisionQuestionForm(payload: Record<string, unknown>): string | n
         if (typeof record.id !== "string" || typeof record.question !== "string") {
           return [];
         }
+        const field = inferQuestionFormFieldFromText(record.question);
         return [
           {
             id: record.id,
             label: record.question,
-            type: "textarea",
+            type: field.type,
             required: true,
+            ...(field.type === "textarea" ? {} : { options: field.options }),
             help: `来源：${formatQuestionSources(record)}`,
           },
         ];
@@ -747,7 +765,7 @@ ${JSON.stringify(
         label: "补充说明",
         type: "textarea",
         required: false,
-        placeholder: "如果选择退回或补充，请说明需要调整或新增的内容",
+        placeholder: "如果选择退回或补充，请说明需要调整或新增的内容。",
       },
     ],
     submitLabel: "提交确认",

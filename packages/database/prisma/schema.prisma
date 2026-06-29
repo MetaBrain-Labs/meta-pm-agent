@@ -1,4 +1,4 @@
-generator client {
+﻿generator client {
   provider = "prisma-client-js"
 }
 
@@ -101,13 +101,9 @@ model ProductKnowledgeGraph {
   workspaceId    String    @unique @map("workspace_id") @db.VarChar(36)
   conversationId String?   @map("conversation_id") @db.VarChar(36)
   requestFormId  String?   @map("request_form_id") @db.VarChar(36)
-  content        String                                                          // 遗留字段，保持为空；前端展示 markdown 按结构化列即时生成
-  summary        Json?     @db.JsonB                                             // JSON 数组：string[]
+  content        String
   nodes          Json?     @db.JsonB                                             // JSON 数组：KnowledgeGraphNodeInput[]
   relations      Json?     @db.JsonB                                             // JSON 数组：KnowledgeGraphRelationInput[]
-  decisions      Json?     @db.JsonB                                             // JSON 数组：KnowledgeGraphDecisionInput[]
-  risks          Json?     @db.JsonB                                             // JSON 数组：KnowledgeGraphRiskInput[]
-  openQuestions  Json?     @map("open_questions") @db.JsonB                      // JSON 数组：KnowledgeGraphOpenQuestionInput[]
   version        Int       @default(1)
   createdAt      DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime? @default(now()) @map("updated_at") @db.Timestamptz(6)

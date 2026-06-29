@@ -1,15 +1,15 @@
-/**
+﻿/**
  * 产品工作流编排与格式化
  *
  * 作为 product-workflow 模块的聚合入口，负责：
- * - 编排 Planner → Executor → Planner Review 的完整产品工作流流式执行
+ * - 编排 Planner -> Executor -> Planner Review 的完整产品工作流流式执行
  * - 格式化各环节的展示 block（任务计划、执行结果、确认表单等）
  * - 协调知识图谱的创建、追加与归档
  *
  * Responsibilities:
  * - streamPlannerProductWorkflow()：主工作流编排器
  * - formatTaskExecutionPlanBlock()：格式化 DAG 展示块
- * - formatExecutorResultBlock()：格式化单 Executor 结果块
+ * - formatExecutorResultBlock()：格式化 Executor 结果块
  * - formatProductWorkflowBlock()：格式化完整产出块
  * - formatProductWorkflowConfirmationQuestionForm / ProposalQuestionForm：生成确认表单
  * - 聚合导出子模块（knowledge-graph、tasks、executor-agent、planner-agent）
@@ -23,6 +23,7 @@ import type {
   ProductWorkflowResult,
   TaskExecutionPlan,
 } from "@repo/shared";
+import { inferQuestionFormFieldFromText } from "@repo/shared";
 import { createProductWorkflowKnowledgeGraph, appendKnowledgeGraphPatch } from "./common/knowledge-graph";
 import { orderTasksBySequence } from "./common/tasks";
 import { streamExecutorAgent } from "./executor-agent/agent";
@@ -91,7 +92,7 @@ export async function* streamPlannerProductWorkflow(
       previousResults: executorResults,
       signal: input.signal,
     });
-    // 工具调用已直接变更 knowledgeGraph 引用，同时显式合并新增结构化数据以确保状态完整性
+    // 工具调用已直接变更 knowledgeGraph 引用，同时显式合并新增结构化数据以确保状态完整。
     knowledgeGraph = appendKnowledgeGraphPatch({
       knowledgeGraph,
       taskId: result.task_id,
@@ -104,7 +105,7 @@ export async function* streamPlannerProductWorkflow(
       summary: [result.summary],
     });
     executorResults.push(result);
-    // 每个 Executor 完成后立刻发出增量知识图谱更新事件
+    // 每个 Executor 完成后立刻发出增量知识图谱更新事件。
     yield {
       type: "knowledge-graph-update",
       knowledgeGraph,
@@ -199,7 +200,7 @@ export function formatProductWorkflowConfirmationQuestionForm(
         label: "补充说明",
         type: "textarea",
         required: false,
-        placeholder: "如果选择退回或补充，请说明需要调整或新增的内容",
+        placeholder: "如果选择退回或补充，请说明需要调整或新增的内容。",
       },
     ],
     submitLabel: "提交确认",
@@ -222,13 +223,17 @@ export function formatProductWorkflowProposalQuestionForm(
   const form = {
     description:
       "Planner Agent 汇总了 Executor Agent 需要你补充确认的信息，请先回答这些高优先级问题。",
-    questions: slots.map((slot) => ({
-      id: slot.id,
-      label: slot.question,
-      type: "textarea",
-      required: true,
-      help: `来源：${slot.source_agent} / ${slot.source_task_id}`,
-    })),
+    questions: slots.map((slot) => {
+      const field = inferQuestionFormFieldFromText(slot.question);
+      return {
+        id: slot.id,
+        label: slot.question,
+        type: field.type,
+        required: true,
+        ...(field.type === "textarea" ? {} : { options: field.options }),
+        help: `来源：${slot.source_agent} / ${slot.source_task_id}`,
+      };
+    }),
     submitLabel: "提交补充信息",
   };
 
@@ -238,7 +243,7 @@ export function formatProductWorkflowProposalQuestionForm(
 }
 
 /**
- * 生成补充信息决策项 ID，和请求表单 payload 中的 question_id 保持一致。
+ * 生成补充信息决策 ID，和请求表单 payload 中的 question_id 保持一致。
  */
 export function getProposalDecisionId(
   result: ProductWorkflowResult,

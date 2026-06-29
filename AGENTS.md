@@ -58,7 +58,7 @@ Deliver correct, maintainable changes that integrate with the current pnpm works
 #### 5.1 Alternative Approach Rule (NEW)
 
 - If you see a clearly better approach, state it before implementing.
-- Explain the tradeoff in 2–4 bullets.
+- Explain the tradeoff in 2-4 bullets.
 - If the current request is still reasonable:
   - proceed with current approach
   - unless the alternative avoids serious risk, significant waste, or major rework
@@ -100,6 +100,37 @@ packages/
 - Browser directory selection cannot reliably expose a full absolute path in standard web contexts. Preserve editable path fields and host-provided `file.path` handling where available.
 - Do not change dependency versions, generated files, unrelated modules, or repository-wide configuration unless the task requires it.
 
+## Prompt Language Rule (Strict)
+
+All **LLM-facing prompt content must be written in English**, including but not limited to:
+
+- Tool definitions:
+  - `name`
+  - `description`
+  - `parameters.description`
+
+- System prompts
+- Agent prompts
+- Instruction prompts used for routing / planning / execution
+- Any schema-level metadata intended for model consumption
+
+### Exceptions
+
+- User-facing UI text (e.g., labels, form fields, UI copy, form options shown to the user, and final assistant prose) may follow the user's language.
+- Internal code comments are not affected unless they are embedded into prompts.
+- Fixed output literals that are part of a user-facing product contract may stay localized, but the surrounding instruction prose, schema descriptions, tool descriptions, and validation guidance must be English.
+- Prompt source files under `apps/agent-runtime/src/agents/**/prompt.ts`, model-facing tool descriptions, and model-facing schema descriptions must keep their instruction prose in English.
+
+### Rationale
+
+English ensures:
+
+- Better model performance and consistency
+- Reduced ambiguity in multi-agent systems
+- Standardized prompt composition across modules
+
+> Any violation of this rule should be treated as a **prompt validation error** during agent build or runtime injection.
+
 ## Web Structure Rules
 
 - Keep `apps/web/src/App.tsx` as the application shell. It should wire providers, top-level state, routes, and page selection, but avoid accumulating page JSX, API clients, SSE readers, or DTO mapping logic.
@@ -123,6 +154,7 @@ packages/
 - `agent-status` events are authoritative for frontend active-Agent state. After `user-input-complete`, remove `conversation` from `activeAgents` before Request/Planner/Executor statuses are added, so the top-right indicator does not show completed Conversation Agent alongside later workflow Agents.
 - After Conversation Agent emits `user-input-complete`, subsequent planning must flow through `apps/agent-runtime/src/graph/workflow.ts`. Do not directly wire Request Agent, Planner, or Executor orchestration inside Conversation Agent.
 - Product workflow routing is LangGraph-owned: `parse_user_input -> request_agent -> planner_agent -> executor-* -> planner_agent -> END`. Add future workflow stages as graph nodes/edges instead of ad hoc calls from individual agents.
+- User interruption and continuation of product workflows must be checkpoint-based. On manual interruption, LangGraph should persist the current execution point through `PostgresSaver` when configured; when Conversation Agent identifies a continue-interrupted-workflow intent, resume the saved checkpoint instead of regex-matching the user text or rerunning Request Agent analysis from the new message.
 - Product workflow confirmation/proposal form answers are workflow resumes, not fresh product requests. They must restore the previous Request Agent analysis, Planner DAG, Executor results, and product knowledge graph through `apps/agent-runtime/src/agents/conversation/workflow-resume.ts`, then resume LangGraph so Planner creates a `TaskExecutionPlan` with `status: "supplement"` and only plans the required graph corrections/additions.
 - Product workflow model calls are split into independent DeepAgents: `apps/agent-runtime/src/agents/product-workflow/planner-agent/` and `executor-agent/`. Each folder owns its `agent.ts` and `prompt.ts`; Executor shared definitions live in `executor-agent/definitions.ts`.
 - Planner uses shared JSON DeepAgent execution in `apps/agent-runtime/src/agents/common/run-json-agent.ts`. Agent-specific modules should pass a schema, payload, prompt, model options, and deterministic fallback instead of creating ad hoc JSON runners.
@@ -155,7 +187,7 @@ packages/
 - Agent reasoning must be persisted in `message.meta.reasoningContent`.
 - Conversation Agent structured user-input data is stored in `message.user_input`.
 - Request Agent analysis must be written to the request message content and to request-form items.
-- Final workspace knowledge graph data must be stored in `product_knowledge_graph`, keyed by `workspace_id`, with optional `conversation_id` and `request_form_id` provenance. Keep the table at one current graph per workspace, using structured `summary`, `nodes`, `relations`, `decisions`, `risks`, and `open_questions`. Do not populate legacy heavyweight `content` or `entities` fields; they are scheduled for removal.
+- Final workspace knowledge graph data must be stored in `product_knowledge_graph`, keyed by `workspace_id`, with optional `conversation_id` and `request_form_id` provenance. Keep the table at one current graph per workspace, and persist only structured `nodes` and `relations` in the database layer. Runtime `ProductKnowledgeGraph` may still carry summaries, decisions, risks, and open questions for planning, but do not read or write `summary`, `decisions`, `risks`, or `open_questions` database columns.
 - Executor Agent graph patches, full graph markdown, and large knowledge-graph tool results must not be persisted into `message.content`, `message.meta.toolCalls`, or request-form payloads. Persist only lightweight task/result metadata and tool summaries there; the full graph belongs in `product_knowledge_graph`.
 - Product workflow tagged payloads in `message.content` should be reduced to short archival summaries once the structured workflow artifacts have been persisted elsewhere.
 - `request_form.status` must be updated as the request advances through processing states. Current statuses include `received`, `conversation_consumed`, `request_agent_running`, `request_analyzed`, `workflow_running`, `pending_user_confirmation`, `completed`, `stopped`, and `failed`.

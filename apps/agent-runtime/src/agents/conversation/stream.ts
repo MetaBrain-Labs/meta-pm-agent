@@ -34,7 +34,9 @@ import {
   isExecutorHumanInputRequiredError,
   type ExecutorHumanInputRequired,
 } from "../product-workflow/executor-agent/agent";
-import { createWorkflowResumeContextFromMessages } from "./workflow-resume";
+import {
+  createWorkflowResumeContextFromMessages,
+} from "./workflow-resume";
 import { streamWorkflowGraph } from "../../graph/workflow";
 import {
   createHumanInTheLoopThreadId,
@@ -185,8 +187,23 @@ export async function* streamConversation(
         startEvent: "user-input-start",
         completeEvent: "user-input-complete",
       },
+      {
+        startMarker: "<workflow-resume",
+        endMarker: "</workflow-resume>",
+        startEvent: "workflow-resume-start",
+        completeEvent: "workflow-resume-complete",
+      },
     ],
   )) {
+    if (event.type === "workflow-resume-start") {
+      continue;
+    }
+
+    if (event.type === "workflow-resume-complete") {
+      yield* streamWorkflowCheckpointResume(options);
+      return;
+    }
+
     yield event;
 
     if (event.type === "question-form-complete") {
@@ -292,22 +309,26 @@ async function* streamPlanningAfterUserInput(
     resumeContext?: ReturnType<typeof createWorkflowResumeContextFromMessages>;
     suppressRestoredRequestAnalysis?: boolean;
     finalizeOnComplete?: boolean;
+    resumeFromCheckpoint?: boolean;
   } = {},
 ): AsyncGenerator<ConversationStreamEvent> {
   try {
-    const resumeContext =
-      resumeOptions.resumeContext ??
-      createWorkflowResumeContextFromMessages({
-        messages,
-        knowledgeGraph: options.knowledgeGraph,
-      }) ??
-      undefined;
+    const resumeContext = resumeOptions.resumeFromCheckpoint
+      ? undefined
+      : resumeOptions.resumeContext ??
+        createWorkflowResumeContextFromMessages({
+          messages,
+          knowledgeGraph: options.knowledgeGraph,
+        }) ??
+        undefined;
 
     for await (const event of streamWorkflowGraph({
       workspaceId: options.workspaceId,
       productContext: options.productContext,
       knowledgeGraph: options.knowledgeGraph,
       userInputBlock,
+      workflowThreadId: options.workflowThreadId,
+      resumeFromCheckpoint: resumeOptions.resumeFromCheckpoint,
       resumeContext,
       signal: options.signal,
     })) {
@@ -419,6 +440,20 @@ async function* streamPlanningAfterUserInput(
       agentType: "request",
     };
   }
+}
+
+/**
+ * 根据 Conversation Agent 的恢复意图，从 LangGraph checkpoint 继续主产品工作流。
+ */
+async function* streamWorkflowCheckpointResume(
+  options: ConversationStreamOptions,
+): AsyncGenerator<ConversationStreamEvent> {
+  yield* streamPlanningAfterUserInput(
+    createEmptyUserInputBlock(),
+    options,
+    [],
+    { resumeFromCheckpoint: true },
+  );
 }
 
 /**
@@ -593,6 +628,35 @@ function createFormAnswerUserInputBlock(content: string): string {
           index: 1,
           content: content.trim(),
           type: "表单答复",
+        },
+      ],
+    },
+    null,
+    2,
+  )}\n</user-input>`;
+}
+
+/**
+ * 将普通“继续/恢复”指令包装成合法 user_input，直接进入 workflow resume。
+ */
+function createEmptyUserInputBlock(): string {
+  return `<user-input>\n${JSON.stringify(
+    {
+      user_input: [],
+    },
+    null,
+    2,
+  )}\n</user-input>`;
+}
+
+function createLegacyContinueUserInputBlock(content: string): string {
+  return `<user-input>\n${JSON.stringify(
+    {
+      user_input: [
+        {
+          index: 1,
+          content: "",
+          type: "继续执行",
         },
       ],
     },

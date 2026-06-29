@@ -20,7 +20,7 @@ export const productStrategyExecutorProfile = {
   displayName: "Product Strategy Executor",
   domain: "product-strategy",
   focusLayer: "Goal",
-  graphRole: "创建和细化目标、决策、需求、依据实体，建立顶层产品因果链。",
+  graphRole: "Create and refine Goal, Decision, Requirement, and Evidence entities, establishing the top-level product causal chain.",
   skillSource: "pm-skills/pm-product-strategy/",
   referencePath: "references/executor/product-strategy-executor",
   allowedEntityTypes: ["Goal", "Decision", "Requirement", "Evidence"],
@@ -40,9 +40,9 @@ export const productStrategyExecutorProfile = {
     "monetization-strategy",
   ],
   executionGuidelines: [
-    "将顶层业务意图转成可追踪的 Goal 节点，并用 Composes 拆分为子目标。",
-    "将战略、商业模式、定价、盈利和增长路径选择转成 Decision 节点。",
-    "将 SWOT、五力、PESTLE 等结论转成 Evidence 节点，并通过 References 或 Validates 支撑 Decision。",
-    "所有 Decision 必须通过 Drives、Produces 或 References 嵌入目标到功能的因果链。",
+    "Convert top-level business intent into traceable Goal nodes, and split them into sub-goals with Composes relations.",
+    "Convert strategy, business model, pricing, monetization, and growth-path choices into Decision nodes.",
+    "Convert SWOT, Five Forces, PESTLE, and similar findings into Evidence nodes, and support Decision nodes with References or Validates relations.",
+    "Every Decision must be embedded into the goal-to-feature causal chain with Drives, Produces, or References relations.",
   ],
 } as const satisfies ExecutorAgentProfile;

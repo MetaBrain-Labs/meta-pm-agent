@@ -20,7 +20,7 @@ export const gtmExecutorProfile = {
   displayName: "Go-to-Market Executor",
   domain: "go-to-market",
   focusLayer: "Decision",
-  graphRole: "创建和细化决策、组件、需求、指标、依据实体，将战略转化为上市动作。",
+  graphRole: "Create and refine Decision, Component, Requirement, Metric, and Evidence entities, translating strategy into go-to-market actions.",
   skillSource: "pm-skills/pm-go-to-market/",
   referencePath: "references/executor/gtm-executor",
   allowedEntityTypes: ["Decision", "Component", "Requirement", "Metric", "Evidence"],
@@ -34,9 +34,9 @@ export const gtmExecutorProfile = {
     "competitive-battlecard",
   ],
   executionGuidelines: [
-    "将渠道、上市节奏、增长飞轮和里程碑选择转成 Decision 节点。",
-    "将 ICP、滩头阵地和客户约束转成 Requirement 节点并驱动 GTM Decision。",
-    "将 GTM motions、渠道动作和消息策略转成 Component 节点。",
-    "用 Metric 衡量增长循环和上市动作，不输出独立营销文档。",
+    "Convert channel, launch cadence, growth flywheel, and milestone choices into Decision nodes.",
+    "Convert ICP, beachhead, and customer constraints into Requirement nodes that drive GTM Decision nodes.",
+    "Convert GTM motions, channel actions, and messaging strategy into Component nodes.",
+    "Use Metric nodes to measure growth loops and GTM actions; do not output standalone marketing documents.",
   ],
 } as const satisfies ExecutorAgentProfile;

@@ -21,7 +21,7 @@ export const interfaceCraftExecutorProfile = {
   displayName: "Interface Craft Executor",
   domain: "interface-craft",
   focusLayer: "Component",
-  graphRole: "审视 UI 相关组件节点，补全工艺约束并记录反模式检测依据。",
+  graphRole: "Review UI-related Component nodes, fill in craft constraints, and record evidence for anti-pattern detection.",
   skillSource: "references/impeccable/",
   referencePath: "references/executor/interface-craft-executor",
   allowedEntityTypes: ["Component", "Evidence"],
@@ -42,9 +42,9 @@ export const interfaceCraftExecutorProfile = {
     "codex",
   ],
   executionGuidelines: [
-    "将布局、交互、设计令牌、动效、鲁棒性和视觉标准转成 UI Component 节点。",
-    "将 A11y、性能、主题、反模式和设计评审结论转成 Evidence 节点。",
-    "用 Constrains、Implements 或 Validates 连接 UI Component，不创建主链路 Goal、Requirement 或 Decision。",
-    "只处理界面相关质量和工艺，不输出平台适配说明或独立 UI 审计文档。",
+    "Convert layout, interaction, design-token, motion, robustness, and visual standards into UI Component nodes.",
+    "Convert accessibility, performance, theming, anti-pattern, and design-review findings into Evidence nodes.",
+    "Connect UI Component nodes with Constrains, Implements, or Validates relations; do not create main-flow Goal, Requirement, or Decision nodes.",
+    "Handle only interface quality and craft; do not output platform adaptation notes or standalone UI audit documents.",
   ],
 } as const satisfies ExecutorAgentProfile;

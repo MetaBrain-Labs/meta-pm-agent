@@ -17,6 +17,7 @@ import type { Context } from "hono";
 import { stream } from "hono/streaming";
 import {
   createHumanInTheLoopThreadId,
+  createWorkflowThreadId,
   extractQuestionFormId,
   getFormAnswerId,
   releaseQuestionFormHumanInterrupt,
@@ -300,6 +301,10 @@ export async function chatStreamHandler(c: Context) {
           enabledTools: parsed.data.enabledTools,
           workspaceId: runtimeContext.workspaceId,
           requestFormId: parsed.data.requestFormId,
+          workflowThreadId: createWorkflowThreadId({
+            conversationId: parsed.data.chatId,
+            requestFormId: parsed.data.requestFormId,
+          }),
           productContext: runtimeContext.productContext,
           knowledgeGraph: runtimeContext.knowledgeGraph,
           signal: runtimeController.signal,
@@ -464,6 +469,13 @@ export async function chatStreamHandler(c: Context) {
       }
 
       if (isAbortError(error) || runtimeController.signal.aborted) {
+        await persistConversationResult({
+          conversationId: parsed.data.chatId,
+          requestFormId: parsed.data.requestFormId,
+          agentOutputs: [...agentOutputs.values()],
+          messages: parsed.data.messages,
+          skipPendingDecisionItems: true,
+        });
         await markStatus("stopped");
         await writeSse(writer, { type: "abort" });
       } else {

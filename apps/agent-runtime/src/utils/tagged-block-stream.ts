@@ -19,8 +19,11 @@ import type { AgentMessageType, ConversationStreamEvent } from "../types";
 interface TaggedBlockOptions {
   startMarker: string;
   endMarker: string;
-  startEvent: "question-form-start" | "user-input-start";
-  completeEvent: "question-form-complete" | "user-input-complete";
+  startEvent: "question-form-start" | "user-input-start" | "workflow-resume-start";
+  completeEvent:
+    | "question-form-complete"
+    | "user-input-complete"
+    | "workflow-resume-complete";
 }
 
 /**

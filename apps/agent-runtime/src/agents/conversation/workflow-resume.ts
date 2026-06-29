@@ -2,7 +2,7 @@
  * Workflow 恢复上下文解析器
  *
  * 从历史聊天消息中提取 Request Agent 分析、Planner DAG、Executor 结果和用户刚提交的
- * HITL 表单答案，用于在硬阻塞或补充信息确认后从已有上下文继续运行产品工作流。
+ * HITL 表单答案，用于在硬阻塞、补充信息确认或用户手动继续后复用已有上下文。
  *
  * Responsibilities:
  * - 解析历史 tagged block 中的结构化 workflow 产物
@@ -19,6 +19,7 @@ import {
   RequestAnalysisSchema,
   TaskExecutionPlanSchema,
   type ChatMessage,
+  type ExecutorAgentResult,
   type ProductKnowledgeGraph,
 } from "@repo/shared";
 import { getFormAnswerId } from "../../utils/form-parser";
@@ -40,12 +41,18 @@ export function createWorkflowResumeContextFromMessages({
   const formId = parseLatestFormAnswerId(messages);
   if (!formId) return null;
 
-  const requestAnalysis = findLatestTaggedPayload(
-    messages,
-    "<request-analysis",
-    "</request-analysis>",
-    RequestAnalysisSchema,
-  );
+  const requestAnalysis =
+    findLatestTaggedPayload(
+      messages,
+      "<request-analysis",
+      "</request-analysis>",
+      RequestAnalysisSchema,
+    ) ??
+    findLatestStructuredPayload(
+      messages,
+      "requestAnalysis",
+      RequestAnalysisSchema,
+    );
   const productWorkflow = findLatestTaggedPayload(
     messages,
     "<product-workflow",
@@ -63,8 +70,19 @@ export function createWorkflowResumeContextFromMessages({
     null;
   const executorResults = collectExecutorResults(messages, productWorkflow);
 
-  if (!requestAnalysis || !plan) {
+  if (!requestAnalysis) {
     return knowledgeGraph ? { knowledgeGraph, rerunTaskIds: [] } : null;
+  }
+
+  // 允许“继续之前中断的对话”在只有 Request Analysis、还没有 DAG 的情况下从 Planner 继续。
+  if (!plan) {
+    return {
+      requestAnalysis,
+      executorResults,
+      knowledgeGraph: knowledgeGraph ?? null,
+      rerunTaskIds: [],
+      forceSupplementPlan: false,
+    };
   }
 
   return {
@@ -72,8 +90,8 @@ export function createWorkflowResumeContextFromMessages({
     plan,
     executorResults,
     knowledgeGraph: knowledgeGraph ?? null,
-    rerunTaskIds: inferRerunTaskIds(formId, executorResults),
-    forceSupplementPlan: isPlannerConfirmationFormId(formId),
+    rerunTaskIds: formId ? inferRerunTaskIds(formId, executorResults) : [],
+    forceSupplementPlan: formId ? isPlannerConfirmationFormId(formId) : false,
   };
 }
 
@@ -92,7 +110,7 @@ function parseLatestFormAnswerId(messages: ChatMessage[]): string | null {
  */
 function inferRerunTaskIds(
   formId: string,
-  executorResults: ReturnType<typeof collectExecutorResults>,
+  executorResults: ExecutorAgentResult[],
 ): string[] {
   if (formId.startsWith(EXECUTOR_BLOCKER_FORM_PREFIX)) {
     return [formId.slice(EXECUTOR_BLOCKER_FORM_PREFIX.length)].filter(Boolean);
@@ -123,7 +141,7 @@ function isPlannerConfirmationFormId(formId: string): boolean {
  * 根据 Executor 尚未关闭的 open questions 定位需要基于用户补充信息重跑的任务。
  */
 function inferOpenQuestionTaskIds(
-  executorResults: ReturnType<typeof collectExecutorResults>,
+  executorResults: ExecutorAgentResult[],
 ): string[] {
   return [
     ...new Set(
@@ -140,8 +158,8 @@ function inferOpenQuestionTaskIds(
 function collectExecutorResults(
   messages: ChatMessage[],
   productWorkflow: unknown,
-) {
-  const results = new Map<string, ReturnType<typeof ExecutorAgentResultSchema.parse>>();
+): ExecutorAgentResult[] {
+  const results = new Map<string, ExecutorAgentResult>();
   const workflowResult = ProductWorkflowResultSchema.safeParse(productWorkflow);
   if (workflowResult.success) {
     for (const result of workflowResult.data.executor_results) {
@@ -174,7 +192,9 @@ function findLatestTaggedPayload<T>(
   messages: ChatMessage[],
   startMarker: string,
   endMarker: string,
-  schema: { safeParse: (value: unknown) => { success: true; data: T } | { success: false } },
+  schema: {
+    safeParse: (value: unknown) => { success: true; data: T } | { success: false };
+  },
 ): T | null {
   for (let index = messages.length - 1; index >= 0; index--) {
     const block = extractTaggedBlocks(
@@ -186,6 +206,58 @@ function findLatestTaggedPayload<T>(
 
     const parsed = schema.safeParse(parseJsonBlock(block));
     if (parsed.success) return parsed.data;
+  }
+
+  return null;
+}
+
+/**
+ * 从消息对象上的结构化字段恢复 payload，兼容正文未包含 tagged block 的历史消息。
+ */
+function findLatestStructuredPayload<T>(
+  messages: ChatMessage[],
+  key: string,
+  schema: {
+    safeParse: (value: unknown) => { success: true; data: T } | { success: false };
+  },
+): T | null {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index] as ChatMessage & Record<string, unknown>;
+    const value = message[key];
+    if (!value) continue;
+
+    const payload =
+      typeof value === "object" && value !== null && "content" in value
+        ? (value as { content?: unknown }).content
+        : value;
+    const parsedPayload = normalizeStructuredPayloadString(payload, key);
+    const parsed = schema.safeParse(parsedPayload);
+    if (parsed.success) return parsed.data;
+  }
+
+  return null;
+}
+
+/**
+ * 将持久化字段中的字符串恢复为 JSON 对象，必要时兼容被包裹的 tagged block。
+ */
+function normalizeStructuredPayloadString(
+  payload: unknown,
+  key: string,
+): unknown {
+  if (typeof payload !== "string") return payload;
+
+  const parsed = parseJsonBlock(payload);
+  if (parsed) return parsed;
+
+  if (key === "requestAnalysis") {
+    return parseJsonBlock(
+      extractTaggedBlocks(
+        payload,
+        "<request-analysis",
+        "</request-analysis>",
+      ).at(-1) ?? "",
+    );
   }
 
   return null;

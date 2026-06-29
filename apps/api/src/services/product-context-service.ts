@@ -1,11 +1,8 @@
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import type {
-  KnowledgeGraphDecisionInput,
   KnowledgeGraphEntity,
-  KnowledgeGraphOpenQuestionInput,
   KnowledgeGraphRelation,
-  KnowledgeGraphRiskInput,
   ProductKnowledgeGraph,
 } from "@repo/shared";
 import { getConversationWorkspace } from "../repositories/chat-repository";
@@ -73,12 +70,10 @@ async function loadProductKnowledgeGraphForWorkspace(
   return {
     entities: asArray<KnowledgeGraphEntity>(row.nodes),
     relations: asArray<KnowledgeGraphRelation>(row.relations),
-    decisions: asArray<KnowledgeGraphDecisionInput>(row.decisions),
-    risks: asArray<KnowledgeGraphRiskInput>(row.risks),
-    open_questions: asArray<KnowledgeGraphOpenQuestionInput>(
-      row.openQuestions,
-    ),
-    summary: asStringArray(row.summary),
+    decisions: [],
+    risks: [],
+    open_questions: [],
+    summary: [],
     markdown: "",
     notes: [],
   };
