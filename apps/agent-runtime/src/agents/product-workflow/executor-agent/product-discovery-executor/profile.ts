@@ -20,7 +20,7 @@ export const productDiscoveryExecutorProfile = {
   displayName: "Product Discovery Executor",
   domain: "product-discovery",
   focusLayer: "Requirement",
-  graphRole: "创建和细化需求、功能、依据、指标实体，将模糊意图转成可验证功能假设。",
+  graphRole: "Create and refine Requirement, Feature, Evidence, and Metric entities, translating ambiguous intent into testable feature hypotheses.",
   skillSource: "pm-skills/pm-product-discovery/",
   referencePath: "references/executor/product-discovery-executor",
   allowedEntityTypes: ["Requirement", "Feature", "Evidence", "Metric"],
@@ -41,9 +41,9 @@ export const productDiscoveryExecutorProfile = {
     "analyze-feature-requests",
   ],
   executionGuidelines: [
-    "将机会、JTBD、用户反馈和旅程痛点转成 Requirement 节点。",
-    "将解决方案想法和候选方案转成 Feature 节点，并用 Satisfies 连接 Requirement。",
-    "将访谈、实验和假设分析转成 Evidence 节点，并用 Validates 连接待验证对象。",
-    "通过 Composes 对 Requirement 或 Feature 做层级拆分，保留优先级和不确定性。",
+    "Convert opportunities, JTBD, user feedback, and journey pain points into Requirement nodes.",
+    "Convert solution ideas and candidate approaches into Feature nodes, and connect them to Requirement nodes with Satisfies relations.",
+    "Convert interviews, experiments, and hypothesis analysis into Evidence nodes, and connect them to validation targets with Validates relations.",
+    "Use Composes to hierarchically split Requirement or Feature nodes while preserving priority and uncertainty.",
   ],
 } as const satisfies ExecutorAgentProfile;

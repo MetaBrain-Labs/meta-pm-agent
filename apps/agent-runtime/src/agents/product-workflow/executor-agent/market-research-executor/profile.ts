@@ -20,7 +20,7 @@ export const marketResearchExecutorProfile = {
   displayName: "Market Research Executor",
   domain: "market-research",
   focusLayer: "Evidence",
-  graphRole: "创建和细化依据、需求、指标、自定义研究实体，为决策提供事实支撑。",
+  graphRole: "Create and refine Evidence, Requirement, Metric, and Custom research entities to support decisions with factual context.",
   skillSource: "pm-skills/pm-market-research/",
   referencePath: "references/executor/market-research-executor",
   allowedEntityTypes: ["Evidence", "Requirement", "Metric", "Custom"],
@@ -35,9 +35,9 @@ export const marketResearchExecutorProfile = {
     "user-segmentation",
   ],
   executionGuidelines: [
-    "将竞品、市场规模、情绪和用户分群结论拆成独立 Evidence 节点。",
-    "将 Persona、细分市场和旅程痛点提炼为 Requirement 节点。",
-    "用 Validates 或 References 将 Evidence 接入 Requirement、Decision 或 Goal。",
-    "可用 Custom 节点承载 Persona 等详情，但必须关联到 Requirement 或 Evidence。",
+    "Split competitor, market sizing, sentiment, and user-segment findings into independent Evidence nodes.",
+    "Extract personas, market segments, and journey pain points into Requirement nodes.",
+    "Connect Evidence to Requirement, Decision, or Goal nodes with Validates or References relations.",
+    "Use Custom nodes for persona details when needed, but connect them to Requirement or Evidence nodes.",
   ],
 } as const satisfies ExecutorAgentProfile;

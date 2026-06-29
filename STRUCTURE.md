@@ -17,6 +17,10 @@
 | Build | Turborepo | Workspace task graph |
 | Package manager | pnpm 11.3.0 | Enforced by root `packageManager` |
 
+## Prompt Language Rule
+
+All LLM-facing prompt instruction prose must be English. This includes system prompts, Agent prompts, routing/planning/execution instructions, model-facing tool descriptions, and schema metadata consumed by the model. User-facing UI copy, form labels, form options, and final assistant prose may follow the user's language.
+
 ## Directory Layout
 
 ```text
@@ -40,11 +44,14 @@ meta-pm-agent/
 │  │  │  │  │  └─ types.ts
 │  │  │  │  └─ request/
 │  │  │  ├─ graph/
-│  │  │  │  └─ nodes/
+│  │  │  │  ├─ nodes/
+│  │  │  │  └─ workflow-checkpointer.ts
 │  │  │  ├─ utils/
+│  │  │  ├─ assets/
 │  │  │  ├─ config.ts
 │  │  │  ├─ index.ts
 │  │  │  └─ types.ts
+│  │  ├─ docs/
 │  │  └─ package.json
 │  ├─ api/
 │  │  ├─ src/
@@ -85,6 +92,7 @@ meta-pm-agent/
 │  │  │  │  ├─ markdown.tsx
 │  │  │  │  ├─ question-form.ts
 │  │  │  │  └─ user-input.ts
+│  │  │  ├─ pages/chat/chat-run-store.ts
 │  │  │  ├─ App.tsx
 │  │  │  ├─ main.tsx
 │  │  │  ├─ styles.css
@@ -98,7 +106,8 @@ meta-pm-agent/
 │  │  ├─ prisma/schema.prisma
 │  │  └─ src/
 │  └─ shared/
-│     └─ src/
+│     ├─ src/
+│     │  └─ question-form.ts
 ├─ references/
 ├─ AGENTS.md
 ├─ AGENTS-zh.md
@@ -116,7 +125,13 @@ Current product-workflow additions:
 | --- | --- |
 | `apps/agent-runtime/src/agents/common/knowledge-graph-file-tool.ts` | Controlled DeepAgents knowledge-graph tools bound to the current in-memory workflow graph |
 | `apps/agent-runtime/src/agents/common/run-text-agent.ts` | Shared text/markdown DeepAgent runner used by Executor Agents |
+| `apps/agent-runtime/src/graph/workflow-checkpointer.ts` | Optional LangGraph checkpoint saver factory using PostgresSaver when configured, with an in-memory fallback |
+| `apps/agent-runtime/docs/langgraph-postgres-checkpoint.sql` | PostgreSQL DDL for the LangGraph checkpoint tables |
+| `apps/agent-runtime/src/assets/deepseek-v3-tokenizer/` | DeepSeek V3 tokenizer assets used for local token usage estimation |
 | `apps/agent-runtime/src/agents/product-workflow/executor-agent/*-executor/` | Ten independent Executor Agent profile folders, one per executor domain |
+| `packages/shared/src/question-form.ts` | Shared Question Form field-type inference helpers for radio/select/checkbox/textarea display |
+| `apps/web/src/pages/chat/chat-run-store.ts` | Browser-side chat run registry that keeps an active stream alive when the user switches conversations |
+| `references/executor/<executor-domain>/skills/<skill-name>/SKILL.md` | DeepAgents skill sources selected by Executor definitions and passed through the shared text runner |
 
 ## Web Frontend Structure
 
@@ -192,8 +207,9 @@ The workflow stage delegates model work to independent DeepAgents:
 | Directory | Responsibility |
 | --- | --- |
 | `apps/agent-runtime/src/agents/common/run-json-agent.ts` | Shared JSON DeepAgent runner for Planner; it validates schema output and forwards reasoning/tool events |
-| `apps/agent-runtime/src/agents/common/run-text-agent.ts` | Shared text DeepAgent runner for Executor Agents; it streams reasoning/tool events without forcing final JSON validation |
-| `apps/agent-runtime/src/agents/product-workflow/planner-agent/` | Planner Agent implementation and prompt; converts Request Agent analysis plus product context into a persisted Planner Agent DAG and performs final workflow review after Executor completion |
+| `apps/agent-runtime/src/agents/common/run-text-agent.ts` | Shared text DeepAgent runner for Executor Agents; it streams reasoning/tool events, attaches selected DeepAgents skills, and does not force final JSON validation |
+| `apps/agent-runtime/src/agents/conversation/workflow-resume.ts` | Restores prior Request Analysis, Planner DAG, Executor results, and workflow graph state when a product-workflow confirmation/proposal form answer resumes an existing round |
+| `apps/agent-runtime/src/agents/product-workflow/planner-agent/` | Planner Agent implementation and prompt; converts Request Agent analysis plus product context into a persisted Planner Agent DAG, creates supplement DAGs from Planner form answers, and performs final workflow review after Executor completion |
 | `apps/agent-runtime/src/agents/product-workflow/executor-agent/` | Executor Agent implementation, prompt, shared types, definitions, and ten domain profile folders; each Executor reads the current graph and writes structured updates through controlled tools |
 | `apps/agent-runtime/src/agents/product-workflow/agent.ts` | Product workflow orchestration, stream event forwarding, tagged block formatting, and question-form formatting only |
 
@@ -201,11 +217,19 @@ Each product workflow Agent keeps its prompt beside its implementation in `promp
 
 Executor Agent domains are implemented as independent folders under `executor-agent/`: `product-strategy-executor`, `market-research-executor`, `gtm-executor`, `product-discovery-executor`, `product-execution-executor`, `marketing-growth-executor`, `data-analytics-executor`, `ai-shipping-executor`, `toolkit-executor`, and `interface-craft-executor`.
 
+Executor Agent skills are stored under `references/executor/<executor-domain>/skills/`. Each executor definition declares the skill names it needs; the runtime resolves those names to skill directories and passes them to DeepAgents through the shared `skills` option. Conversation and Request Agents do not receive these executor skills.
+
 Executor Agents maintain a shared `ProductKnowledgeGraph` state during a workflow run. Each Executor receives a working copy for tool execution; LangGraph merges the Executor result back into the cumulative graph once through `appendKnowledgeGraphPatch`, preventing tool side effects from duplicating graph entries. The API archives each cumulative graph snapshot after an Executor finishes so interrupted runs keep completed graph data.
 
 After each Executor finishes, the API archives the latest cumulative structured graph snapshot into `product_knowledge_graph`, keyed by `workspace_id`, so completed Executor output remains available if the workflow is interrupted. These intermediate snapshots do not increment `version`; the normal workflow finish or manual interruption finalizes the round and increments `version` at most once. The final archive prefers the runtime cumulative graph snapshot over Planner Review model output, because the model review may summarize or omit fields. Executor and Planner message/request-form persistence must not duplicate full graph markdown or graph patches; heavyweight graph contents belong in `product_knowledge_graph`.
 
-The Planner workflow review may produce proposal slots from multiple executor tasks. Proposal slot aggregation must preserve `source_task_id` and `source_agent`; identical question text from different tasks is not a duplicate. Do not reintroduce text-only de-duplication or hard caps that hide valid pending proposal items.
+Product-workflow form answers are handled as workflow resumes. A `[form answers - product-workflow-confirmation]` or proposal-decision payload should not be sent through a fresh Conversation -> Request Agent analysis cycle. The runtime restores the earlier request analysis, plan, executor results, and product knowledge graph, then asks Planner to create a `TaskExecutionPlan` with `status: "supplement"` for only the required corrections or additions. Supplement Executor tasks update the graph, the final archive marks the round complete, and the UI renders a completion card telling the user the complete knowledge graph can be viewed.
+
+Manual interruption and later continuation use LangGraph checkpointing. `apps/agent-runtime/src/graph/workflow-checkpointer.ts` creates a PostgresSaver-backed checkpointer when checkpoint database settings are available, and `apps/agent-runtime/docs/langgraph-postgres-checkpoint.sql` contains the required table DDL. When Conversation Agent recognizes a continue-interrupted-workflow intent, the API resumes the checkpointed graph thread instead of treating the new message as a fresh Request Agent input.
+
+When resuming or retrying after hard blockers, previously completed Executor results are replayed into the workflow output so DAG nodes remain completed while only unfinished or supplement tasks continue. User-visible errors should be compact: show the key blocker, affected Agent/task, and next action, not provider stack traces, large JSON payloads, or repeated retry internals.
+
+The Planner workflow review may produce proposal slots from multiple executor tasks. Proposal slot aggregation may consolidate duplicate or near-duplicate visible questions, but it must preserve every `source_task_id` and `source_agent` in `sources`; a single answer can then close all referenced proposal items. Do not reintroduce hard caps that hide valid pending proposal sources.
 
 ### Runtime Tools
 
@@ -223,6 +247,8 @@ Tool visibility is managed centrally in `apps/agent-runtime/src/agents/common/to
 `apps/agent-runtime/src/agents/common/knowledge-graph-file-tool.ts` implements the controlled knowledge-graph tools. Despite the historical file-tool name, these tools mutate only the current workflow `ProductKnowledgeGraph` object and must not expose arbitrary filesystem access.
 
 The shared DeepAgent runners only forward explicitly authorized user-visible tools into SSE. Internal DeepAgents tools such as generated task/todo helpers or unscoped file reads are kept out of `tool-call`/`tool-result`, so they do not appear as stuck UI cards or leak internal filesystem errors.
+
+Executor skills are not user-facing tools. They are local DeepAgents skill directories resolved from `references/executor/.../skills/...` and attached through `run-text-agent.ts`; keep tool authorization and skill loading separate.
 
 ## API
 
@@ -246,6 +272,8 @@ The API exposes account, workspace, chat, message, and SSE routes:
 
 `thinking` events may include `agentType`. The frontend uses that field to place reasoning next to the corresponding stage.
 
+Product-workflow confirmation/proposal form submissions must include enough tagged block history for the backend to restore the previous workflow context. The API should route those answers into LangGraph resume handling instead of creating a fresh Request Agent run; the next Planner DAG should be a `status: "supplement"` plan.
+
 `agent-status` events are the authoritative realtime source for `activeAgent` / `activeAgents`. The frontend must remove `conversation` from the active set after `user-input-complete`, and must not keep a completed Agent in the top-right "正在思考 / 并行思考" indicator while later workflow Agents run.
 
 `POST /api/chat/stop` aborts the server-side runtime `AbortController` for the current `chatId`. Frontend stop handling should call this endpoint before aborting the browser fetch so the model provider request is cancelled, not merely hidden in the UI.
@@ -262,8 +290,9 @@ The API exposes account, workspace, chat, message, and SSE routes:
 - Knowledge-graph tool results in `message.meta.toolCalls` are stored as lightweight summaries only. Full graph state must be read from `product_knowledge_graph`.
 - `request_form.status` tracks high-level processing state such as `received`, `conversation_consumed`, `request_agent_running`, `request_analyzed`, `workflow_running`, `pending_user_confirmation`, `completed`, `stopped`, and `failed`.
 - `request_form_item.status` tracks item-level progress. Proposal confirmation forms are represented by `decision` items; when a user submits a proposal decision, the corresponding `decision` and all referenced `proposal` items must be marked `finish` and record the answer in `payload`.
-- Pending proposal decision restoration must merge current pending `proposal` items into the visible question form, preserving distinct `source_task_id`/`source_agent` rows even when question text is identical.
-- `product_knowledge_graph` stores the latest structured graph for each workspace in `summary`, `nodes`, `relations`, `decisions`, `risks`, and `open_questions`. Legacy heavyweight `content` and `entities` fields must remain empty because they are scheduled for removal. It has one current row per `workspace_id`, optional `conversation_id` / `request_form_id` provenance, and a `version` that increments once per workflow round.
+- Pending proposal decision restoration must merge current pending `proposal` items into the visible question form, consolidate duplicate or near-duplicate visible questions, and preserve every distinct `source_task_id`/`source_agent` row in `sources`.
+- After a supplement DAG completes, request-form persistence should transition the round to `completed` and retain final completion metadata so restored chats show the workflow as finished.
+- `product_knowledge_graph` stores the latest structured graph for each workspace in database-level `nodes` and `relations` fields only. Runtime graph state may still carry summaries, decisions, risks, and open questions for planning, but repository/service code should not read or write `summary`, `decisions`, `risks`, or `open_questions` database columns. It has one current row per `workspace_id`, optional `conversation_id` / `request_form_id` provenance, and a `version` that increments once per workflow round.
 - `GET /api/chats/:id/messages` returns message `type`, `reasoningContent`, `userInput`, `requestAnalysis`, Planner DAG data, executor completion results, and tool calls so the frontend can restore the correct display order.
 
 ## Frontend Rendering Order
@@ -281,9 +310,12 @@ Message rendering is staged:
 9. Planner reasoning, Planner DAG progress, and Planner tool calls.
 10. Each Executor Agent reasoning block followed by that Executor's own knowledge-graph tool card.
 11. Planner Agent Review status card, shown after the Executor Agent sections once all Executors have finished and Planner is thinking about follow-up questions.
-12. Future agent-specific reasoning blocks.
+12. Product-workflow completion card after the final confirmation/supplement archive completes.
+13. Future agent-specific reasoning blocks.
 
 `ToolCallsCard`, `UserInputCard`, and `RequestAnalysisCard` default to collapsed so detailed intermediate data stays available without pushing normal assistant prose out of view. Tool calls must preserve `agentType`; the frontend uses it to avoid merging all Executor tool calls into a single card.
+
+When a retry or supplement resume restores an existing Planner DAG, completed Executor nodes should stay visibly completed instead of reverting to waiting. Only new, failed, or pending supplement tasks should appear as active.
 
 `ChatApp` refreshes `GET /api/workspaces/:workspaceId/knowledge-graph` whenever a new Executor result appears in the active message. This makes the knowledge-graph viewer button available after each completed Executor, not only after the full workflow ends.
 

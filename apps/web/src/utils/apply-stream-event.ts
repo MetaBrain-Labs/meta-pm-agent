@@ -53,7 +53,7 @@ export function applyStreamEvent(
         ),
       };
     case "text":
-      return applyTextChunk(message, event.content ?? "");
+      return applyTextChunk(message, event);
     case "question-form-start":
       return {
         ...message,
@@ -312,13 +312,28 @@ function rememberParallelExecutors(
  * 将 SSE 错误负载转换为简洁可展示的文本。
  */
 function normalizeErrorMessage(error: unknown): string {
-  if (typeof error === "string") return error;
-  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return compactErrorText(error);
+  if (error instanceof Error) return compactErrorText(error.message);
   try {
-    return JSON.stringify(error);
+    return compactErrorText(JSON.stringify(error));
   } catch {
-    return String(error);
+    return compactErrorText(String(error));
   }
+}
+
+/**
+ * 压缩错误卡片文案，只保留最关键的一行。
+ */
+function compactErrorText(text: string, maxLength = 240): string {
+  const firstLine =
+    text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line && !line.startsWith("at ")) ?? text.trim();
+  const compacted = firstLine.replace(/\s+/g, " ");
+  return compacted.length > maxLength
+    ? `${compacted.slice(0, maxLength).trimEnd()}...`
+    : compacted;
 }
 
 /**
@@ -421,8 +436,19 @@ function removeActiveAgent(
 
 function applyTextChunk(
   message: Message,
-  chunk: string,
+  event: StreamEvent,
 ): Message {
+  const chunk = event.content ?? "";
+  if (isWorkflowCompletionText(event)) {
+    return {
+      ...message,
+      workflowCompletion: {
+        state: "complete",
+        content: chunk,
+      },
+    };
+  }
+
   const content = message.content + chunk;
   const questionForm = extractTaggedBlock(
     content,
@@ -724,4 +750,15 @@ function extractTaggedBlock(
     remainingText:
       content.slice(0, startIndex) + content.slice(blockEnd),
   };
+}
+
+/**
+ * 判断是否为产品工作流最终完成提示，用于渲染独立完成卡片。
+ */
+function isWorkflowCompletionText(event: StreamEvent): boolean {
+  return (
+    event.agentType === "conversation_confirmation" &&
+    typeof event.content === "string" &&
+    event.content.includes("本轮产品工作流已正式结束")
+  );
 }

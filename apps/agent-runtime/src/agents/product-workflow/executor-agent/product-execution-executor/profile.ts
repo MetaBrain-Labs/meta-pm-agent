@@ -21,7 +21,7 @@ export const productExecutionExecutorProfile = {
   displayName: "Product Execution Executor",
   domain: "product-execution",
   focusLayer: "Feature",
-  graphRole: "将功能节点逐层拆细为子功能和组件，建立实现层级图谱结构。",
+  graphRole: "Break Feature nodes into sub-features and Components, establishing an implementation hierarchy in the graph.",
   skillSource: "pm-skills/pm-execution/",
   referencePath: "references/executor/product-execution-executor",
   allowedEntityTypes: [
@@ -65,9 +65,9 @@ export const productExecutionExecutorProfile = {
     "dummy-dataset",
   ],
   executionGuidelines: [
-    "将 PRD、用户故事、Job Story 和路线图内容转译为 Feature、Requirement、Decision 或 Component 节点。",
-    "核心职责是用 Composes 拆细 Feature，并用 Implements 连接实现 Component。",
-    "将验收场景、风险、复盘和会议结论转成 Evidence 或 Component 约束。",
-    "只产出图谱增量，不生成 PRD、发布说明或会议纪要文档正文。",
+    "Translate PRDs, user stories, job stories, and roadmap content into Feature, Requirement, Decision, or Component nodes.",
+    "Use Composes to break down Feature nodes, and connect implementation Component nodes with Implements relations.",
+    "Convert acceptance scenarios, risks, retrospectives, and meeting conclusions into Evidence nodes or Component constraints.",
+    "Produce graph deltas only; do not generate PRD, release-note, or meeting-minutes document bodies.",
   ],
 } as const satisfies ExecutorAgentProfile;

@@ -41,6 +41,10 @@ const KNOWLEDGE_GRAPH_FILE_TOOLS: AgentRuntimeTool[] = [
   "kg_file_add_open_questions",
 ];
 
+const EXECUTOR_BLOCKER_TOOLS: AgentRuntimeTool[] = [
+  "kg_file_raise_blocker",
+];
+
 const EXECUTOR_AGENT_TYPES = [
   "executor-product-strategy",
   "executor-market-research",
@@ -61,7 +65,7 @@ const AGENT_TOOL_ACCESS: Record<string, ReadonlySet<AgentRuntimeTool>> = {
   ...Object.fromEntries(
     EXECUTOR_AGENT_TYPES.map((agentType) => [
       agentType,
-      new Set(KNOWLEDGE_GRAPH_FILE_TOOLS),
+      new Set([...KNOWLEDGE_GRAPH_FILE_TOOLS, ...EXECUTOR_BLOCKER_TOOLS]),
     ]),
   ),
 };
@@ -89,11 +93,17 @@ export function createToolsForAgent(
 
   if (
     options.knowledgeGraph &&
-    KNOWLEDGE_GRAPH_FILE_TOOLS.some(
+    [...KNOWLEDGE_GRAPH_FILE_TOOLS, ...EXECUTOR_BLOCKER_TOOLS].some(
       (toolName) => enabledToolSet.has(toolName) && allowedTools.has(toolName),
     )
   ) {
-    tools.push(...createKnowledgeGraphTools(options.knowledgeGraph));
+    tools.push(
+      ...createKnowledgeGraphTools(options.knowledgeGraph).filter(
+        (toolItem) =>
+          enabledToolSet.has(toolItem.name as AgentRuntimeTool) &&
+          allowedTools.has(toolItem.name as AgentRuntimeTool),
+      ),
+    );
   }
 
   return tools;
@@ -117,7 +127,7 @@ export function canAgentUseTool(
  * Planner/Executor 内部默认启用的知识图谱文件工具名称列表。
  */
 export function getKnowledgeGraphFileToolNames(): AgentRuntimeTool[] {
-  return [...KNOWLEDGE_GRAPH_FILE_TOOLS];
+  return [...KNOWLEDGE_GRAPH_FILE_TOOLS, ...EXECUTOR_BLOCKER_TOOLS];
 }
 
 export type { StructuredToolCallResult };

@@ -20,7 +20,7 @@ export const marketingGrowthExecutorProfile = {
   displayName: "Marketing Growth Executor",
   domain: "marketing-growth",
   focusLayer: "Metric",
-  graphRole: "创建和细化指标、决策、需求实体，建立衡量体系和营销增长决策链路。",
+  graphRole: "Create and refine Metric, Decision, and Requirement entities, establishing measurement systems and marketing-growth decision chains.",
   skillSource: "pm-skills/pm-marketing-growth/",
   referencePath: "references/executor/marketing-growth-executor",
   allowedEntityTypes: ["Metric", "Decision", "Requirement"],
@@ -33,9 +33,9 @@ export const marketingGrowthExecutorProfile = {
     "marketing-ideas",
   ],
   executionGuidelines: [
-    "将北极星指标、输入指标和增长 KPI 转成 Metric 节点，并用 Measures 连接 Goal 或 Requirement。",
-    "将价值主张、定位和营销想法转成 Decision 节点。",
-    "从价值主张背后提炼 Requirement，并用 Drives 连接增长 Decision。",
-    "不输出营销文案成品，只记录可追踪的指标、决策和需求节点。",
+    "Convert north-star metrics, input metrics, and growth KPIs into Metric nodes, and connect them to Goal or Requirement nodes with Measures relations.",
+    "Convert value propositions, positioning, and marketing ideas into Decision nodes.",
+    "Extract Requirement nodes behind value propositions, and connect them to growth Decision nodes with Drives relations.",
+    "Do not output finished marketing copy; only record traceable Metric, Decision, and Requirement nodes.",
   ],
 } as const satisfies ExecutorAgentProfile;

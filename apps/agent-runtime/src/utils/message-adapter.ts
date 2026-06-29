@@ -2,34 +2,33 @@
  * LangChain 消息适配器
  *
  * 提供 ChatMessage（API 层）与 LangChain BaseMessage（Agent 运行时）之间的
- * 双向转换，以及推理内容、文本内容和 token 用量的提取工具。
+ * 双向转换，并集中处理推理内容、文本内容和 token 用量的读取。
  *
  * Responsibilities:
  * - 将 ChatMessage[] 转换为 LangChain HumanMessage / AIMessage
  * - 从 BaseMessage 中提取 reasoning_content 和纯文本 content
- * - 从 AIMessage 中提取 usage_metadata（token 用量）
+ * - 从 AIMessage 中提取 provider usage，并用 DeepSeek tokenizer 校正 completion token
  */
 
 import { AIMessage, HumanMessage, type BaseMessage } from "langchain";
 import type { ChatMessage } from "@repo/shared";
+import { countDeepSeekTokens } from "./deepseek-tokenizer";
 
 /**
- * token 用量结构，来自 LangChain AIMessage.usage_metadata。
- * 区分缓存命中与未命中的输入 token，用于精确计费。
+ * token 用量结构。
  */
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
-  /** 缓存命中的输入 token 数 */
+  /** 缓存命中的输入 token 数。 */
   cacheHitInputTokens: number;
-  /** 缓存未命中的输入 token 数 */
+  /** 缓存未命中的输入 token 数。 */
   cacheMissInputTokens: number;
 }
 
 /**
- * 将 ChatMessage 转换为 LangChain 官方推荐并自带的 HumanMessage 或 AIMessage。
- * 如果 ChatMessage 中包含 reasoningContent，则将其作为 additional_kwargs 的 reasoning_content 属性传递给 AIMessage。
+ * 将 ChatMessage 转换为 LangChain 消息。
  */
 export function toLangChainMessages(
   messages: ChatMessage[],
@@ -53,7 +52,7 @@ export function toLangChainMessages(
 }
 
 /**
- * 从 message 中获取推理内容
+ * 从消息中读取推理内容。
  */
 export function getReasoningContent(message: BaseMessage): string {
   const reasoning = message.additional_kwargs?.reasoning_content;
@@ -61,7 +60,7 @@ export function getReasoningContent(message: BaseMessage): string {
 }
 
 /**
- * 从 message 中获取文本内容
+ * 从消息中读取可见文本内容。
  */
 export function getTextContent(message: BaseMessage): string {
   if (typeof message.content === "string") {
@@ -82,9 +81,10 @@ export function getTextContent(message: BaseMessage): string {
 }
 
 /**
- * 从 AIMessage 中提取 LLM provider 返回的 token 用量信息。
- * 使用 LangChain usage_metadata 标准字段，兼容 OpenAI/DeepSeek API，
- * 并区分缓存命中/未命中的输入 token。
+ * 从 AIMessage 中提取 token 用量。
+ *
+ * provider usage 仍然是输入 token、缓存命中和官方计费的主来源；本地 DeepSeek
+ * tokenizer 只用于 completion 侧兜底，避免兼容层漏报可见文本或推理文本时低估。
  */
 export function getTokenUsage(message: BaseMessage): TokenUsage | null {
   if (!AIMessage.isInstance(message)) return null;
@@ -92,28 +92,91 @@ export function getTokenUsage(message: BaseMessage): TokenUsage | null {
   const usage = message.usage_metadata as
     | Record<string, unknown>
     | undefined;
-  if (!usage || typeof usage.input_tokens !== "number") return null;
+  const responseUsage = extractResponseMetadataUsage(message);
+  if (!usage && !responseUsage) return null;
 
-  const inputTokens = usage.input_tokens as number;
-  const outputTokens = (usage.output_tokens as number) ?? 0;
-  const totalTokens =
-    (usage.total_tokens as number) ?? inputTokens + outputTokens;
-
-  // 从 input_token_details 中提取缓存命中 token 数，
-  // 兼容 DeepSeek 的 cache_read 和 OpenAI 的 cached_tokens 两种键名。
-  const inputDetails = usage.input_token_details as
-    | Record<string, unknown>
-    | undefined;
-  const cacheHitInputTokens =
-    (inputDetails?.cache_read as number) ??
-    (inputDetails?.cached_tokens as number) ??
+  const inputTokens =
+    readNumber(usage, "input_tokens") ??
+    readNumber(responseUsage, "input_tokens") ??
+    readNumber(responseUsage, "prompt_tokens") ??
+    readNumber(responseUsage, "promptTokens") ??
     0;
+  const providerOutputTokens =
+    readNumber(usage, "output_tokens") ??
+    readNumber(responseUsage, "output_tokens") ??
+    readNumber(responseUsage, "completion_tokens") ??
+    readNumber(responseUsage, "completionTokens") ??
+    0;
+  const localOutputTokens = countDeepSeekTokens(
+    `${getReasoningContent(message)}${getTextContent(message)}`,
+  );
+  const outputTokens = Math.max(providerOutputTokens, localOutputTokens ?? 0);
+  const totalTokens = Math.max(
+    readNumber(usage, "total_tokens") ??
+      readNumber(responseUsage, "total_tokens") ??
+      readNumber(responseUsage, "totalTokens") ??
+      0,
+    inputTokens + outputTokens,
+  );
+
+  const inputDetails = readObject(usage, "input_token_details");
+  const cacheHitInputTokens =
+    readNumber(inputDetails, "cache_read") ??
+    readNumber(inputDetails, "cached_tokens") ??
+    readNumber(responseUsage, "prompt_cache_hit_tokens") ??
+    readNumber(responseUsage, "promptCacheHitTokens") ??
+    0;
+  const cacheMissInputTokens =
+    readNumber(responseUsage, "prompt_cache_miss_tokens") ??
+    readNumber(responseUsage, "promptCacheMissTokens") ??
+    Math.max(0, inputTokens - cacheHitInputTokens);
 
   return {
     inputTokens,
     outputTokens,
     totalTokens,
     cacheHitInputTokens,
-    cacheMissInputTokens: inputTokens - cacheHitInputTokens,
+    cacheMissInputTokens,
   };
+}
+
+/**
+ * 从 LangChain response_metadata 中读取不同兼容接口暴露的原始 usage。
+ */
+function extractResponseMetadataUsage(
+  message: BaseMessage,
+): Record<string, unknown> | undefined {
+  const metadata = (message as { response_metadata?: Record<string, unknown> })
+    .response_metadata;
+  if (!metadata) return undefined;
+
+  const usage =
+    readObject(metadata, "tokenUsage") ??
+    readObject(metadata, "token_usage") ??
+    readObject(metadata, "usage");
+  return usage ?? metadata;
+}
+
+/**
+ * 安全读取数字字段。
+ */
+function readNumber(
+  value: Record<string, unknown> | undefined,
+  key: string,
+): number | undefined {
+  const item = value?.[key];
+  return typeof item === "number" && Number.isFinite(item) ? item : undefined;
+}
+
+/**
+ * 安全读取对象字段。
+ */
+function readObject(
+  value: Record<string, unknown> | undefined,
+  key: string,
+): Record<string, unknown> | undefined {
+  const item = value?.[key];
+  return item && typeof item === "object" && !Array.isArray(item)
+    ? (item as Record<string, unknown>)
+    : undefined;
 }

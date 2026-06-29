@@ -35,7 +35,7 @@ test("parses user_input when downstream blocks are present", () => {
   const records = parseUserInputPayload(`<user-input>
   {
     "user_input": [
-      { "index": 1, "content": "Need a team workspace.", "type": "璇锋眰" }
+      { "index": 1, "content": "Need a team workspace.", "type": "请求" }
     ]
   }
   </user-input>
@@ -48,7 +48,7 @@ test("parses user_input when downstream blocks are present", () => {
   </request-analysis>`);
 
   assert.deepEqual(records, [
-    { index: 1, content: "Need a team workspace.", type: "璇锋眰" },
+    { index: 1, content: "Need a team workspace.", type: "请求" },
   ]);
 });
 

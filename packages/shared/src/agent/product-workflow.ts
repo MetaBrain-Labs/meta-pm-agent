@@ -182,6 +182,7 @@ export const TaskExecutionNodeSchema = z.object({
  * Planner Agent 写入 task_execution 的结构化计划。
  */
 export const TaskExecutionPlanSchema = z.object({
+  status: z.enum(["initial", "supplement"]).default("initial"),
   request_summary: z.string().min(1),
   dag: z.object({
     nodes: z.array(z.string().min(1)),

@@ -44,6 +44,27 @@ export async function plannerAgentNode(
   if (state.plan && arePlanTasksFinished(state)) {
     return executePlannerWorkflowReview(state, config);
   }
+  if (state.plan) {
+    const writer = getWriter(config);
+    writer?.({
+      type: "agent-output",
+      agentType: "planner",
+      content: formatTaskExecutionPlanBlock(state.plan),
+    });
+    for (const result of state.executorResults) {
+      writer?.({
+        type: "agent-output",
+        agentType: result.agent_type,
+        content: formatExecutorResultBlock(result),
+      });
+    }
+
+    return {
+      knowledgeGraph:
+        state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph(),
+      plan: state.plan,
+    };
+  }
 
   const writer = getWriter(config);
   const knowledgeGraph =

@@ -88,9 +88,13 @@ export interface RunTextAgentOptions<AgentType extends string> {
   modelOptions?: ChatModelOptions;
   systemPrompt: string;
   tools?: StructuredTool[];
+  /** DeepAgents 技能目录 sources；具体技能由 source 内的 SKILL.md 声明。 */
+  skills?: string[];
   payload: unknown;
   fallback: (reason: string) => string;
   signal?: AbortSignal;
+  /** 是否把模型/工具运行时异常继续上抛，交给上层 workflow 决定是否 HITL。 */
+  throwOnError?: boolean;
 }
 
 /**
@@ -108,7 +112,7 @@ export async function* runTextAgent<AgentType extends string>(
       systemPrompt: options.systemPrompt,
       tools: options.tools ?? [],
       name: options.name,
-      skills: [],
+      skills: options.skills ?? [],
       middleware: createDefaultAgentMiddleware() as any,
     });
 
@@ -195,6 +199,9 @@ export async function* runTextAgent<AgentType extends string>(
     return patch || options.fallback("empty-output");
   } catch (error) {
     const message = getErrorMessage(error);
+    if (options.throwOnError) {
+      throw error;
+    }
     yield {
       type: "reasoning",
       agentType: options.agentType,

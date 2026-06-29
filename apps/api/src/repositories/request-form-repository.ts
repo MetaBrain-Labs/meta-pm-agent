@@ -1,3 +1,18 @@
+/**
+ * 请求表单持久化仓储
+ *
+ * 负责维护 request_form 与 request_form_item 的状态流转、问题表单决策项、
+ * Executor proposal 聚合结果以及用户回答后的完成标记。
+ *
+ * Responsibilities:
+ * - 写入 Request Agent 分析结果和 Executor proposal 项
+ * - 生成待 Conversation Agent 展示的 Question Form tagged block
+ * - 在用户提交表单后关闭对应 decision/proposal 条目
+ *
+ * Notes:
+ * - 不负责直接运行 Agent 或修改 LangGraph 状态。
+ */
+
 import { randomUUID } from "node:crypto";
 import { prisma } from "@repo/database";
 import type {
@@ -6,6 +21,7 @@ import type {
   ProductWorkflowResult,
   RequestAnalysis,
 } from "@repo/shared";
+import { inferQuestionFormFieldFromText } from "@repo/shared";
 
 /**
  * 更新请求表单的阶段状态，用于前端和后续调度判断当前表单被哪个阶段消费。
@@ -27,6 +43,7 @@ export async function updateRequestFormStatus(
 
 /**
  * 将 Request Agent 的分析结果写入请求表单条目表。
+ *
  * 业务建模项标记为 pending 待后续 Agent 处理，闲聊项直接标记为 completed。
  */
 export async function persistRequestAnalysisItems(
@@ -35,8 +52,8 @@ export async function persistRequestAnalysisItems(
 ): Promise<void> {
   if (!requestFormId || !analysis) return;
 
-  // Request Agent 负责给当前请求表单分类：业务项继续等待后续 Agent 处理，
-  // 闲聊只做记录并视为已完成。
+  // Request Agent 负责给当前请求表单分类：业务项继续等待后续 Agent 处理。
+  // 闲聊项只做记录并视为已完成。
   await prisma.$transaction(async (tx) => {
     for (const item of analysis.business_model) {
       await tx.$executeRaw`
@@ -122,7 +139,7 @@ export async function persistExecutorProposalItems(
     for (const result of results) {
       if (result.open_questions.length === 0) continue;
 
-      // open_questions 现在为结构化对象 {id, text}，提取 text 作为显示文本
+      // open_questions 现在为结构化对象 {id, text}，提取 text 作为显示文本。
       const slots = result.open_questions.map((question, index) => ({
         id: `${result.task_id}-slot-${index + 1}`,
         question: typeof question === "object" && question !== null && "text" in question
@@ -162,7 +179,7 @@ export async function persistExecutorProposalItems(
 }
 
 /**
- * 将 Planner 聚合后的 proposal slots 写入 decision 项，供 Conversation Agent 统一提问。
+ * 将 Planner 聚合后的 proposal slots 写入 decision 项，由 Conversation Agent 统一提问。
  */
 export async function persistProposalDecisionItem(
   requestFormId: string | undefined,
@@ -328,6 +345,7 @@ interface ProposalQuestion {
   question: string;
   source_task_id: string;
   source_agent: string;
+  sources?: Array<{ source_task_id: string; source_agent: string }>;
   priority: number;
 }
 
@@ -376,8 +394,7 @@ export async function getPendingDecisionQuestionForm(
 function toPriority(
   missingInformation: RequestAnalysis["business_model"][number]["missing_information"],
 ): number {
-  // 请求表单条目的 priority 字段是整数，这里把最高欠缺信息重要度压缩成 0-100，
-  // 作为后续调度的粗粒度优先级信号。
+  // request_form_item.priority 是粗粒度调度信号，取最高缺口重要度压缩到 0-100。
   const maxImportance = Math.max(
     0,
     ...missingInformation.map((item) => item.importance),
@@ -399,14 +416,36 @@ async function syncDecisionPayloadWithPendingProposals(
 
   const byKey = new Map<string, ProposalQuestion>();
   for (const question of [...existingQuestions, ...proposalQuestions]) {
-    byKey.set(
-      createProposalSlotKey({
-        sourceTaskId: question.source_task_id,
-        sourceAgent: question.source_agent,
-        normalizedQuestion: normalizeSlotQuestion(question.question),
-      }),
-      question,
-    );
+    const key = normalizeSlotQuestion(question.question);
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.sources = [
+        ...(existing.sources ?? [
+          {
+            source_task_id: existing.source_task_id,
+            source_agent: existing.source_agent,
+          },
+        ]),
+        ...(question.sources ?? [
+          {
+            source_task_id: question.source_task_id,
+            source_agent: question.source_agent,
+          },
+        ]),
+      ];
+      existing.priority = Math.max(existing.priority, question.priority);
+      continue;
+    }
+
+    byKey.set(key, {
+      ...question,
+      sources: question.sources ?? [
+        {
+          source_task_id: question.source_task_id,
+          source_agent: question.source_agent,
+        },
+      ],
+    });
   }
 
   const questions = [...byKey.values()].sort(
@@ -474,6 +513,7 @@ function parseDecisionQuestions(value: unknown): ProposalQuestion[] {
         question: record.question,
         source_task_id: record.source_task_id,
         source_agent: record.source_agent,
+        sources: parseProposalQuestionSources(record.sources),
         priority:
           typeof record.priority === "number" ? record.priority : 0,
       },
@@ -482,7 +522,32 @@ function parseDecisionQuestions(value: unknown): ProposalQuestion[] {
 }
 
 /**
- * 从 Question Form 提交消息中提取本次提问 ID。
+ * 解析合并问题保留的来源列表，保证同一答案仍能关闭所有源 proposal。
+ */
+function parseProposalQuestionSources(
+  value: unknown,
+): Array<{ source_task_id: string; source_agent: string }> | undefined {
+  if (!Array.isArray(value)) return undefined;
+
+  const sources = value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const record = item as Record<string, unknown>;
+    return typeof record.source_task_id === "string" &&
+      typeof record.source_agent === "string"
+      ? [
+          {
+            source_task_id: record.source_task_id,
+            source_agent: record.source_agent,
+          },
+        ]
+      : [];
+  });
+
+  return sources.length > 0 ? sources : undefined;
+}
+
+/**
+ * 从 Question Form 提交消息中提取本次提交的 ID。
  */
 function parseFormAnswer(content: string): { formId: string; content: string } | null {
   const firstLine = content.split("\n")[0]?.trim() ?? "";
@@ -503,6 +568,7 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
   question: string;
   source_task_id: string;
   source_agent: string;
+  sources: Array<{ source_task_id: string; source_agent: string }>;
   priority: number;
 }> {
   const slots = new Map<string, {
@@ -510,12 +576,13 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
     question: string;
     source_task_id: string;
     source_agent: string;
+    sources: Array<{ source_task_id: string; source_agent: string }>;
     priority: number;
   }>();
 
   for (const executorResult of result.executor_results) {
     executorResult.open_questions.forEach((question, index) => {
-      // open_questions 现在为结构化对象 {id, text}，提取 text 进行归一化
+      // open_questions 是结构化对象 {id, text}，提取 text 进行归一化。
       const questionText = typeof question === "object" && question !== null && "text" in question
         ? String((question as Record<string, unknown>).text)
         : String(question);
@@ -523,19 +590,24 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
       if (!normalized) return;
 
       const priority = executorResult.open_questions.length - index;
-      const slotKey = createProposalSlotKey({
-        sourceTaskId: executorResult.task_id,
-        sourceAgent: executorResult.agent_type,
-        normalizedQuestion: normalized,
-      });
+      const slotKey = normalized;
       const existing = slots.get(slotKey);
-      if (existing && existing.priority >= priority) return;
+      const source = {
+        source_task_id: executorResult.task_id,
+        source_agent: executorResult.agent_type,
+      };
+      if (existing) {
+        existing.sources.push(source);
+        existing.priority = Math.max(existing.priority, priority);
+        return;
+      }
 
       slots.set(slotKey, {
         id: `slot-${slots.size + 1}`,
         question: questionText,
         source_task_id: executorResult.task_id,
         source_agent: executorResult.agent_type,
+        sources: [source],
         priority,
       });
     });
@@ -546,7 +618,7 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
 }
 
 /**
- * 生成 proposal decision 的稳定提问 ID。
+ * 生成 proposal decision 的稳定提交 ID。
  */
 function getProposalDecisionId(result: ProductWorkflowResult): string {
   return `${result.confirmation_id}-proposal-decision`;
@@ -557,21 +629,6 @@ function getProposalDecisionId(result: ProductWorkflowResult): string {
  */
 function normalizeSlotQuestion(question: string): string {
   return question.trim().replace(/\s+/g, " ").toLowerCase();
-}
-
-/**
- * 生成 proposal slot 去重键；相同问题来自不同任务时必须分别确认。
- */
-function createProposalSlotKey({
-  sourceTaskId,
-  sourceAgent,
-  normalizedQuestion,
-}: {
-  sourceTaskId: string;
-  sourceAgent: string;
-  normalizedQuestion: string;
-}): string {
-  return `${sourceTaskId}:${sourceAgent}:${normalizedQuestion}`;
 }
 
 /**
@@ -598,8 +655,23 @@ function extractProposalTaskIds(
         if (!item || typeof item !== "object" || Array.isArray(item)) {
           return [];
         }
-        const taskId = (item as Record<string, unknown>).source_task_id;
-        return typeof taskId === "string" && taskId.trim() ? [taskId] : [];
+        const record = item as Record<string, unknown>;
+        const sourceTaskIds = Array.isArray(record.sources)
+          ? record.sources.flatMap((source) => {
+              if (!source || typeof source !== "object" || Array.isArray(source)) {
+                return [];
+              }
+              const taskId = (source as Record<string, unknown>).source_task_id;
+              return typeof taskId === "string" && taskId.trim()
+                ? [taskId]
+                : [];
+            })
+          : [];
+        const taskId = record.source_task_id;
+        return [
+          ...sourceTaskIds,
+          ...(typeof taskId === "string" && taskId.trim() ? [taskId] : []),
+        ];
       }),
     ),
   ];
@@ -620,15 +692,15 @@ function buildDecisionQuestionForm(payload: Record<string, unknown>): string | n
         if (typeof record.id !== "string" || typeof record.question !== "string") {
           return [];
         }
+        const field = inferQuestionFormFieldFromText(record.question);
         return [
           {
             id: record.id,
             label: record.question,
-            type: "textarea",
+            type: field.type,
             required: true,
-            help: `来源：${String(record.source_agent ?? "-")} / ${String(
-              record.source_task_id ?? "-",
-            )}`,
+            ...(field.type === "textarea" ? {} : { options: field.options }),
+            help: `来源：${formatQuestionSources(record)}`,
           },
         ];
       })
@@ -653,6 +725,22 @@ ${JSON.stringify(
 /**
  * 根据 confirmation_decision 项生成最终确认表单。
  */
+/**
+ * 格式化合并问题的来源说明，避免重复问题在 UI 中拆成多项。
+ */
+function formatQuestionSources(record: Record<string, unknown>): string {
+  const sources = parseProposalQuestionSources(record.sources);
+  if (sources?.length) {
+    return sources
+      .map((source) => `${source.source_agent} / ${source.source_task_id}`)
+      .join("；");
+  }
+
+  return `${String(record.source_agent ?? "-")} / ${String(
+    record.source_task_id ?? "-",
+  )}`;
+}
+
 function buildConfirmationQuestionForm(
   payload: Record<string, unknown>,
 ): string | null {
@@ -677,7 +765,7 @@ ${JSON.stringify(
         label: "补充说明",
         type: "textarea",
         required: false,
-        placeholder: "如果选择退回或补充，请说明需要调整或新增的内容",
+        placeholder: "如果选择退回或补充，请说明需要调整或新增的内容。",
       },
     ],
     submitLabel: "提交确认",

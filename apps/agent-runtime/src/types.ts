@@ -69,6 +69,8 @@ export type ConversationStreamEvent =
     }
   | { type: "question-form-start"; agentType?: AgentMessageType }
   | { type: "question-form-complete"; content: string; agentType?: AgentMessageType }
+  | { type: "workflow-resume-start"; agentType?: AgentMessageType }
+  | { type: "workflow-resume-complete"; content: string; agentType?: AgentMessageType }
   | {
       type: "human-interrupt";
       interrupt: HumanInTheLoopInterrupt;
@@ -108,6 +110,8 @@ export interface ConversationStreamOptions {
   enabledTools?: AgentRuntimeTool[];
   workspaceId?: string;
   requestFormId?: string;
+  workflowThreadId?: string;
   productContext?: string;
+  knowledgeGraph?: ProductKnowledgeGraph | null;
   signal?: AbortSignal;
 }

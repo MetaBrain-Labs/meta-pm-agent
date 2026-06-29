@@ -1,17 +1,22 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type Dispatch,
-  type SetStateAction,
-} from "react";
+/**
+ * 线程聊天页面容器
+ *
+ * 负责会话消息恢复、新会话创建、发送用户消息以及把当前页面订阅到
+ * chat-run-store 中对应 thread 的运行快照。实际 SSE 消费由运行注册表持有，
+ * 因此切换对话不会中断原对话的 Agent 输出。
+ *
+ * Responsibilities:
+ * - 管理当前 thread 的历史消息加载、加载态和错误态
+ * - 创建聊天记录并提交用户消息到运行注册表
+ * - 处理停止生成、清空展示和返回动作
+ *
+ * Notes:
+ * - 本组件不直接持有 SSE reader 或 AbortController，避免页面切换影响运行中任务。
+ */
+
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatApp } from "../../components/ChatApp";
-import {
-  createChatRecord,
-  fetchChatMessages,
-  stopChatGeneration as requestStopChatGeneration,
-} from "../../api/chat-api";
+import { createChatRecord, fetchChatMessages } from "../../api/chat-api";
 import {
   DEFAULT_CHAT_TITLE,
   NO_WORKSPACE_MESSAGE,
@@ -19,11 +24,15 @@ import {
 import type {
   HumanInTheLoopResume,
   Message,
-  StreamEvent,
   ThreadInfo,
 } from "../../types";
 import { mapErrorToChinese } from "../../utils/errors";
-import { applyStreamEvent } from "../../utils/apply-stream-event";
+import {
+  getActiveChatRunSnapshot,
+  startChatRun,
+  stopChatRun,
+  subscribeChatRun,
+} from "./chat-run-store";
 
 interface ThreadChatPageProps {
   workspaceId: string | null;
@@ -37,7 +46,7 @@ interface ThreadChatPageProps {
 }
 
 /**
- * 聊天页，负责会话消息恢复、新会话创建和 `/api/chat` SSE 消费。
+ * 聊天页面，负责当前 thread 的页面级状态编排。
  */
 export function ThreadChatPage({
   workspaceId,
@@ -53,12 +62,10 @@ export function ThreadChatPage({
   const [isLoading, setIsLoading] = useState(false);
   const [isMessagesLoading, setIsMessagesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
   const workspaceIdRef = useRef<string | null>(workspaceId);
   const threadIdRef = useRef<string | null>(thread?.id ?? null);
   const requestFormIdRef = useRef<string | undefined>(thread?.requestFormId);
   const messagesRef = useRef<Message[]>(messages);
-  const creatingRef = useRef(false);
   const threadId = thread?.id ?? null;
   const requestFormId = thread?.requestFormId;
 
@@ -83,49 +90,68 @@ export function ThreadChatPage({
   }, [requestFormId, threadId]);
 
   useEffect(() => {
-    if (creatingRef.current) {
-      creatingRef.current = false;
+    if (!threadId) {
+      setMessages([]);
+      setError(null);
+      setIsLoading(false);
       return;
     }
 
-    if (threadId) {
-      setMessages([]);
-      setIsMessagesLoading(true);
-      let cancelled = false;
+    let cancelled = false;
+    const unsubscribe = subscribeChatRun(threadId, (snapshot) => {
+      if (cancelled) return;
+      if (!snapshot.isLoading) {
+        setIsLoading(false);
+        setError(snapshot.error);
+        return;
+      }
+      setMessages(snapshot.messages);
+      setIsLoading(snapshot.isLoading);
+      setError(snapshot.error);
+    });
+    const activeSnapshot = getActiveChatRunSnapshot(threadId);
 
-      fetchChatMessages(threadId)
-        .then((serverMessages) => {
-          if (cancelled) return;
-          // 历史消息以数据库为准；会话元信息变化不触发重载。
-          setMessages(serverMessages);
-        })
-        .catch((error) => {
-          if (cancelled) return;
-          console.error("[chat] Failed to load messages:", error);
-        })
-        .finally(() => {
-          if (!cancelled) setIsMessagesLoading(false);
-        });
-
+    if (activeSnapshot) {
+      setMessages(activeSnapshot.messages);
+      setIsLoading(activeSnapshot.isLoading);
+      setError(activeSnapshot.error);
+      setIsMessagesLoading(false);
       return () => {
         cancelled = true;
+        unsubscribe();
       };
     }
 
     setMessages([]);
-    setError(null);
+    setIsMessagesLoading(true);
+
+    fetchChatMessages(threadId)
+      .then((serverMessages) => {
+        if (cancelled) return;
+        // 历史消息以数据库为准；运行中消息由注册表快照覆盖。
+        const runningSnapshot = getActiveChatRunSnapshot(threadId);
+        setMessages(runningSnapshot?.messages ?? serverMessages);
+        setIsLoading(Boolean(runningSnapshot?.isLoading));
+        setError(runningSnapshot?.error ?? null);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error("[chat] Failed to load messages:", error);
+      })
+      .finally(() => {
+        if (!cancelled) setIsMessagesLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, [threadId]);
 
   const stopGeneration = useCallback(() => {
     const currentThreadId = threadIdRef.current;
     if (currentThreadId) {
-      // 先通知服务端中止模型调用，再断开当前浏览器流。
-      void requestStopChatGeneration(currentThreadId);
-    }
-
-    if (abortRef.current) {
-      abortRef.current.abort();
-      abortRef.current = null;
+      stopChatRun(currentThreadId);
     }
     setIsLoading(false);
   }, []);
@@ -155,7 +181,6 @@ export function ThreadChatPage({
             DEFAULT_CHAT_TITLE,
           );
           threadId = newThread.id;
-          creatingRef.current = true;
           threadIdRef.current = threadId;
           requestFormIdRef.current = newThread.requestFormId;
           onNewThread(newThread);
@@ -166,82 +191,17 @@ export function ThreadChatPage({
       }
 
       onThreadMessageStarted(threadId);
-
       setError(null);
-      setIsLoading(true);
 
-      const userMsg: Message = {
-        id: crypto.randomUUID(),
-        role: "user",
-        content: text,
-        timestamp: Date.now(),
-      };
-
-      const agentMsgId = crypto.randomUUID();
-      const agentMsg: Message = {
-        id: agentMsgId,
-        role: "agent",
-        content: "",
-        timestamp: Date.now(),
-      };
-      const priorMessages = hasExistingThread ? messagesRef.current : [];
-
-      setMessages((prev) => [...prev, userMsg, agentMsg]);
-
-      const controller = new AbortController();
-      abortRef.current = controller;
-
-      try {
-        const requestMessages = [...priorMessages, userMsg].map((message) => ({
-          id: message.id,
-          role:
-            message.role === "agent"
-              ? ("assistant" as const)
-              : ("user" as const),
-          content: message.content || message.userInput?.content || "",
-          timestamp: new Date(message.timestamp).toISOString(),
-          sessionId: "local",
-          ...(message.thinking ? { reasoningContent: message.thinking } : {}),
-        }));
-
-        const resp = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chatId: threadId,
-            enabledTools: options?.webSearchEnabled ? ["web_search"] : [],
-            requestFormId: requestFormIdRef.current,
-            hitlResume: options?.hitlResume,
-            messages: requestMessages,
-          }),
-          signal: controller.signal,
-        });
-
-        if (!resp.ok) {
-          const errorMsg = `Server error: ${resp.status}`;
-          setError(mapErrorToChinese(new Error(errorMsg)));
-          return;
-        }
-
-        const reader = resp.body?.getReader();
-        if (!reader) {
-          setError(mapErrorToChinese(new Error("No response body")));
-          return;
-        }
-
-        await readChatStream(
-          reader,
-          agentMsgId,
-          setMessages,
-          onThreadTitleChange,
-        );
-      } catch (error: unknown) {
-        if (error instanceof Error && error.name === "AbortError") return;
-        setError(mapErrorToChinese(error));
-      } finally {
-        setIsLoading(false);
-        abortRef.current = null;
-      }
+      await startChatRun({
+        threadId,
+        requestFormId: requestFormIdRef.current,
+        priorMessages: hasExistingThread ? messagesRef.current : [],
+        userText: text,
+        webSearchEnabled: options?.webSearchEnabled,
+        hitlResume: options?.hitlResume,
+        onThreadTitleChange,
+      });
     },
     [isLoading, onNewThread, onThreadMessageStarted, onThreadTitleChange],
   );
@@ -266,53 +226,4 @@ export function ThreadChatPage({
       onBack={onBack}
     />
   );
-}
-
-/**
- * 读取聊天 SSE 流，并把事件应用到当前助手消息上。
- */
-async function readChatStream(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  agentMsgId: string,
-  setMessages: Dispatch<SetStateAction<Message[]>>,
-  onThreadTitleChange: (threadId: string, title: string) => void,
-) {
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      const payload = line.slice(6).trim();
-      if (payload === "[DONE]") continue;
-
-      try {
-        const event = JSON.parse(payload) as StreamEvent;
-        if (
-          event.type === "conversation-title" &&
-          event.chatId &&
-          event.title
-        ) {
-          onThreadTitleChange(event.chatId, event.title);
-          continue;
-        }
-
-        setMessages((prev) =>
-          prev.map((message) => {
-            if (message.id !== agentMsgId) return message;
-            return applyStreamEvent(message, event);
-          }),
-        );
-      } catch {
-        // 忽略格式异常的流片段，继续读取后续 SSE 数据。
-      }
-    }
-  }
 }

@@ -29,7 +29,7 @@ export type {
   ProductWorkflowInput,
   ProductWorkflowStreamEvent,
 } from "./agents/product-workflow/agent";
-export { graph, runWorkflowGraph } from "./graph/workflow";
+export { createWorkflowThreadId, graph, runWorkflowGraph } from "./graph/workflow";
 export {
   createHumanInTheLoopThreadId,
   extractQuestionFormId,
@@ -46,4 +46,4 @@ export type {
   ConversationStreamOptions,
   StreamChunk,
 } from "./types";
-export { isFormAnswer } from "./utils/form-parser";
+export { getFormAnswerId, isFormAnswer } from "./utils/form-parser";

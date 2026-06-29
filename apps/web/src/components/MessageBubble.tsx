@@ -22,6 +22,7 @@ import {
 import { Spin, Tooltip } from "antd";
 import {
   CaretRightOutlined,
+  CheckCircleOutlined,
   ReloadOutlined,
   LoadingOutlined,
   PartitionOutlined,
@@ -282,6 +283,10 @@ export function MessageBubble({
         <PlannerReviewStatusCard state={message.plannerReview.state} />
       )}
 
+      {message.workflowCompletion && (
+        <WorkflowCompletionCard content={message.workflowCompletion.content} />
+      )}
+
       {productDirectorReasoningBlocks?.map((block) => (
         <ThinkingBox
           key={block.agentType}
@@ -349,6 +354,7 @@ export function MessageBubble({
         !message.requestAnalysis &&
         !message.plannerExecution &&
         !message.plannerReview &&
+        !message.workflowCompletion &&
         !message.agentError && (
           <div className="assistant-bubble is-loading">
             <Spin
@@ -626,6 +632,23 @@ function AgentErrorCard({
 /**
  * 渲染生成中状态，用于表单、用户输入整理和 Request Agent 分析。
  */
+/**
+ * 展示产品工作流正式结束状态，提示用户可以查看完整知识图谱。
+ */
+function WorkflowCompletionCard({ content }: { content: string }) {
+  return (
+    <div className="mb-2 rounded-lg border border-[#bbf7d0] bg-[#f0fdf4] px-4 py-3 text-[#166534]">
+      <div className="mb-1 flex items-center gap-2 text-[13px] font-extrabold">
+        <CheckCircleOutlined />
+        <span>本轮流程已结束</span>
+      </div>
+      <div className="whitespace-pre-wrap text-[13px] leading-relaxed">
+        {content || "知识图谱已完成归档，可以查看完整体知识图谱。"}
+      </div>
+    </div>
+  );
+}
+
 function QFGenerating({ label }: { label: string }) {
   return (
     <div className="mb-2 flex items-center gap-3 rounded-lg border border-[var(--line-soft)] bg-white p-5">

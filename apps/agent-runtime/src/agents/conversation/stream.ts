@@ -25,11 +25,18 @@ import {
   toLangChainMessages,
 } from "../../utils/message-adapter";
 import { streamTaggedBlock } from "../../utils/tagged-block-stream";
-import { isFormAnswer } from "../../utils/form-parser";
+import { getFormAnswerId, isFormAnswer } from "../../utils/form-parser";
 import {
   formatProductWorkflowConfirmationQuestionForm,
   formatProductWorkflowProposalQuestionForm,
 } from "../product-workflow/agent";
+import {
+  isExecutorHumanInputRequiredError,
+  type ExecutorHumanInputRequired,
+} from "../product-workflow/executor-agent/agent";
+import {
+  createWorkflowResumeContextFromMessages,
+} from "./workflow-resume";
 import { streamWorkflowGraph } from "../../graph/workflow";
 import {
   createHumanInTheLoopThreadId,
@@ -41,6 +48,9 @@ import type {
   ConversationStreamEvent,
   ConversationStreamOptions,
 } from "../../types";
+
+const PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID = "product-workflow-confirmation";
+const EXECUTOR_BLOCKER_FORM_PREFIX = "executor-blocker-";
 
 /**
  * 流式获取 Conversation Agent 的原始消息事件。
@@ -152,6 +162,12 @@ export async function* streamConversation(
   }
 
   if (lastMessage.role === "user" && isFormAnswer(lastMessage.content)) {
+    const formId = getFormAnswerId(lastMessage.content);
+    if (formId && isProductWorkflowResumeFormId(formId)) {
+      yield* streamWorkflowResumeAfterFormAnswer(messages, options, formId);
+      return;
+    }
+
     yield* streamUserInputIntegration(messages, options);
     return;
   }
@@ -171,8 +187,23 @@ export async function* streamConversation(
         startEvent: "user-input-start",
         completeEvent: "user-input-complete",
       },
+      {
+        startMarker: "<workflow-resume",
+        endMarker: "</workflow-resume>",
+        startEvent: "workflow-resume-start",
+        completeEvent: "workflow-resume-complete",
+      },
     ],
   )) {
+    if (event.type === "workflow-resume-start") {
+      continue;
+    }
+
+    if (event.type === "workflow-resume-complete") {
+      yield* streamWorkflowCheckpointResume(options);
+      return;
+    }
+
     yield event;
 
     if (event.type === "question-form-complete") {
@@ -184,7 +215,7 @@ export async function* streamConversation(
     }
 
     if (event.type === "user-input-complete") {
-      yield* streamPlanningAfterUserInput(event.content, options);
+      yield* streamPlanningAfterUserInput(event.content, options, messages);
     }
   }
 }
@@ -233,8 +264,38 @@ async function* streamUserInputIntegration(
       content: userInputBlock,
     };
 
-    yield* streamPlanningAfterUserInput(userInputBlock, options);
+    yield* streamPlanningAfterUserInput(userInputBlock, options, messages);
   }
+}
+
+/**
+ * 产品工作流表单答案不再交给 Conversation Agent 重新整理，直接恢复原 DAG 上下文继续执行。
+ */
+async function* streamWorkflowResumeAfterFormAnswer(
+  messages: ChatMessage[],
+  options: ConversationStreamOptions,
+  formId: string,
+): AsyncGenerator<ConversationStreamEvent> {
+  const resumeContext = createWorkflowResumeContextFromMessages({
+    messages,
+    knowledgeGraph: options.knowledgeGraph,
+  });
+
+  if (!resumeContext) {
+    yield* streamUserInputIntegration(messages, options);
+    return;
+  }
+
+  const latestUserMessage = messages.at(-1);
+  const userInputBlock = createFormAnswerUserInputBlock(
+    latestUserMessage?.content ?? "",
+  );
+
+  yield* streamPlanningAfterUserInput(userInputBlock, options, messages, {
+    resumeContext,
+    suppressRestoredRequestAnalysis: true,
+    finalizeOnComplete: formId === PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID,
+  });
 }
 
 /**
@@ -243,14 +304,41 @@ async function* streamUserInputIntegration(
 async function* streamPlanningAfterUserInput(
   userInputBlock: string,
   options: ConversationStreamOptions,
+  messages: ChatMessage[] = [],
+  resumeOptions: {
+    resumeContext?: ReturnType<typeof createWorkflowResumeContextFromMessages>;
+    suppressRestoredRequestAnalysis?: boolean;
+    finalizeOnComplete?: boolean;
+    resumeFromCheckpoint?: boolean;
+  } = {},
 ): AsyncGenerator<ConversationStreamEvent> {
   try {
+    const resumeContext = resumeOptions.resumeFromCheckpoint
+      ? undefined
+      : resumeOptions.resumeContext ??
+        createWorkflowResumeContextFromMessages({
+          messages,
+          knowledgeGraph: options.knowledgeGraph,
+        }) ??
+        undefined;
+
     for await (const event of streamWorkflowGraph({
       workspaceId: options.workspaceId,
       productContext: options.productContext,
+      knowledgeGraph: options.knowledgeGraph,
       userInputBlock,
+      workflowThreadId: options.workflowThreadId,
+      resumeFromCheckpoint: resumeOptions.resumeFromCheckpoint,
+      resumeContext,
       signal: options.signal,
     })) {
+      if (
+        resumeOptions.suppressRestoredRequestAnalysis &&
+        event.type === "request-analysis-complete"
+      ) {
+        continue;
+      }
+
       if (
         event.type === "agent-status" ||
         event.type === "reasoning" ||
@@ -277,6 +365,16 @@ async function* streamPlanningAfterUserInput(
       if (event.type === "complete") {
         // 将结构化工作流结果转发给 API 持久化层，供知识图谱归档
         yield { type: "complete", result: event.result };
+
+        if (resumeOptions.finalizeOnComplete) {
+          yield {
+            type: "text",
+            content:
+              "本轮产品工作流已正式结束，相关 Executor Agent 的知识图谱修正/补充已完成并归档。",
+            agentType: "conversation_confirmation",
+          };
+          continue;
+        }
 
         const proposalForm = formatProductWorkflowProposalQuestionForm(
           event.result,
@@ -310,12 +408,52 @@ async function* streamPlanningAfterUserInput(
       }
     }
   } catch (error) {
+    if (isExecutorHumanInputRequiredError(error)) {
+      const questionForm = formatExecutorHumanInputQuestionForm(
+        error.interrupt,
+      );
+      yield {
+        type: "text",
+        content:
+          "Planner Agent 暂停了当前 Executor 批次，需要先由你补充阻塞信息后再继续运行。",
+        agentType: "conversation_confirmation",
+      };
+      yield {
+        type: "question-form-start",
+        agentType: "conversation_confirmation",
+      };
+      yield {
+        type: "question-form-complete",
+        content: questionForm,
+        agentType: "conversation_confirmation",
+      };
+      yield* streamHumanInterruptForQuestionForm(
+        questionForm,
+        "conversation_confirmation",
+        options,
+      );
+      return;
+    }
     yield {
       type: "error",
       error: getErrorMessage(error),
       agentType: "request",
     };
   }
+}
+
+/**
+ * 根据 Conversation Agent 的恢复意图，从 LangGraph checkpoint 继续主产品工作流。
+ */
+async function* streamWorkflowCheckpointResume(
+  options: ConversationStreamOptions,
+): AsyncGenerator<ConversationStreamEvent> {
+  yield* streamPlanningAfterUserInput(
+    createEmptyUserInputBlock(),
+    options,
+    [],
+    { resumeFromCheckpoint: true },
+  );
 }
 
 /**
@@ -348,6 +486,56 @@ async function* streamHumanInterruptForQuestionForm(
 /**
  * 格式化为 <user-input> 块，如果已经是该块则直接返回。
  */
+/**
+ * 将 Executor 硬阻塞转换为 Conversation Agent 对用户展示的 HITL 表单。
+ */
+function formatExecutorHumanInputQuestionForm(
+  interrupt: ExecutorHumanInputRequired,
+): string {
+  const form = {
+    description: [
+      `来源：${interrupt.displayName} / ${interrupt.taskId}`,
+      `原因：${interrupt.title}`,
+      `关键详情：${compactUserVisibleText(interrupt.details)}`,
+    ].join("\n"),
+    questions: [
+      {
+        id: "resolution",
+        label: interrupt.neededUserInput,
+        type: "textarea",
+        required: true,
+        placeholder: "请补充事实、取舍或修正信息，提交后系统会基于已有上下文继续运行。",
+      },
+    ],
+    submitLabel: "提交并继续运行",
+  };
+
+  return `<question-form id="${escapeAttribute(
+    `executor-blocker-${interrupt.taskId}`,
+  )}" title="${escapeAttribute(interrupt.title)}">\n${JSON.stringify(
+    form,
+    null,
+    2,
+  )}\n</question-form>`;
+}
+
+/**
+ * 压缩展示给用户的阻塞详情，只保留关键一行。
+ */
+function compactUserVisibleText(text: string, maxLength = 180): string {
+  const compacted = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean)
+    ?.replace(/\s+/g, " ") ?? "";
+  return compacted.length > maxLength
+    ? `${compacted.slice(0, maxLength).trimEnd()}...`
+    : compacted;
+}
+
+/**
+ * 格式化为 <user-input> 块，如果已经是该块则直接返回。
+ */
 function ensureUserInputBlock(content: string): string {
   const trimmed = content.trim();
   if (/^<user-input\b/i.test(trimmed)) {
@@ -371,6 +559,16 @@ function stripInternalNoise(content: string): string {
  */
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 从模型消息中提取已完成的工具调用。
+ */
+/**
+ * 转义 tagged block 属性值，避免标题或 ID 破坏 question-form 标签。
+ */
+function escapeAttribute(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
 
 /**
@@ -406,4 +604,63 @@ function getToolResult(
     name: message.name ?? "unknown",
     content: message.content,
   };
+}
+
+/**
+ * 判断表单答案是否属于产品工作流恢复路径，而不是普通 Conversation 问答表单。
+ */
+function isProductWorkflowResumeFormId(formId: string): boolean {
+  return (
+    formId === PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID ||
+    formId.endsWith("-proposal-decision") ||
+    formId.startsWith(EXECUTOR_BLOCKER_FORM_PREFIX)
+  );
+}
+
+/**
+ * 将原始表单答案包装成合法 user_input，供恢复后的 Executor Agent 读取用户补充信息。
+ */
+function createFormAnswerUserInputBlock(content: string): string {
+  return `<user-input>\n${JSON.stringify(
+    {
+      user_input: [
+        {
+          index: 1,
+          content: content.trim(),
+          type: "表单答复",
+        },
+      ],
+    },
+    null,
+    2,
+  )}\n</user-input>`;
+}
+
+/**
+ * 将普通“继续/恢复”指令包装成合法 user_input，直接进入 workflow resume。
+ */
+function createEmptyUserInputBlock(): string {
+  return `<user-input>\n${JSON.stringify(
+    {
+      user_input: [],
+    },
+    null,
+    2,
+  )}\n</user-input>`;
+}
+
+function createLegacyContinueUserInputBlock(content: string): string {
+  return `<user-input>\n${JSON.stringify(
+    {
+      user_input: [
+        {
+          index: 1,
+          content: "",
+          type: "继续执行",
+        },
+      ],
+    },
+    null,
+    2,
+  )}\n</user-input>`;
 }

@@ -65,6 +65,43 @@ const STRUCTURED_TOOL_NAMES = new Set([
   "kg_file_add_open_questions",
 ]);
 
+const BLOCKER_TOOL_NAME = "kg_file_raise_blocker";
+
+/**
+ * Executor 上报的硬阻塞信息，用于由 Conversation Agent 释放 HITL 表单。
+ */
+export interface ExecutorHumanInputRequired {
+  taskId: string;
+  agentType: ExecutorAgentType;
+  displayName: string;
+  category: "hard_conflict" | "runtime_error";
+  title: string;
+  details: string;
+  neededUserInput: string;
+}
+
+/**
+ * 表示 Executor 当前任务必须等待用户补充信息后才能继续。
+ */
+export class ExecutorHumanInputRequiredError extends Error {
+  readonly interrupt: ExecutorHumanInputRequired;
+
+  constructor(interrupt: ExecutorHumanInputRequired) {
+    super(`${interrupt.displayName} requires human input: ${interrupt.title}`);
+    this.name = "ExecutorHumanInputRequiredError";
+    this.interrupt = interrupt;
+  }
+}
+
+/**
+ * 判断异常是否为 Executor 主动触发的人审阻塞。
+ */
+export function isExecutorHumanInputRequiredError(
+  error: unknown,
+): error is ExecutorHumanInputRequiredError {
+  return error instanceof ExecutorHumanInputRequiredError;
+}
+
 /**
  * Executor Agent：读取当前知识图谱结构化状态并产出本任务的图谱补丁。
  */
@@ -107,6 +144,7 @@ export async function* streamExecutorAgent(
     },
     systemPrompt: createExecutorAgentPrompt(definition),
     tools,
+    skills: getExecutorSkillSources(definition),
     payload: {
       executor_profile: {
         agent_type: definition.agentType,
@@ -134,15 +172,25 @@ export async function* streamExecutorAgent(
     },
     fallback: () => createFallbackKnowledgeGraphPatch(input.task),
     signal: input.signal,
+    throwOnError: true,
   });
 
   // 手动迭代生成器以在透传事件给上游的同时收集结构化数据
   let patch = "";
+  try {
   let genResult = await textGen.next();
   while (!genResult.done) {
     const event = genResult.value as TextAgentEvent<string>;
 
     yield event as ProductWorkflowStreamEvent;
+    if (event.type === "tool-result" && event.toolName === BLOCKER_TOOL_NAME) {
+      throw createHumanInputRequiredError({
+        task: input.task,
+        agentType: definition.agentType,
+        displayName: definition.displayName,
+        toolResult: event.toolResult,
+      });
+    }
     if (
       event.type === "tool-result" &&
       STRUCTURED_TOOL_NAMES.has(event.toolName)
@@ -156,6 +204,24 @@ export async function* streamExecutorAgent(
     genResult = await textGen.next();
   }
   patch = genResult.value;
+  } catch (error) {
+    if (isExecutorHumanInputRequiredError(error)) {
+      throw error;
+    }
+    if (isAbortError(error)) {
+      throw error;
+    }
+    throw new ExecutorHumanInputRequiredError({
+      taskId: input.task.task_id,
+      agentType: definition.agentType,
+      displayName: definition.displayName,
+      category: "runtime_error",
+      title: "Executor runtime error",
+      details: compactErrorMessage(getErrorMessage(error)),
+      neededUserInput:
+        "请确认是否重试该 Executor，并补充任何可以帮助绕过当前程序错误或约束冲突的信息。",
+    });
+  }
   const graphDelta = getKnowledgeGraphDelta(
     baseKnowledgeGraph,
     toolKnowledgeGraph,
@@ -174,6 +240,18 @@ export async function* streamExecutorAgent(
     risks: graphDelta.risks,
     openQuestions: graphDelta.open_questions,
   });
+}
+
+/**
+ * 将 Executor profile 中的技能名映射到 references 下的 DeepAgents skill source 目录。
+ */
+function getExecutorSkillSources(definition: {
+  referencePath: string;
+  skills: readonly string[];
+}): string[] {
+  return definition.skills.map(
+    (skillName) => `${definition.referencePath}/skills/${skillName}`,
+  );
 }
 
 /**
@@ -223,8 +301,125 @@ function createExecutorResult({
 }
 
 /**
+ * 从硬阻塞工具结果构造 workflow 可捕获的人审异常。
+ */
+function createHumanInputRequiredError({
+  task,
+  agentType,
+  displayName,
+  toolResult,
+}: {
+  task: TaskExecutionNode;
+  agentType: ExecutorAgentType;
+  displayName: string;
+  toolResult: unknown;
+}): ExecutorHumanInputRequiredError {
+  const blocker = parseBlockerToolResult(toolResult);
+  return new ExecutorHumanInputRequiredError({
+    taskId: task.task_id,
+    agentType,
+    displayName,
+    category: blocker.category,
+    title: blocker.title,
+    details: blocker.details,
+    neededUserInput: blocker.needed_user_input,
+  });
+}
+
+/**
+ * 解析硬阻塞工具输出，兼容字符串 JSON 和对象结果。
+ */
+function parseBlockerToolResult(toolResult: unknown): {
+  category: "hard_conflict" | "runtime_error";
+  title: string;
+  details: string;
+  needed_user_input: string;
+} {
+  const parsed =
+    typeof toolResult === "string" ? parseJsonObject(toolResult) : toolResult;
+  const firstItem =
+    parsed &&
+    typeof parsed === "object" &&
+    Array.isArray((parsed as Record<string, unknown>).items)
+      ? (parsed as { items: unknown[] }).items[0]
+      : null;
+  const record =
+    firstItem && typeof firstItem === "object"
+      ? (firstItem as Record<string, unknown>)
+      : {};
+  const category =
+    record.category === "runtime_error" ? "runtime_error" : "hard_conflict";
+
+  return {
+    category,
+    title: compactErrorMessage(
+      getStringField(record, "title") || "Executor hard blocker",
+      120,
+    ),
+    details:
+      compactErrorMessage(
+        getStringField(record, "details") ||
+          "Executor reported a hard blocker without additional details.",
+      ),
+    needed_user_input:
+      compactErrorMessage(
+        getStringField(record, "needed_user_input") ||
+          "请补充能够解除该阻塞的信息。",
+      ),
+  };
+}
+
+/**
+ * 压缩面向用户展示的异常文本，避免把堆栈、长 JSON 或 provider 细节整段塞进确认表单。
+ */
+function compactErrorMessage(message: string, maxLength = 240): string {
+  const firstMeaningfulLine =
+    message
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line && !line.startsWith("at ")) ?? message.trim();
+  const compacted = firstMeaningfulLine.replace(/\s+/g, " ");
+  return compacted.length > maxLength
+    ? `${compacted.slice(0, maxLength).trimEnd()}...`
+    : compacted;
+}
+
+/**
+ * 安全解析工具返回的 JSON 文本。
+ */
+function parseJsonObject(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 从未知记录中读取字符串字段。
+ */
+function getStringField(record: Record<string, unknown>, field: string): string {
+  const value = record[field];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * 提取运行时异常的可展示文本。
+ */
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
  * 克隆当前知识图谱，供单个 Executor 内部工具读取和写入，避免工具副作用污染全局状态。
  */
+/**
+ * 保留用户主动停止的 AbortError 语义，避免被包装为 HITL。
+ */
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
 function cloneKnowledgeGraph(
   knowledgeGraph: ProductKnowledgeGraph,
 ): ProductKnowledgeGraph {

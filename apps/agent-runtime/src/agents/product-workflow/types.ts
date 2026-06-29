@@ -32,6 +32,15 @@ export interface ProductWorkflowInput {
   signal?: AbortSignal;
 }
 
+export interface WorkflowResumeContext {
+  requestAnalysis?: RequestAnalysis | null;
+  plan?: TaskExecutionPlan | null;
+  executorResults?: ExecutorAgentResult[];
+  knowledgeGraph?: ProductKnowledgeGraph | null;
+  rerunTaskIds?: string[];
+  forceSupplementPlan?: boolean;
+}
+
 /**
  * Planner Agent 节点输入，包含 Request Agent 结果和当前产品知识图谱快照。
  */
