@@ -1,3 +1,18 @@
+/**
+ * 应用入口组件
+ *
+ * 负责挂载全局 Provider、应用外壳布局和顶层页面选择。具体聊天、文档生成、
+ * 工作区列表和弹窗内部逻辑分别下沉到对应页面、组件和 hook。
+ *
+ * Responsibilities:
+ * - 挂载 Ant Design 主题与本地化配置
+ * - 根据当前路由组合侧边栏和工作区详情页
+ * - 挂载项目创建与配置弹窗
+ *
+ * Notes:
+ * - 不在此处承载页面级业务逻辑、API 调用或 SSE 消费。
+ */
+
 import { ConfigProvider, Layout } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import { Sidebar } from "./components/Sidebar";
@@ -5,6 +20,7 @@ import { ConfigModal } from "./components/modals/ConfigModal";
 import { ProjectCreateModal } from "./components/modals/ProjectCreateModal";
 import { useAppShell } from "./hooks/useAppShell";
 import { ThreadChatPage } from "./pages/chat/ThreadChatPage";
+import { DocumentPlanningPage } from "./pages/documents/DocumentPlanningPage";
 import { WorkspacePage } from "./pages/workplace/WorkspacePage";
 import { APP_THEME } from "./theme/app-theme";
 
@@ -24,24 +40,34 @@ export default function App() {
               activeWorkspaceId={app.activeWorkspaceId}
               threads={app.threads}
               activeId={app.activeThread?.id ?? null}
+              activeMode={app.route.name === "documents" ? "documents" : "chat"}
               collapsed={app.sidebarCollapsed}
               creating={app.isCreatingChat}
               onWorkspaceInfo={() => app.openConfigModal("workspace")}
               onSelect={app.handleSelectThread}
+              onDocuments={app.handleOpenDocuments}
               onNew={app.handleNewChat}
               onToggle={() => app.setSidebarCollapsed(!app.sidebarCollapsed)}
             />
             <Layout style={{ background: "transparent" }}>
-              <ThreadChatPage
-                workspaceId={app.activeWorkspaceId}
-                workspaceName={app.activeWorkspaceName}
-                thread={app.activeThread}
-                creationError={app.creationError}
-                onNewThread={app.handleNewThread}
-                onThreadMessageStarted={app.handleThreadMessageStarted}
-                onThreadTitleChange={app.handleThreadTitleChange}
-                onBack={app.handleBackToWorkspaceList}
-              />
+              {app.route.name === "documents" ? (
+                <DocumentPlanningPage
+                  workspaceId={app.activeWorkspaceId}
+                  workspaceName={app.activeWorkspaceName}
+                  onBack={app.handleBackToWorkspaceList}
+                />
+              ) : (
+                <ThreadChatPage
+                  workspaceId={app.activeWorkspaceId}
+                  workspaceName={app.activeWorkspaceName}
+                  thread={app.activeThread}
+                  creationError={app.creationError}
+                  onNewThread={app.handleNewThread}
+                  onThreadMessageStarted={app.handleThreadMessageStarted}
+                  onThreadTitleChange={app.handleThreadTitleChange}
+                  onBack={app.handleBackToWorkspaceList}
+                />
+              )}
             </Layout>
           </>
         ) : (

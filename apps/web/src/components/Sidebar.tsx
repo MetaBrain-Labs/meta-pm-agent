@@ -1,3 +1,18 @@
+/**
+ * 工作区侧边栏
+ *
+ * 展示当前工作区导航、对话历史和工作区信息入口。侧边栏只负责用户导航动作，
+ * 不直接加载聊天消息或文档生成状态。
+ *
+ * Responsibilities:
+ * - 提供新建对话、知识图谱和策划产出文档入口
+ * - 展示当前工作区的会话列表
+ * - 支持展开/收起状态
+ *
+ * Notes:
+ * - 文档生成页面由上层路由切换，本组件只触发导航。
+ */
+
 import { Layout, Button, Tooltip } from "antd";
 import {
   ApartmentOutlined,
@@ -32,10 +47,12 @@ interface Props {
   activeWorkspaceId: string | null;
   threads: ThreadInfo[];
   activeId: string | null;
+  activeMode: "chat" | "documents";
   collapsed: boolean;
   creating: boolean;
   onWorkspaceInfo: () => void;
   onSelect: (id: string) => void;
+  onDocuments: () => void;
   onNew: () => void | Promise<void>;
   onToggle: () => void;
 }
@@ -45,10 +62,12 @@ export function Sidebar({
   activeWorkspaceId,
   threads,
   activeId,
+  activeMode,
   collapsed,
   creating,
   onWorkspaceInfo,
   onSelect,
+  onDocuments,
   onNew,
   onToggle,
 }: Props) {
@@ -105,6 +124,15 @@ export function Sidebar({
                 disabled={!activeWorkspaceId}
               />
             </Tooltip>
+            <Tooltip title={TEXT.document} placement="right">
+              <Button
+                className="sidebar-create"
+                type={activeMode === "documents" ? "primary" : "default"}
+                icon={<FolderOpenOutlined />}
+                disabled={!activeWorkspaceId}
+                onClick={onDocuments}
+              />
+            </Tooltip>
           </>
         ) : (
           <>
@@ -127,7 +155,9 @@ export function Sidebar({
             <Button
               icon={<FolderOpenOutlined />}
               block
+              type={activeMode === "documents" ? "primary" : "default"}
               disabled={!activeWorkspaceId}
+              onClick={onDocuments}
             >
               {TEXT.document}
             </Button>

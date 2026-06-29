@@ -31,6 +31,16 @@ export type {
 } from "./agents/product-workflow/agent";
 export { createWorkflowThreadId, graph, runWorkflowGraph } from "./graph/workflow";
 export {
+  createDocumentWorkflowThreadId,
+  documentGraph,
+  streamDocumentWorkflow,
+} from "./graph/document-workflow";
+export type {
+  DocumentWorkflowInput,
+  DocumentWorkflowResult,
+  DocumentWorkflowStreamEvent,
+} from "./graph/document-workflow";
+export {
   createHumanInTheLoopThreadId,
   extractQuestionFormId,
   releaseQuestionFormHumanInterrupt,

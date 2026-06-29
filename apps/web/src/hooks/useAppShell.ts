@@ -1,3 +1,18 @@
+/**
+ * 应用外壳状态 Hook
+ *
+ * 管理工作区、会话、顶层路由、弹窗和侧边栏状态，为 App 组件提供轻量的页面
+ * 组合数据与回调。页面内部的数据加载与流式任务由各页面自行管理。
+ *
+ * Responsibilities:
+ * - 同步浏览器路径与当前工作区/会话/文档页状态
+ * - 加载账号、工作区和会话列表
+ * - 提供创建工作区、创建会话和导航动作
+ *
+ * Notes:
+ * - 不直接消费聊天 SSE，也不管理文档生成后台轮询。
+ */
+
 import {
   useCallback,
   useEffect,
@@ -21,6 +36,7 @@ import {
 } from "../constants/app";
 import {
   buildChatPath,
+  buildDocumentsPath,
   parseAppRoute,
   pushPath,
   replacePath,
@@ -96,7 +112,7 @@ export function useAppShell() {
 
     setWorkspaceDetailOpen(true);
     setActiveWorkspaceId(route.workspaceId);
-    setActiveThreadId(route.threadId);
+    setActiveThreadId(route.name === "chat" ? route.threadId : null);
     localStorage.setItem(ACTIVE_WORKSPACE_KEY, route.workspaceId);
   }, [route]);
 
@@ -210,6 +226,14 @@ export function useAppShell() {
     setWorkspaceDetailOpen(true);
     localStorage.setItem(ACTIVE_WORKSPACE_KEY, id);
   }, []);
+
+  const handleOpenDocuments = useCallback(() => {
+    if (!activeWorkspaceId) return;
+
+    pushPath(buildDocumentsPath(activeWorkspaceId));
+    setWorkspaceDetailOpen(true);
+    setActiveThreadId(null);
+  }, [activeWorkspaceId]);
 
   const handleBackToWorkspaceList = useCallback(() => {
     pushPath("/workplace");
@@ -373,6 +397,7 @@ export function useAppShell() {
     handleThreadMessageStarted,
     handleThreadTitleChange,
     handleNewWorkspace,
+    handleOpenDocuments,
     handleOpenWorkspace,
     handleSelectThread,
     isCreatingChat,
@@ -388,6 +413,7 @@ export function useAppShell() {
     setSidebarCollapsed,
     sidebarCollapsed,
     threads,
+    route,
     workspaceDetailOpen,
     workspaces,
   };

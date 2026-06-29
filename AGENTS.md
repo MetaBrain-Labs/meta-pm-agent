@@ -96,7 +96,7 @@ packages/
 - Use `.env` for local configuration. Copy `.env.example` and provide `DATABASE_URL`, Redis settings, `OPENAI_API_KEY`, `LLM_MODEL`, and `LLM_BASE_URL`. Configure `TAVILY_API_KEY` when the `web_search` tool should use Tavily; otherwise the runtime falls back to free public indexes without extra search dependencies.
 - Run Prisma commands from `packages/database`: `pnpm db:generate`, `pnpm db:push`, or `pnpm db:migrate`.
 - Ensure `prisma generate` runs before building `@repo/database`; `allowBuilds` in `pnpm-workspace.yaml` handles this installation requirement.
-- Preserve the workspace/chat routes and their current split: `/workplace`, `/chat/:workspaceId`, and `/chat/:workspaceId/:threadId`.
+- Preserve the workspace/chat/document routes and their current split: `/workplace`, `/chat/:workspaceId`, `/chat/:workspaceId/:threadId`, and `/documents/:workspaceId`.
 - Browser directory selection cannot reliably expose a full absolute path in standard web contexts. Preserve editable path fields and host-provided `file.path` handling where available.
 - Do not change dependency versions, generated files, unrelated modules, or repository-wide configuration unless the task requires it.
 
@@ -154,6 +154,11 @@ English ensures:
 - `agent-status` events are authoritative for frontend active-Agent state. After `user-input-complete`, remove `conversation` from `activeAgents` before Request/Planner/Executor statuses are added, so the top-right indicator does not show completed Conversation Agent alongside later workflow Agents.
 - After Conversation Agent emits `user-input-complete`, subsequent planning must flow through `apps/agent-runtime/src/graph/workflow.ts`. Do not directly wire Request Agent, Planner, or Executor orchestration inside Conversation Agent.
 - Product workflow routing is LangGraph-owned: `parse_user_input -> request_agent -> planner_agent -> executor-* -> planner_agent -> END`. Add future workflow stages as graph nodes/edges instead of ad hoc calls from individual agents.
+- Document generation is owned by Document Agent and an independent LangGraph, separate from the chat/product-workflow graph. Keep document workflow orchestration under `apps/agent-runtime/src/graph/document-workflow.ts` and keep Document Agent model prompts/implementation under `apps/agent-runtime/src/agents/document-agent/`.
+- Document Agent owns multiple document workflows by document kind. PRD, MRD, and BRD must map to distinct workflow intentions; PRD is currently the only enabled frontend action, while MRD/BRD controls remain disabled until their workflows are implemented.
+- Document Agent should use Deep Agents built-in `write_todos` for user-visible Task planning and the built-in `task` tool for heavy temporary subagents such as user-story generation, API drafting, or cross-section consistency checks. Internal DeepAgents helper tools must remain filtered from normal SSE/persistence unless deliberately exposed by a document-generation contract.
+- Document-generation LangGraph stages are modeled separately from product-workflow stages, currently `parseKg -> normalizeGraph -> buildSectionDossiers -> draftSection -> crossCheck -> humanReview -> exportPrd`. Avoid node names that collide with state-channel names in LangGraph typed state.
+- Document-generation tasks run in the API background after being started. Frontend page navigation must not cancel them; supported interruption paths are manual stop through the document stop endpoint and server/runtime failure.
 - User interruption and continuation of product workflows must be checkpoint-based. On manual interruption, LangGraph should persist the current execution point through `PostgresSaver` when configured; when Conversation Agent identifies a continue-interrupted-workflow intent, resume the saved checkpoint instead of regex-matching the user text or rerunning Request Agent analysis from the new message.
 - Product workflow confirmation/proposal form answers are workflow resumes, not fresh product requests. They must restore the previous Request Agent analysis, Planner DAG, Executor results, and product knowledge graph through `apps/agent-runtime/src/agents/conversation/workflow-resume.ts`, then resume LangGraph so Planner creates a `TaskExecutionPlan` with `status: "supplement"` and only plans the required graph corrections/additions.
 - Product workflow model calls are split into independent DeepAgents: `apps/agent-runtime/src/agents/product-workflow/planner-agent/` and `executor-agent/`. Each folder owns its `agent.ts` and `prompt.ts`; Executor shared definitions live in `executor-agent/definitions.ts`.
@@ -179,6 +184,7 @@ English ensures:
 ## Persistence Rules
 
 - The API persists account, workspace, conversation, message, and request-form data through Prisma/PostgreSQL.
+- Document-generation run/artifact persistence is currently defined by manual SQL in `packages/database/sql/document-generation.sql`. Apply that SQL before using PRD generation in an environment; do not assume Prisma migrations have created those tables.
 - Persisted data should be loaded through the API: `/api/account`, `/api/workspaces`, `/api/chats`, and `/api/chats/:id/messages`.
 - Do not persist chat message history in browser `localStorage`. Local browser storage is only acceptable for non-authoritative UI preferences such as the active workspace id.
 - User messages are persisted before agent execution.
@@ -188,6 +194,7 @@ English ensures:
 - Conversation Agent structured user-input data is stored in `message.user_input`.
 - Request Agent analysis must be written to the request message content and to request-form items.
 - Final workspace knowledge graph data must be stored in `product_knowledge_graph`, keyed by `workspace_id`, with optional `conversation_id` and `request_form_id` provenance. Keep the table at one current graph per workspace, and persist only structured `nodes` and `relations` in the database layer. Runtime `ProductKnowledgeGraph` may still carry summaries, decisions, risks, and open questions for planning, but do not read or write `summary`, `decisions`, `risks`, or `open_questions` database columns.
+- Document artifacts must be persisted after generation completes. Store generated PRD markdown and structured content in the document artifact table, linked to the document generation run and workspace. Do not store full generated documents in chat message history.
 - Executor Agent graph patches, full graph markdown, and large knowledge-graph tool results must not be persisted into `message.content`, `message.meta.toolCalls`, or request-form payloads. Persist only lightweight task/result metadata and tool summaries there; the full graph belongs in `product_knowledge_graph`.
 - Product workflow tagged payloads in `message.content` should be reduced to short archival summaries once the structured workflow artifacts have been persisted elsewhere.
 - `request_form.status` must be updated as the request advances through processing states. Current statuses include `received`, `conversation_consumed`, `request_agent_running`, `request_analyzed`, `workflow_running`, `pending_user_confirmation`, `completed`, `stopped`, and `failed`.
@@ -211,6 +218,10 @@ English ensures:
 - The top-right active-Agent indicator may show multiple parallel Executor Agents. Each Agent label must scroll to a visible reasoning or loading card; when the chat is already stuck to the bottom, disable auto-bottom scrolling before performing the jump.
 - The frontend knowledge-graph viewer availability should refresh after each Executor result is received, because the API archives the cumulative graph after every Executor completion.
 - The knowledge-graph modal must manage the G6 instance lifecycle defensively: retry while the modal container has zero size, never leave the loading overlay visible forever after close/reopen, and reduce dense graph clutter by avoiding overly verbose node/edge labels.
+- The document planning page loads knowledge-graph/document-generation data only when the user enters `/documents/:workspaceId`; entering a workspace/chat must not trigger document-page loading. Show an explicit loading animation while the page fetches graph/run data.
+- The document planning page's embedded AntV G6 graph should visually match the "view knowledge graph" modal. Treat `KnowledgeGraphModal` as the source of truth for G6 node, combo, edge, tooltip, minimap, dense-graph, and lifecycle behavior.
+- Clicking a node in the document planning page graph must update the right-side node detail panel with the selected node data.
+- When a PRD artifact exists, show user actions to view the full markdown in a modal and download the `.md` file. The inline artifact card may remain a preview, but the full generated content must be accessible without rerunning the workflow.
 - "用户输入整理" and "Request Agent 分析" cards should default to collapsed.
 - Prefer Tailwind utilities for new styling. Do not create new CSS/SCSS/Less/CSS Module files unless explicitly requested or unavoidable.
 - Do not add global stylesheet rules or inline `<style>` blocks unless the task explicitly requires it.
