@@ -19,6 +19,8 @@ import type {
   DocumentGenerationResult,
   DocumentGenerationStatus,
   DocumentKind,
+  DocumentReasoningLogEntry,
+  DocumentScoreAttempt,
   DocumentTodo,
   DocumentWorkflowStage,
 } from "@repo/shared";
@@ -34,6 +36,8 @@ interface DocumentGenerationRunRow {
   workflow_thread_id: string;
   current_stage: DocumentWorkflowStage | null;
   task_planning: unknown;
+  reasoning_log: unknown;
+  scoring_attempts: unknown;
   document_artifact_id: string | null;
   error_message: string | null;
   started_at: Date | null;
@@ -69,6 +73,8 @@ export interface DocumentGenerationRunDto {
   workflowThreadId: string;
   currentStage: DocumentWorkflowStage | null;
   todos: DocumentTodo[];
+  reasoningLog: DocumentReasoningLogEntry[];
+  scoringAttempts: DocumentScoreAttempt[];
   documentArtifactId: string | null;
   errorMessage: string | null;
   startedAt: string | null;
@@ -114,7 +120,9 @@ export async function createDocumentGenerationRun({
       "kind",
       "status",
       "workflow_thread_id",
-      "task_planning"
+      "task_planning",
+      "reasoning_log",
+      "scoring_attempts"
     )
     VALUES (
       ${runId ?? randomUUID()},
@@ -122,6 +130,8 @@ export async function createDocumentGenerationRun({
       ${kind},
       'queued',
       ${workflowThreadId},
+      '[]'::jsonb,
+      '[]'::jsonb,
       '[]'::jsonb
     )
     RETURNING *
@@ -235,18 +245,26 @@ export async function updateDocumentGenerationRunProgress({
   runId,
   currentStage,
   todos,
+  reasoningLog,
+  scoringAttempts,
 }: {
   runId: string;
   currentStage?: DocumentWorkflowStage | null;
   todos?: DocumentTodo[];
+  reasoningLog?: DocumentReasoningLogEntry[];
+  scoringAttempts?: DocumentScoreAttempt[];
 }): Promise<void> {
   const todosJson = todos ? JSON.stringify(todos) : undefined;
+  const reasoningJson = reasoningLog ? JSON.stringify(reasoningLog) : undefined;
+  const scoringJson = scoringAttempts ? JSON.stringify(scoringAttempts) : undefined;
 
   await prisma.$executeRaw`
     UPDATE "document_generation_run"
     SET
       "current_stage" = COALESCE(${currentStage ?? null}, "current_stage"),
       "task_planning" = COALESCE(${todosJson ?? null}::jsonb, "task_planning"),
+      "reasoning_log" = COALESCE(${reasoningJson ?? null}::jsonb, "reasoning_log"),
+      "scoring_attempts" = COALESCE(${scoringJson ?? null}::jsonb, "scoring_attempts"),
       "updated_at" = CURRENT_TIMESTAMP
     WHERE "id" = ${runId}
       AND "status" IN ('queued', 'running')
@@ -317,6 +335,7 @@ export async function completeDocumentGenerationRun({
         "status" = 'completed',
         "current_stage" = 'exportPrd',
         "task_planning" = ${JSON.stringify(todos)}::jsonb,
+        "scoring_attempts" = ${JSON.stringify(result.qualityScore.attempts)}::jsonb,
         "document_artifact_id" = ${artifact.id},
         "error_message" = NULL,
         "finished_at" = CURRENT_TIMESTAMP,
@@ -379,6 +398,8 @@ function mapRunRow(row: DocumentGenerationRunRow): DocumentGenerationRunDto {
     workflowThreadId: row.workflow_thread_id,
     currentStage: row.current_stage,
     todos: parseJsonColumn(row.task_planning, []),
+    reasoningLog: parseJsonColumn(row.reasoning_log, []),
+    scoringAttempts: parseJsonColumn(row.scoring_attempts, []),
     documentArtifactId: row.document_artifact_id,
     errorMessage: row.error_message,
     startedAt: row.started_at?.toISOString() ?? null,

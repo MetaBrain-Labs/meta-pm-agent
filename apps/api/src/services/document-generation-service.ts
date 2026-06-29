@@ -21,6 +21,8 @@ import {
 import type {
   DocumentGenerationResult,
   DocumentKind,
+  DocumentReasoningLogEntry,
+  DocumentScoreAttempt,
   DocumentTodo,
   DocumentWorkflowStage,
   KnowledgeGraphEntity,
@@ -210,6 +212,8 @@ async function executeDocumentGenerationRun(
   controller: AbortController,
 ): Promise<void> {
   let latestTodos = run.todos;
+  let latestReasoning = run.reasoningLog;
+  let latestScoringAttempts = run.scoringAttempts;
   let result: DocumentGenerationResult | null = null;
 
   try {
@@ -232,6 +236,14 @@ async function executeDocumentGenerationRun(
       const event = next.value;
       if (event.type === "document-stage" && event.status === "started") {
         await updateRunStage(run.id, event.stage);
+        latestReasoning = appendReasoningLog(latestReasoning, {
+          agentType: "document-workflow",
+          content: `进入阶段：${event.label}`,
+        });
+        await updateDocumentGenerationRunProgress({
+          runId: run.id,
+          reasoningLog: latestReasoning,
+        });
       }
       if (event.type === "todo-update") {
         latestTodos = event.todos;
@@ -240,8 +252,29 @@ async function executeDocumentGenerationRun(
           todos: latestTodos,
         });
       }
+      if (event.type === "reasoning") {
+        latestReasoning = appendReasoningLog(latestReasoning, {
+          agentType: event.agentType,
+          content: event.content,
+        });
+        await updateDocumentGenerationRunProgress({
+          runId: run.id,
+          reasoningLog: latestReasoning,
+        });
+      }
+      if (event.type === "document-score-attempt") {
+        latestScoringAttempts = upsertScoreAttempt(
+          latestScoringAttempts,
+          event.attempt,
+        );
+        await updateDocumentGenerationRunProgress({
+          runId: run.id,
+          scoringAttempts: latestScoringAttempts,
+        });
+      }
       if (event.type === "document-complete") {
         result = event.result;
+        latestScoringAttempts = result.qualityScore.attempts;
       }
 
       next = await stream.next();
@@ -273,6 +306,41 @@ async function executeDocumentGenerationRun(
       errorMessage: compactErrorMessage(error),
     });
   }
+}
+
+/**
+ * 追加思考日志，限制长度避免状态记录过重。
+ */
+function appendReasoningLog(
+  entries: DocumentReasoningLogEntry[],
+  next: {
+    agentType: string;
+    content: string;
+  },
+): DocumentReasoningLogEntry[] {
+  const content = next.content.trim();
+  if (!content) return entries;
+
+  return [
+    ...entries,
+    {
+      index: entries.length,
+      agentType: next.agentType,
+      content: content.length > 2400 ? `${content.slice(0, 2400)}...` : content,
+      createdAt: new Date().toISOString(),
+    },
+  ].slice(-80);
+}
+
+/**
+ * 写入或替换同一轮评分结果。
+ */
+function upsertScoreAttempt(
+  attempts: DocumentScoreAttempt[],
+  next: DocumentScoreAttempt,
+): DocumentScoreAttempt[] {
+  const filtered = attempts.filter((attempt) => attempt.attempt !== next.attempt);
+  return [...filtered, next].sort((a, b) => a.attempt - b.attempt);
 }
 
 /**

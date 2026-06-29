@@ -3,7 +3,7 @@
  *
  * 构建独立于产品知识图谱生产链路的 Document Agent 图，固定阶段为
  * parseKg → normalizeGraph → buildSectionDossiers → draftSection →
- * crossCheck → humanReview → exportPrd。图状态由 checkpointer 保存，
+ * crossCheck → scoreDraft → aggregateScore → humanReview → exportPrd。图状态由 checkpointer 保存，
  * 便于后续恢复、回放与 thread 级连续性扩展。
  *
  * Responsibilities:
@@ -38,6 +38,17 @@ import {
   streamPrdDocumentAgent,
   type DocumentAgentStreamEvent,
 } from "../agents/document-agent/agent";
+import {
+  DOCUMENT_SCORE_MAX_ATTEMPTS,
+  DOCUMENT_SCORE_MAX_SPREAD,
+  DOCUMENT_SCORE_THRESHOLD,
+  calculateScoreSpread,
+  createScoreRetryFeedback,
+  runPrdScoringReviewers,
+  runPrdWeightedScoringAgent,
+  selectFinalScoreAttempt,
+  type DocumentScoringStreamEvent,
+} from "../agents/document-agent/scoring";
 import { getWorkflowCheckpointer } from "./workflow-checkpointer";
 import {
   DocumentWorkflowGraphState,
@@ -64,6 +75,7 @@ export interface DocumentWorkflowInput {
  */
 export type DocumentWorkflowStreamEvent =
   | DocumentAgentStreamEvent
+  | DocumentScoringStreamEvent
   | {
       type: "document-stage";
       stage: DocumentWorkflowStage;
@@ -73,6 +85,10 @@ export type DocumentWorkflowStreamEvent =
   | {
       type: "document-complete";
       result: DocumentGenerationResult;
+    }
+  | {
+      type: "document-score-attempt";
+      attempt: DocumentGenerationResult["qualityScore"]["attempts"][number];
     };
 
 /**
@@ -96,6 +112,8 @@ const STAGE_LABELS: Record<DocumentWorkflowStage, string> = {
   buildSectionDossiers: "构建 PRD 章节材料",
   draftSection: "Document Agent 生成 PRD",
   crossCheck: "交叉检查文档一致性",
+  scoreDraft: "三方评分 Agent 打分",
+  aggregateScore: "加权评分系统汇总",
   humanReview: "人工审核节点",
   exportPrd: "导出 PRD 文档",
 };
@@ -110,6 +128,8 @@ function createDocumentWorkflowGraph(checkpointer: BaseCheckpointSaver) {
     .addNode("buildSectionDossiers", buildSectionDossiersNode)
     .addNode("draftSection", draftSectionNode)
     .addNode("crossCheck", crossCheckNode)
+    .addNode("scoreDraft", scoreDraftNode)
+    .addNode("aggregateScore", aggregateScoreNode)
     .addNode("humanReview", humanReviewNode)
     .addNode("exportPrd", exportPrdNode)
     .addEdge(START, "parseKg")
@@ -117,7 +137,12 @@ function createDocumentWorkflowGraph(checkpointer: BaseCheckpointSaver) {
     .addEdge("normalizeGraph", "buildSectionDossiers")
     .addEdge("buildSectionDossiers", "draftSection")
     .addEdge("draftSection", "crossCheck")
-    .addEdge("crossCheck", "humanReview")
+    .addEdge("crossCheck", "scoreDraft")
+    .addEdge("scoreDraft", "aggregateScore")
+    .addConditionalEdges("aggregateScore", selectNextNodeAfterScore, {
+      retry: "draftSection",
+      pass: "humanReview",
+    })
     .addEdge("humanReview", "exportPrd")
     .addEdge("exportPrd", END)
     .compile({ checkpointer });
@@ -220,6 +245,7 @@ function parseKgNode(
   config?: LangGraphRunnableConfig,
 ) {
   emitStage(config, "parseKg", "started");
+  emitTodoUpdate(config, createWorkflowTodos("parseKg"));
   if (state.kind !== "prd") {
     throw new Error(`Document workflow '${state.kind}' is not implemented yet.`);
   }
@@ -228,7 +254,9 @@ function parseKgNode(
   }
 
   emitStage(config, "parseKg", "completed");
-  return {};
+  const todos = createWorkflowTodos("parseKg", true);
+  emitTodoUpdate(config, todos);
+  return { todos };
 }
 
 /**
@@ -239,6 +267,7 @@ function normalizeGraphNode(
   config?: LangGraphRunnableConfig,
 ) {
   emitStage(config, "normalizeGraph", "started");
+  emitTodoUpdate(config, createWorkflowTodos("normalizeGraph"));
 
   const nodes = dedupeByKey(state.sourceGraph.nodes, (node) => node.id);
   const nodeIds = new Set(nodes.map((node) => node.id));
@@ -253,8 +282,11 @@ function normalizeGraphNode(
   );
 
   emitStage(config, "normalizeGraph", "completed");
+  const todos = createWorkflowTodos("normalizeGraph", true);
+  emitTodoUpdate(config, todos);
   return {
     normalizedGraph: { nodes, relations },
+    todos,
   };
 }
 
@@ -266,11 +298,14 @@ function buildSectionDossiersNode(
   config?: LangGraphRunnableConfig,
 ) {
   emitStage(config, "buildSectionDossiers", "started");
+  emitTodoUpdate(config, createWorkflowTodos("buildSectionDossiers"));
   const graph = requireNormalizedGraph(state);
   const dossiers = createPrdSectionDossiers(graph);
 
   emitStage(config, "buildSectionDossiers", "completed");
-  return { dossiers };
+  const todos = createWorkflowTodos("buildSectionDossiers", true);
+  emitTodoUpdate(config, todos);
+  return { dossiers, todos };
 }
 
 /**
@@ -281,6 +316,7 @@ async function draftSectionNode(
   config?: LangGraphRunnableConfig,
 ) {
   emitStage(config, "draftSection", "started");
+  emitTodoUpdate(config, createWorkflowTodos("draftSection"));
   const writer = getWriter(config);
   const graph = requireNormalizedGraph(state);
   let todos = state.todos;
@@ -290,6 +326,8 @@ async function draftSectionNode(
       runId: state.runId,
       graph,
       dossiers: state.dossiers,
+      attemptNumber: state.scoreAttempts.length + 1,
+      revisionFeedback: state.scoreFeedback,
       signal: config?.signal,
     }),
     (event) => {
@@ -302,10 +340,12 @@ async function draftSectionNode(
   const sectionDrafts = extractSectionDrafts(markdown, state.dossiers);
 
   emitStage(config, "draftSection", "completed");
+  const workflowTodos = createWorkflowTodos("draftSection", true);
+  emitTodoUpdate(config, workflowTodos);
   return {
     draftMarkdown: markdown,
     sectionDrafts,
-    todos,
+    todos: todos.length > 0 ? todos : workflowTodos,
   };
 }
 
@@ -317,6 +357,7 @@ function crossCheckNode(
   config?: LangGraphRunnableConfig,
 ) {
   emitStage(config, "crossCheck", "started");
+  emitTodoUpdate(config, createWorkflowTodos("crossCheck"));
   const notes: string[] = [];
   const markdown = state.draftMarkdown;
 
@@ -335,7 +376,107 @@ function crossCheckNode(
   };
 
   emitStage(config, "crossCheck", "completed");
-  return { crossCheckResult };
+  const todos = createWorkflowTodos("crossCheck", true);
+  emitTodoUpdate(config, todos);
+  return { crossCheckResult, todos };
+}
+
+/**
+ * 调用三位独立评分 Agent，按高考作文阅卷模式给 PRD 草稿打分。
+ */
+async function scoreDraftNode(
+  state: DocumentWorkflowGraphStateValue,
+  config?: LangGraphRunnableConfig,
+) {
+  emitStage(config, "scoreDraft", "started");
+  emitTodoUpdate(config, createWorkflowTodos("scoreDraft"));
+  const writer = getWriter(config);
+  const reviewerScores = await runPrdScoringReviewers({
+    markdown: state.draftMarkdown,
+    sections: state.sectionDrafts,
+    attempt: state.scoreAttempts.length + 1,
+    signal: config?.signal,
+    onEvent: (event) => writer?.(event),
+  });
+
+  emitStage(config, "scoreDraft", "completed");
+  const todos = createWorkflowTodos("scoreDraft", true);
+  emitTodoUpdate(config, todos);
+  return { scoreReviewerReports: reviewerScores, todos };
+}
+
+/**
+ * 调用加权评分系统汇总三方评分，并决定是否进入下一轮重写。
+ */
+async function aggregateScoreNode(
+  state: DocumentWorkflowGraphStateValue,
+  config?: LangGraphRunnableConfig,
+) {
+  emitStage(config, "aggregateScore", "started");
+  emitTodoUpdate(config, createWorkflowTodos("aggregateScore"));
+  const writer = getWriter(config);
+  const scoreSpread = calculateScoreSpread(state.scoreReviewerReports);
+  const varianceAccepted = scoreSpread <= DOCUMENT_SCORE_MAX_SPREAD;
+  const aggregate = await runPrdWeightedScoringAgent({
+    markdown: state.draftMarkdown,
+    reviewerScores: state.scoreReviewerReports,
+    scoreSpread,
+    varianceAccepted,
+    attempt: state.scoreAttempts.length + 1,
+    signal: config?.signal,
+    onEvent: (event) => writer?.(event),
+  });
+  const attempt = {
+    attempt: state.scoreAttempts.length + 1,
+    markdown: state.draftMarkdown,
+    reviewerScores: state.scoreReviewerReports,
+    scoreSpread,
+    varianceAccepted,
+    aggregate,
+    passed: aggregate.passed,
+    selected: false,
+  };
+  const scoreAttempts = [...state.scoreAttempts, attempt];
+  const selected = selectFinalScoreAttempt(scoreAttempts);
+  const shouldRetry =
+    !attempt.passed &&
+    scoreAttempts.length < DOCUMENT_SCORE_MAX_ATTEMPTS &&
+    (!attempt.varianceAccepted || attempt.aggregate.score < DOCUMENT_SCORE_THRESHOLD);
+  const persistedAttempt = {
+    ...attempt,
+    selected: !shouldRetry && selected?.attempt.attempt === attempt.attempt,
+  };
+  getWriter(config)?.({
+    type: "document-score-attempt",
+    attempt: persistedAttempt,
+  });
+
+  emitStage(config, "aggregateScore", "completed");
+  const todos = createWorkflowTodos("aggregateScore", true);
+  emitTodoUpdate(config, todos);
+  return {
+    scoreAttempts: [...state.scoreAttempts, persistedAttempt],
+    scoreFeedback: shouldRetry ? createScoreRetryFeedback(attempt) : "",
+    // 三轮后仍未通过时，将最终导出草稿回退为最终选择版本。
+    draftMarkdown: shouldRetry
+      ? state.draftMarkdown
+      : selected?.attempt.markdown ?? state.draftMarkdown,
+    todos,
+  };
+}
+
+/**
+ * 根据评分门禁决定继续审核或回到草稿节点重写。
+ */
+function selectNextNodeAfterScore(state: DocumentWorkflowGraphStateValue) {
+  const latestAttempt = state.scoreAttempts.at(-1);
+  if (!latestAttempt) return "retry";
+  if (latestAttempt.passed) return "pass";
+  if (state.scoreAttempts.length >= DOCUMENT_SCORE_MAX_ATTEMPTS) return "pass";
+  return latestAttempt.varianceAccepted &&
+    latestAttempt.aggregate.score >= DOCUMENT_SCORE_THRESHOLD
+    ? "pass"
+    : "retry";
 }
 
 /**
@@ -346,9 +487,12 @@ function humanReviewNode(
   config?: LangGraphRunnableConfig,
 ) {
   emitStage(config, "humanReview", "started");
+  emitTodoUpdate(config, createWorkflowTodos("humanReview"));
   // 当前 PRD 后台任务不自动弹出人工审核；后续可在此接入 interrupt()。
   emitStage(config, "humanReview", "completed");
-  return { reviewStatus: "auto_approved" as const };
+  const todos = createWorkflowTodos("humanReview", true);
+  emitTodoUpdate(config, todos);
+  return { reviewStatus: "auto_approved" as const, todos };
 }
 
 /**
@@ -359,12 +503,15 @@ function exportPrdNode(
   config?: LangGraphRunnableConfig,
 ) {
   emitStage(config, "exportPrd", "started");
+  emitTodoUpdate(config, createWorkflowTodos("exportPrd"));
   const graph = requireNormalizedGraph(state);
+  const selectedScoreAttempt = selectFinalScoreAttempt(state.scoreAttempts);
+  const finalMarkdown = selectedScoreAttempt?.attempt.markdown ?? state.draftMarkdown;
   const result: DocumentGenerationResult = {
     kind: "prd",
     title: createDocumentTitle(graph.nodes),
-    markdown: state.draftMarkdown,
-    sections: state.sectionDrafts,
+    markdown: finalMarkdown,
+    sections: extractSectionDrafts(finalMarkdown, state.dossiers),
     sourceGraphStats: {
       nodeCount: graph.nodes.length,
       relationCount: graph.relations.length,
@@ -373,11 +520,32 @@ function exportPrdNode(
       passed: false,
       notes: ["PRD 生成结束，但未获得交叉检查结果。"],
     },
+    qualityScore: {
+      threshold: DOCUMENT_SCORE_THRESHOLD,
+      maxAllowedScoreSpread: DOCUMENT_SCORE_MAX_SPREAD,
+      maxAttempts: DOCUMENT_SCORE_MAX_ATTEMPTS,
+      selectedAttempt: selectedScoreAttempt?.attempt.attempt ?? 1,
+      finalScore: selectedScoreAttempt?.attempt.aggregate.score ?? 0,
+      passed: selectedScoreAttempt?.attempt.passed ?? false,
+      selectionReason: selectedScoreAttempt?.reason ?? "highest_score",
+      attempts: state.scoreAttempts.map((attempt) => ({
+        attempt: attempt.attempt,
+        markdown: attempt.markdown,
+        reviewerScores: attempt.reviewerScores,
+        scoreSpread: attempt.scoreSpread,
+        varianceAccepted: attempt.varianceAccepted,
+        aggregate: attempt.aggregate,
+        passed: attempt.passed,
+        selected: selectedScoreAttempt?.attempt.attempt === attempt.attempt,
+      })),
+    },
   };
 
   getWriter(config)?.({ type: "document-complete", result });
   emitStage(config, "exportPrd", "completed");
-  return { result };
+  const todos = createWorkflowTodos("exportPrd", true);
+  emitTodoUpdate(config, todos);
+  return { result, todos };
 }
 
 /**
@@ -409,6 +577,53 @@ function emitStage(
     status,
     label: STAGE_LABELS[stage],
   });
+}
+
+/**
+ * 向 LangGraph custom stream 写入任务规划事件，保证页面和数据库可见。
+ */
+function emitTodoUpdate(
+  config: LangGraphRunnableConfig | undefined,
+  todos: DocumentTodo[],
+) {
+  getWriter(config)?.({
+    type: "todo-update",
+    agentType: "document",
+    todos,
+  });
+}
+
+const WORKFLOW_TODO_STAGES: DocumentWorkflowStage[] = [
+  "parseKg",
+  "normalizeGraph",
+  "buildSectionDossiers",
+  "draftSection",
+  "crossCheck",
+  "scoreDraft",
+  "aggregateScore",
+  "humanReview",
+  "exportPrd",
+];
+
+/**
+ * 根据当前阶段创建可持久化的工作流级 Task planning。
+ */
+function createWorkflowTodos(
+  currentStage: DocumentWorkflowStage,
+  completedCurrent = false,
+): DocumentTodo[] {
+  const currentIndex = WORKFLOW_TODO_STAGES.indexOf(currentStage);
+
+  return WORKFLOW_TODO_STAGES.map((stage, index) => ({
+    index,
+    content: STAGE_LABELS[stage],
+    status:
+      index < currentIndex || (index === currentIndex && completedCurrent)
+        ? "completed"
+        : index === currentIndex
+          ? "in_progress"
+          : "pending",
+  }));
 }
 
 /**

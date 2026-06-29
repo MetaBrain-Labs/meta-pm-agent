@@ -57,6 +57,8 @@ export interface PrdDocumentAgentInput {
     relationIds: string[];
     evidence: string[];
   }>;
+  attemptNumber?: number;
+  revisionFeedback?: string;
   signal?: AbortSignal;
 }
 
@@ -133,6 +135,8 @@ export async function* streamPrdDocumentAgent(
             task: "Generate a complete PRD from the supplied product knowledge graph.",
             workspaceId: input.workspaceId,
             runId: input.runId,
+            attemptNumber: input.attemptNumber ?? 1,
+            revisionFeedback: input.revisionFeedback ?? "",
             graph: input.graph,
             sectionDossiers: input.dossiers,
           }),

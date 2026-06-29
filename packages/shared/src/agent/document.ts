@@ -41,6 +41,16 @@ export const DocumentTodoSchema = z.object({
 });
 
 /**
+ * 文档生成过程中持久化的思考日志。
+ */
+export const DocumentReasoningLogEntrySchema = z.object({
+  index: z.number().int().nonnegative(),
+  agentType: z.string().min(1),
+  content: z.string().min(1),
+  createdAt: z.string().min(1),
+});
+
+/**
  * 文档工作流阶段。
  */
 export const DocumentWorkflowStageSchema = z.enum([
@@ -49,6 +59,8 @@ export const DocumentWorkflowStageSchema = z.enum([
   "buildSectionDossiers",
   "draftSection",
   "crossCheck",
+  "scoreDraft",
+  "aggregateScore",
   "humanReview",
   "exportPrd",
 ]);
@@ -62,6 +74,48 @@ export const DocumentSectionDraftSchema = z.object({
   summary: z.string().min(1),
   nodeIds: z.array(z.string()).default([]),
   relationIds: z.array(z.string()).default([]),
+});
+
+/**
+ * 单个 PRD 评分尝试的持久化摘要。
+ */
+export const DocumentScoreAttemptSchema = z.object({
+  attempt: z.number().int().positive(),
+  markdown: z.string().min(1),
+  reviewerScores: z.array(
+    z.object({
+      reviewerId: z.string().min(1),
+      reviewerName: z.string().min(1),
+      score: z.number().min(0).max(100),
+      dimensions: z.object({
+        relevance: z.number().min(0).max(100),
+        completeness: z.number().min(0).max(100),
+        structure: z.number().min(0).max(100),
+        feasibility: z.number().min(0).max(100),
+        language: z.number().min(0).max(100),
+      }),
+      strengths: z.array(z.string()),
+      weaknesses: z.array(z.string()),
+      revisionAdvice: z.array(z.string()),
+    }),
+  ),
+  scoreSpread: z.number().min(0).max(100),
+  varianceAccepted: z.boolean(),
+  aggregate: z.object({
+    score: z.number().min(0).max(100),
+    passed: z.boolean(),
+    confidence: z.number().min(0).max(1),
+    rationale: z.string(),
+    requiredRevisions: z.array(z.string()),
+    weights: z.object({
+      averageScore: z.number().min(0).max(100),
+      minimumScore: z.number().min(0).max(100),
+      spreadPenalty: z.number().min(0),
+      consistencyBonus: z.number().min(0),
+    }),
+  }),
+  passed: z.boolean(),
+  selected: z.boolean().default(false),
 });
 
 /**
@@ -80,6 +134,16 @@ export const DocumentGenerationResultSchema = z.object({
     passed: z.boolean(),
     notes: z.array(z.string()),
   }),
+  qualityScore: z.object({
+    threshold: z.number().min(0).max(100),
+    maxAllowedScoreSpread: z.number().min(0).max(100),
+    maxAttempts: z.number().int().positive(),
+    selectedAttempt: z.number().int().positive(),
+    finalScore: z.number().min(0).max(100),
+    passed: z.boolean(),
+    selectionReason: z.string(),
+    attempts: z.array(DocumentScoreAttemptSchema),
+  }),
 });
 
 export type DocumentKind = z.infer<typeof DocumentKindSchema>;
@@ -87,8 +151,12 @@ export type DocumentGenerationStatus = z.infer<
   typeof DocumentGenerationStatusSchema
 >;
 export type DocumentTodo = z.infer<typeof DocumentTodoSchema>;
+export type DocumentReasoningLogEntry = z.infer<
+  typeof DocumentReasoningLogEntrySchema
+>;
 export type DocumentWorkflowStage = z.infer<typeof DocumentWorkflowStageSchema>;
 export type DocumentSectionDraft = z.infer<typeof DocumentSectionDraftSchema>;
+export type DocumentScoreAttempt = z.infer<typeof DocumentScoreAttemptSchema>;
 export type DocumentGenerationResult = z.infer<
   typeof DocumentGenerationResultSchema
 >;

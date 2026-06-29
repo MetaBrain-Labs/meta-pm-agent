@@ -49,7 +49,10 @@ import {
   fetchLatestDocumentGeneration,
   startDocumentGeneration,
   stopDocumentGeneration,
+  type DocumentQualityScore,
   type DocumentGenerationRun,
+  type DocumentReasoningLogEntry,
+  type DocumentScoreAttempt,
   type DocumentGenerationStatusResponse,
   type DocumentWorkflowStage,
 } from "../../api/document-api";
@@ -167,6 +170,8 @@ const STAGE_LABELS: Record<DocumentWorkflowStage, string> = {
   buildSectionDossiers: "构建章节材料",
   draftSection: "Document Agent 生成 PRD",
   crossCheck: "交叉检查",
+  scoreDraft: "三方评分 Agent 打分",
+  aggregateScore: "加权评分系统汇总",
   humanReview: "人工审核节点",
   exportPrd: "导出 PRD",
 };
@@ -197,6 +202,11 @@ export function DocumentPlanningPage({
   const artifact = documentState.artifact;
   const runActive = run?.status === "queued" || run?.status === "running";
   const graphReady = (kgData?.nodes.length ?? 0) > 0;
+  const qualityScore = artifact?.content?.qualityScore ?? null;
+  const scoringAttempts =
+    run?.scoringAttempts && run.scoringAttempts.length > 0
+      ? run.scoringAttempts
+      : qualityScore?.attempts ?? [];
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -454,17 +464,25 @@ export function DocumentPlanningPage({
                   <TodoCard todos={run.todos} />
                 )}
 
+                <ReasoningLogPanel entries={run?.reasoningLog ?? []} />
+
+                <ScoringResultPanel
+                  attempts={scoringAttempts}
+                  qualityScore={qualityScore}
+                  currentStage={run?.currentStage ?? null}
+                />
+
                 {artifact && (
-                  <section className="rounded border border-gray-200 bg-white p-4 min-h-[260px]">
+                  <section className="rounded border border-gray-200 bg-white p-4">
                     <div className="flex items-center justify-between gap-3 mb-3">
                       <div className="min-w-0">
                         <Text strong className="block truncate">
                           {artifact.title}
                         </Text>
-                      <Text type="secondary" className="text-xs">
-                        PRD v{artifact.version}
-                      </Text>
-                    </div>
+                        <Text type="secondary" className="text-xs">
+                          PRD v{artifact.version}
+                        </Text>
+                      </div>
                       <Space size="small" wrap>
                         <Tag color="success" icon={<FileDoneOutlined />}>
                           已生成
@@ -485,9 +503,9 @@ export function DocumentPlanningPage({
                         </Button>
                       </Space>
                     </div>
-                    <div className="max-h-[420px] overflow-y-auto pr-2 text-sm">
-                      {renderMarkdown(artifact.markdown)}
-                    </div>
+                    <Text type="secondary" className="text-xs">
+                      正文内容仅在完整 Markdown 弹窗中展示。
+                    </Text>
                   </section>
                 )}
               </aside>
@@ -1116,6 +1134,126 @@ function NodeDetailPanel({
 }
 
 /**
+ * 展示 Document Agent 和评分 Agent 的持久化思考过程。
+ */
+function ReasoningLogPanel({
+  entries,
+}: {
+  entries: DocumentReasoningLogEntry[];
+}) {
+  return (
+    <section className="rounded border border-gray-200 bg-white p-4">
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <Text strong>思考过程</Text>
+        <Tag>{entries.length} 条</Tag>
+      </div>
+      {entries.length === 0 ? (
+        <Text type="secondary" className="text-xs">
+          暂无思考记录，任务开始后会在这里持续更新。
+        </Text>
+      ) : (
+        <div className="max-h-[280px] overflow-y-auto pr-1 flex flex-col gap-3">
+          {entries.slice(-12).map((entry) => (
+            <div
+              key={`${entry.index}-${entry.createdAt}`}
+              className="rounded bg-gray-50 px-3 py-2"
+            >
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <Tag className="m-0">{getReasoningAgentLabel(entry.agentType)}</Tag>
+                <Text type="secondary" className="text-[11px]">
+                  {formatDate(entry.createdAt)}
+                </Text>
+              </div>
+              <Text className="text-xs whitespace-pre-wrap break-words">
+                {entry.content}
+              </Text>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * 展示 PRD 评分状态和每轮评分结果。
+ */
+function ScoringResultPanel({
+  attempts,
+  qualityScore,
+  currentStage,
+}: {
+  attempts: DocumentScoreAttempt[];
+  qualityScore: DocumentQualityScore | null;
+  currentStage: DocumentWorkflowStage | null;
+}) {
+  const scoringActive =
+    currentStage === "scoreDraft" || currentStage === "aggregateScore";
+
+  return (
+    <section className="rounded border border-gray-200 bg-white p-4">
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <div>
+          <Text strong>评分结果</Text>
+          <Text type="secondary" className="block text-xs mt-1">
+            三位评分 Agent 分差不超过 8 分后进入加权汇总。
+          </Text>
+        </div>
+        {scoringActive ? <Spin size="small" /> : <Tag>{attempts.length}/3 轮</Tag>}
+      </div>
+
+      {qualityScore && (
+        <div className="rounded bg-gray-50 px-3 py-2 mb-3 text-sm">
+          <div className="flex flex-wrap items-center gap-2">
+            <Tag color={qualityScore.passed ? "success" : "warning"}>
+              最终 {qualityScore.finalScore} / {qualityScore.threshold}
+            </Tag>
+            <Tag>选择第 {qualityScore.selectedAttempt} 轮</Tag>
+            <Tag>{getSelectionReasonLabel(qualityScore.selectionReason)}</Tag>
+          </div>
+        </div>
+      )}
+
+      {attempts.length === 0 ? (
+        <Text type="secondary" className="text-xs">
+          暂无评分结果，PRD 草稿生成后开始评分。
+        </Text>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {attempts.map((attempt) => (
+            <div key={attempt.attempt} className="rounded border border-gray-100 p-3">
+              <div className="flex flex-wrap items-center gap-2 mb-2">
+                <Text strong>第 {attempt.attempt} 轮</Text>
+                <Tag color={attempt.varianceAccepted ? "success" : "error"}>
+                  分差 {attempt.scoreSpread}
+                </Tag>
+                <Tag color={attempt.aggregate.passed ? "success" : "warning"}>
+                  加权 {attempt.aggregate.score}
+                </Tag>
+                {attempt.selected && <Tag color="processing">已选中</Tag>}
+              </div>
+              <div className="grid grid-cols-3 gap-2 mb-2">
+                {attempt.reviewerScores.map((review) => (
+                  <div key={review.reviewerId} className="rounded bg-gray-50 p-2">
+                    <Text type="secondary" className="block text-[11px] truncate">
+                      {review.reviewerName}
+                    </Text>
+                    <Text strong>{review.score}</Text>
+                  </div>
+                ))}
+              </div>
+              <Text type="secondary" className="text-xs whitespace-pre-wrap">
+                {attempt.aggregate.rationale}
+              </Text>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
  * 渲染后台 run 状态标签。
  */
 function renderRunStatus(run: DocumentGenerationRun | null) {
@@ -1197,6 +1335,26 @@ function getNodeStatusLabel(status: string): string {
   if (status === "confirmed") return "已确认";
   if (status === "deprecated") return "已废弃";
   return status;
+}
+
+/**
+ * 将思考日志 Agent 类型转换为展示名称。
+ */
+function getReasoningAgentLabel(agentType: string): string {
+  if (agentType === "document") return "Document Agent";
+  if (agentType === "document-score") return "评分 Agent";
+  if (agentType === "document-workflow") return "文档工作流";
+  return agentType;
+}
+
+/**
+ * 将最终选择原因转换为展示名称。
+ */
+function getSelectionReasonLabel(reason: string): string {
+  if (reason === "passed_threshold") return "通过阈值";
+  if (reason === "lowest_spread") return "最小分差";
+  if (reason === "highest_score") return "最高加权分";
+  return reason;
 }
 
 /**

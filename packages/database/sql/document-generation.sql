@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS "document_generation_run" (
   "workflow_thread_id" varchar(255) NOT NULL,
   "current_stage" varchar(64),
   "task_planning" jsonb NOT NULL DEFAULT '[]'::jsonb,
+  "reasoning_log" jsonb NOT NULL DEFAULT '[]'::jsonb,
+  "scoring_attempts" jsonb NOT NULL DEFAULT '[]'::jsonb,
   "document_artifact_id" varchar(36),
   "error_message" text,
   "started_at" timestamptz,
@@ -20,6 +22,12 @@ CREATE TABLE IF NOT EXISTS "document_generation_run" (
   CONSTRAINT "document_generation_run_status_check"
     CHECK ("status" IN ('queued', 'running', 'completed', 'stopped', 'failed'))
 );
+
+ALTER TABLE "document_generation_run"
+  ADD COLUMN IF NOT EXISTS "reasoning_log" jsonb NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE "document_generation_run"
+  ADD COLUMN IF NOT EXISTS "scoring_attempts" jsonb NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE TABLE IF NOT EXISTS "document_artifact" (
   "id" varchar(36) PRIMARY KEY,

@@ -25,8 +25,59 @@ export type DocumentWorkflowStage =
   | "buildSectionDossiers"
   | "draftSection"
   | "crossCheck"
+  | "scoreDraft"
+  | "aggregateScore"
   | "humanReview"
   | "exportPrd";
+
+export interface DocumentReasoningLogEntry {
+  index: number;
+  agentType: string;
+  content: string;
+  createdAt: string;
+}
+
+export interface DocumentScoreAttempt {
+  attempt: number;
+  markdown: string;
+  reviewerScores: Array<{
+    reviewerId: string;
+    reviewerName: string;
+    score: number;
+    dimensions: Record<string, number>;
+    strengths: string[];
+    weaknesses: string[];
+    revisionAdvice: string[];
+  }>;
+  scoreSpread: number;
+  varianceAccepted: boolean;
+  aggregate: {
+    score: number;
+    passed: boolean;
+    confidence: number;
+    rationale: string;
+    requiredRevisions: string[];
+    weights: {
+      averageScore: number;
+      minimumScore: number;
+      spreadPenalty: number;
+      consistencyBonus: number;
+    };
+  };
+  passed: boolean;
+  selected: boolean;
+}
+
+export interface DocumentQualityScore {
+  threshold: number;
+  maxAllowedScoreSpread: number;
+  maxAttempts: number;
+  selectedAttempt: number;
+  finalScore: number;
+  passed: boolean;
+  selectionReason: string;
+  attempts: DocumentScoreAttempt[];
+}
 
 export interface DocumentGenerationRun {
   id: string;
@@ -36,6 +87,8 @@ export interface DocumentGenerationRun {
   workflowThreadId: string;
   currentStage: DocumentWorkflowStage | null;
   todos: TodoItem[];
+  reasoningLog: DocumentReasoningLogEntry[];
+  scoringAttempts: DocumentScoreAttempt[];
   documentArtifactId: string | null;
   errorMessage: string | null;
   startedAt: string | null;
@@ -51,7 +104,9 @@ export interface DocumentArtifact {
   kind: DocumentKind;
   title: string;
   markdown: string;
-  content: unknown;
+  content: {
+    qualityScore?: DocumentQualityScore;
+  } | null;
   version: number;
   createdAt: string;
   updatedAt: string;

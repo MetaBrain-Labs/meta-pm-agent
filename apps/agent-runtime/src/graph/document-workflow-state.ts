@@ -22,6 +22,10 @@ import type {
   KnowledgeGraphEntity,
   KnowledgeGraphRelation,
 } from "@repo/shared";
+import type {
+  DocumentScoreAttempt,
+  DocumentScoreReview,
+} from "../agents/document-agent/scoring";
 
 /**
  * 文档工作流中的规范化图谱快照。
@@ -85,6 +89,18 @@ export const DocumentWorkflowGraphState = Annotation.Root({
   crossCheckResult: Annotation<DocumentCrossCheck | null>({
     reducer: (_current, update) => update,
     default: () => null,
+  }),
+  scoreReviewerReports: Annotation<DocumentScoreReview[]>({
+    reducer: (_current, update) => update,
+    default: () => [],
+  }),
+  scoreAttempts: Annotation<DocumentScoreAttempt[]>({
+    reducer: (_current, update) => update,
+    default: () => [],
+  }),
+  scoreFeedback: Annotation<string>({
+    reducer: (_current, update) => update,
+    default: () => "",
   }),
   reviewStatus: Annotation<"pending" | "auto_approved" | "approved">({
     reducer: (_current, update) => update,

@@ -252,14 +252,16 @@ Document generation is intentionally separated from the chat/product-workflow La
 The current PRD workflow stages are:
 
 ```text
-parseKg -> normalizeGraph -> buildSectionDossiers -> draftSection -> crossCheck -> humanReview -> exportPrd
+parseKg -> normalizeGraph -> buildSectionDossiers -> draftSection -> crossCheck -> scoreDraft -> aggregateScore -> humanReview -> exportPrd
 ```
 
-The workflow reads the current persisted workspace knowledge graph, normalizes it for document drafting, builds section dossiers, delegates heavy section work through DeepAgents subagents where appropriate, cross-checks consistency, reserves a human-review interrupt stage, and exports a PRD markdown artifact. Document Agent uses Deep Agents `write_todos` so Task planning can be displayed to the user, and it may use the built-in `task` tool for temporary isolated subagents such as user-story drafting, API draft generation, or cross-section consistency checks.
+The workflow reads the current persisted workspace knowledge graph, normalizes it for document drafting, builds section dossiers, delegates heavy section work through DeepAgents subagents where appropriate, cross-checks consistency, applies the scoring quality gate, reserves a human-review interrupt stage, and exports a PRD markdown artifact. Document Agent uses Deep Agents `write_todos` so Task planning can be displayed to the user, and it may use the built-in `task` tool for temporary isolated subagents such as user-story drafting, API draft generation, or cross-section consistency checks.
+
+The PRD quality gate first scores the same PRD draft with three independent scoring agents modeled after China's Gaokao Chinese essay grading discipline. If the three scores differ by more than `8` points, the graph routes back to `draftSection` and scores the regenerated PRD. The graph tries at most three PRD drafts. If all three drafts exceed the spread limit, it selects the draft with the smallest score spread and then lets the weighted scoring agent choose the final export. Reliable drafts should also meet the weighted quality threshold of `85/100`. All discarded draft markdown and scoring structures are retained in scoring history for inspection.
 
 Document-generation tasks are started by the API and continue in the background. Navigating away from the document page should not cancel the task; supported stop paths are the explicit stop endpoint or server/runtime failure. PRD is currently the enabled document kind. MRD and BRD are represented in the UI but remain disabled until their corresponding Document Agent workflows are added.
 
-Generated document persistence is defined by `packages/database/sql/document-generation.sql`. Apply that manual SQL before using document generation in a database. Runs and artifacts are stored separately: the run tracks status/current stage/todos/error metadata, and the artifact stores the generated markdown plus structured content.
+Generated document persistence is defined by `packages/database/sql/document-generation.sql`. Apply that manual SQL before using document generation in a database. Runs and artifacts are stored separately: the run tracks status/current stage/todos/reasoning/scoring/error metadata, and the artifact stores the generated markdown plus structured content.
 
 ### Runtime Tools
 
@@ -327,7 +329,7 @@ Product-workflow confirmation/proposal form submissions must include enough tagg
 - Pending proposal decision restoration must merge current pending `proposal` items into the visible question form, consolidate duplicate or near-duplicate visible questions, and preserve every distinct `source_task_id`/`source_agent` row in `sources`.
 - After a supplement DAG completes, request-form persistence should transition the round to `completed` and retain final completion metadata so restored chats show the workflow as finished.
 - `product_knowledge_graph` stores the latest structured graph for each workspace in database-level `nodes` and `relations` fields only. Runtime graph state may still carry summaries, decisions, risks, and open questions for planning, but repository/service code should not read or write `summary`, `decisions`, `risks`, or `open_questions` database columns. It has one current row per `workspace_id`, optional `conversation_id` / `request_form_id` provenance, and a `version` that increments once per workflow round.
-- `document_generation_run` tracks background document-generation status, kind, workflow thread id, current stage, Task planning todos, artifact id, errors, and timestamps.
+- `document_generation_run` tracks background document-generation status, kind, workflow thread id, current stage, Task planning todos, thinking log, scoring attempts, artifact id, errors, and timestamps.
 - `document_artifact` stores generated document output for a workspace/run/kind, including PRD markdown and structured content. Full generated documents should be read from this table, not from chat messages.
 - `GET /api/chats/:id/messages` returns message `type`, `reasoningContent`, `userInput`, `requestAnalysis`, Planner DAG data, executor completion results, and tool calls so the frontend can restore the correct display order.
 
@@ -359,7 +361,7 @@ The top-right active-Agent indicator may show multiple entries during parallel E
 
 The knowledge-graph modal in `apps/web/src/components/modals/KnowledgeGraphModal.tsx` owns G6 graph lifecycle. It should retry initialization while the Ant Design modal container reports zero dimensions, avoid one-shot initialization latches that can leave the modal permanently in "正在渲染知识图谱", and hide edge labels for dense graphs to keep the layout readable.
 
-The document planning page at `/documents/:workspaceId` loads its data only when the user opens that page. It shows the current knowledge graph using the same AntV G6 visual language as `KnowledgeGraphModal`, displays selected-node details in the right panel, shows Document Agent run status and Task planning, and exposes generated PRD artifacts. Completed PRD artifacts can be previewed inline, viewed fully in a modal, and downloaded as `.md` files.
+The document planning page at `/documents/:workspaceId` loads its data only when the user opens that page. It shows the current knowledge graph using the same AntV G6 visual language as `KnowledgeGraphModal`, displays selected-node details in the right panel, shows Document Agent run status, Task planning, thinking log, and scoring results, and exposes generated PRD artifacts. Completed PRD body content is not rendered inline on the page; users view it fully in a modal or download it as an `.md` file.
 
 ## Development Workflow
 
@@ -396,3 +398,4 @@ Useful commands:
 9. Apply the `product_knowledge_graph` SQL before running workflows that need final knowledge-graph archival.
 10. Apply `packages/database/sql/document-generation.sql` before using PRD document generation.
 11. Keep `/documents/:workspaceId` data loading lazy; entering a workspace/chat should not load document-generation state.
+12. When updating an existing database, rerun `packages/database/sql/document-generation.sql` so `reasoning_log` and `scoring_attempts` are added to `document_generation_run`.

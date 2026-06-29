@@ -175,12 +175,13 @@
 - 文档 LangGraph 目前的主状态机为：
 
   ```text
-  parseKg → normalizeGraph → buildSectionDossiers → draftSection → crossCheck → humanReview → exportPrd
+  parseKg → normalizeGraph → buildSectionDossiers → draftSection → crossCheck → scoreDraft → aggregateScore → humanReview → exportPrd
   ```
 
 - Document Agent 的实现与 prompt 放在 `apps/agent-runtime/src/agents/document-agent/`，文档工作流编排放在 `apps/agent-runtime/src/graph/document-workflow.ts`。
 - Document Agent 拥有多条按文档类型区分的工作流。PRD、MRD、BRD 应一一对应不同的文档生成工作流；当前前端只启用 PRD，MRD/BRD 按钮保持禁用直到后续接入。
 - Document Agent 必须使用 Deep Agents 内置 `write_todos` 展示 Task planning；重型临时任务可以通过内置 `task` 工具拆给临时子代理。DeepAgents 内部 helper 工具默认不得进入普通 SSE 和持久化。
+- PRD 质量门禁先由三个独立评分 Agent 按“中国高考语文作文阅卷模式”对同一份 PRD 草稿分别评分。若三次评分分差超过 `8` 分，则重新生成 PRD，再对下一版 PRD 评分。最多生成三轮；如果三轮分差都超过 `8` 分，则选择分差最小的一轮，再交给加权评分 Agent 选择最终产出。被暂时抛弃的 PRD 草稿和评分结果也必须持久化到评分历史中留作备用。可靠草稿还应满足加权质量阈值 `85/100`。
 - 文档生成任务启动后在 API 后台运行。用户离开页面不应中断任务；中断方式仅包括用户手动停止和服务端/运行时失败。
 - LangGraph typed state 中节点名不能与 state channel 重名；新增文档节点时需避免类似 `crossCheck` channel 与 `crossCheck` node 冲突。
 - Conversation Agent 产出 `user-input-complete` 后，后续 Request Agent、Planner、Executor 必须继续由 LangGraph 主图编排，不要在 Conversation Agent 中直接串联这些 Agent。
@@ -214,6 +215,7 @@
 
 - 聊天、workspace、message 使用 Prisma 持久化
 - 文档生成 run/artifact 表目前通过 `packages/database/sql/document-generation.sql` 手动建表；使用 PRD 生成功能前必须先执行该 SQL，不要假设 Prisma migration 已自动创建。
+- 文档生成 run 行必须持久化 `task_planning`、`reasoning_log` 和 `scoring_attempts`，以便策划产出文档页面在任务运行中和完成后展示 Task planning、思考过程、评分状态和被抛弃候选 PRD。
 - conversation / request message 分类型存储
 - reasoning 必须存入 meta.reasoningContent
 - 产品工作流的完整 tagged payload 不应长期保存在 `message.content`；结构化结果落到对应业务表后，message 中保留短摘要即可。
@@ -241,7 +243,7 @@
 - 策划产出文档页面只在进入 `/documents/:workspaceId` 时加载知识图谱和文档任务数据；进入工作区或聊天页不应触发文档页加载。页面加载期间必须有明确 loading 动画。
 - 策划产出文档页面的嵌入式 AntV G6 图谱效果应与“查看知识图谱”Modal 保持一致，以 `KnowledgeGraphModal` 的节点、Combo、边、tooltip、minimap、密集图和生命周期处理为准。
 - 在策划产出文档页面点击图谱节点时，右侧节点详情框必须显示对应节点信息。
-- PRD 产物存在时，页面必须提供“查看完整 MD”和“下载 MD”操作。卡片内可显示预览，但完整 markdown 必须可通过 Modal 查看并可下载为 `.md` 文件。
+- PRD 产物存在时，页面必须提供“查看完整 MD”和“下载 MD”操作。策划产出文档页面不要直接内嵌展示 PRD 正文；页面展示状态、思考过程、Task planning 和评分结果，完整 markdown 只通过 Modal 和下载入口提供。
 - UI 默认使用 Tailwind
 - 禁止新增全局 CSS
 
