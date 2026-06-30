@@ -8,9 +8,9 @@
 
 | Layer | Technology | Notes |
 | --- | --- | --- |
-| Agent runtime | LangGraph, LangChain, DeepAgents | Conversation Agent, Request Agent, JSON Planner Agent, and 10 markdown knowledge-graph Executor Agents |
-| API | Hono | HTTP API on port 3001, SSE `/api/chat` stream, `/api/chat/stop`, Prisma repositories |
-| Web | Vite, React, Ant Design 6 | Workspace and chat UI, TypeScript 5.8.3 |
+| Agent runtime | LangGraph, LangChain, DeepAgents | Conversation Agent, Request Agent, JSON Planner Agent, 10 markdown knowledge-graph Executor Agents, and Document Agent |
+| API | Hono | HTTP API on port 3001, SSE `/api/chat` stream, `/api/chat/stop`, document-generation endpoints, Prisma repositories |
+| Web | Vite, React, Ant Design 6 | Workspace, chat, knowledge-graph, and document-planning UI, TypeScript 5.8.3 |
 | Web search | LangChain tool + Tavily/free public indexes | Optional `web_search` runtime tool, centrally authorized per Agent |
 | Worker | BullMQ, Redis | Background queue worker scaffold |
 | Database | PostgreSQL, Prisma | Account, workspace, conversation, message, request-form, task, product knowledge graph data |
@@ -31,6 +31,7 @@ meta-pm-agent/
 │  │  │  ├─ agents/
 │  │  │  │  ├─ common/
 │  │  │  │  ├─ conversation/
+│  │  │  │  ├─ document-agent/
 │  │  │  │  ├─ product-workflow/
 │  │  │  │  │  ├─ common/
 │  │  │  │  │  ├─ executor-agent/
@@ -44,6 +45,8 @@ meta-pm-agent/
 │  │  │  │  │  └─ types.ts
 │  │  │  │  └─ request/
 │  │  │  ├─ graph/
+│  │  │  │  ├─ document-workflow.ts
+│  │  │  │  ├─ document-workflow-state.ts
 │  │  │  │  ├─ nodes/
 │  │  │  │  └─ workflow-checkpointer.ts
 │  │  │  ├─ utils/
@@ -67,7 +70,8 @@ meta-pm-agent/
 │  ├─ web/
 │  │  ├─ src/
 │  │  │  ├─ api/
-│  │  │  │  └─ chat-api.ts
+│  │  │  │  ├─ chat-api.ts
+│  │  │  │  └─ document-api.ts
 │  │  │  ├─ components/
 │  │  │  │  ├─ chat/
 │  │  │  │  ├─ ui/
@@ -93,6 +97,7 @@ meta-pm-agent/
 │  │  │  │  ├─ question-form.ts
 │  │  │  │  └─ user-input.ts
 │  │  │  ├─ pages/chat/chat-run-store.ts
+│  │  │  ├─ pages/documents/
 │  │  │  ├─ App.tsx
 │  │  │  ├─ main.tsx
 │  │  │  ├─ styles.css
@@ -104,9 +109,11 @@ meta-pm-agent/
 ├─ packages/
 │  ├─ database/
 │  │  ├─ prisma/schema.prisma
+│  │  ├─ sql/
 │  │  └─ src/
 │  └─ shared/
 │     ├─ src/
+│     │  ├─ agent/
 │     │  └─ question-form.ts
 ├─ references/
 ├─ AGENTS.md
@@ -124,13 +131,20 @@ Current product-workflow additions:
 | Path | Purpose |
 | --- | --- |
 | `apps/agent-runtime/src/agents/common/knowledge-graph-file-tool.ts` | Controlled DeepAgents knowledge-graph tools bound to the current in-memory workflow graph |
+| `apps/agent-runtime/src/agents/document-agent/` | Document Agent implementation and English prompt for PRD generation, Task planning, and DeepAgents subtask delegation |
+| `apps/agent-runtime/src/graph/document-workflow.ts` | Independent document-generation LangGraph separate from the chat/product-workflow graph |
+| `apps/agent-runtime/src/graph/document-workflow-state.ts` | Typed state/channels for document-generation graph execution |
 | `apps/agent-runtime/src/agents/common/run-text-agent.ts` | Shared text/markdown DeepAgent runner used by Executor Agents |
 | `apps/agent-runtime/src/graph/workflow-checkpointer.ts` | Optional LangGraph checkpoint saver factory using PostgresSaver when configured, with an in-memory fallback |
 | `apps/agent-runtime/docs/langgraph-postgres-checkpoint.sql` | PostgreSQL DDL for the LangGraph checkpoint tables |
 | `apps/agent-runtime/src/assets/deepseek-v3-tokenizer/` | DeepSeek V3 tokenizer assets used for local token usage estimation |
 | `apps/agent-runtime/src/agents/product-workflow/executor-agent/*-executor/` | Ten independent Executor Agent profile folders, one per executor domain |
 | `packages/shared/src/question-form.ts` | Shared Question Form field-type inference helpers for radio/select/checkbox/textarea display |
+| `packages/shared/src/agent/document.ts` | Shared document generation schemas and TypeScript types |
+| `packages/database/sql/document-generation.sql` | Manual PostgreSQL DDL for document-generation run and artifact tables |
 | `apps/web/src/pages/chat/chat-run-store.ts` | Browser-side chat run registry that keeps an active stream alive when the user switches conversations |
+| `apps/web/src/pages/documents/DocumentPlanningPage.tsx` | Route-level document planning page with G6 knowledge graph, Document Agent task state, PRD artifact preview, full markdown modal, and markdown download |
+| `apps/web/src/api/document-api.ts` | Browser-side API client for document-generation start/status/stop endpoints |
 | `references/executor/<executor-domain>/skills/<skill-name>/SKILL.md` | DeepAgents skill sources selected by Executor definitions and passed through the shared text runner |
 
 ## Web Frontend Structure
@@ -141,11 +155,11 @@ Supporting responsibilities are split into focused modules:
 
 | Directory | Responsibility |
 | --- | --- |
-| `api/` | Browser-side API clients for account, workspace, chat, and persisted messages |
+| `api/` | Browser-side API clients for account, workspace, chat, persisted messages, and document generation |
 | `constants/` | UI constants and local preference keys |
 | `mappers/` | Data restoration between API DTOs and frontend view models |
-| `pages/` | Route-level page folders such as `pages/workplace` and `pages/chat` |
-| `router/` | Lightweight path parsing and history updates for `/workplace` and chat routes |
+| `pages/` | Route-level page folders such as `pages/workplace`, `pages/chat`, and `pages/documents` |
+| `router/` | Lightweight path parsing and history updates for `/workplace`, chat routes, and `/documents/:workspaceId` |
 | `utils/` | Stream-event reducers, markdown rendering, and structured-block parsers |
 | `components/` | Shared presentational components; page-specific orchestration belongs in `pages/` |
 | `components/modals/` | Reusable modal views such as project creation and configuration |
@@ -231,6 +245,24 @@ When resuming or retrying after hard blockers, previously completed Executor res
 
 The Planner workflow review may produce proposal slots from multiple executor tasks. Proposal slot aggregation may consolidate duplicate or near-duplicate visible questions, but it must preserve every `source_task_id` and `source_agent` in `sources`; a single answer can then close all referenced proposal items. Do not reintroduce hard caps that hide valid pending proposal sources.
 
+### Document Generation Workflow
+
+Document generation is intentionally separated from the chat/product-workflow LangGraph. The Document Agent lives in `apps/agent-runtime/src/agents/document-agent/`, and the independent document graph is implemented by `apps/agent-runtime/src/graph/document-workflow.ts` plus `document-workflow-state.ts`.
+
+The current PRD workflow stages are:
+
+```text
+parseKg -> normalizeGraph -> buildSectionDossiers -> draftSection -> crossCheck -> scoreDraft -> aggregateScore -> humanReview -> exportPrd
+```
+
+The workflow reads the current persisted workspace knowledge graph, normalizes it for document drafting, builds section dossiers, delegates heavy section work through DeepAgents subagents where appropriate, cross-checks consistency, applies the scoring quality gate, reserves a human-review interrupt stage, and exports a PRD markdown artifact. Document Agent uses Deep Agents `write_todos` so Task planning can be displayed to the user, and it may use the built-in `task` tool for temporary isolated subagents such as user-story drafting, API draft generation, or cross-section consistency checks.
+
+The PRD quality gate first scores the same PRD draft with three independent scoring agents modeled after China's Gaokao Chinese essay grading discipline. If the three scores differ by more than `8` points, the graph routes back to `draftSection` and scores the regenerated PRD. The graph tries at most three PRD drafts. If all three drafts exceed the spread limit, it selects the draft with the smallest score spread and then lets the weighted scoring agent choose the final export. Reliable drafts should also meet the weighted quality threshold of `85/100`. All discarded draft markdown and scoring structures are retained in scoring history for inspection.
+
+Document-generation tasks are started by the API and continue in the background. Navigating away from the document page should not cancel the task; supported stop paths are the explicit stop endpoint or server/runtime failure. PRD is currently the enabled document kind. MRD and BRD are represented in the UI but remain disabled until their corresponding Document Agent workflows are added.
+
+Generated document persistence is defined by `packages/database/sql/document-generation.sql`. Apply that manual SQL before using document generation in a database. Runs and artifacts are stored separately: the run tracks status/current stage/todos/reasoning/scoring/error metadata, and the artifact stores the generated markdown plus structured content.
+
 ### Runtime Tools
 
 Runtime tools are validated through the shared `enabledTools` schema. User-facing requests may enable `web_search`; product-workflow file tools are internally attached by the runtime only for authorized product-workflow agents.
@@ -265,6 +297,10 @@ The API exposes account, workspace, chat, message, and SSE routes:
 | `POST` | `/api/chat` | Stream an agent response with SSE and persist messages |
 | `POST` | `/api/chat/stop` | Abort the current running Agent stream for a chat |
 | `GET` | `/api/workspaces/:workspaceId/knowledge-graph` | Load the latest persisted product knowledge graph for a workspace |
+| `POST` | `/api/workspaces/:workspaceId/document-generation` | Start a background document-generation run for a document kind |
+| `GET` | `/api/workspaces/:workspaceId/document-generation/latest?kind=prd` | Load the latest document-generation run and artifact for a workspace/kind |
+| `GET` | `/api/document-generation/:runId` | Load a single document-generation run and its artifact |
+| `POST` | `/api/document-generation/:runId/stop` | Manually stop a queued/running document-generation task |
 
 `POST /api/chat` returns `text/event-stream` and uses typed events including `start`, `agent-status`, `thinking`, `text`, `question-form-start`, `question-form-complete`, `user-input-start`, `user-input-complete`, `request-analysis-start`, `request-analysis-complete`, `todo-update`, `tool-call`, `tool-result`, `token-usage`, `step-finish`, `finish`, `abort`, and `error`, followed by `[DONE]`.
 
@@ -293,6 +329,8 @@ Product-workflow confirmation/proposal form submissions must include enough tagg
 - Pending proposal decision restoration must merge current pending `proposal` items into the visible question form, consolidate duplicate or near-duplicate visible questions, and preserve every distinct `source_task_id`/`source_agent` row in `sources`.
 - After a supplement DAG completes, request-form persistence should transition the round to `completed` and retain final completion metadata so restored chats show the workflow as finished.
 - `product_knowledge_graph` stores the latest structured graph for each workspace in database-level `nodes` and `relations` fields only. Runtime graph state may still carry summaries, decisions, risks, and open questions for planning, but repository/service code should not read or write `summary`, `decisions`, `risks`, or `open_questions` database columns. It has one current row per `workspace_id`, optional `conversation_id` / `request_form_id` provenance, and a `version` that increments once per workflow round.
+- `document_generation_run` tracks background document-generation status, kind, workflow thread id, current stage, Task planning todos, thinking log, scoring attempts, artifact id, errors, and timestamps.
+- `document_artifact` stores generated document output for a workspace/run/kind, including PRD markdown and structured content. Full generated documents should be read from this table, not from chat messages.
 - `GET /api/chats/:id/messages` returns message `type`, `reasoningContent`, `userInput`, `requestAnalysis`, Planner DAG data, executor completion results, and tool calls so the frontend can restore the correct display order.
 
 ## Frontend Rendering Order
@@ -322,6 +360,8 @@ When a retry or supplement resume restores an existing Planner DAG, completed Ex
 The top-right active-Agent indicator may show multiple entries during parallel Executor execution. Each entry must scroll to the related visible reasoning/loading card. When the chat viewport is already at the bottom, the click handler should first disable auto-stick-to-bottom behavior and then scroll on the next animation frame so the automatic bottom lock does not cancel the jump.
 
 The knowledge-graph modal in `apps/web/src/components/modals/KnowledgeGraphModal.tsx` owns G6 graph lifecycle. It should retry initialization while the Ant Design modal container reports zero dimensions, avoid one-shot initialization latches that can leave the modal permanently in "正在渲染知识图谱", and hide edge labels for dense graphs to keep the layout readable.
+
+The document planning page at `/documents/:workspaceId` loads its data only when the user opens that page. It shows the current knowledge graph using the same AntV G6 visual language as `KnowledgeGraphModal`, displays selected-node details in the right panel, shows Document Agent run status, Task planning, thinking log, and scoring results, and exposes generated PRD artifacts. Completed PRD body content is not rendered inline on the page; users view it fully in a modal or download it as an `.md` file.
 
 ## Development Workflow
 
@@ -356,3 +396,6 @@ Useful commands:
 7. Standard browser folder selection may not expose full absolute paths. Keep manual path entry and host-provided path handling intact.
 8. Keep runtime tool access centralized in `tool-access.ts`; do not grant tools directly inside individual agents unless the centralized policy is updated.
 9. Apply the `product_knowledge_graph` SQL before running workflows that need final knowledge-graph archival.
+10. Apply `packages/database/sql/document-generation.sql` before using PRD document generation.
+11. Keep `/documents/:workspaceId` data loading lazy; entering a workspace/chat should not load document-generation state.
+12. When updating an existing database, rerun `packages/database/sql/document-generation.sql` so `reasoning_log` and `scoring_attempts` are added to `document_generation_run`.

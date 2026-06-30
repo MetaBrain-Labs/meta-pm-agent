@@ -104,6 +104,7 @@
 - web_search 默认可用，但依赖配置
 - build 前必须先构建 shared packages
 - 不允许随意升级依赖版本
+- 保持路由拆分：`/workplace`、`/chat/:workspaceId`、`/chat/:workspaceId/:threadId`、`/documents/:workspaceId`
 
 ---
 
@@ -170,6 +171,19 @@
   ```
   parse_user_input → request_agent → planner → executor → planner → END
   ```
+- 文档生成由 Document Agent 和独立的文档 LangGraph 负责，不得复用用户对话产出知识图谱的主 LangGraph。
+- 文档 LangGraph 目前的主状态机为：
+
+  ```text
+  parseKg → normalizeGraph → buildSectionDossiers → draftSection → crossCheck → scoreDraft → aggregateScore → humanReview → exportPrd
+  ```
+
+- Document Agent 的实现与 prompt 放在 `apps/agent-runtime/src/agents/document-agent/`，文档工作流编排放在 `apps/agent-runtime/src/graph/document-workflow.ts`。
+- Document Agent 拥有多条按文档类型区分的工作流。PRD、MRD、BRD 应一一对应不同的文档生成工作流；当前前端只启用 PRD，MRD/BRD 按钮保持禁用直到后续接入。
+- Document Agent 必须使用 Deep Agents 内置 `write_todos` 展示 Task planning；重型临时任务可以通过内置 `task` 工具拆给临时子代理。DeepAgents 内部 helper 工具默认不得进入普通 SSE 和持久化。
+- PRD 质量门禁先由三个独立评分 Agent 按“中国高考语文作文阅卷模式”对同一份 PRD 草稿分别评分。若三次评分分差超过 `8` 分，则重新生成 PRD，再对下一版 PRD 评分。最多生成三轮；如果三轮分差都超过 `8` 分，则选择分差最小的一轮，再交给加权评分 Agent 选择最终产出。被暂时抛弃的 PRD 草稿和评分结果也必须持久化到评分历史中留作备用。可靠草稿还应满足加权质量阈值 `85/100`。
+- 文档生成任务启动后在 API 后台运行。用户离开页面不应中断任务；中断方式仅包括用户手动停止和服务端/运行时失败。
+- LangGraph typed state 中节点名不能与 state channel 重名；新增文档节点时需避免类似 `crossCheck` channel 与 `crossCheck` node 冲突。
 - Conversation Agent 产出 `user-input-complete` 后，后续 Request Agent、Planner、Executor 必须继续由 LangGraph 主图编排，不要在 Conversation Agent 中直接串联这些 Agent。
 - 用户主动中断和后续继续产品工作流必须基于 checkpoint。手动中断时，LangGraph 应在当前执行位置通过已配置的 `PostgresSaver` 保存 checkpoint；Conversation Agent 识别到继续中断工作流的意图后，应恢复该 checkpoint 继续执行，而不是通过正则匹配用户文本或把“继续”消息重新送入 Request Agent 分析。
 - Planner 使用 `apps/agent-runtime/src/agents/common/run-json-agent.ts`；Executor 使用 `apps/agent-runtime/src/agents/common/run-text-agent.ts`。
@@ -200,6 +214,8 @@
 ## 持久化规则（Persistence）
 
 - 聊天、workspace、message 使用 Prisma 持久化
+- 文档生成 run/artifact 表目前通过 `packages/database/sql/document-generation.sql` 手动建表；使用 PRD 生成功能前必须先执行该 SQL，不要假设 Prisma migration 已自动创建。
+- 文档生成 run 行必须持久化 `task_planning`、`reasoning_log` 和 `scoring_attempts`，以便策划产出文档页面在任务运行中和完成后展示 Task planning、思考过程、评分状态和被抛弃候选 PRD。
 - conversation / request message 分类型存储
 - reasoning 必须存入 meta.reasoningContent
 - 产品工作流的完整 tagged payload 不应长期保存在 `message.content`；结构化结果落到对应业务表后，message 中保留短摘要即可。
@@ -207,6 +223,7 @@
 - request_form 必须跟踪状态流转
 - proposal 问题展示可以合并重复或近似重复问题，但必须在 `sources` 中保留所有来源信息；用户一次确认可以关闭所有关联 proposal，不能因为合并或数量上限丢失来源。
 - 修改持久化协议时，必须同步更新 API schema、repository、service、controller、前端 type、历史消息恢复和渲染逻辑。
+- PRD 生成完成后必须把 markdown 和结构化内容写入文档产物表，并关联 workspace 与 document generation run。完整生成文档不要写入聊天 message 历史。
 
 ---
 
@@ -223,6 +240,10 @@
 - 右上角运行状态在并行 Executor 场景下可以同时展示多个 Agent；每个 Agent 标签都必须能跳转到对应的推理或加载卡片。聊天区位于底部时，跳转前应先退出自动贴底状态，避免滚动被自动贴底逻辑抵消。
 - 每个 Executor 结果到达前端后，应重新查询当前工作区知识图谱，让“查看知识图谱”按钮在单个 Executor 完成后即可变为可用。
 - 知识图谱弹窗必须稳健管理 G6 实例生命周期：Modal 容器尺寸为 0 时重试初始化；关闭后再次打开不得永久停留在“正在渲染知识图谱”；节点和边较多时应减少冗余标签以保持布局可读。
+- 策划产出文档页面只在进入 `/documents/:workspaceId` 时加载知识图谱和文档任务数据；进入工作区或聊天页不应触发文档页加载。页面加载期间必须有明确 loading 动画。
+- 策划产出文档页面的嵌入式 AntV G6 图谱效果应与“查看知识图谱”Modal 保持一致，以 `KnowledgeGraphModal` 的节点、Combo、边、tooltip、minimap、密集图和生命周期处理为准。
+- 在策划产出文档页面点击图谱节点时，右侧节点详情框必须显示对应节点信息。
+- PRD 产物存在时，页面必须提供“查看完整 MD”和“下载 MD”操作。策划产出文档页面不要直接内嵌展示 PRD 正文；页面展示状态、思考过程、Task planning 和评分结果，完整 markdown 只通过 Modal 和下载入口提供。
 - UI 默认使用 Tailwind
 - 禁止新增全局 CSS
 

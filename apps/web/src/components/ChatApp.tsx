@@ -21,7 +21,15 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import { Button, Dropdown, FloatButton, Input, Skeleton, Tooltip } from "antd";
+import {
+  Button,
+  Dropdown,
+  FloatButton,
+  Input,
+  Skeleton,
+  Tooltip,
+  message,
+} from "antd";
 import BorderBeam from "antd/es/border-beam";
 import {
   ApartmentOutlined,
@@ -110,33 +118,27 @@ export function ChatApp({
     [messages],
   );
 
-  // 工作区切换时查询知识图谱数据
+  // 工作区切换时仅清理本地缓存，避免进入工作区就触发知识图谱加载。
   useEffect(() => {
-    if (!workspaceId) {
-      setKgData(null);
-      return;
-    }
+    setKgData(null);
+    setKgModalOpen(false);
+  }, [workspaceId]);
 
-    let cancelled = false;
+  const loadKnowledgeGraph = useCallback(async () => {
+    if (!workspaceId) return null;
+
     setKgLoading(true);
-
-    fetchProductKnowledgeGraph(workspaceId)
-      .then((data) => {
-        if (cancelled) return;
-        setKgData(data);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        console.error("[kg] Failed to load knowledge graph:", error);
-        setKgData(null);
-      })
-      .finally(() => {
-        if (!cancelled) setKgLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
+    try {
+      const data = await fetchProductKnowledgeGraph(workspaceId);
+      setKgData(data);
+      return data;
+    } catch (error) {
+      console.error("[kg] Failed to load knowledge graph:", error);
+      setKgData(null);
+      return null;
+    } finally {
+      setKgLoading(false);
+    }
   }, [workspaceId]);
 
   // 每个 Executor 结果流入前端时，API 已完成对应知识图谱归档，此时刷新按钮可用状态。
@@ -165,12 +167,20 @@ export function ChatApp({
   }, [executorResultRefreshKey, workspaceId]);
 
   // 打开知识图谱可视化弹窗
-  const handleOpenKgModal = useCallback(() => {
-    setKgModalOpen(true);
-  }, []);
+  const handleOpenKgModal = useCallback(async () => {
+    if (!workspaceId || kgLoading) return;
+
+    const data = kgData ?? (await loadKnowledgeGraph());
+    if (data?.hasData) {
+      setKgModalOpen(true);
+      return;
+    }
+
+    void message.info("当前工作区暂无可查看的知识图谱数据");
+  }, [kgData, kgLoading, loadKnowledgeGraph, workspaceId]);
 
   // 按钮是否可用
-  const kgEnabled = kgData?.hasData === true;
+  const kgEnabled = Boolean(workspaceId);
 
   const isAtBottom = useCallback(() => {
     const el = containerRef.current;
@@ -459,7 +469,13 @@ export function ChatApp({
                   />
                 </Tooltip>
                 <Tooltip
-                  title={kgEnabled ? "查看知识图谱" : "暂无知识图谱数据"}
+                  title={
+                    kgLoading
+                      ? "正在加载知识图谱"
+                      : kgData?.hasData === false
+                        ? "暂无知识图谱数据"
+                        : "查看知识图谱"
+                  }
                 >
                   <Button
                     type="text"

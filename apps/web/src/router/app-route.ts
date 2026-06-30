@@ -1,6 +1,19 @@
+/**
+ * 前端应用路由工具
+ *
+ * 解析浏览器路径并构造工作区、聊天和文档生成页面路径。该模块只处理轻量
+ * history 操作，不依赖 React Router。
+ *
+ * Responsibilities:
+ * - 将 URL pathname 转换成 AppRoute
+ * - 构造聊天页与策划产出文档页路径
+ * - 推送或替换浏览器历史记录
+ */
+
 export type AppRoute =
   | { name: "workspace" }
-  | { name: "chat"; workspaceId: string; threadId: string | null };
+  | { name: "chat"; workspaceId: string; threadId: string | null }
+  | { name: "documents"; workspaceId: string };
 
 /**
  * 将浏览器路径恢复为应用内部路由状态。
@@ -12,6 +25,12 @@ export function parseAppRoute(pathname = window.location.pathname): AppRoute {
       name: "chat",
       workspaceId: decodeURIComponent(parts[1]),
       threadId: parts[2] ? decodeURIComponent(parts[2]) : null,
+    };
+  }
+  if (parts[0] === "documents" && parts[1]) {
+    return {
+      name: "documents",
+      workspaceId: decodeURIComponent(parts[1]),
     };
   }
 
@@ -27,6 +46,13 @@ export function buildChatPath(
 ): string {
   const base = `/chat/${encodeURIComponent(workspaceId)}`;
   return threadId ? `${base}/${encodeURIComponent(threadId)}` : base;
+}
+
+/**
+ * 构造工作区文档生成页面路径。
+ */
+export function buildDocumentsPath(workspaceId: string): string {
+  return `/documents/${encodeURIComponent(workspaceId)}`;
 }
 
 /**
