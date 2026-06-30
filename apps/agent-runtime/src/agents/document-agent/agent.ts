@@ -19,6 +19,7 @@ import {
   HumanMessage,
   ToolMessage,
   type BaseMessage,
+  createMiddleware,
 } from "langchain";
 import { createDeepAgent } from "deepagents";
 import type {
@@ -105,6 +106,15 @@ export type DocumentAgentStreamEvent =
     };
 
 const VISIBLE_BUILTIN_TOOL_NAMES = new Set(["write_todos", "task"]);
+const DOCUMENT_AGENT_BLOCKED_TOOL_NAMES = new Set([
+  "ls",
+  "read_file",
+  "write_file",
+  "edit_file",
+  "glob",
+  "grep",
+  "execute",
+]);
 
 /**
  * 运行 PRD Document Agent，返回最终 Markdown 文档。
@@ -114,6 +124,7 @@ export async function* streamPrdDocumentAgent(
 ): AsyncGenerator<DocumentAgentStreamEvent, string, void> {
   const startTime = Date.now();
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
+  const documentToolFilterMiddleware = createDocumentAgentToolFilterMiddleware();
 
   const agent = createDeepAgent({
     model: createChatModel({
@@ -123,8 +134,17 @@ export async function* streamPrdDocumentAgent(
     }) as any,
     systemPrompt: PRD_DOCUMENT_AGENT_PROMPT,
     name: "document-agent-prd",
-    subagents: PRD_DOCUMENT_SUBAGENTS,
-    middleware: createDefaultAgentMiddleware() as any,
+    subagents: PRD_DOCUMENT_SUBAGENTS.map((subagent) => ({
+      ...subagent,
+      middleware: [
+        ...((subagent as { middleware?: unknown[] }).middleware ?? []),
+        documentToolFilterMiddleware,
+      ],
+    })) as any,
+    middleware: [
+      documentToolFilterMiddleware,
+      ...createDefaultAgentMiddleware(),
+    ] as any,
   });
 
   const run = await agent.stream(
@@ -221,6 +241,33 @@ export async function* streamPrdDocumentAgent(
   }
 
   return markdown;
+}
+
+/**
+ * 创建 Document Agent 专用工具过滤中间件。
+ */
+function createDocumentAgentToolFilterMiddleware() {
+  return createMiddleware({
+    name: "DocumentAgentToolFilterMiddleware",
+    wrapModelCall: async (request, handler) => {
+      // 文档由业务数据库持久化，生成阶段只允许规划和子任务编排工具。
+      const tools = request.tools?.filter(
+        (tool) => !DOCUMENT_AGENT_BLOCKED_TOOL_NAMES.has(getToolName(tool)),
+      );
+
+      return handler({
+        ...request,
+        tools,
+      });
+    },
+  });
+}
+
+/**
+ * 提取工具名称。
+ */
+function getToolName(tool: { name?: unknown }): string {
+  return typeof tool.name === "string" ? tool.name : "";
 }
 
 /**

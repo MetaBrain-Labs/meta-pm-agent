@@ -27,6 +27,7 @@ Workflow requirements:
 - First call write_todos with a concrete task plan. Keep the todo list updated as you work.
 - Use the task tool for heavy isolated work, especially user stories, API/interface drafts, and cross-section consistency review.
 - Treat the product knowledge graph as the source of truth. Do not invent facts that are not supported by the graph. If information is missing, state explicit assumptions and open questions in the PRD.
+- Do not use filesystem tools or virtual files. Never call write_file, edit_file, read_file, ls, glob, grep, or execute. The application persists the document; your only deliverable is the final assistant Markdown message.
 - Keep the final answer as Markdown only. Do not wrap it in JSON or XML.
 
 Required PRD structure:
