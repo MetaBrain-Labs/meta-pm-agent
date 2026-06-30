@@ -171,7 +171,7 @@ const STAGE_LABELS: Record<DocumentWorkflowStage, string> = {
   draftSection: "Document Agent 生成 PRD",
   crossCheck: "交叉检查",
   scoreDraft: "三方评分 Agent 打分",
-  aggregateScore: "加权评分系统汇总",
+  aggregateScore: "必要时加权评分系统汇总",
   humanReview: "人工审核节点",
   exportPrd: "导出 PRD",
 };
@@ -1196,7 +1196,7 @@ function ScoringResultPanel({
         <div>
           <Text strong>评分结果</Text>
           <Text type="secondary" className="block text-xs mt-1">
-            三位评分 Agent 分差不超过 8 分后进入加权汇总。
+            三位评分 Agent 分差超过 8 分时才触发加权汇总，否则使用共识评分进入后续流程。
           </Text>
         </div>
         {scoringActive ? <Spin size="small" /> : <Tag>{attempts.length}/3 轮</Tag>}
@@ -1228,7 +1228,7 @@ function ScoringResultPanel({
                   分差 {attempt.scoreSpread}
                 </Tag>
                 <Tag color={attempt.aggregate.passed ? "success" : "warning"}>
-                  加权 {attempt.aggregate.score}
+                  {attempt.varianceAccepted ? "共识" : "加权"} {attempt.aggregate.score}
                 </Tag>
                 {attempt.selected && <Tag color="processing">已选中</Tag>}
               </div>
@@ -1353,7 +1353,7 @@ function getReasoningAgentLabel(agentType: string): string {
 function getSelectionReasonLabel(reason: string): string {
   if (reason === "passed_threshold") return "通过阈值";
   if (reason === "lowest_spread") return "最小分差";
-  if (reason === "highest_score") return "最高加权分";
+  if (reason === "highest_score") return "最高评分";
   return reason;
 }
 

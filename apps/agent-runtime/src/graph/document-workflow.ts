@@ -43,6 +43,7 @@ import {
   DOCUMENT_SCORE_MAX_SPREAD,
   DOCUMENT_SCORE_THRESHOLD,
   calculateScoreSpread,
+  createReviewerConsensusScore,
   createScoreRetryFeedback,
   runPrdScoringReviewers,
   runPrdWeightedScoringAgent,
@@ -113,7 +114,7 @@ const STAGE_LABELS: Record<DocumentWorkflowStage, string> = {
   draftSection: "Document Agent 生成 PRD",
   crossCheck: "交叉检查文档一致性",
   scoreDraft: "三方评分 Agent 打分",
-  aggregateScore: "加权评分系统汇总",
+  aggregateScore: "必要时加权评分系统汇总",
   humanReview: "人工审核节点",
   exportPrd: "导出 PRD 文档",
 };
@@ -129,6 +130,7 @@ function createDocumentWorkflowGraph(checkpointer: BaseCheckpointSaver) {
     .addNode("draftSection", draftSectionNode)
     .addNode("crossCheck", crossCheckNode)
     .addNode("scoreDraft", scoreDraftNode)
+    .addNode("acceptScore", acceptScoreNode)
     .addNode("aggregateScore", aggregateScoreNode)
     .addNode("humanReview", humanReviewNode)
     .addNode("exportPrd", exportPrdNode)
@@ -138,7 +140,14 @@ function createDocumentWorkflowGraph(checkpointer: BaseCheckpointSaver) {
     .addEdge("buildSectionDossiers", "draftSection")
     .addEdge("draftSection", "crossCheck")
     .addEdge("crossCheck", "scoreDraft")
-    .addEdge("scoreDraft", "aggregateScore")
+    .addConditionalEdges("scoreDraft", selectNextNodeAfterReviewerScore, {
+      accept: "acceptScore",
+      aggregate: "aggregateScore",
+    })
+    .addConditionalEdges("acceptScore", selectNextNodeAfterScore, {
+      retry: "draftSection",
+      pass: "humanReview",
+    })
     .addConditionalEdges("aggregateScore", selectNextNodeAfterScore, {
       retry: "draftSection",
       pass: "humanReview",
@@ -406,6 +415,52 @@ async function scoreDraftNode(
 }
 
 /**
+ * 记录分差合格时的直接共识评分，不触发加权评分 Agent。
+ */
+function acceptScoreNode(
+  state: DocumentWorkflowGraphStateValue,
+  config?: LangGraphRunnableConfig,
+) {
+  const scoreSpread = calculateScoreSpread(state.scoreReviewerReports);
+  const varianceAccepted = scoreSpread <= DOCUMENT_SCORE_MAX_SPREAD;
+  const aggregate = createReviewerConsensusScore({
+    reviewerScores: state.scoreReviewerReports,
+    scoreSpread,
+  });
+  const attempt = {
+    attempt: state.scoreAttempts.length + 1,
+    markdown: state.draftMarkdown,
+    reviewerScores: state.scoreReviewerReports,
+    scoreSpread,
+    varianceAccepted,
+    aggregate,
+    passed: varianceAccepted && aggregate.passed,
+    selected: false,
+  };
+  const scoreAttempts = [...state.scoreAttempts, attempt];
+  const selected = selectFinalScoreAttempt(scoreAttempts);
+  const shouldRetry =
+    !attempt.passed && scoreAttempts.length < DOCUMENT_SCORE_MAX_ATTEMPTS;
+  const persistedAttempt = {
+    ...attempt,
+    selected: !shouldRetry && selected?.attempt.attempt === attempt.attempt,
+  };
+
+  getWriter(config)?.({
+    type: "document-score-attempt",
+    attempt: persistedAttempt,
+  });
+
+  return {
+    scoreAttempts: [...state.scoreAttempts, persistedAttempt],
+    scoreFeedback: shouldRetry ? createScoreRetryFeedback(attempt) : "",
+    draftMarkdown: shouldRetry
+      ? state.draftMarkdown
+      : selected?.attempt.markdown ?? state.draftMarkdown,
+  };
+}
+
+/**
  * 调用加权评分系统汇总三方评分，并决定是否进入下一轮重写。
  */
 async function aggregateScoreNode(
@@ -463,6 +518,16 @@ async function aggregateScoreNode(
       : selected?.attempt.markdown ?? state.draftMarkdown,
     todos,
   };
+}
+
+/**
+ * 根据三位评分 Agent 的分差决定是否触发加权汇总。
+ */
+function selectNextNodeAfterReviewerScore(
+  state: DocumentWorkflowGraphStateValue,
+) {
+  const scoreSpread = calculateScoreSpread(state.scoreReviewerReports);
+  return scoreSpread > DOCUMENT_SCORE_MAX_SPREAD ? "aggregate" : "accept";
 }
 
 /**

@@ -21,7 +21,7 @@ import {
   type BaseMessage,
   createMiddleware,
 } from "langchain";
-import { createDeepAgent } from "deepagents";
+import { createDeepAgent, type SubAgent } from "deepagents";
 import type {
   DocumentTodo,
   KnowledgeGraphEntity,
@@ -115,6 +115,7 @@ const DOCUMENT_AGENT_BLOCKED_TOOL_NAMES = new Set([
   "grep",
   "execute",
 ]);
+const SUBAGENT_RUNTIME_CONTEXT_MAX_CHARS = 120_000;
 
 /**
  * 运行 PRD Document Agent，返回最终 Markdown 文档。
@@ -134,13 +135,10 @@ export async function* streamPrdDocumentAgent(
     }) as any,
     systemPrompt: PRD_DOCUMENT_AGENT_PROMPT,
     name: "document-agent-prd",
-    subagents: PRD_DOCUMENT_SUBAGENTS.map((subagent) => ({
-      ...subagent,
-      middleware: [
-        ...((subagent as { middleware?: unknown[] }).middleware ?? []),
-        documentToolFilterMiddleware,
-      ],
-    })) as any,
+    subagents: createRuntimePrdSubagents(
+      input,
+      documentToolFilterMiddleware,
+    ) as any,
     middleware: [
       documentToolFilterMiddleware,
       ...createDefaultAgentMiddleware(),
@@ -157,6 +155,8 @@ export async function* streamPrdDocumentAgent(
             runId: input.runId,
             attemptNumber: input.attemptNumber ?? 1,
             revisionFeedback: input.revisionFeedback ?? "",
+            taskDelegationPolicy:
+              "When using task subagents, include all relevant graph nodes, relations, section dossier evidence, and draft excerpts directly in the task description. Subagents must not look for files or external graph context.",
             graph: input.graph,
             sectionDossiers: input.dossiers,
           }),
@@ -268,6 +268,87 @@ function createDocumentAgentToolFilterMiddleware() {
  */
 function getToolName(tool: { name?: unknown }): string {
   return typeof tool.name === "string" ? tool.name : "";
+}
+
+/**
+ * 为 PRD 子代理注入当前运行的知识图谱上下文。
+ */
+function createRuntimePrdSubagents(
+  input: PrdDocumentAgentInput,
+  documentToolFilterMiddleware: ReturnType<
+    typeof createDocumentAgentToolFilterMiddleware
+  >,
+): SubAgent[] {
+  const runtimeContext = createSubagentRuntimeContext(input);
+
+  return PRD_DOCUMENT_SUBAGENTS.map((subagent) => ({
+    ...subagent,
+    systemPrompt: `${subagent.systemPrompt}\n\n${runtimeContext}`,
+    middleware: [
+      ...((subagent as { middleware?: unknown[] }).middleware ?? []),
+      documentToolFilterMiddleware,
+    ],
+  })) as SubAgent[];
+}
+
+/**
+ * 构造子代理可直接读取的紧凑知识图谱上下文。
+ */
+function createSubagentRuntimeContext(input: PrdDocumentAgentInput): string {
+  const context = JSON.stringify({
+    workspaceId: input.workspaceId,
+    runId: input.runId,
+    attemptNumber: input.attemptNumber ?? 1,
+    revisionFeedback: input.revisionFeedback ?? "",
+    graph: {
+      nodes: input.graph.nodes.map(compactKnowledgeGraphNode),
+      relations: input.graph.relations.map(compactKnowledgeGraphRelation),
+    },
+    sectionDossiers: input.dossiers,
+  });
+  const compactContext =
+    context.length > SUBAGENT_RUNTIME_CONTEXT_MAX_CHARS
+      ? `${context.slice(0, SUBAGENT_RUNTIME_CONTEXT_MAX_CHARS)}`
+      : context;
+  const truncationNote =
+    context.length > SUBAGENT_RUNTIME_CONTEXT_MAX_CHARS
+      ? "\nThe runtime context was truncated for token budget. Use the available evidence and explicitly mark gaps."
+      : "";
+
+  return [
+    "Runtime knowledge graph context:",
+    "Use this context as the authoritative product graph even if the delegated task description is short.",
+    "Do not claim that no knowledge graph evidence was provided unless this runtime context is empty.",
+    `<knowledge_graph_context>${compactContext}</knowledge_graph_context>${truncationNote}`,
+  ].join("\n");
+}
+
+/**
+ * 压缩知识图谱节点，保留生成 PRD 所需字段。
+ */
+function compactKnowledgeGraphNode(node: KnowledgeGraphEntity) {
+  return {
+    id: node.id,
+    type: node.type,
+    name: node.name,
+    description: node.description,
+    source_task_id: node.source_task_id,
+    status: node.status,
+  };
+}
+
+/**
+ * 压缩知识图谱关系，保留生成 PRD 所需字段。
+ */
+function compactKnowledgeGraphRelation(relation: KnowledgeGraphRelation) {
+  return {
+    id: relation.id,
+    type: relation.type,
+    source: relation.source,
+    target: relation.target,
+    description: relation.description,
+    source_task_id: relation.source_task_id,
+  };
 }
 
 /**

@@ -286,6 +286,58 @@ export async function runPrdWeightedScoringAgent({
 }
 
 /**
+ * 根据三位评分 Agent 的一致性结果生成直接评分。
+ */
+export function createReviewerConsensusScore({
+  reviewerScores,
+  scoreSpread,
+}: {
+  reviewerScores: DocumentScoreReview[];
+  scoreSpread: number;
+}): DocumentWeightedScore {
+  const scores = reviewerScores.map((review) => review.score);
+  const averageScore =
+    scores.length > 0
+      ? scores.reduce((sum, score) => sum + score, 0) / scores.length
+      : 0;
+  const minimumScore = scores.length > 0 ? Math.min(...scores) : 0;
+  const consistencyBonus = scoreSpread <= DOCUMENT_SCORE_MAX_SPREAD ? 1 : 0;
+  const score = clampScore(
+    averageScore * 0.82 + minimumScore * 0.18 + consistencyBonus,
+  );
+  const requiredRevisions = Array.from(
+    new Set(
+      reviewerScores
+        .flatMap((review) => review.revisionAdvice)
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ).slice(0, 10);
+
+  return {
+    score,
+    passed: score >= DOCUMENT_SCORE_THRESHOLD,
+    confidence: scoreSpread <= DOCUMENT_SCORE_MAX_SPREAD ? 0.86 : 0.5,
+    rationale:
+      scoreSpread <= DOCUMENT_SCORE_MAX_SPREAD
+        ? "Reviewer scores are within the allowed spread, so the workflow used direct reviewer consensus without invoking the weighted scoring agent."
+        : "Reviewer scores exceed the allowed spread and require weighted aggregation.",
+    requiredRevisions:
+      score >= DOCUMENT_SCORE_THRESHOLD
+        ? []
+        : requiredRevisions.length > 0
+          ? requiredRevisions
+          : ["Raise the PRD above the quality threshold before final export."],
+    weights: {
+      averageScore,
+      minimumScore,
+      spreadPenalty: 0,
+      consistencyBonus,
+    },
+  };
+}
+
+/**
  * 计算评分偏差范围。
  */
 export function calculateScoreSpread(reviews: DocumentScoreReview[]): number {
@@ -437,7 +489,8 @@ function createWeightedFallback({
   return {
     score,
     confidence: varianceAccepted ? 0.72 : 0.48,
-    rationale: `Deterministic weighted fallback used because the weighted scoring agent failed: ${reason}`,
+    rationale:
+      "Weighted scoring was completed by the deterministic backup scorer because the weighted scoring agent did not return a valid structured result.",
     requiredRevisions: [
       "Address the lowest scoring reviewer comments first.",
       "Reduce reviewer disagreement by making requirements more concrete and evidence-backed.",

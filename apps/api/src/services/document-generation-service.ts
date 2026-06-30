@@ -309,7 +309,7 @@ async function executeDocumentGenerationRun(
 }
 
 /**
- * 追加思考日志，限制长度避免状态记录过重。
+ * 追加思考日志，并把同一 Agent 的流式增量合并到同一条记录。
  */
 function appendReasoningLog(
   entries: DocumentReasoningLogEntry[],
@@ -318,18 +318,44 @@ function appendReasoningLog(
     content: string;
   },
 ): DocumentReasoningLogEntry[] {
-  const content = next.content.trim();
-  if (!content) return entries;
+  const content = next.content;
+  if (!content.trim()) return entries;
+  const latestEntry = entries.at(-1);
+
+  if (latestEntry && shouldMergeReasoningEntry(latestEntry, next.agentType)) {
+    const mergedContent = `${latestEntry.content}${content}`;
+    return [
+      ...entries.slice(0, -1),
+      {
+        ...latestEntry,
+        content: mergedContent,
+        createdAt: new Date().toISOString(),
+      },
+    ].slice(-80);
+  }
 
   return [
     ...entries,
     {
       index: entries.length,
       agentType: next.agentType,
-      content: content.length > 2400 ? `${content.slice(0, 2400)}...` : content,
+      content,
       createdAt: new Date().toISOString(),
     },
   ].slice(-80);
+}
+
+/**
+ * 判断流式 reasoning chunk 是否应合并为同一条展示记录。
+ */
+function shouldMergeReasoningEntry(
+  latestEntry: DocumentReasoningLogEntry,
+  nextAgentType: string,
+): boolean {
+  return (
+    latestEntry.agentType === nextAgentType &&
+    latestEntry.agentType !== "document-workflow"
+  );
 }
 
 /**
