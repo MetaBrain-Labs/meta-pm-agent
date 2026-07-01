@@ -37,10 +37,7 @@ import {
   type ExecutorAgentDefinition,
   type ExecutorAgentType,
 } from "../executor-agent/definitions";
-import {
-  PLANNER_AGENT_PROMPT,
-  PLANNER_WORKFLOW_REVIEW_PROMPT,
-} from "./prompt";
+import { PLANNER_AGENT_PROMPT, PLANNER_WORKFLOW_REVIEW_PROMPT } from "./prompt";
 
 /**
  * Planner Agent：把 Request Agent 的 business_model 转换为可执行 DAG。
@@ -54,8 +51,7 @@ export async function* streamPlannerAgent(
     name: "planner-agent",
     modelOptions: {
       ...JSON_AGENT_MODEL_OPTIONS,
-      // Planner DAG 近期命中 4k 输出上限，提升到 6k 为任务计划保留余量。
-      maxTokens: 6144,
+      maxTokens: 8192,
     },
     systemPrompt: PLANNER_AGENT_PROMPT,
     payload: {
@@ -78,19 +74,14 @@ export async function* streamPlannerAgent(
  */
 export async function* streamPlannerWorkflowReview(
   input: PlannerWorkflowReviewInput,
-): AsyncGenerator<
-  ProductWorkflowStreamEvent,
-  ProductWorkflowResult,
-  void
-> {
+): AsyncGenerator<ProductWorkflowStreamEvent, ProductWorkflowResult, void> {
   const result = yield* runJsonAgent({
     agentType: "planner",
     agentLabel: "Planner Agent",
     name: "planner-agent-review",
     modelOptions: {
       ...JSON_AGENT_MODEL_OPTIONS,
-      // 收尾汇总近期约 5.1k 输出，7k 预算覆盖补充问题和确认表单。
-      maxTokens: 7168,
+      maxTokens: 9216,
     },
     systemPrompt: PLANNER_WORKFLOW_REVIEW_PROMPT,
     payload: {
@@ -102,10 +93,7 @@ export async function* streamPlannerWorkflowReview(
     },
     schema: ProductWorkflowResultSchema,
     fallback: () =>
-      createFallbackWorkflowResult(
-        input.plan,
-        input.executorResults,
-      ),
+      createFallbackWorkflowResult(input.plan, input.executorResults),
     signal: input.signal,
   });
 
@@ -201,8 +189,7 @@ function normalizeTaskDependencies(
 
     const dependencyAgent = dependencyTask.assigned_agent as ExecutorAgentType;
     const isSameAgentPreviousTask =
-      dependencyAgent === agentType &&
-      dependencyTask.sequence < task.sequence;
+      dependencyAgent === agentType && dependencyTask.sequence < task.sequence;
     const isHardDependency = hardDependencyAgents.includes(dependencyAgent);
 
     if (isSameAgentPreviousTask || isHardDependency) {
@@ -346,9 +333,11 @@ function selectFallbackExecutorDefinitions(
 ): ExecutorAgentDefinition[] {
   const requestText = analysis.business_model
     .map((item) =>
-      [item.user_goal, ...item.goal_constraints, ...item.missing_information.map((info) => info.description)].join(
-        " ",
-      ),
+      [
+        item.user_goal,
+        ...item.goal_constraints,
+        ...item.missing_information.map((info) => info.description),
+      ].join(" "),
     )
     .join(" ")
     .toLowerCase();
@@ -432,7 +421,9 @@ function selectFallbackExecutorDefinitions(
     "页面",
   ]);
 
-  if (matchesAny(requestText, ["full chain", "end-to-end", "全链路", "完整方案"])) {
+  if (
+    matchesAny(requestText, ["full chain", "end-to-end", "全链路", "完整方案"])
+  ) {
     EXECUTOR_DEFINITIONS.forEach((definition) =>
       selected.add(definition.agentType),
     );

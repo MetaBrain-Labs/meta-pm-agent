@@ -139,8 +139,7 @@ export async function* streamExecutorAgent(
     name: `${definition.agentType}-agent`,
     modelOptions: {
       ...TEXT_AGENT_MODEL_OPTIONS,
-      // Executor 输出峰值约 5k，6k 预算足够保留图谱补丁且避免过度生成。
-      maxTokens: 6144,
+      maxTokens: 10240,
     },
     systemPrompt: createExecutorAgentPrompt(definition),
     tools,
@@ -178,32 +177,35 @@ export async function* streamExecutorAgent(
   // 手动迭代生成器以在透传事件给上游的同时收集结构化数据
   let patch = "";
   try {
-  let genResult = await textGen.next();
-  while (!genResult.done) {
-    const event = genResult.value as TextAgentEvent<string>;
+    let genResult = await textGen.next();
+    while (!genResult.done) {
+      const event = genResult.value as TextAgentEvent<string>;
 
-    yield event as ProductWorkflowStreamEvent;
-    if (event.type === "tool-result" && event.toolName === BLOCKER_TOOL_NAME) {
-      throw createHumanInputRequiredError({
-        task: input.task,
-        agentType: definition.agentType,
-        displayName: definition.displayName,
-        toolResult: event.toolResult,
-      });
+      yield event as ProductWorkflowStreamEvent;
+      if (
+        event.type === "tool-result" &&
+        event.toolName === BLOCKER_TOOL_NAME
+      ) {
+        throw createHumanInputRequiredError({
+          task: input.task,
+          agentType: definition.agentType,
+          displayName: definition.displayName,
+          toolResult: event.toolResult,
+        });
+      }
+      if (
+        event.type === "tool-result" &&
+        STRUCTURED_TOOL_NAMES.has(event.toolName)
+      ) {
+        // 结构化写入工具完成后立即发出累计图谱快照，避免后续中断丢失已完成工具产物。
+        yield {
+          type: "knowledge-graph-update",
+          knowledgeGraph: cloneKnowledgeGraph(toolKnowledgeGraph),
+        };
+      }
+      genResult = await textGen.next();
     }
-    if (
-      event.type === "tool-result" &&
-      STRUCTURED_TOOL_NAMES.has(event.toolName)
-    ) {
-      // 结构化写入工具完成后立即发出累计图谱快照，避免后续中断丢失已完成工具产物。
-      yield {
-        type: "knowledge-graph-update",
-        knowledgeGraph: cloneKnowledgeGraph(toolKnowledgeGraph),
-      };
-    }
-    genResult = await textGen.next();
-  }
-  patch = genResult.value;
+    patch = genResult.value;
   } catch (error) {
     if (isExecutorHumanInputRequiredError(error)) {
       throw error;
@@ -356,16 +358,14 @@ function parseBlockerToolResult(toolResult: unknown): {
       getStringField(record, "title") || "Executor hard blocker",
       120,
     ),
-    details:
-      compactErrorMessage(
-        getStringField(record, "details") ||
-          "Executor reported a hard blocker without additional details.",
-      ),
-    needed_user_input:
-      compactErrorMessage(
-        getStringField(record, "needed_user_input") ||
-          "请补充能够解除该阻塞的信息。",
-      ),
+    details: compactErrorMessage(
+      getStringField(record, "details") ||
+        "Executor reported a hard blocker without additional details.",
+    ),
+    needed_user_input: compactErrorMessage(
+      getStringField(record, "needed_user_input") ||
+        "请补充能够解除该阻塞的信息。",
+    ),
   };
 }
 
@@ -398,7 +398,10 @@ function parseJsonObject(text: string): unknown {
 /**
  * 从未知记录中读取字符串字段。
  */
-function getStringField(record: Record<string, unknown>, field: string): string {
+function getStringField(
+  record: Record<string, unknown>,
+  field: string,
+): string {
   const value = record[field];
   return typeof value === "string" ? value.trim() : "";
 }

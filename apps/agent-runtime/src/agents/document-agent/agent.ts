@@ -35,10 +35,7 @@ import {
   getTextContent,
   getTokenUsage,
 } from "../../utils/message-adapter";
-import {
-  PRD_DOCUMENT_AGENT_PROMPT,
-  PRD_DOCUMENT_SUBAGENTS,
-} from "./prompt";
+import { PRD_DOCUMENT_AGENT_PROMPT, PRD_DOCUMENT_SUBAGENTS } from "./prompt";
 
 /**
  * Document Agent 的输入载荷。
@@ -125,13 +122,14 @@ export async function* streamPrdDocumentAgent(
 ): AsyncGenerator<DocumentAgentStreamEvent, string, void> {
   const startTime = Date.now();
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
-  const documentToolFilterMiddleware = createDocumentAgentToolFilterMiddleware();
+  const documentToolFilterMiddleware =
+    createDocumentAgentToolFilterMiddleware();
 
   const agent = createDeepAgent({
     model: createChatModel({
       enableThinking: false,
       temperature: 0.2,
-      maxTokens: 12000,
+      maxTokens: 24000,
     }) as any,
     systemPrompt: PRD_DOCUMENT_AGENT_PROMPT,
     name: "document-agent-prd",
@@ -354,9 +352,7 @@ function compactKnowledgeGraphRelation(relation: KnowledgeGraphRelation) {
 /**
  * 提取 Document Agent 可展示的内置工具调用。
  */
-function getVisibleBuiltinToolCalls(
-  message: BaseMessage,
-): Array<{
+function getVisibleBuiltinToolCalls(message: BaseMessage): Array<{
   id?: string;
   name: "write_todos" | "task";
   args?: Record<string, unknown>;
@@ -378,9 +374,7 @@ function getVisibleBuiltinToolCalls(
 /**
  * 提取 Document Agent 可展示的内置工具结果。
  */
-function getVisibleBuiltinToolResult(
-  message: BaseMessage,
-): {
+function getVisibleBuiltinToolResult(message: BaseMessage): {
   id?: string;
   name: "write_todos" | "task";
   content: unknown;
@@ -427,9 +421,7 @@ function extractTodosFromToolArgs(
  */
 function isTodoStatus(value: unknown): value is DocumentTodo["status"] {
   return (
-    value === "pending" ||
-    value === "in_progress" ||
-    value === "completed"
+    value === "pending" || value === "in_progress" || value === "completed"
   );
 }
 
