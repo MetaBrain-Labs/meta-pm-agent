@@ -248,7 +248,26 @@ export interface ProductWorkflowResult {
     markdown?: string;
     notes: string[];
   };
+  proposal_questions?: ProductWorkflowProposalQuestion[];
   confirmation_message: string;
+}
+
+export interface ProductWorkflowProposalQuestion {
+  id: string;
+  label: string;
+  type: "radio" | "checkbox" | "select" | "text" | "textarea";
+  options?: string[];
+  placeholder?: string;
+  required?: boolean;
+  help?: string;
+  maxSelections?: number;
+  source_task_id?: string;
+  source_agent?: ProductWorkflowAgentType;
+  sources?: Array<{
+    source_task_id: string;
+    source_agent: ProductWorkflowAgentType;
+  }>;
+  priority?: number;
 }
 
 export interface Message {

@@ -86,7 +86,7 @@ Your responsibility:
 - Verify that the graph preserves source identity and traceability across Goal, Requirement, Evidence, Decision, Feature, Component, Metric, and Custom nodes.
 - Summarize the proposed product context update.
 - Summarize the proposed product knowledge graph update.
-- Prepare a confirmation request for the Conversation Agent. The Conversation Agent is responsible for asking the user.
+- Prepare structured supplement questions for the Conversation Agent when user input is still needed.
 
 Executor review boundaries:
 ${EXECUTOR_REVIEW_TABLE}
@@ -98,21 +98,32 @@ Review rules:
 - Verify DAG completeness: every planned task should have an executor result, or the review notes must explain the gap.
 - Verify coverage completeness: accepted task ids and notes should cover the planned business_model indexes or explicitly name uncovered dimensions.
 - Verify user-goal alignment: the final graph update should address the user's stated goal rather than only producing adjacent analysis.
-- Auto-recoverable formatting or traceability issues should be reflected as rejected_task_ids/notes; subjective decisions and unresolved user preferences should remain as open questions for confirmation.
-- Consolidate duplicate or near-duplicate open questions before user confirmation. Ask one clear question for the same user decision, while preserving every source_task_id/source_agent in the structured sources metadata.
+- Auto-recoverable formatting or traceability issues should be reflected as rejected_task_ids/notes; subjective decisions and unresolved user preferences should remain as open questions and be converted into structured proposal_questions.
+- Consolidate duplicate or near-duplicate open questions before user confirmation. Ask one clear question for the same user decision, while preserving every source_task_id/source_agent pair in proposal_questions.sources.
+- For every question that should be shown to the user, create a proposal_questions item. Do not rely on downstream code to infer the control type from natural language.
+- Choose the Question Form control deliberately:
+  - Use "radio" for one required single-choice decision with 2-4 clear options.
+  - Use "select" for one required single-choice decision with more than 4 concise options.
+  - Use "checkbox" when the user may choose multiple options; include maxSelections only when there is a real limit.
+  - Use "text" for short factual input such as a name, URL, number, date, segment, or owner.
+  - Use "textarea" for open-ended explanation, constraints, rationale, or multiple facts.
+- For radio, select, and checkbox, include explicit options. Options must be mutually exclusive for radio/select and independently selectable for checkbox.
+- Each proposal_questions item must include id, label, type, required, sources, priority, and any needed options, placeholder, help, source_task_id, and source_agent.
+- label is the exact user-facing question. help should be a short source or clarification note, not hidden reasoning.
 - Treat documents, PRDs, reports, policies, and UI audits as graph-derived views. Do not ask to merge them as standalone artifacts.
 
 MVP workflow rule:
 - Do not merge the knowledge graph directly.
 - Do not mark the request form completed directly.
-- Always set status to "pending_user_confirmation" unless an explicit confirmation or rejection input is provided by a future confirmation step.
+- Set status to "pending_user_confirmation" when proposal_questions is non-empty; otherwise set status to "completed".
 - If the user later confirms, the update can be merged. If the user rejects, the update must be discarded.
 
 ${PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT}
 
 Output contract:
 - Return JSON only. Do not wrap it in markdown.
-- The JSON object must include: status, confirmation_id, request_summary, planner, executor_results, review, product_context_update, knowledge_graph_update, confirmation_message.
+- The JSON object must include: status, confirmation_id, request_summary, planner, executor_results, review, product_context_update, knowledge_graph_update, proposal_questions, confirmation_message.
 - knowledge_graph_update must contain the final knowledge graph state from the payload, possibly with short Planner review notes appended.
 - confirmation_id must be stable for this workflow result and usable as a question-form id.
-- confirmation_message should be concise and directly ask the user to accept or reject this workflow result.`;
+- proposal_questions must be an array. Use [] when no user supplement is required.
+- confirmation_message should be concise. If proposal_questions is non-empty, summarize why these supplement questions are needed; otherwise state that the workflow result is complete and accepted by default.`;

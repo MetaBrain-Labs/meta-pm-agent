@@ -216,6 +216,7 @@ export async function chatStreamHandler(c: Context) {
     let productWorkflowResult: unknown = null;
     let latestKnowledgeGraph: ProductKnowledgeGraph | null = null;
     let runtimeWorkspaceId: string | undefined;
+    let autoFinalizedWorkflowRound = false;
     const shouldFinalizeWorkflowRound = isProductWorkflowFinalConfirmationAnswer(
       parsed.data.messages,
     );
@@ -314,6 +315,19 @@ export async function chatStreamHandler(c: Context) {
           // 捕获工作流完整结构化结果，供最终知识图谱归档使用
           productWorkflowResult = event.result;
           continue;
+        }
+        if (
+          event.type === "text" &&
+          event.agentType === "conversation_confirmation" &&
+          productWorkflowResult
+        ) {
+          autoFinalizedWorkflowRound = true;
+        }
+        if (
+          event.type === "question-form-complete" &&
+          event.agentType === "conversation_confirmation"
+        ) {
+          autoFinalizedWorkflowRound = false;
         }
         if (event.type === "knowledge-graph-update") {
           latestKnowledgeGraph = event.knowledgeGraph;
@@ -422,7 +436,8 @@ export async function chatStreamHandler(c: Context) {
         requestFormId: parsed.data.requestFormId,
         agentOutputs: [...agentOutputs.values()],
         messages: parsed.data.messages,
-        skipPendingDecisionItems: shouldFinalizeWorkflowRound,
+        skipPendingDecisionItems:
+          shouldFinalizeWorkflowRound || autoFinalizedWorkflowRound,
       });
 
       await finalizeWorkspaceKnowledgeGraph({

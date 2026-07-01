@@ -132,6 +132,40 @@ export const KnowledgeGraphOpenQuestionInputSchema = z.object({
 });
 
 /**
+ * Planner Agent 输出给 Conversation Agent 渲染的结构化 Question Form 问题。
+ */
+export const ProductWorkflowProposalQuestionSchema = z.object({
+  id: z.string().min(1).describe("Stable field ID used in the submitted form answer"),
+  label: z.string().min(1).describe("User-facing question label"),
+  type: z.enum(["radio", "checkbox", "select", "text", "textarea"]).describe("Question Form control type chosen by Planner Agent"),
+  options: z.array(z.string().min(1)).optional().describe("Required for radio, checkbox, and select controls"),
+  placeholder: z.string().optional().describe("Optional placeholder for text or textarea controls"),
+  required: z.boolean().default(true).describe("Whether the user must answer this field"),
+  help: z.string().optional().describe("Optional user-facing help text or source summary"),
+  maxSelections: z.number().int().positive().optional().describe("Maximum selected options for checkbox controls"),
+  source_task_id: z.string().optional().describe("Primary executor task ID that raised this question"),
+  source_agent: ProductWorkflowAgentTypeSchema.optional().describe("Primary agent that raised this question"),
+  sources: z.array(
+    z.object({
+      source_task_id: z.string().min(1).describe("Executor task ID that raised this question"),
+      source_agent: ProductWorkflowAgentTypeSchema.describe("Agent that raised this question"),
+    }),
+  ).default([]).describe("All executor sources covered by the same merged question"),
+  priority: z.number().int().default(0).describe("Higher priority questions should be shown first"),
+}).superRefine((question, ctx) => {
+  if (
+    ["radio", "checkbox", "select"].includes(question.type) &&
+    (!question.options || question.options.length < 2)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["options"],
+      message: "radio, checkbox, and select questions must include at least two options.",
+    });
+  }
+});
+
+/**
  * 产品知识图谱结构化上下文，承载节点、关系、决策、风险、待确认问题及摘要等完整图谱快照。
  * markdown 字段可由结构化数据按需生成，不再作为主存储。
  */
@@ -245,6 +279,7 @@ export const ProductWorkflowResultSchema = z.object({
   }),
   product_context_update: z.string().min(1),
   knowledge_graph_update: ProductKnowledgeGraphSchema,
+  proposal_questions: z.array(ProductWorkflowProposalQuestionSchema).default([]),
   confirmation_message: z.string().min(1),
 });
 
@@ -274,4 +309,7 @@ export type KnowledgeGraphRiskInput = z.infer<
 >;
 export type KnowledgeGraphOpenQuestionInput = z.infer<
   typeof KnowledgeGraphOpenQuestionInputSchema
+>;
+export type ProductWorkflowProposalQuestion = z.infer<
+  typeof ProductWorkflowProposalQuestionSchema
 >;

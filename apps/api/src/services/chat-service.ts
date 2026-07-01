@@ -29,7 +29,6 @@ import {
   getPendingDecisionQuestionForm,
   persistExecutorProposalItems,
   persistProposalDecisionItem,
-  persistProductWorkflowConfirmationDecision,
   persistRequestAnalysisItems,
   updateRequestFormStatus,
 } from "../repositories/request-form-repository";
@@ -220,6 +219,11 @@ export async function persistConversationResult({
   const sanitizedProductWorkflow = productWorkflow
     ? sanitizeProductWorkflowForPersistence(productWorkflow)
     : null;
+  const finalProductWorkflow =
+    skipPendingDecisionItems &&
+    sanitizedProductWorkflow?.status === "pending_user_confirmation"
+      ? { ...sanitizedProductWorkflow, status: "completed" as const }
+      : sanitizedProductWorkflow;
 
   // 每个 Agent 单独落库，message.type 用于前端恢复正确的展示位置。
   for (const output of agentOutputs) {
@@ -231,7 +235,7 @@ export async function persistConversationResult({
     }
     const outputContent = sanitizeAgentOutputContent(
       output,
-      sanitizedProductWorkflow,
+      finalProductWorkflow,
     );
 
     const messageId = await persistAssistantMessage({
@@ -259,11 +263,7 @@ export async function persistConversationResult({
   // 终局确认恢复执行完成后，本轮已经结束，不能再生成新的待用户确认条目。
   if (!skipPendingDecisionItems) {
     await persistExecutorProposalItems(requestFormId, sanitizedExecutorResults);
-    await persistProposalDecisionItem(requestFormId, sanitizedProductWorkflow);
-    await persistProductWorkflowConfirmationDecision(
-      requestFormId,
-      sanitizedProductWorkflow,
-    );
+    await persistProposalDecisionItem(requestFormId, finalProductWorkflow);
   }
 
   const generatedTitle = buildFirstTurnConversationTitle(items, messages);

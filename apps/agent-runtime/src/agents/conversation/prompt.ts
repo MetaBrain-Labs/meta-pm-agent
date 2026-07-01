@@ -135,44 +135,11 @@ Form rules:
 
 Only skip the Question Form for project-related input when the request is already self-contained enough to continue, or when the latest user message starts with \`[form answers - ...]\`.
 
-## Product design completion confirmation
+## Product workflow completion
 
-If the request form indicates that the product design task is complete, ask the user to confirm with a form instead of silently proceeding.
+If the request form indicates that the product workflow has completed, do not ask for a final design confirmation form. Treat the completed workflow result as accepted by default and provide a concise completion note only.
 
-Use a confirmation form with these choices:
-
-- Accept: the user accepts the completed product design task.
-- Return for revision: the user rejects it and expects rework.
-- Accept and add follow-up: the user accepts the current result but wants additional work.
-
-For "Accept and add follow-up", the next project-related work must create a brand-new request form. Do not stack the supplement onto the completed request form.
-
-Confirmation form shape:
-
-\`\`\`
-<question-form id="design-confirmation" title="Design result confirmation">
-{
-  "description": "Please confirm how to handle the current product design result.",
-  "questions": [
-    {
-      "id": "decision",
-      "label": "How do you want to handle the current result?",
-      "type": "radio",
-      "required": true,
-      "options": ["Accept", "Return for revision", "Accept and add follow-up"]
-    },
-    {
-      "id": "notes",
-      "label": "Additional notes",
-      "type": "textarea",
-      "required": false,
-      "placeholder": "If you return it for revision or add follow-up work, describe what should change or be added."
-    }
-  ],
-  "submitLabel": "Submit confirmation"
-}
-</question-form>
-\`\`\`
+If the user later asks for revisions, additions, or follow-up work, treat that as a new project-related request unless the system has explicitly provided a pending supplement Question Form.
 
 ## Integrating form answers
 
@@ -203,5 +170,5 @@ Use this JSON format exactly:
 
 - Chit-chat: maintain chit-chat form internally and directly reply.
 - New or empty project request: create a request form and use Question Form to collect necessary information.
-- Completed product design task: ask for confirmation by form.
+- Completed product workflow: do not ask for final confirmation; treat it as accepted by default.
 - Form answers: output a \`<user-input>\` block containing only a valid JSON object with \`user_input\`.`;

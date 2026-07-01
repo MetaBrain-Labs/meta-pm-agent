@@ -462,8 +462,10 @@ function createFallbackWorkflowResult(
   plan: TaskExecutionPlan,
   executorResults: ExecutorAgentResult[],
 ): ProductWorkflowResult {
+  const proposalQuestions = createFallbackProposalQuestions(executorResults);
+
   return {
-    status: "pending_user_confirmation",
+    status: proposalQuestions.length > 0 ? "pending_user_confirmation" : "completed",
     confirmation_id: "product-workflow-confirmation",
     request_summary: plan.request_summary,
     planner: plan,
@@ -487,9 +489,38 @@ function createFallbackWorkflowResult(
       markdown: "",
       notes: ["最终知识图谱以结构化 JSON 为准。"],
     },
+    proposal_questions: proposalQuestions,
     confirmation_message:
-      "我已完成本轮 MVP 规划、执行和汇总。请确认是否接受这些产品上下文与知识图谱更新；确认后再合并，退回则放弃本轮更新。",
+      proposalQuestions.length > 0
+        ? "Planner Agent 使用 fallback 汇总完成本轮规划，请先补充 Executor Agent 提出的关键问题。"
+        : "Planner Agent 使用 fallback 汇总完成本轮规划，当前结果默认确认并结束本轮流程。",
   };
+}
+
+/**
+ * Planner Review 不可用时，把 Executor open question 降级为 textarea 问题，不做控件类型猜测。
+ */
+function createFallbackProposalQuestions(
+  executorResults: ExecutorAgentResult[],
+): ProductWorkflowResult["proposal_questions"] {
+  return executorResults.flatMap((result) =>
+    result.open_questions.map((question, index) => ({
+      id: `${result.task_id}-slot-${index + 1}`,
+      label: question.text,
+      type: "textarea" as const,
+      required: true,
+      placeholder: "请补充这个问题所需的事实、约束或偏好。",
+      source_task_id: result.task_id,
+      source_agent: result.agent_type,
+      sources: [
+        {
+          source_task_id: result.task_id,
+          source_agent: result.agent_type,
+        },
+      ],
+      priority: result.open_questions.length - index,
+    })),
+  );
 }
 
 /**

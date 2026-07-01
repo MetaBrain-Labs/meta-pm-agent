@@ -19,7 +19,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Spin, Tooltip } from "antd";
+import { Spin, Tag, Tooltip } from "antd";
 import {
   CaretRightOutlined,
   CheckCircleOutlined,
@@ -70,19 +70,25 @@ export function MessageBubble({
   );
 
   if (message.role === "user") {
+    const formAnswers = parseFormAnswersMessage(message.content);
+
     return (
       <div className="flex max-w-[min(760px,88%)] flex-col self-end">
-        <div
-          className="whitespace-pre-wrap wrap-break-word rounded-[18px] rounded-br-md px-4 py-3 text-white"
-          style={{
-            background: "var(--primary)",
-            fontFamily: "var(--body)",
-            fontSize: 14,
-            lineHeight: 1.6,
-          }}
-        >
-          {message.content}
-        </div>
+        {formAnswers ? (
+          <FormAnswersCard answers={formAnswers} />
+        ) : (
+          <div
+            className="whitespace-pre-wrap wrap-break-word rounded-[18px] rounded-br-md px-4 py-3 text-white"
+            style={{
+              background: "var(--primary)",
+              fontFamily: "var(--body)",
+              fontSize: 14,
+              lineHeight: 1.6,
+            }}
+          >
+            {message.content}
+          </div>
+        )}
       </div>
     );
   }
@@ -372,6 +378,72 @@ export function MessageBubble({
 /**
  * 展示当前助手消息内各 Agent 的 token 和费用用量，可折叠以减少聊天区干扰。
  */
+/**
+ * 用户提交后的 Question Form 答案展示模型。
+ */
+interface FormAnswersViewModel {
+  formId: string;
+  rows: Array<{ question: string; answer: string }>;
+}
+
+/**
+ * 将用户提交的 Question Form 回复解析为可展示卡片数据。
+ */
+function parseFormAnswersMessage(content: string): FormAnswersViewModel | null {
+  const lines = content.split(/\r?\n/);
+  const header = lines[0]?.trim() ?? "";
+  const headerMatch = /^\[form answers\s*(?:-|–|—)\s*([^\]]+)\]/i.exec(header);
+  if (!headerMatch?.[1]) return null;
+
+  const rows = lines.slice(1).flatMap((line) => {
+    const match = /^\s*[-*]\s*(.+?)\s*[:：]\s*(.*)\s*$/.exec(line);
+    if (!match?.[1]) return [];
+    return [
+      {
+        question: match[1].trim(),
+        answer: (match[2] ?? "").trim() || "(skipped)",
+      },
+    ];
+  });
+
+  return rows.length > 0
+    ? { formId: headerMatch[1].trim(), rows }
+    : null;
+}
+
+/**
+ * 以只读卡片展示用户已经提交的 Question Form 答案。
+ */
+function FormAnswersCard({ answers }: { answers: FormAnswersViewModel }) {
+  return (
+    <div className="w-full max-w-[min(720px,88vw)] rounded-lg border border-[var(--primary-soft)] bg-white px-4 py-3 shadow-[var(--shadow-card)]">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="text-[13px] font-extrabold text-[var(--ink)]">
+          Question Form 回复
+        </span>
+        <Tag color="blue" className="m-0! max-w-full truncate">
+          {answers.formId}
+        </Tag>
+      </div>
+      <div className="space-y-2">
+        {answers.rows.map((row, index) => (
+          <div
+            key={`${row.question}-${index}`}
+            className="rounded-md bg-[var(--surface-muted)] px-3 py-2"
+          >
+            <div className="text-[12px] font-semibold leading-relaxed text-[var(--ink-mute)]">
+              {row.question}
+            </div>
+            <div className="mt-1 whitespace-pre-wrap wrap-break-word text-[13px] leading-relaxed text-[var(--ink)]">
+              {row.answer}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function TokenUsageFloatingBox({
   usages,
   legacyUsage,
