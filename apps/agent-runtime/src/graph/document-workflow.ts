@@ -134,6 +134,7 @@ function createDocumentWorkflowGraph(checkpointer: BaseCheckpointSaver) {
     .addNode("aggregateScore", aggregateScoreNode)
     .addNode("humanReview", humanReviewNode)
     .addNode("exportPrd", exportPrdNode)
+
     .addEdge(START, "parseKg")
     .addEdge("parseKg", "normalizeGraph")
     .addEdge("normalizeGraph", "buildSectionDossiers")
@@ -160,9 +161,11 @@ function createDocumentWorkflowGraph(checkpointer: BaseCheckpointSaver) {
 /**
  * 获取带持久化 checkpointer 的文档生成图。
  */
-async function getDurableDocumentWorkflowGraph(): Promise<typeof documentGraph> {
-  durableDocumentGraphPromise ??= getWorkflowCheckpointer().then((checkpointer) =>
-    createDocumentWorkflowGraph(checkpointer),
+async function getDurableDocumentWorkflowGraph(): Promise<
+  typeof documentGraph
+> {
+  durableDocumentGraphPromise ??= getWorkflowCheckpointer().then(
+    (checkpointer) => createDocumentWorkflowGraph(checkpointer),
   );
   return durableDocumentGraphPromise;
 }
@@ -256,10 +259,14 @@ function parseKgNode(
   emitStage(config, "parseKg", "started");
   emitTodoUpdate(config, createWorkflowTodos("parseKg"));
   if (state.kind !== "prd") {
-    throw new Error(`Document workflow '${state.kind}' is not implemented yet.`);
+    throw new Error(
+      `Document workflow '${state.kind}' is not implemented yet.`,
+    );
   }
   if (state.sourceGraph.nodes.length === 0) {
-    throw new Error("Cannot generate a PRD without product knowledge graph nodes.");
+    throw new Error(
+      "Cannot generate a PRD without product knowledge graph nodes.",
+    );
   }
 
   emitStage(config, "parseKg", "completed");
@@ -456,7 +463,7 @@ function acceptScoreNode(
     scoreFeedback: shouldRetry ? createScoreRetryFeedback(attempt) : "",
     draftMarkdown: shouldRetry
       ? state.draftMarkdown
-      : selected?.attempt.markdown ?? state.draftMarkdown,
+      : (selected?.attempt.markdown ?? state.draftMarkdown),
   };
 }
 
@@ -496,7 +503,8 @@ async function aggregateScoreNode(
   const shouldRetry =
     !attempt.passed &&
     scoreAttempts.length < DOCUMENT_SCORE_MAX_ATTEMPTS &&
-    (!attempt.varianceAccepted || attempt.aggregate.score < DOCUMENT_SCORE_THRESHOLD);
+    (!attempt.varianceAccepted ||
+      attempt.aggregate.score < DOCUMENT_SCORE_THRESHOLD);
   const persistedAttempt = {
     ...attempt,
     selected: !shouldRetry && selected?.attempt.attempt === attempt.attempt,
@@ -515,7 +523,7 @@ async function aggregateScoreNode(
     // 三轮后仍未通过时，将最终导出草稿回退为最终选择版本。
     draftMarkdown: shouldRetry
       ? state.draftMarkdown
-      : selected?.attempt.markdown ?? state.draftMarkdown,
+      : (selected?.attempt.markdown ?? state.draftMarkdown),
     todos,
   };
 }
@@ -571,7 +579,8 @@ function exportPrdNode(
   emitTodoUpdate(config, createWorkflowTodos("exportPrd"));
   const graph = requireNormalizedGraph(state);
   const selectedScoreAttempt = selectFinalScoreAttempt(state.scoreAttempts);
-  const finalMarkdown = selectedScoreAttempt?.attempt.markdown ?? state.draftMarkdown;
+  const finalMarkdown =
+    selectedScoreAttempt?.attempt.markdown ?? state.draftMarkdown;
   const result: DocumentGenerationResult = {
     kind: "prd",
     title: createDocumentTitle(graph.nodes),
@@ -714,19 +723,22 @@ function createPrdSectionDossiers(
     createDossier(graph, {
       id: "overview",
       title: "背景与问题",
-      purpose: "Explain the product context, target problem, and source evidence.",
+      purpose:
+        "Explain the product context, target problem, and source evidence.",
       types: ["Goal", "Evidence", "Decision"],
     }),
     createDossier(graph, {
       id: "requirements",
       title: "功能需求",
-      purpose: "Convert requirements and features into implementable PRD requirements.",
+      purpose:
+        "Convert requirements and features into implementable PRD requirements.",
       types: ["Requirement", "Feature", "Component"],
     }),
     createDossier(graph, {
       id: "stories",
       title: "用户故事与验收标准",
-      purpose: "Draft user stories and acceptance criteria from goals and requirements.",
+      purpose:
+        "Draft user stories and acceptance criteria from goals and requirements.",
       types: ["Goal", "Requirement", "Feature"],
     }),
     createDossier(graph, {
@@ -738,7 +750,8 @@ function createPrdSectionDossiers(
     createDossier(graph, {
       id: "risks",
       title: "依赖、约束与风险",
-      purpose: "Summarize constraints, dependencies, decisions, and open risks.",
+      purpose:
+        "Summarize constraints, dependencies, decisions, and open risks.",
       types: ["Decision", "Component", "Custom"],
     }),
   ];
@@ -788,21 +801,22 @@ function extractSectionDrafts(
     .map((line) => line.replace(/^#{2,3}\s+/, "").trim())
     .filter(Boolean);
 
-  const source = headings.length > 0
-    ? headings.slice(0, 12).map((title, index) => ({
-        id: `section-${index + 1}`,
-        title,
-        summary: `PRD section generated from Document Agent draft: ${title}`,
-        nodeIds: dossiers[index]?.nodeIds ?? [],
-        relationIds: dossiers[index]?.relationIds ?? [],
-      }))
-    : dossiers.map((dossier) => ({
-        id: dossier.id,
-        title: dossier.title,
-        summary: dossier.purpose,
-        nodeIds: dossier.nodeIds,
-        relationIds: dossier.relationIds,
-      }));
+  const source =
+    headings.length > 0
+      ? headings.slice(0, 12).map((title, index) => ({
+          id: `section-${index + 1}`,
+          title,
+          summary: `PRD section generated from Document Agent draft: ${title}`,
+          nodeIds: dossiers[index]?.nodeIds ?? [],
+          relationIds: dossiers[index]?.relationIds ?? [],
+        }))
+      : dossiers.map((dossier) => ({
+          id: dossier.id,
+          title: dossier.title,
+          summary: dossier.purpose,
+          nodeIds: dossier.nodeIds,
+          relationIds: dossier.relationIds,
+        }));
 
   return source;
 }

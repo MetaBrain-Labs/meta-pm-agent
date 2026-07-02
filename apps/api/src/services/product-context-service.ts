@@ -130,8 +130,6 @@ async function loadProductContextForWorkspace(
     if (sections.join("\n\n").length >= MAX_CONTEXT_CHARS) break;
   }
 
-  console.log("sections:", sections);
-
   return sections.join("\n\n").slice(0, MAX_CONTEXT_CHARS);
 }
 

@@ -414,15 +414,15 @@ function getErrorMessage(error: unknown): string {
 }
 
 /**
- * 克隆当前知识图谱，供单个 Executor 内部工具读取和写入，避免工具副作用污染全局状态。
- */
-/**
  * 保留用户主动停止的 AbortError 语义，避免被包装为 HITL。
  */
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
+/**
+ * 克隆当前知识图谱，供单个 Executor 内部工具读取和写入，避免工具副作用污染全局状态。
+ */
 function cloneKnowledgeGraph(
   knowledgeGraph: ProductKnowledgeGraph,
 ): ProductKnowledgeGraph {
