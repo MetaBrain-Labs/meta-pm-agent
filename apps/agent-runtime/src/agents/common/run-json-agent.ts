@@ -131,14 +131,9 @@ export async function* runJsonAgent<T, AgentType extends string>(
       { streamMode: "messages", signal: options.signal },
     );
 
-    const visibleToolNames = new Set(
-      (options.tools ?? []).map((toolItem) => toolItem.name),
-    );
     let responseText = "";
     for await (const [message] of run) {
-      for (const toolCall of getToolCalls(message).filter((item) =>
-        visibleToolNames.has(item.name),
-      )) {
+      for (const toolCall of getToolCalls(message)) {
         yield {
           type: "tool-call",
           toolCallId: toolCall.id,
@@ -149,7 +144,7 @@ export async function* runJsonAgent<T, AgentType extends string>(
       }
 
       const toolResult = getToolResult(message);
-      if (toolResult && visibleToolNames.has(toolResult.name)) {
+      if (toolResult) {
         yield {
           type: "tool-result",
           toolCallId: toolResult.id,
@@ -157,10 +152,6 @@ export async function* runJsonAgent<T, AgentType extends string>(
           toolResult: toolResult.content,
           agentType: options.agentType,
         };
-        continue;
-      }
-      if (toolResult) {
-        // DeepAgents 内置工具结果只用于内部状态，不进入用户可见 SSE。
         continue;
       }
 

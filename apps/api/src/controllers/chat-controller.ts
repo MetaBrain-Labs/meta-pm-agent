@@ -20,6 +20,7 @@ import {
   createWorkflowThreadId,
   extractQuestionFormId,
   getFormAnswerId,
+  parseExistingGraphNewProjectAction,
   releaseQuestionFormHumanInterrupt,
   resumeQuestionFormHumanInterrupt,
   streamConversation,
@@ -45,7 +46,11 @@ import {
   persistConversationStart,
 } from "../services/chat-service";
 import { loadProductRuntimeContextForConversation } from "../services/product-context-service";
-import { finalizeWorkspaceKnowledgeGraph, getWorkspaceKnowledgeGraph } from "../services/product-knowledge-graph-service";
+import {
+  clearWorkspaceKnowledgeGraph,
+  finalizeWorkspaceKnowledgeGraph,
+  getWorkspaceKnowledgeGraph,
+} from "../services/product-knowledge-graph-service";
 import {
   createWorkspace,
   getAccount,
@@ -294,6 +299,13 @@ export async function chatStreamHandler(c: Context) {
         parsed.data.chatId,
       );
       runtimeWorkspaceId = runtimeContext.workspaceId;
+      if (
+        parseLatestExistingGraphNewProjectAction(parsed.data.messages) ===
+        "replace_current_graph"
+      ) {
+        await clearWorkspaceKnowledgeGraph(runtimeContext.workspaceId);
+        runtimeContext.knowledgeGraph = null;
+      }
 
       // 启动 agent-runtime 流式对话
       for await (const event of streamConversation(
@@ -549,12 +561,7 @@ function getRequestFormStatusForEvent(event: {
   ) {
     return "workflow_running";
   }
-  if (
-    event.type === "question-form-complete" &&
-    event.agentType === "conversation_confirmation"
-  ) {
-    return "pending_user_confirmation";
-  }
+  if (event.type === "question-form-complete") return "pending_user_confirmation";
   if (event.type === "human-interrupt") return "pending_user_confirmation";
   return null;
 }
@@ -740,6 +747,25 @@ function isProductWorkflowFinalConfirmationAnswer(
     getFormAnswerId(latestUserMessage?.content ?? "") ===
     "product-workflow-confirmation"
   );
+}
+
+/**
+ * 识别用户是否在已有图谱的新项目确认表单中选择替换当前图谱。
+ */
+function parseLatestExistingGraphNewProjectAction(
+  messages: { role: string; content: string }[],
+): ReturnType<typeof parseExistingGraphNewProjectAction> {
+  const latestUserMessage = messages
+    .filter((message) => message.role === "user")
+    .at(-1);
+  if (!latestUserMessage) return null;
+  if (
+    getFormAnswerId(latestUserMessage.content) !==
+    "existing-graph-new-project-check"
+  ) {
+    return null;
+  }
+  return parseExistingGraphNewProjectAction(latestUserMessage.content);
 }
 
 /**

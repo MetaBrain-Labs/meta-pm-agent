@@ -12,7 +12,7 @@
  */
 
 import { createDeepAgent } from "deepagents";
-import type { AgentRuntimeTool } from "@repo/shared";
+import type { AgentRuntimeTool, ProductKnowledgeGraph } from "@repo/shared";
 import { createToolsForAgent } from "../common/tool-access";
 import { createChatModel } from "../common/model";
 import { createDefaultAgentMiddleware } from "../common/middleware";
@@ -24,6 +24,7 @@ import { DISCOVERY_PROMPT } from "./prompt";
 
 export interface ConversationAgentOptions {
   enabledTools?: AgentRuntimeTool[];
+  knowledgeGraph?: ProductKnowledgeGraph | null;
 }
 
 /**
@@ -39,6 +40,7 @@ export function createConversationAgent(options: ConversationAgentOptions = {}) 
     systemPrompt: buildConversationPrompt({
       runtimeContext,
       webSearchEnabled: tools.length > 0,
+      knowledgeGraph: options.knowledgeGraph,
     }),
     tools,
     name: "conversation-agent",
@@ -50,6 +52,7 @@ export function createConversationAgent(options: ConversationAgentOptions = {}) 
 interface ConversationPromptOptions {
   runtimeContext: RuntimeDateContext;
   webSearchEnabled: boolean;
+  knowledgeGraph?: ProductKnowledgeGraph | null;
 }
 
 /**
@@ -58,18 +61,24 @@ interface ConversationPromptOptions {
 function buildConversationPrompt({
   runtimeContext,
   webSearchEnabled,
+  knowledgeGraph,
 }: ConversationPromptOptions): string {
   const runtimePrompt = buildRuntimeContextPrompt(runtimeContext);
+  const graphGuardPrompt = buildWorkspaceKnowledgeGraphPrompt(knowledgeGraph);
 
   if (!webSearchEnabled) {
     return `${DISCOVERY_PROMPT}
 
-${runtimePrompt}`;
+${runtimePrompt}
+
+${graphGuardPrompt}`;
   }
 
   return `${DISCOVERY_PROMPT}
 
 ${runtimePrompt}
+
+${graphGuardPrompt}
 
 ## Web search tool
 
@@ -91,4 +100,40 @@ function buildRuntimeContextPrompt(context: RuntimeDateContext): string {
 - Current server date: ${context.currentDate} (${context.timeZone}).
 - Current server year: ${context.currentYear}.
 - Treat relative-time phrases as relative to this date, not to the model's training data.`;
+}
+
+/**
+ * 注入当前工作区图谱状态，提醒 Conversation Agent 避免把新项目混入旧图谱。
+ */
+function buildWorkspaceKnowledgeGraphPrompt(
+  knowledgeGraph: ProductKnowledgeGraph | null | undefined,
+): string {
+  const graph = knowledgeGraph ?? null;
+  const nodeCount = graph?.entities.length ?? 0;
+  const relationCount = graph?.relations.length ?? 0;
+  const hasExistingGraph = nodeCount > 0 && relationCount > 0;
+
+  if (!graph || !hasExistingGraph) {
+    return `## Current workspace knowledge graph
+
+- Existing complete graph: no.`;
+  }
+
+  const recentNodes = graph.entities
+    .slice(Math.max(0, graph.entities.length - 5))
+    .map((node) => `${node.id}:${node.name}`)
+    .join(", ");
+
+  return `## Current workspace knowledge graph
+
+- Existing complete graph: yes.
+- Node count: ${nodeCount}.
+- Relation count: ${relationCount}.
+- Recent nodes: ${recentNodes || "none"}.
+
+If the latest user request appears to start a different new project instead of revising or extending the current project, do not emit a <user-input> block. Ask exactly one Question Form with id "existing-graph-new-project-check" and one required radio question with id "action". The form must warn that the current workspace already has a product knowledge graph and must ask whether to delete the current graph and continue in this workspace, or create a new workspace for the new project.
+
+This graph guard has priority over ordinary request-discovery forms. A standalone broad project request such as "design/build/create a [product/tool/system]" must be treated as a possible new project unless the user explicitly says they are continuing, revising, extending, or summarizing the current project. Do not infer continuation only because the existing graph has related domain nodes. When uncertain, ask the "existing-graph-new-project-check" form first, before asking any scope, goal, audience, or feature clarification questions.
+
+Use the user's language for the title, description, question label, and submit label. For Chinese, use these exact option labels: "删除当前知识图谱，并在当前工作区开始新项目" and "创建新的工作区开始新项目". For English, use these exact option labels: "Delete the current knowledge graph and start the new project in this workspace" and "Create a new workspace for the new project".`;
 }

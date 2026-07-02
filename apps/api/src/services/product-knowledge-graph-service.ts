@@ -7,6 +7,7 @@
  *
  * Responsibilities:
  * - finalizeWorkspaceKnowledgeGraph()：归档当前工作区的图谱节点和关系
+ * - clearWorkspaceKnowledgeGraph()：在用户确认替换当前项目时清空图谱
  * - getWorkspaceKnowledgeGraph()：读取图谱并生成前端展示 DTO
  * - 对节点和关系按业务 key 去重，避免重试或并行合并造成重复
  *
@@ -20,6 +21,7 @@ import type {
   ProductKnowledgeGraph,
 } from "@repo/shared";
 import {
+  clearProductKnowledgeGraphByWorkspaceId,
   getProductKnowledgeGraphByWorkspaceId,
   upsertProductKnowledgeGraph,
   type ProductKnowledgeGraphRow,
@@ -63,6 +65,16 @@ export async function finalizeWorkspaceKnowledgeGraph({
     nodes: normalizedGraph.entities,
     relations: normalizedGraph.relations,
   });
+}
+
+/**
+ * 清空当前工作区的产品知识图谱，避免新项目沿用旧项目节点和关系。
+ */
+export async function clearWorkspaceKnowledgeGraph(
+  workspaceId: string | undefined,
+): Promise<void> {
+  if (!workspaceId) return;
+  await clearProductKnowledgeGraphByWorkspaceId(workspaceId);
 }
 
 /**

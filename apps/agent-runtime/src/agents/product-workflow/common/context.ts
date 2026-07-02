@@ -22,10 +22,9 @@ import type {
 } from "@repo/shared";
 import type { UserInputRecord } from "../../request/user-input";
 
-const MAX_SUMMARIES = 8;
 const MAX_RELEVANT_NODES = 16;
 const MAX_RELEVANT_RELATIONS = 16;
-const MAX_RELEVANT_ITEMS = 8;
+const MAX_SOURCE_TASK_ITEMS = 8;
 const MAX_PREVIOUS_RESULTS = 12;
 const MAX_USER_INPUT = 8;
 const MAX_TEXT_LENGTH = 600;
@@ -40,27 +39,13 @@ export function createGraphContextSummary(
     counts: {
       entities: knowledgeGraph.entities.length,
       relations: knowledgeGraph.relations.length,
-      decisions: knowledgeGraph.decisions.length,
-      risks: knowledgeGraph.risks.length,
-      open_questions: knowledgeGraph.open_questions.length,
-      summaries: knowledgeGraph.summary.length,
     },
-    latest_summaries: takeTail(knowledgeGraph.summary, MAX_SUMMARIES).map(
-      (summary) => truncateText(summary),
-    ),
     recent_nodes: takeTail(knowledgeGraph.entities, 6).map((entity) => ({
       id: entity.id,
       type: entity.type,
       name: truncateText(entity.name),
       source_task_id: entity.source_task_id,
       status: entity.status,
-    })),
-    recent_open_questions: takeTail(
-      knowledgeGraph.open_questions,
-      4,
-    ).map((question) => ({
-      id: question.id,
-      text: truncateText(question.text),
     })),
   };
 }
@@ -100,9 +85,6 @@ export function createTaskRelevantGraphContext({
     dependency_results: previousResults
       .filter((result) => dependencyResultTaskIds.has(result.task_id))
       .map(compactExecutorResult),
-    summaries: takeTail(knowledgeGraph.summary, MAX_SUMMARIES).map((summary) =>
-      truncateText(summary),
-    ),
     nodes: relevantNodes.map((node) => ({
       id: node.id,
       type: node.type,
@@ -118,28 +100,6 @@ export function createTaskRelevantGraphContext({
       target: relation.target,
       description: truncateText(relation.description ?? ""),
       source_task_id: relation.source_task_id,
-    })),
-    decisions: selectRelevantItems(
-      knowledgeGraph.decisions,
-      keywords,
-      (item) => item.text,
-    ).map((item) => ({
-      id: item.id,
-      text: truncateText(item.text),
-    })),
-    risks: selectRelevantItems(knowledgeGraph.risks, keywords, (item) =>
-      item.text,
-    ).map((item) => ({
-      id: item.id,
-      text: truncateText(item.text),
-    })),
-    open_questions: selectRelevantItems(
-      knowledgeGraph.open_questions,
-      keywords,
-      (item) => item.text,
-    ).map((item) => ({
-      id: item.id,
-      text: truncateText(item.text),
     })),
   };
 }
@@ -243,7 +203,7 @@ export function compactUserInputForTask({
 export function readGraphBySourceTasks(
   knowledgeGraph: ProductKnowledgeGraph,
   sourceTaskIds: string[],
-  limit = MAX_RELEVANT_ITEMS,
+  limit = MAX_SOURCE_TASK_ITEMS,
 ) {
   const sourceTaskIdSet = new Set(sourceTaskIds);
   const nodes = knowledgeGraph.entities.filter((entity) =>
@@ -263,9 +223,6 @@ export function readGraphBySourceTasks(
           nodeIds.has(relation.target),
       )
       .slice(0, limit),
-    summaries: takeTail(knowledgeGraph.summary, limit).map((summary) =>
-      truncateText(summary),
-    ),
   };
 }
 
@@ -278,7 +235,6 @@ function compactExecutorResult(result: ExecutorAgentResult) {
     agent_type: result.agent_type,
     summary: truncateText(result.summary, 240),
     top_node_ids: result.entities.slice(0, 3).map((entity) => entity.id),
-    open_question_count: result.open_questions.length,
   };
 }
 
@@ -336,21 +292,6 @@ function selectRelevantRelations(
   });
 
   return matched.slice(0, MAX_RELEVANT_RELATIONS);
-}
-
-/**
- * 从自由文本集合里选择与任务关键词相关的轻量条目。
- */
-function selectRelevantItems<T>(
-  items: T[],
-  keywords: string[],
-  getText: (item: T) => string,
-) {
-  const matched = items.filter((item) => matchesKeywords(getText(item), keywords));
-  return (matched.length > 0 ? matched : takeTail(items, 4)).slice(
-    0,
-    MAX_RELEVANT_ITEMS,
-  );
 }
 
 /**

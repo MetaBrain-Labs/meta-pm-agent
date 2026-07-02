@@ -350,7 +350,9 @@ function sanitizeToolResultForPersistence(
   toolName: string,
   result: unknown,
 ): unknown {
-  if (!toolName.startsWith("kg_file_")) return result;
+  if (!toolName.startsWith("kg_file_")) {
+    return sanitizeGenericToolResultForPersistence(result);
+  }
 
   const parsed = parseToolResultObject(result);
   if (!parsed) {
@@ -379,6 +381,21 @@ function sanitizeToolResultForPersistence(
     summaryCount: Array.isArray(parsed.summary) ? parsed.summary.length : undefined,
     preview: createToolResultPreview(parsed),
   };
+}
+
+/**
+ * DeepAgents 内置工具保留可恢复展示的轻量结果，避免大型子任务报告撑大 message.meta。
+ */
+function sanitizeGenericToolResultForPersistence(result: unknown): unknown {
+  if (typeof result === "string") {
+    return truncateText(result, 1200);
+  }
+
+  try {
+    return truncateText(JSON.stringify(result), 1200);
+  } catch {
+    return truncateText(String(result), 1200);
+  }
 }
 
 /**
