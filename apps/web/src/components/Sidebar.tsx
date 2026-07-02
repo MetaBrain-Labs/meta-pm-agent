@@ -74,6 +74,21 @@ export function Sidebar({
   const activeWorkspace =
     workspaces.find((workspace) => workspace.id === activeWorkspaceId) ??
     workspaces[0];
+  const navClassName = [
+    "chat-nav",
+    collapsed ? "is-collapsed" : "",
+    activeMode === "documents" ? "is-documents" : "is-chat",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const documentButtonClassName =
+    activeMode === "documents" ? "sidebar-nav-active" : "";
+  const collapsedDocumentButtonClassName = [
+    "sidebar-create",
+    documentButtonClassName,
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <Sider
@@ -105,7 +120,7 @@ export function Sidebar({
         </Tooltip>
       </div>
 
-      <div className={collapsed ? "chat-nav is-collapsed" : "chat-nav"}>
+      <div className={navClassName}>
         {collapsed ? (
           <>
             <Tooltip title={TEXT.newConversation} placement="right">
@@ -126,7 +141,7 @@ export function Sidebar({
             </Tooltip>
             <Tooltip title={TEXT.document} placement="right">
               <Button
-                className="sidebar-create"
+                className={collapsedDocumentButtonClassName}
                 type={activeMode === "documents" ? "primary" : "default"}
                 icon={<FolderOpenOutlined />}
                 disabled={!activeWorkspaceId}
@@ -155,6 +170,7 @@ export function Sidebar({
             <Button
               icon={<FolderOpenOutlined />}
               block
+              className={documentButtonClassName}
               type={activeMode === "documents" ? "primary" : "default"}
               disabled={!activeWorkspaceId}
               onClick={onDocuments}

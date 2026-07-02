@@ -1,12 +1,12 @@
 /**
  * Document Agent 评分执行器
  *
- * 为 PRD 草稿提供独立质量门禁：三位评分 Agent 按中国高考语文作文阅卷模式独立打分，
- * 再由加权评分 Agent 汇总。评分偏差过大或总分低于阈值时，文档工作流会触发重写重试。
+ * 为 PRD 草稿提供独立质量门禁：三位评分 Agent 按中国高考语文作文阅卷模式独立打分。
+ * 只有三方分差不超过阈值时，才进入共识评分；分差过大时直接记录失败并触发重写重试。
  *
  * Responsibilities:
  * - runPrdScoringReviewers()：运行三位独立评分 Agent
- * - runPrdWeightedScoringAgent()：运行加权汇总评分 Agent
+ * - runPrdWeightedScoringAgent()：运行分差合格后的共识评分 Agent
  * - 提供评分阈值、最大偏差、最大重试次数与确定性回退
  *
  * Notes:
@@ -58,7 +58,7 @@ export interface DocumentScoreReview {
 }
 
 /**
- * 加权评分 Agent 的结构化汇总结果。
+ * 共识评分 Agent 的结构化汇总结果。
  */
 export interface DocumentWeightedScore {
   score: number;
@@ -93,7 +93,11 @@ export interface DocumentScoreAttempt {
  */
 export interface DocumentScoreSelection {
   attempt: DocumentScoreAttempt;
-  reason: "passed_threshold" | "lowest_spread" | "highest_score";
+  reason:
+    | "passed_threshold"
+    | "lowest_spread"
+    | "highest_score"
+    | "highest_score_then_lowest_spread";
 }
 
 const ReviewerScoreSchema = z.object({
@@ -217,7 +221,7 @@ export async function runPrdScoringReviewers({
 }
 
 /**
- * 运行加权汇总评分 Agent，并由代码层强制执行阈值与偏差规则。
+ * 运行分差合格后的共识评分 Agent，并由代码层强制执行阈值与偏差规则。
  */
 export async function runPrdWeightedScoringAgent({
   markdown,
@@ -243,7 +247,7 @@ export async function runPrdWeightedScoringAgent({
     systemPrompt: PRD_WEIGHTED_SCORING_AGENT_PROMPT,
     modelOptions: {
       ...JSON_AGENT_MODEL_OPTIONS,
-      // 加权评分需要综合三方分歧和修订项，使用与单评审一致的 4k 结构化输出预算。
+      // 共识评分需要综合三方分歧和修订项，使用与单评审一致的 4k 结构化输出预算。
       maxTokens: 4096,
     },
     payload: {
@@ -286,9 +290,9 @@ export async function runPrdWeightedScoringAgent({
 }
 
 /**
- * 根据三位评分 Agent 的一致性结果生成直接评分。
+ * 为分差不合格的草稿记录保守评分，不触发共识评分 Agent。
  */
-export function createReviewerConsensusScore({
+export function createSkippedConsensusScore({
   reviewerScores,
   scoreSpread,
 }: {
@@ -301,9 +305,9 @@ export function createReviewerConsensusScore({
       ? scores.reduce((sum, score) => sum + score, 0) / scores.length
       : 0;
   const minimumScore = scores.length > 0 ? Math.min(...scores) : 0;
-  const consistencyBonus = scoreSpread <= DOCUMENT_SCORE_MAX_SPREAD ? 1 : 0;
+  const spreadPenalty = Math.max(0, scoreSpread - DOCUMENT_SCORE_MAX_SPREAD) * 2;
   const score = clampScore(
-    averageScore * 0.82 + minimumScore * 0.18 + consistencyBonus,
+    averageScore * 0.7 + minimumScore * 0.3 - spreadPenalty,
   );
   const requiredRevisions = Array.from(
     new Set(
@@ -316,23 +320,21 @@ export function createReviewerConsensusScore({
 
   return {
     score,
-    passed: score >= DOCUMENT_SCORE_THRESHOLD,
-    confidence: scoreSpread <= DOCUMENT_SCORE_MAX_SPREAD ? 0.86 : 0.5,
+    passed: false,
+    confidence: 0.42,
     rationale:
-      scoreSpread <= DOCUMENT_SCORE_MAX_SPREAD
-        ? "Reviewer scores are within the allowed spread, so the workflow used direct reviewer consensus without invoking the weighted scoring agent."
-        : "Reviewer scores exceed the allowed spread and require weighted aggregation.",
+      "Reviewer score spread exceeds the allowed limit, so consensus scoring was skipped. This conservative score is stored only for retry and fallback selection.",
     requiredRevisions:
-      score >= DOCUMENT_SCORE_THRESHOLD
-        ? []
-        : requiredRevisions.length > 0
-          ? requiredRevisions
-          : ["Raise the PRD above the quality threshold before final export."],
+      requiredRevisions.length > 0
+        ? requiredRevisions
+        : [
+            "Reduce reviewer disagreement by making requirements more concrete, evidence-backed, and internally consistent.",
+          ],
     weights: {
       averageScore,
       minimumScore,
-      spreadPenalty: 0,
-      consistencyBonus,
+      spreadPenalty,
+      consistencyBonus: 0,
     },
   };
 }
@@ -355,25 +357,20 @@ export function selectFinalScoreAttempt(
   const passed = attempts.find((attempt) => attempt.passed);
   if (passed) return { attempt: passed, reason: "passed_threshold" };
 
-  const reliableAttempts = attempts.filter(
-    (attempt) => attempt.varianceAccepted,
-  );
-  if (reliableAttempts.length > 0) {
-    return {
-      attempt: [...reliableAttempts].sort(
-        (a, b) => b.aggregate.score - a.aggregate.score,
-      )[0]!,
-      reason: "highest_score",
-    };
-  }
-
-  const lowestSpread = [...attempts].sort((a, b) => {
+  const highestScoreThenLowestSpread = [...attempts].sort((a, b) => {
+    if (a.aggregate.score !== b.aggregate.score) {
+      return b.aggregate.score - a.aggregate.score;
+    }
     if (a.scoreSpread !== b.scoreSpread) return a.scoreSpread - b.scoreSpread;
-    return b.aggregate.score - a.aggregate.score;
+    // 稳定选择更早生成的草稿，避免同分同分差时最终版本来回变化。
+    return a.attempt - b.attempt;
   })[0];
 
-  return lowestSpread
-    ? { attempt: lowestSpread, reason: "lowest_spread" }
+  return highestScoreThenLowestSpread
+    ? {
+        attempt: highestScoreThenLowestSpread,
+        reason: "highest_score_then_lowest_spread",
+      }
     : null;
 }
 
@@ -393,11 +390,11 @@ export function createScoreRetryFeedback(
 
   return [
     `Previous PRD scoring attempt ${attempt.attempt} did not pass.`,
-    `Weighted score: ${attempt.aggregate.score}/${DOCUMENT_SCORE_THRESHOLD}.`,
+    `Consensus score: ${attempt.aggregate.score}/${DOCUMENT_SCORE_THRESHOLD}.`,
     `Reviewer score spread: ${attempt.scoreSpread}/${DOCUMENT_SCORE_MAX_SPREAD}.`,
     attempt.varianceAccepted
-      ? "Reviewer scores are within the allowed spread, but the weighted score is still below threshold."
-      : "Reviewer scores exceed the allowed spread, so the draft must be regenerated and made less ambiguous.",
+      ? "Reviewer scores are within the allowed spread, but the consensus score is still below threshold."
+      : "Reviewer scores exceed the allowed spread, so consensus scoring was skipped and the draft must be regenerated.",
     "Revise the PRD to address these issues:",
     ...uniqueAdvice.map((item) => `- ${item}`),
   ].join("\n");
@@ -466,7 +463,7 @@ function createReviewerFallback({
 }
 
 /**
- * 创建加权评分 Agent 的确定性回退结果。
+ * 创建共识评分 Agent 的确定性回退结果。
  */
 function createWeightedFallback({
   reviewerScores,

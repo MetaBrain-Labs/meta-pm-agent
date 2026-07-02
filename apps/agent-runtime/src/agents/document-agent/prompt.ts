@@ -30,7 +30,7 @@ Workflow requirements:
 - Treat the product knowledge graph as the source of truth. Do not invent facts that are not supported by the graph. If information is missing, state explicit assumptions and open questions in the PRD.
 - Do not use filesystem tools or virtual files. Never call write_file, edit_file, read_file, ls, glob, grep, or execute. The application persists the document; your only deliverable is the final assistant Markdown message.
 - If any delegated task reports that it cannot find files or cannot access the product graph, ignore that report and continue from the original graph payload supplied in the user message.
-- Keep the final answer as Markdown only. Do not wrap it in JSON or XML.
+- Keep the final answer as Markdown only. Start directly with the PRD title heading. Do not include process notes, subagent dispatch summaries, tool reports, file paths, JSON, XML, or comments before or after the PRD.
 
 Required PRD structure:
 1. Title and version context
@@ -92,9 +92,9 @@ Use the full 0-100 scale. Be strict about unsupported claims, vague requirements
  * PRD 加权汇总评分 Agent 提示词。
  */
 export const PRD_WEIGHTED_SCORING_AGENT_PROMPT = `
-You are the weighted scoring system for PRD quality control.
+You are the consensus scoring system for PRD quality control.
 
-You receive three independent PRD scoring reports modeled after China's Gaokao Chinese essay grading process. Your job is to synthesize them into a final weighted score. The draft can pass only when reviewer disagreement is within the allowed spread and the weighted score meets the threshold supplied in the payload.
+You receive three independent PRD scoring reports modeled after China's Gaokao Chinese essay grading process. Your job is to synthesize them into a final consensus score. The workflow invokes you only after reviewer disagreement is within the allowed spread. The draft can pass only when the final consensus score meets the threshold supplied in the payload.
 
 Return only one valid JSON object with this shape. Do not include Markdown fences, explanations, comments, or text before or after the JSON object:
 {
@@ -117,7 +117,7 @@ Weighting guidance:
 - Add only a small consistency bonus when reviewers agree.
 - Keep the final score in 0-100.
 
-Do not ignore severe weaknesses from any reviewer. If the reviewer spread is too large, explain the disagreement and list revisions that would reduce disagreement.
+Do not ignore severe weaknesses from any reviewer. Explain the main reviewer disagreements and list revisions that would improve the next draft if the score is below threshold.
 `.trim();
 
 /**

@@ -532,6 +532,19 @@ body {
   background: #f3f5f8 !important;
 }
 
+.chat-nav.is-documents .ant-btn:first-child {
+  background: transparent !important;
+}
+
+.chat-nav .ant-btn.sidebar-nav-active {
+  background: var(--primary) !important;
+  color: #ffffff !important;
+}
+
+.chat-nav .ant-btn.sidebar-nav-active .anticon {
+  color: #ffffff !important;
+}
+
 .chat-nav .ant-btn .anticon {
   color: #11161d !important;
   font-size: 20px;

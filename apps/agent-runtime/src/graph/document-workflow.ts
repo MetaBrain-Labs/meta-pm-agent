@@ -43,8 +43,8 @@ import {
   DOCUMENT_SCORE_MAX_SPREAD,
   DOCUMENT_SCORE_THRESHOLD,
   calculateScoreSpread,
-  createReviewerConsensusScore,
   createScoreRetryFeedback,
+  createSkippedConsensusScore,
   runPrdScoringReviewers,
   runPrdWeightedScoringAgent,
   selectFinalScoreAttempt,
@@ -114,7 +114,7 @@ const STAGE_LABELS: Record<DocumentWorkflowStage, string> = {
   draftSection: "Document Agent 生成 PRD",
   crossCheck: "交叉检查文档一致性",
   scoreDraft: "三方评分 Agent 打分",
-  aggregateScore: "必要时加权评分系统汇总",
+  aggregateScore: "分差合格后共识评分",
   humanReview: "人工审核节点",
   exportPrd: "导出 PRD 文档",
 };
@@ -130,7 +130,7 @@ function createDocumentWorkflowGraph(checkpointer: BaseCheckpointSaver) {
     .addNode("draftSection", draftSectionNode)
     .addNode("crossCheck", crossCheckNode)
     .addNode("scoreDraft", scoreDraftNode)
-    .addNode("acceptScore", acceptScoreNode)
+    .addNode("rejectScore", rejectScoreNode)
     .addNode("aggregateScore", aggregateScoreNode)
     .addNode("humanReview", humanReviewNode)
     .addNode("exportPrd", exportPrdNode)
@@ -142,10 +142,10 @@ function createDocumentWorkflowGraph(checkpointer: BaseCheckpointSaver) {
     .addEdge("draftSection", "crossCheck")
     .addEdge("crossCheck", "scoreDraft")
     .addConditionalEdges("scoreDraft", selectNextNodeAfterReviewerScore, {
-      accept: "acceptScore",
+      reject: "rejectScore",
       aggregate: "aggregateScore",
     })
-    .addConditionalEdges("acceptScore", selectNextNodeAfterScore, {
+    .addConditionalEdges("rejectScore", selectNextNodeAfterScore, {
       retry: "draftSection",
       pass: "humanReview",
     })
@@ -422,15 +422,15 @@ async function scoreDraftNode(
 }
 
 /**
- * 记录分差合格时的直接共识评分，不触发加权评分 Agent。
+ * 记录分差过大时的失败尝试，不触发共识评分 Agent。
  */
-function acceptScoreNode(
+function rejectScoreNode(
   state: DocumentWorkflowGraphStateValue,
   config?: LangGraphRunnableConfig,
 ) {
   const scoreSpread = calculateScoreSpread(state.scoreReviewerReports);
   const varianceAccepted = scoreSpread <= DOCUMENT_SCORE_MAX_SPREAD;
-  const aggregate = createReviewerConsensusScore({
+  const aggregate = createSkippedConsensusScore({
     reviewerScores: state.scoreReviewerReports,
     scoreSpread,
   });
@@ -441,7 +441,7 @@ function acceptScoreNode(
     scoreSpread,
     varianceAccepted,
     aggregate,
-    passed: varianceAccepted && aggregate.passed,
+    passed: false,
     selected: false,
   };
   const scoreAttempts = [...state.scoreAttempts, attempt];
@@ -468,7 +468,7 @@ function acceptScoreNode(
 }
 
 /**
- * 调用加权评分系统汇总三方评分，并决定是否进入下一轮重写。
+ * 调用共识评分系统汇总三方评分，并决定是否进入下一轮重写。
  */
 async function aggregateScoreNode(
   state: DocumentWorkflowGraphStateValue,
@@ -501,10 +501,7 @@ async function aggregateScoreNode(
   const scoreAttempts = [...state.scoreAttempts, attempt];
   const selected = selectFinalScoreAttempt(scoreAttempts);
   const shouldRetry =
-    !attempt.passed &&
-    scoreAttempts.length < DOCUMENT_SCORE_MAX_ATTEMPTS &&
-    (!attempt.varianceAccepted ||
-      attempt.aggregate.score < DOCUMENT_SCORE_THRESHOLD);
+    !attempt.passed && scoreAttempts.length < DOCUMENT_SCORE_MAX_ATTEMPTS;
   const persistedAttempt = {
     ...attempt,
     selected: !shouldRetry && selected?.attempt.attempt === attempt.attempt,
@@ -529,13 +526,13 @@ async function aggregateScoreNode(
 }
 
 /**
- * 根据三位评分 Agent 的分差决定是否触发加权汇总。
+ * 根据三位评分 Agent 的分差决定是否触发共识评分。
  */
 function selectNextNodeAfterReviewerScore(
   state: DocumentWorkflowGraphStateValue,
 ) {
   const scoreSpread = calculateScoreSpread(state.scoreReviewerReports);
-  return scoreSpread > DOCUMENT_SCORE_MAX_SPREAD ? "aggregate" : "accept";
+  return scoreSpread > DOCUMENT_SCORE_MAX_SPREAD ? "reject" : "aggregate";
 }
 
 /**
@@ -546,10 +543,7 @@ function selectNextNodeAfterScore(state: DocumentWorkflowGraphStateValue) {
   if (!latestAttempt) return "retry";
   if (latestAttempt.passed) return "pass";
   if (state.scoreAttempts.length >= DOCUMENT_SCORE_MAX_ATTEMPTS) return "pass";
-  return latestAttempt.varianceAccepted &&
-    latestAttempt.aggregate.score >= DOCUMENT_SCORE_THRESHOLD
-    ? "pass"
-    : "retry";
+  return "retry";
 }
 
 /**
