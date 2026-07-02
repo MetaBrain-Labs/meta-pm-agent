@@ -2,13 +2,13 @@
  * 文本 Agent 通用执行器
  *
  * 为非 JSON 输出的 DeepAgent（如 Executor Agent）提供统一的流式执行框架，
- * 管理消息构建、模型调用、推理和文本内容提取，并过滤内部工具/环境噪声。
+ * 管理消息构建、模型调用、推理和文本内容提取，并透传 DeepAgents 工具轨迹。
  *
  * Responsibilities:
  * - runTextAgent()：创建并驱动 DeepAgent，按事件流提取推理/工具/文本内容
  * - 定义 TEXT_AGENT_MODEL_OPTIONS 默认模型参数
  * - 定义 TextAgentEvent / RunTextAgentOptions 等类型
- * - 过滤 DeepAgent 内部噪声（如 "No files found in /"）
+ * - 透传 DeepAgents 内置工具和业务授权工具，方便前端观察执行过程
  *
  * Notes:
  * - Executor Agent 使用此执行器产出 markdown 图谱补丁而非 JSON
@@ -123,14 +123,9 @@ export async function* runTextAgent<AgentType extends string>(
       { streamMode: "messages", signal: options.signal },
     );
 
-    const visibleToolNames = new Set(
-      (options.tools ?? []).map((toolItem) => toolItem.name),
-    );
     let responseText = "";
     for await (const [message] of run) {
-      for (const toolCall of getToolCalls(message).filter((item) =>
-        visibleToolNames.has(item.name),
-      )) {
+      for (const toolCall of getToolCalls(message)) {
         yield {
           type: "tool-call",
           toolCallId: toolCall.id,
@@ -141,7 +136,7 @@ export async function* runTextAgent<AgentType extends string>(
       }
 
       const toolResult = getToolResult(message);
-      if (toolResult && visibleToolNames.has(toolResult.name)) {
+      if (toolResult) {
         yield {
           type: "tool-result",
           toolCallId: toolResult.id,
@@ -149,10 +144,6 @@ export async function* runTextAgent<AgentType extends string>(
           toolResult: toolResult.content,
           agentType: options.agentType,
         };
-        continue;
-      }
-      if (toolResult) {
-        // DeepAgents 内置工具结果只用于内部状态，不进入用户可见 SSE。
         continue;
       }
 

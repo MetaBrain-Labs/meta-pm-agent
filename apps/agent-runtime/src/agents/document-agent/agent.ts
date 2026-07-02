@@ -113,6 +113,11 @@ const DOCUMENT_AGENT_BLOCKED_TOOL_NAMES = new Set([
   "execute",
 ]);
 const SUBAGENT_RUNTIME_CONTEXT_MAX_CHARS = 120_000;
+const PRD_MARKDOWN_START_PATTERNS = [
+  /^#{1,2}\s+.*Product Requirements Document\s*\(PRD\).*$/im,
+  /^#{1,2}\s+.*产品需求文档.*PRD.*$/im,
+  /^#{1,2}\s+.*PRD.*$/im,
+];
 
 /**
  * 运行 PRD Document Agent，返回最终 Markdown 文档。
@@ -165,8 +170,12 @@ export async function* streamPrdDocumentAgent(
   );
 
   let responseText = "";
+  let currentTextBlock = "";
   for await (const [message] of run) {
-    for (const toolCall of getVisibleBuiltinToolCalls(message)) {
+    const visibleToolCalls = getVisibleBuiltinToolCalls(message);
+    const hasAnyToolCalls =
+      AIMessage.isInstance(message) && (message.tool_calls?.length ?? 0) > 0;
+    for (const toolCall of visibleToolCalls) {
       const todos = extractTodosFromToolArgs(toolCall.args);
       if (todos.length > 0) {
         yield {
@@ -183,6 +192,11 @@ export async function* streamPrdDocumentAgent(
         agentType: "document",
       };
     }
+    if (hasAnyToolCalls) {
+      // 带工具调用的 AI 文本通常是 DeepAgents 子任务编排说明，不属于最终 PRD 正文。
+      currentTextBlock = "";
+      continue;
+    }
 
     const toolResult = getVisibleBuiltinToolResult(message);
     if (toolResult) {
@@ -193,6 +207,12 @@ export async function* streamPrdDocumentAgent(
         toolResult: compactToolResult(toolResult.content),
         agentType: "document",
       };
+      currentTextBlock = "";
+      continue;
+    }
+    if (ToolMessage.isInstance(message)) {
+      // 工具结果只进入可观察事件，不参与最终 Markdown 拼接。
+      currentTextBlock = "";
       continue;
     }
 
@@ -204,7 +224,11 @@ export async function* streamPrdDocumentAgent(
         content: reasoning,
       };
     }
-    responseText += getTextContent(message);
+    const text = getTextContent(message);
+    if (text) {
+      currentTextBlock += text;
+      responseText = currentTextBlock;
+    }
 
     const usage = getTokenUsage(message);
     if (usage) {
@@ -233,12 +257,29 @@ export async function* streamPrdDocumentAgent(
     };
   }
 
-  const markdown = responseText.trim();
+  const markdown = sanitizePrdMarkdown(responseText);
   if (!markdown) {
     throw new Error("Document Agent completed without PRD markdown.");
   }
 
   return markdown;
+}
+
+/**
+ * 清理 Document Agent 最终 Markdown，剔除 DeepAgents 子任务编排说明。
+ */
+export function sanitizePrdMarkdown(markdown: string): string {
+  const trimmed = markdown.trim();
+  if (!trimmed) return "";
+
+  for (const pattern of PRD_MARKDOWN_START_PATTERNS) {
+    const match = pattern.exec(trimmed);
+    if (match?.index !== undefined && match.index >= 0) {
+      return trimmed.slice(match.index).trim();
+    }
+  }
+
+  return trimmed;
 }
 
 /**

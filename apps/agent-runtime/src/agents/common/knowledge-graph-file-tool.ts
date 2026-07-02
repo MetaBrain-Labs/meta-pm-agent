@@ -179,7 +179,7 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_read_summary",
         description:
-          "Read counts, recent summaries, recent nodes, and recent open questions from the product knowledge graph.",
+          "Read counts and recent nodes from the product knowledge graph.",
         schema: z.object({}),
       },
     ),

@@ -44,6 +44,7 @@ interface WebSearchPayload {
 
 const TOOL_NAME_LABELS: Record<string, string> = {
   write_todos: "生成任务",
+  task: "子任务",
   ask_user: "询问用户",
   search_knowledge: "搜索知识库",
   read_file: "读取文件",
@@ -54,6 +55,11 @@ const TOOL_NAME_LABELS: Record<string, string> = {
   web_fetch: "抓取页面",
   kg_file_create: "知识图谱文件",
   kg_file_read: "知识图谱文件",
+  kg_file_read_summary: "知识图谱文件",
+  kg_file_query_nodes: "知识图谱文件",
+  kg_file_query_relations: "知识图谱文件",
+  kg_file_read_task_delta: "知识图谱文件",
+  kg_file_read_by_source_task: "知识图谱文件",
   kg_file_insert: "知识图谱文件",
   kg_file_update: "知识图谱文件",
   kg_file_delete_content: "知识图谱文件",
@@ -63,11 +69,17 @@ const TOOL_NAME_LABELS: Record<string, string> = {
   kg_file_add_decisions: "知识图谱文件",
   kg_file_add_risks: "知识图谱文件",
   kg_file_add_open_questions: "知识图谱文件",
+  kg_file_raise_blocker: "知识图谱文件",
 };
 
 const KG_TOOL_TYPE_LABELS: Record<string, string> = {
   kg_file_create: "新增",
   kg_file_read: "查询",
+  kg_file_read_summary: "摘要",
+  kg_file_query_nodes: "节点查询",
+  kg_file_query_relations: "关系查询",
+  kg_file_read_task_delta: "任务增量",
+  kg_file_read_by_source_task: "来源任务",
   kg_file_insert: "插入",
   kg_file_update: "更新",
   kg_file_delete_content: "删除",
@@ -77,6 +89,7 @@ const KG_TOOL_TYPE_LABELS: Record<string, string> = {
   kg_file_add_decisions: "决策",
   kg_file_add_risks: "风险",
   kg_file_add_open_questions: "问题",
+  kg_file_raise_blocker: "阻塞",
 };
 
 /**

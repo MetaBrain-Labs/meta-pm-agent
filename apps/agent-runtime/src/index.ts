@@ -11,7 +11,10 @@
  * - 导出公共流事件类型和表单工具判定函数
  */
 
-export { streamConversation } from "./agents/conversation/stream";
+export {
+  parseExistingGraphNewProjectAction,
+  streamConversation,
+} from "./agents/conversation/stream";
 export {
   createRequestAgent,
   formatRequestAnalysisBlock,

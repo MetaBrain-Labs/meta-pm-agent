@@ -48,6 +48,7 @@ import type {
 
 const PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID = "product-workflow-confirmation";
 const EXECUTOR_BLOCKER_FORM_PREFIX = "executor-blocker-";
+const EXISTING_GRAPH_NEW_PROJECT_FORM_ID = "existing-graph-new-project-check";
 
 /**
  * 流式获取 Conversation Agent 的原始消息事件。
@@ -64,17 +65,14 @@ async function* streamAgentEvents(
 
   const agent = createConversationAgent({
     enabledTools: options.enabledTools,
+    knowledgeGraph: options.knowledgeGraph,
   });
   const run = await agent.stream(
     { messages },
     { streamMode: "messages", signal: options.signal },
   );
-  const visibleToolNames = new Set<string>(options.enabledTools ?? []);
-
   for await (const [message] of run) {
-    for (const toolCall of getToolCalls(message).filter((item) =>
-      visibleToolNames.has(item.name),
-    )) {
+    for (const toolCall of getToolCalls(message)) {
       yield {
         type: "tool-call",
         toolCallId: toolCall.id,
@@ -85,7 +83,7 @@ async function* streamAgentEvents(
     }
 
     const toolResult = getToolResult(message);
-    if (toolResult && visibleToolNames.has(toolResult.name)) {
+    if (toolResult) {
       yield {
         type: "tool-result",
         toolCallId: toolResult.id,
@@ -94,10 +92,6 @@ async function* streamAgentEvents(
         agentType: "conversation",
       };
       // 工具响应只进入工具卡片，不作为普通助手正文继续输出。
-      continue;
-    }
-    if (toolResult) {
-      // DeepAgents 内置工具响应只保留给内部状态，避免污染用户可见流。
       continue;
     }
 
@@ -160,6 +154,18 @@ export async function* streamConversation(
 
   if (lastMessage.role === "user" && isFormAnswer(lastMessage.content)) {
     const formId = getFormAnswerId(lastMessage.content);
+    if (formId === EXISTING_GRAPH_NEW_PROJECT_FORM_ID) {
+      const action = parseExistingGraphNewProjectAction(lastMessage.content);
+      if (action === "create_new_workspace") {
+        yield {
+          type: "text",
+          content:
+            "当前工作区的知识图谱已保留。请在工作区列表中新建一个工作区，然后在新工作区中开始这个新项目。",
+          agentType: "conversation",
+        };
+        return;
+      }
+    }
     if (formId && isProductWorkflowResumeFormId(formId)) {
       yield* streamWorkflowResumeAfterFormAnswer(messages, options, formId);
       return;
@@ -630,6 +636,22 @@ function isProductWorkflowResumeFormId(formId: string): boolean {
     formId.endsWith("-proposal-decision") ||
     formId.startsWith(EXECUTOR_BLOCKER_FORM_PREFIX)
   );
+}
+
+/**
+ * 从图谱处理表单答案中识别用户选择。
+ */
+export function parseExistingGraphNewProjectAction(
+  content: string,
+): "replace_current_graph" | "create_new_workspace" | null {
+  const normalized = content.toLowerCase();
+  if (/创建新的工作区|新建工作区|create (a )?new workspace/.test(normalized)) {
+    return "create_new_workspace";
+  }
+  if (/删除当前知识图谱|替换当前|delete .*graph|replace .*graph/.test(normalized)) {
+    return "replace_current_graph";
+  }
+  return null;
 }
 
 /**

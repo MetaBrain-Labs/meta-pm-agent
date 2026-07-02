@@ -171,7 +171,7 @@ const STAGE_LABELS: Record<DocumentWorkflowStage, string> = {
   draftSection: "Document Agent 生成 PRD",
   crossCheck: "交叉检查",
   scoreDraft: "三方评分 Agent 打分",
-  aggregateScore: "必要时加权评分系统汇总",
+  aggregateScore: "分差合格后共识评分",
   humanReview: "人工审核节点",
   exportPrd: "导出 PRD",
 };
@@ -377,7 +377,7 @@ export function DocumentPlanningPage({
             <PageLoadingState />
           ) : (
             <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.55fr)] gap-4">
-              <section className="min-h-[620px] rounded border border-gray-200 bg-white overflow-hidden">
+              <section className="min-h-[620px] rounded border border-gray-200 bg-white overflow-hidden xl:sticky xl:top-0 xl:self-start">
                 <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
                   <div>
                     <Text strong>当前知识图谱</Text>
@@ -1196,7 +1196,7 @@ function ScoringResultPanel({
         <div>
           <Text strong>评分结果</Text>
           <Text type="secondary" className="block text-xs mt-1">
-            三位评分 Agent 分差超过 8 分时才触发加权汇总，否则使用共识评分进入后续流程。
+            三位评分 Agent 分差超过 8 分时跳过共识评分并重试，分差合格后才进入共识评分。
           </Text>
         </div>
         {scoringActive ? <Spin size="small" /> : <Tag>{attempts.length}/3 轮</Tag>}
@@ -1228,7 +1228,7 @@ function ScoringResultPanel({
                   分差 {attempt.scoreSpread}
                 </Tag>
                 <Tag color={attempt.aggregate.passed ? "success" : "warning"}>
-                  {attempt.varianceAccepted ? "共识" : "加权"} {attempt.aggregate.score}
+                  {attempt.varianceAccepted ? "共识" : "跳过共识"} {attempt.aggregate.score}
                 </Tag>
                 {attempt.selected && <Tag color="processing">已选中</Tag>}
               </div>
@@ -1354,6 +1354,7 @@ function getSelectionReasonLabel(reason: string): string {
   if (reason === "passed_threshold") return "通过阈值";
   if (reason === "lowest_spread") return "最小分差";
   if (reason === "highest_score") return "最高评分";
+  if (reason === "highest_score_then_lowest_spread") return "最高评分，同分看分差";
   return reason;
 }
 

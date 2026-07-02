@@ -8,6 +8,7 @@
  * Responsibilities:
  * - upsertProductKnowledgeGraph()：按 workspace 保存最新图谱节点和关系
  * - getProductKnowledgeGraphByWorkspaceId()：读取当前 workspace 图谱快照
+ * - clearProductKnowledgeGraphByWorkspaceId()：清空当前 workspace 的图谱快照
  * - 维护 conversation/request_form provenance 与图谱版本号
  *
  * Notes:
@@ -134,6 +135,18 @@ export async function getProductKnowledgeGraphByWorkspaceId(
         ? row.updated_at.toISOString()
         : String(row.updated_at),
   };
+}
+
+/**
+ * 清空指定工作区当前产品知识图谱，用于用户确认在同一工作区开始新项目。
+ */
+export async function clearProductKnowledgeGraphByWorkspaceId(
+  workspaceId: string,
+): Promise<void> {
+  await prisma.$executeRaw`
+    DELETE FROM "product_knowledge_graph"
+    WHERE "workspace_id" = ${workspaceId}
+  `;
 }
 
 /**
