@@ -50,7 +50,11 @@ import {
 } from "../api/chat-api";
 import { MessageBubble } from "./MessageBubble";
 import { KnowledgeGraphModal } from "./modals/KnowledgeGraphModal";
-import { LangGraphModal } from "./modals/LangGraphModal";
+import {
+  LangGraphModal,
+  type LangGraphRuntimeState,
+  type LangGraphRuntimeStatus,
+} from "./modals/LangGraphModal";
 
 const { TextArea } = Input;
 
@@ -211,6 +215,10 @@ export function ChatApp({
     return -1;
   })();
   const activeAgents = isLoading ? findActiveAgents(messages) : [];
+  const langGraphRuntimeState = useMemo(
+    () => buildLangGraphRuntimeState(messages, activeAgents),
+    [activeAgents, messages],
+  );
 
   const nextUserContentByAssistantId = (() => {
     const map = new Map<string, string>();
@@ -538,6 +546,7 @@ export function ChatApp({
       />
       <LangGraphModal
         open={langGraphModalOpen}
+        runtimeState={langGraphRuntimeState}
         onClose={() => setLangGraphModalOpen(false)}
       />
     </div>
@@ -602,4 +611,136 @@ function findActiveAgents(messages: Message[]): string[] {
     }
   }
   return [];
+}
+
+const LANGGRAPH_NODE_IDS = [
+  "START",
+  "parse_user_input",
+  "request_agent",
+  "planner_agent",
+  "executor_router",
+  "executor-product-strategy",
+  "executor-market-research",
+  "executor-gtm",
+  "executor-product-discovery",
+  "executor-product-execution",
+  "executor-marketing-growth",
+  "executor-data-analytics",
+  "executor-ai-shipping",
+  "executor-toolkit",
+  "executor-interface-craft",
+  "executor_aggregator",
+  "END",
+];
+
+const LANGGRAPH_EXECUTOR_NODE_IDS = LANGGRAPH_NODE_IDS.filter((nodeId) =>
+  nodeId.startsWith("executor-"),
+);
+
+const AGENT_TO_LANGGRAPH_NODE: Record<string, string> = {
+  request: "request_agent",
+  planner: "planner_agent",
+  product_director: "planner_agent",
+  "executor-product-strategy": "executor-product-strategy",
+  "executor-market-research": "executor-market-research",
+  "executor-gtm": "executor-gtm",
+  "executor-product-discovery": "executor-product-discovery",
+  "executor-product-execution": "executor-product-execution",
+  "executor-marketing-growth": "executor-marketing-growth",
+  "executor-data-analytics": "executor-data-analytics",
+  "executor-ai-shipping": "executor-ai-shipping",
+  "executor-toolkit": "executor-toolkit",
+  "executor-interface-craft": "executor-interface-craft",
+};
+
+/**
+ * 根据当前聊天消息恢复 LangGraph 固定骨架的可视运行状态。
+ */
+function buildLangGraphRuntimeState(
+  messages: Message[],
+  activeAgents: string[],
+): LangGraphRuntimeState {
+  const nodeStatuses = Object.fromEntries(
+    LANGGRAPH_NODE_IDS.map((nodeId) => [nodeId, "pending"]),
+  ) as Record<string, LangGraphRuntimeStatus>;
+  const workflowMessage = findLatestWorkflowMessage(messages);
+
+  if (!workflowMessage) {
+    return { nodeStatuses, activeAgents };
+  }
+
+  nodeStatuses.START = "completed";
+
+  if (workflowMessage.userInput?.state === "complete") {
+    nodeStatuses.parse_user_input = "completed";
+  }
+
+  if (workflowMessage.requestAnalysis?.state === "complete") {
+    nodeStatuses.request_agent = "completed";
+  }
+
+  const plannedExecutors = new Set(
+    workflowMessage.plannerExecution?.plan.tasks.map(
+      (task) => task.assigned_agent,
+    ) ?? [],
+  );
+
+  if (workflowMessage.plannerExecution) {
+    nodeStatuses.planner_agent = "completed";
+    nodeStatuses.executor_router = "completed";
+    for (const executorNodeId of LANGGRAPH_EXECUTOR_NODE_IDS) {
+      if (!plannedExecutors.has(executorNodeId)) {
+        nodeStatuses[executorNodeId] = "skipped";
+      }
+    }
+  }
+
+  for (const result of workflowMessage.executorResults ?? []) {
+    nodeStatuses[result.agent_type] = "completed";
+  }
+
+  if ((workflowMessage.executorResults?.length ?? 0) > 0) {
+    nodeStatuses.executor_aggregator = "completed";
+  }
+
+  if (workflowMessage.plannerReview?.state === "complete") {
+    nodeStatuses.planner_agent = "completed";
+  }
+
+  if (workflowMessage.workflowCompletion) {
+    nodeStatuses.END = "completed";
+  }
+
+  for (const agentType of activeAgents) {
+    const nodeId = AGENT_TO_LANGGRAPH_NODE[agentType];
+    if (nodeId) {
+      nodeStatuses[nodeId] = "running";
+    }
+  }
+
+  return { nodeStatuses, activeAgents };
+}
+
+/**
+ * 找到最近一条携带产品工作流结构状态的 assistant 消息。
+ */
+function findLatestWorkflowMessage(messages: Message[]): Message | null {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (
+      message?.role === "agent" &&
+      (message.userInput ||
+        message.requestAnalysis ||
+        message.plannerExecution ||
+        message.executorResults?.length ||
+        message.plannerReview ||
+        message.workflowCompletion ||
+        message.activeAgent ||
+        message.activeAgents?.length)
+    ) {
+      return message;
+    }
+  }
+
+  return null;
 }

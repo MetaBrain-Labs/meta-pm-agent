@@ -64,8 +64,7 @@ export type RequestAgentStreamEvent =
 export function createRequestAgent() {
   const model = createChatModel({
     enableThinking: false,
-    // Request Agent 近期输出峰值约 2.6k，保留 4k 预算避免结构化 JSON 被截断。
-    maxTokens: 4096,
+    maxTokens: 5120,
     responseFormat: "json_object",
     temperature: 0,
   });
@@ -189,15 +188,16 @@ export async function* streamRequestAgent(
       if (attempt < REQUEST_AGENT_MAX_ATTEMPTS) {
         yield {
           type: "reasoning",
-          content:
-            "\nRequest Agent 输出结构校验失败，正在自动重试一次。\n",
+          content: "\nRequest Agent 输出结构校验失败，正在自动重试一次。\n",
           agentType: "request",
         };
       }
     }
   }
 
-  throw lastError ?? new Error("Request Agent did not produce a request analysis.");
+  throw (
+    lastError ?? new Error("Request Agent did not produce a request analysis.")
+  );
 }
 
 /**

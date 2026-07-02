@@ -21,9 +21,9 @@
 import type {
   ExecutorAgentResult,
   ProductWorkflowResult,
+  ProductWorkflowProposalQuestion,
   TaskExecutionPlan,
 } from "@repo/shared";
-import { inferQuestionFormFieldFromText } from "@repo/shared";
 import { createProductWorkflowKnowledgeGraph, appendKnowledgeGraphPatch } from "./common/knowledge-graph";
 import { orderTasksBySequence } from "./common/tasks";
 import { streamExecutorAgent } from "./executor-agent/agent";
@@ -121,6 +121,7 @@ export async function* streamPlannerProductWorkflow(
     workspaceId: input.workspaceId,
     productContext: input.productContext,
     requestAnalysis: input.requestAnalysis,
+    userInput: input.userInput,
     plan,
     executorResults,
     knowledgeGraph,
@@ -217,29 +218,100 @@ export function formatProductWorkflowConfirmationQuestionForm(
 export function formatProductWorkflowProposalQuestionForm(
   result: ProductWorkflowResult,
 ): string | null {
-  const slots = collectProposalSlots(result);
-  if (slots.length === 0) return null;
+  const questions = getProposalFormQuestions(result);
+  if (questions.length === 0) return null;
 
   const form = {
     description:
       "Planner Agent 汇总了 Executor Agent 需要你补充确认的信息，请先回答这些高优先级问题。",
-    questions: slots.map((slot) => {
-      const field = inferQuestionFormFieldFromText(slot.question);
-      return {
-        id: slot.id,
-        label: slot.question,
-        type: field.type,
-        required: true,
-        ...(field.type === "textarea" ? {} : { options: field.options }),
-        help: `来源：${slot.source_agent} / ${slot.source_task_id}`,
-      };
-    }),
+    questions,
     submitLabel: "提交补充信息",
   };
 
   return `<question-form id="${escapeAttribute(
     getProposalDecisionId(result),
   )}" title="补充信息确认">\n${JSON.stringify(form, null, 2)}\n</question-form>`;
+}
+
+/**
+ * 读取 Planner Review 输出的结构化问题；旧结果只降级为 textarea，不做类型猜测。
+ */
+function getProposalFormQuestions(result: ProductWorkflowResult) {
+  const proposalQuestions = result.proposal_questions ?? [];
+  if (proposalQuestions.length > 0) {
+    return proposalQuestions
+      .slice()
+      .sort((left, right) => right.priority - left.priority)
+      .map(toQuestionFormQuestion);
+  }
+
+  return collectProposalSlots(result).map((slot) =>
+    toQuestionFormQuestion({
+      id: slot.id,
+      label: slot.question,
+      type: "textarea",
+      required: true,
+      source_task_id: slot.source_task_id,
+      source_agent: slot.source_agent as ProductWorkflowProposalQuestion["source_agent"],
+      sources: slot.sources as ProductWorkflowProposalQuestion["sources"],
+      priority: slot.priority,
+    }),
+  );
+}
+
+/**
+ * 将 Planner Review 结构化问题映射为前端 Question Form JSON 字段。
+ */
+function toQuestionFormQuestion(question: ProductWorkflowProposalQuestion) {
+  const type = normalizeQuestionFormType(question);
+
+  return {
+    id: question.id,
+    label: question.label,
+    type,
+    required: question.required,
+    ...(type !== "text" && type !== "textarea" && question.options
+      ? { options: question.options }
+      : {}),
+    ...(question.placeholder ? { placeholder: question.placeholder } : {}),
+    ...(question.maxSelections ? { maxSelections: question.maxSelections } : {}),
+    help:
+      question.help ??
+      formatProposalQuestionSources(
+        question.sources.length > 0
+          ? question.sources
+          : question.source_task_id && question.source_agent
+            ? [
+                {
+                  source_task_id: question.source_task_id,
+                  source_agent: question.source_agent,
+                },
+              ]
+            : [],
+      ),
+  };
+}
+
+/**
+ * 避免单个结构化问题缺少选项时破坏整个 Question Form。
+ */
+function normalizeQuestionFormType(question: ProductWorkflowProposalQuestion) {
+  const needsOptions = ["radio", "checkbox", "select"].includes(question.type);
+  return needsOptions && (!question.options || question.options.length < 2)
+    ? "textarea"
+    : question.type;
+}
+
+/**
+ * 格式化结构化问题来源，帮助用户理解该问题由哪些 Executor 提出。
+ */
+function formatProposalQuestionSources(
+  sources: NonNullable<ProductWorkflowProposalQuestion["sources"]>,
+): string | undefined {
+  if (sources.length === 0) return undefined;
+  return `来源：${sources
+    .map((source) => `${source.source_agent} / ${source.source_task_id}`)
+    .join("；")}`;
 }
 
 /**

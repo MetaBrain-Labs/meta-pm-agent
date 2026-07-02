@@ -33,6 +33,24 @@ import { Graph } from "@antv/g6";
 interface Props {
   open: boolean;
   onClose: () => void;
+  runtimeState?: LangGraphRuntimeState;
+}
+
+/**
+ * LangGraph 固定骨架节点在当前会话轮次中的可视运行状态。
+ */
+export type LangGraphRuntimeStatus =
+  | "completed"
+  | "running"
+  | "pending"
+  | "skipped";
+
+/**
+ * LangGraph 弹窗接收的运行态快照。
+ */
+export interface LangGraphRuntimeState {
+  nodeStatuses: Record<string, LangGraphRuntimeStatus>;
+  activeAgents: string[];
 }
 
 type LangGraphNodeType =
@@ -75,6 +93,23 @@ const NODE_TYPE_LABELS: Record<LangGraphNodeType, string> = {
   aggregator: "Aggregator",
   end: "结束",
 };
+
+const RUNTIME_STATUS_COLORS: Record<LangGraphRuntimeStatus, string> = {
+  completed: "#16a34a",
+  running: "#2563eb",
+  pending: "#94a3b8",
+  skipped: "#cbd5e1",
+};
+
+const RUNTIME_STATUS_LABELS: Record<LangGraphRuntimeStatus, string> = {
+  completed: "已运行",
+  running: "运行中",
+  pending: "未运行",
+  skipped: "忽略运行",
+};
+
+const MAX_RENDER_RETRIES = 30;
+const RENDER_RETRY_INTERVAL = 100;
 
 const LANGGRAPH_NODES: LangGraphNode[] = [
   {
@@ -261,15 +296,30 @@ const LANGGRAPH_EDGES: LangGraphEdge[] = [
 /**
  * 将 LangGraph 节点转换为 G6 节点数据。
  */
-function toG6Node(node: LangGraphNode) {
+function toG6Node(
+  node: LangGraphNode,
+  runtimeState: LangGraphRuntimeState | undefined,
+) {
+  const runtimeStatus = getRuntimeNodeStatus(node.id, runtimeState);
   return {
     id: node.id,
     data: {
       label: node.label,
       nodeType: node.type,
       description: node.description,
+      runtimeStatus,
     },
   };
+}
+
+/**
+ * 读取节点当前运行状态，默认保持未运行。
+ */
+function getRuntimeNodeStatus(
+  nodeId: string,
+  runtimeState: LangGraphRuntimeState | undefined,
+): LangGraphRuntimeStatus {
+  return runtimeState?.nodeStatuses[nodeId] ?? "pending";
 }
 
 /**
@@ -290,10 +340,11 @@ function toG6Edge(edge: LangGraphEdge) {
 /**
  * LangGraph 架构图弹窗。
  */
-export const LangGraphModal: FC<Props> = ({ open, onClose }) => {
+export const LangGraphModal: FC<Props> = ({ open, onClose, runtimeState }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<Graph | null>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
+  const renderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [graphReady, setGraphReady] = useState(false);
   const [selectedNode, setSelectedNode] = useState<LangGraphNode | null>(null);
 
@@ -306,6 +357,10 @@ export const LangGraphModal: FC<Props> = ({ open, onClose }) => {
    * 销毁 G6 实例和尺寸监听，避免弹窗重复打开后残留画布。
    */
   const cleanup = useCallback(() => {
+    if (renderTimerRef.current) {
+      clearTimeout(renderTimerRef.current);
+      renderTimerRef.current = null;
+    }
     resizeObserverRef.current?.disconnect();
     resizeObserverRef.current = null;
     if (graphRef.current) {
@@ -315,6 +370,9 @@ export const LangGraphModal: FC<Props> = ({ open, onClose }) => {
         // 销毁失败不影响弹窗关闭。
       }
       graphRef.current = null;
+    }
+    if (containerRef.current) {
+      containerRef.current.innerHTML = "";
     }
   }, []);
 
@@ -345,7 +403,7 @@ export const LangGraphModal: FC<Props> = ({ open, onClose }) => {
         height: container.clientHeight,
         background: "#ffffff",
         data: {
-          nodes: LANGGRAPH_NODES.map(toG6Node),
+          nodes: LANGGRAPH_NODES.map((node) => toG6Node(node, runtimeState)),
           edges: LANGGRAPH_EDGES.map(toG6Edge),
         },
         layout: {
@@ -364,16 +422,18 @@ export const LangGraphModal: FC<Props> = ({ open, onClose }) => {
               return [width, height];
             },
             radius: 8,
-            fill: (datum: { data?: { nodeType?: LangGraphNodeType } }) => {
-              const type = datum.data?.nodeType ?? "agent";
-              return NODE_COLORS[type];
+            fill: (datum: { data?: { runtimeStatus?: LangGraphRuntimeStatus } }) => {
+              const status = datum.data?.runtimeStatus ?? "pending";
+              return RUNTIME_STATUS_COLORS[status];
             },
-            fillOpacity: 0.12,
-            stroke: (datum: { data?: { nodeType?: LangGraphNodeType } }) => {
-              const type = datum.data?.nodeType ?? "agent";
-              return NODE_COLORS[type];
+            fillOpacity: (datum: { data?: { runtimeStatus?: LangGraphRuntimeStatus } }) =>
+              datum.data?.runtimeStatus === "skipped" ? 0.08 : 0.16,
+            stroke: (datum: { data?: { runtimeStatus?: LangGraphRuntimeStatus } }) => {
+              const status = datum.data?.runtimeStatus ?? "pending";
+              return RUNTIME_STATUS_COLORS[status];
             },
-            strokeWidth: 2,
+            strokeWidth: (datum: { data?: { runtimeStatus?: LangGraphRuntimeStatus } }) =>
+              datum.data?.runtimeStatus === "running" ? 3 : 2,
             labelText: (datum: { data?: { label?: string } }) =>
               datum.data?.label ?? "",
             labelFill: "#11161d",
@@ -446,7 +506,7 @@ export const LangGraphModal: FC<Props> = ({ open, onClose }) => {
       });
       resizeObserverRef.current.observe(container);
     },
-    [cleanup, fitGraphView, nodeById],
+    [cleanup, fitGraphView, nodeById, runtimeState],
   );
 
   useEffect(() => {
@@ -457,16 +517,37 @@ export const LangGraphModal: FC<Props> = ({ open, onClose }) => {
       return;
     }
 
-    const rafId = requestAnimationFrame(() => {
+    setGraphReady(false);
+
+    const tryRender = (attempt: number) => {
       const container = containerRef.current;
-      if (!container || container.clientWidth === 0 || container.clientHeight === 0) {
+      if (!container) return;
+
+      if (container.clientWidth === 0 || container.clientHeight === 0) {
+        if (attempt < MAX_RENDER_RETRIES) {
+          renderTimerRef.current = setTimeout(
+            () => tryRender(attempt + 1),
+            RENDER_RETRY_INTERVAL,
+          );
+          return;
+        }
+        setGraphReady(true);
         return;
       }
+
       void renderGraph(container);
+    };
+
+    const rafId = requestAnimationFrame(() => {
+      tryRender(0);
     });
 
     return () => {
       cancelAnimationFrame(rafId);
+      if (renderTimerRef.current) {
+        clearTimeout(renderTimerRef.current);
+        renderTimerRef.current = null;
+      }
     };
   }, [cleanup, open, renderGraph]);
 
@@ -559,12 +640,13 @@ export const LangGraphModal: FC<Props> = ({ open, onClose }) => {
         <div className="absolute bottom-4 left-4 z-10 w-[220px] rounded-md border border-[var(--line-soft)] bg-white p-3 shadow-[var(--shadow-card)]">
           <div className="mb-2 text-xs font-bold text-[var(--ink)]">图例</div>
           <div className="space-y-1.5">
-            {Object.entries(NODE_TYPE_LABELS).map(([type, label]) => (
-              <div key={type} className="flex items-center gap-2 text-xs">
+            {Object.entries(RUNTIME_STATUS_LABELS).map(([status, label]) => (
+              <div key={status} className="flex items-center gap-2 text-xs">
                 <span
                   className="h-3 w-3 rounded-sm"
                   style={{
-                    background: NODE_COLORS[type as LangGraphNodeType],
+                    background:
+                      RUNTIME_STATUS_COLORS[status as LangGraphRuntimeStatus],
                   }}
                 />
                 <span className="text-[var(--ink-soft)]">{label}</span>
@@ -595,6 +677,20 @@ export const LangGraphModal: FC<Props> = ({ open, onClose }) => {
                   color={NODE_COLORS[selectedNode.type]}
                 >
                   {NODE_TYPE_LABELS[selectedNode.type]}
+                </Tag>
+                <Tag
+                  className="mt-2"
+                  color={
+                    RUNTIME_STATUS_COLORS[
+                      getRuntimeNodeStatus(selectedNode.id, runtimeState)
+                    ]
+                  }
+                >
+                  {
+                    RUNTIME_STATUS_LABELS[
+                      getRuntimeNodeStatus(selectedNode.id, runtimeState)
+                    ]
+                  }
                 </Tag>
               </div>
               <Button

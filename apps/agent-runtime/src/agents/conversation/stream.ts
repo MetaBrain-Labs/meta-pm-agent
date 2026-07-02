@@ -15,7 +15,7 @@
  */
 
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "langchain";
-import type { ChatMessage } from "@repo/shared";
+import type { ChatMessage, ProductWorkflowResult } from "@repo/shared";
 import { calculateCost } from "../../config";
 import { createConversationAgent } from "./agent";
 import {
@@ -26,10 +26,7 @@ import {
 } from "../../utils/message-adapter";
 import { streamTaggedBlock } from "../../utils/tagged-block-stream";
 import { getFormAnswerId, isFormAnswer } from "../../utils/form-parser";
-import {
-  formatProductWorkflowConfirmationQuestionForm,
-  formatProductWorkflowProposalQuestionForm,
-} from "../product-workflow/agent";
+import { formatProductWorkflowProposalQuestionForm } from "../product-workflow/agent";
 import {
   isExecutorHumanInputRequiredError,
   type ExecutorHumanInputRequired,
@@ -294,7 +291,9 @@ async function* streamWorkflowResumeAfterFormAnswer(
   yield* streamPlanningAfterUserInput(userInputBlock, options, messages, {
     resumeContext,
     suppressRestoredRequestAnalysis: true,
-    finalizeOnComplete: formId === PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID,
+    finalizeOnComplete:
+      formId === PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID ||
+      formId.endsWith("-proposal-decision"),
   });
 }
 
@@ -364,9 +363,17 @@ async function* streamPlanningAfterUserInput(
 
       if (event.type === "complete") {
         // 将结构化工作流结果转发给 API 持久化层，供知识图谱归档
-        yield { type: "complete", result: event.result };
+        const proposalForm = resumeOptions.finalizeOnComplete
+          ? null
+          : formatProductWorkflowProposalQuestionForm(event.result);
+        const shouldFinalize = resumeOptions.finalizeOnComplete || !proposalForm;
+        const workflowResult = shouldFinalize
+          ? markWorkflowResultCompleted(event.result)
+          : event.result;
 
-        if (resumeOptions.finalizeOnComplete) {
+        yield { type: "complete", result: workflowResult };
+
+        if (shouldFinalize) {
           yield {
             type: "text",
             content:
@@ -375,13 +382,7 @@ async function* streamPlanningAfterUserInput(
           };
           continue;
         }
-
-        const proposalForm = formatProductWorkflowProposalQuestionForm(
-          event.result,
-        );
-        const questionForm =
-          proposalForm ??
-          formatProductWorkflowConfirmationQuestionForm(event.result);
+        if (!proposalForm) continue;
 
         // Planner 只发起确认/补充请求，由 Conversation Agent 面向用户提问。
         yield {
@@ -397,11 +398,11 @@ async function* streamPlanningAfterUserInput(
         };
         yield {
           type: "question-form-complete",
-          content: questionForm,
+          content: proposalForm,
           agentType: "conversation_confirmation",
         };
         yield* streamHumanInterruptForQuestionForm(
-          questionForm,
+          proposalForm,
           "conversation_confirmation",
           options,
         );
@@ -486,6 +487,20 @@ async function* streamHumanInterruptForQuestionForm(
 /**
  * 格式化为 <user-input> 块，如果已经是该块则直接返回。
  */
+/**
+ * 将 Executor 硬阻塞转换为 Conversation Agent 对用户展示的 HITL 表单。
+ */
+/**
+ * 将默认确认的产品工作流结果标记为已完成，避免后续恢复时再次要求最终确认。
+ */
+function markWorkflowResultCompleted(
+  result: ProductWorkflowResult,
+): ProductWorkflowResult {
+  return result.status === "completed"
+    ? result
+    : { ...result, status: "completed" };
+}
+
 /**
  * 将 Executor 硬阻塞转换为 Conversation Agent 对用户展示的 HITL 表单。
  */

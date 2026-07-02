@@ -102,7 +102,8 @@ function asStringArray(value: unknown): string[] {
 export async function loadProductContextForConversation(
   conversationId: string | undefined,
 ): Promise<string> {
-  const context = await loadProductRuntimeContextForConversation(conversationId);
+  const context =
+    await loadProductRuntimeContextForConversation(conversationId);
   return context.productContext;
 }
 
@@ -114,9 +115,7 @@ async function loadProductContextForWorkspace(
 ): Promise<string> {
   if (!workspace?.localPath) return "";
 
-  const sections: string[] = [
-    `Workspace: ${workspace.workspaceName}`,
-  ];
+  const sections: string[] = [`Workspace: ${workspace.workspaceName}`];
 
   for (const relativeFile of OVERVIEW_FILES) {
     const filePath = path.resolve(workspace.localPath, relativeFile);
@@ -154,7 +153,7 @@ function isInsideDirectory(filePath: string, directory: string): boolean {
 
   // 当 filePath 位于目录外时，path.relative 会返回以 ".." 开头或绝对路径的结果。
   // 这里用这个特征做跨平台的目录边界检查。
-  return relative !== "" &&
-    !relative.startsWith("..") &&
-    !path.isAbsolute(relative);
+  return (
+    relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
+  );
 }

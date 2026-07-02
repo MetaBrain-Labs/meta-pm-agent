@@ -312,6 +312,7 @@ async function executePlannerWorkflowReview(
       workspaceId: state.workspaceId,
       productContext: state.productContext,
       requestAnalysis: state.requestAnalysis,
+      userInput: state.userInput,
       plan: state.plan,
       executorResults: state.executorResults,
       knowledgeGraph,

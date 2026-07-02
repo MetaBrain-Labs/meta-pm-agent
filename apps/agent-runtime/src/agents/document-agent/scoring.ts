@@ -31,8 +31,7 @@ export const DOCUMENT_SCORE_MAX_ATTEMPTS = 3;
 
 export type DocumentScoreAgentType = "document-score";
 
-export type DocumentScoringStreamEvent =
-  JsonAgentEvent<DocumentScoreAgentType>;
+export type DocumentScoringStreamEvent = JsonAgentEvent<DocumentScoreAgentType>;
 
 export type DocumentScoringReviewerId =
   | "gaokao-reviewer-a"
@@ -175,7 +174,7 @@ export async function runPrdScoringReviewers({
       systemPrompt: PRD_GAOKAO_SCORING_AGENT_PROMPT,
       modelOptions: {
         ...JSON_AGENT_MODEL_OPTIONS,
-        maxTokens: 2500,
+        maxTokens: 4096,
       },
       payload: {
         reviewer,
@@ -244,7 +243,8 @@ export async function runPrdWeightedScoringAgent({
     systemPrompt: PRD_WEIGHTED_SCORING_AGENT_PROMPT,
     modelOptions: {
       ...JSON_AGENT_MODEL_OPTIONS,
-      maxTokens: 2600,
+      // 加权评分需要综合三方分歧和修订项，使用与单评审一致的 4k 结构化输出预算。
+      maxTokens: 4096,
     },
     payload: {
       attempt,
@@ -355,7 +355,9 @@ export function selectFinalScoreAttempt(
   const passed = attempts.find((attempt) => attempt.passed);
   if (passed) return { attempt: passed, reason: "passed_threshold" };
 
-  const reliableAttempts = attempts.filter((attempt) => attempt.varianceAccepted);
+  const reliableAttempts = attempts.filter(
+    (attempt) => attempt.varianceAccepted,
+  );
   if (reliableAttempts.length > 0) {
     return {
       attempt: [...reliableAttempts].sort(
@@ -370,13 +372,17 @@ export function selectFinalScoreAttempt(
     return b.aggregate.score - a.aggregate.score;
   })[0];
 
-  return lowestSpread ? { attempt: lowestSpread, reason: "lowest_spread" } : null;
+  return lowestSpread
+    ? { attempt: lowestSpread, reason: "lowest_spread" }
+    : null;
 }
 
 /**
  * 根据失败评分生成下一轮重写反馈。
  */
-export function createScoreRetryFeedback(attempt: DocumentScoreAttempt): string {
+export function createScoreRetryFeedback(
+  attempt: DocumentScoreAttempt,
+): string {
   const revisionAdvice = [
     ...attempt.aggregate.requiredRevisions,
     ...attempt.reviewerScores.flatMap((review) => review.revisionAdvice),
@@ -448,7 +454,9 @@ function createReviewerFallback({
       language: Math.min(92, baseScore + 3),
     },
     strengths: ["The draft contains a usable PRD structure."],
-    weaknesses: [`Fallback scoring used because ${reviewer.name} failed: ${reason}`],
+    weaknesses: [
+      `Fallback scoring used because ${reviewer.name} failed: ${reason}`,
+    ],
     revisionAdvice: [
       "Strengthen evidence links to knowledge graph nodes.",
       "Make acceptance criteria and measurable success metrics explicit.",

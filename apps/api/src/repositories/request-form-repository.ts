@@ -18,10 +18,10 @@ import { prisma } from "@repo/database";
 import type {
   ChatMessage,
   ExecutorAgentResult,
+  ProductWorkflowProposalQuestion,
   ProductWorkflowResult,
   RequestAnalysis,
 } from "@repo/shared";
-import { inferQuestionFormFieldFromText } from "@repo/shared";
 
 /**
  * 更新请求表单的阶段状态，用于前端和后续调度判断当前表单被哪个阶段消费。
@@ -343,9 +343,15 @@ interface RequestFormProposalRow {
 interface ProposalQuestion {
   id: string;
   question: string;
+  type: "radio" | "checkbox" | "select" | "text" | "textarea";
+  options?: string[];
+  placeholder?: string;
+  required?: boolean;
+  help?: string;
+  maxSelections?: number;
   source_task_id: string;
   source_agent: string;
-  sources?: Array<{ source_task_id: string; source_agent: string }>;
+  sources: Array<{ source_task_id: string; source_agent: string }>;
   priority: number;
 }
 
@@ -511,6 +517,18 @@ function parseDecisionQuestions(value: unknown): ProposalQuestion[] {
       {
         id: typeof record.id === "string" ? record.id : `slot-${index + 1}`,
         question: record.question,
+        type: parseQuestionType(record.type),
+        options: parseStringArray(record.options),
+        placeholder:
+          typeof record.placeholder === "string" ? record.placeholder : undefined,
+        required: typeof record.required === "boolean" ? record.required : true,
+        help: typeof record.help === "string" ? record.help : undefined,
+        maxSelections:
+          typeof record.maxSelections === "number" &&
+          Number.isInteger(record.maxSelections) &&
+          record.maxSelections > 0
+            ? record.maxSelections
+            : undefined,
         source_task_id: record.source_task_id,
         source_agent: record.source_agent,
         sources: parseProposalQuestionSources(record.sources),
@@ -526,8 +544,8 @@ function parseDecisionQuestions(value: unknown): ProposalQuestion[] {
  */
 function parseProposalQuestionSources(
   value: unknown,
-): Array<{ source_task_id: string; source_agent: string }> | undefined {
-  if (!Array.isArray(value)) return undefined;
+): Array<{ source_task_id: string; source_agent: string }> {
+  if (!Array.isArray(value)) return [];
 
   const sources = value.flatMap((item) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) return [];
@@ -543,7 +561,7 @@ function parseProposalQuestionSources(
       : [];
   });
 
-  return sources.length > 0 ? sources : undefined;
+  return sources;
 }
 
 /**
@@ -566,14 +584,33 @@ function parseFormAnswer(content: string): { formId: string; content: string } |
 function collectProposalSlots(result: ProductWorkflowResult): Array<{
   id: string;
   question: string;
+  type: "radio" | "checkbox" | "select" | "text" | "textarea";
+  options?: string[];
+  placeholder?: string;
+  required?: boolean;
+  help?: string;
+  maxSelections?: number;
   source_task_id: string;
   source_agent: string;
   sources: Array<{ source_task_id: string; source_agent: string }>;
   priority: number;
 }> {
+  const proposalQuestions = result.proposal_questions ?? [];
+  if (proposalQuestions.length > 0) {
+    return proposalQuestions
+      .map(toProposalQuestionSlot)
+      .sort((left, right) => right.priority - left.priority);
+  }
+
   const slots = new Map<string, {
     id: string;
     question: string;
+    type: "radio" | "checkbox" | "select" | "text" | "textarea";
+    options?: string[];
+    placeholder?: string;
+    required?: boolean;
+    help?: string;
+    maxSelections?: number;
     source_task_id: string;
     source_agent: string;
     sources: Array<{ source_task_id: string; source_agent: string }>;
@@ -605,6 +642,7 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
       slots.set(slotKey, {
         id: `slot-${slots.size + 1}`,
         question: questionText,
+        type: "textarea",
         source_task_id: executorResult.task_id,
         source_agent: executorResult.agent_type,
         sources: [source],
@@ -615,6 +653,77 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
 
   return [...slots.values()]
     .sort((left, right) => right.priority - left.priority);
+}
+
+/**
+ * 解析持久化问题控件类型；历史数据缺失时只降级 textarea，不做文本推断。
+ */
+function parseQuestionType(value: unknown): ProposalQuestion["type"] {
+  return value === "radio" ||
+    value === "checkbox" ||
+    value === "select" ||
+    value === "text" ||
+    value === "textarea"
+    ? value
+    : "textarea";
+}
+
+/**
+ * 解析结构化问题选项。
+ */
+function parseStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const items = value.filter((item): item is string => typeof item === "string");
+  return items.length > 0 ? items : undefined;
+}
+
+/**
+ * 将 Planner Review 的结构化问题转换成 request_form_item payload。
+ */
+function toProposalQuestionSlot(
+  question: ProductWorkflowProposalQuestion,
+): ProposalQuestion {
+  const sources =
+    question.sources.length > 0
+      ? question.sources
+      : question.source_task_id && question.source_agent
+        ? [
+            {
+              source_task_id: question.source_task_id,
+              source_agent: question.source_agent,
+            },
+          ]
+        : [];
+
+  const type = normalizeProposalQuestionType(question.type, question.options);
+
+  return {
+    id: question.id,
+    question: question.label,
+    type,
+    ...(type !== "text" && type !== "textarea" && question.options
+      ? { options: question.options }
+      : {}),
+    ...(question.placeholder ? { placeholder: question.placeholder } : {}),
+    required: question.required,
+    ...(question.help ? { help: question.help } : {}),
+    ...(question.maxSelections ? { maxSelections: question.maxSelections } : {}),
+    source_task_id: question.source_task_id ?? sources[0]?.source_task_id ?? "",
+    source_agent: question.source_agent ?? sources[0]?.source_agent ?? "planner",
+    sources,
+    priority: question.priority,
+  };
+}
+
+/**
+ * 结构化问题缺少选项时，仅把该题降级为 textarea，避免整张表单不可用。
+ */
+function normalizeProposalQuestionType(
+  type: ProposalQuestion["type"],
+  options: string[] | undefined,
+): ProposalQuestion["type"] {
+  const needsOptions = type === "radio" || type === "checkbox" || type === "select";
+  return needsOptions && (!options || options.length < 2) ? "textarea" : type;
 }
 
 /**
@@ -692,14 +801,29 @@ function buildDecisionQuestionForm(payload: Record<string, unknown>): string | n
         if (typeof record.id !== "string" || typeof record.question !== "string") {
           return [];
         }
-        const field = inferQuestionFormFieldFromText(record.question);
+        const options = parseStringArray(record.options);
+        const type = normalizeProposalQuestionType(
+          parseQuestionType(record.type),
+          options,
+        );
         return [
           {
             id: record.id,
             label: record.question,
-            type: field.type,
-            required: true,
-            ...(field.type === "textarea" ? {} : { options: field.options }),
+            type,
+            required:
+              typeof record.required === "boolean" ? record.required : true,
+            ...(options && type !== "text" && type !== "textarea"
+              ? { options }
+              : {}),
+            ...(typeof record.placeholder === "string"
+              ? { placeholder: record.placeholder }
+              : {}),
+            ...(typeof record.maxSelections === "number" &&
+            Number.isInteger(record.maxSelections) &&
+            record.maxSelections > 0
+              ? { maxSelections: record.maxSelections }
+              : {}),
             help: `来源：${formatQuestionSources(record)}`,
           },
         ];
