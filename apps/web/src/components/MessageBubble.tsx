@@ -142,6 +142,22 @@ export function MessageBubble({
   const hasVisibleProcessContent = Boolean(
     message.thinking || message.reasoningBlocks?.length || message.toolCalls?.length,
   );
+  // 当前消息上正在运行的 Agent 列表，供左栏执行态卡片展示。
+  const runningAgents = message.activeAgents?.length
+    ? message.activeAgents
+    : message.activeAgent
+      ? [message.activeAgent]
+      : [];
+  const showLoadingPlaceholder =
+    !message.content &&
+    !message.questionForm &&
+    !message.humanInterrupt &&
+    !message.userInput &&
+    !message.requestAnalysis &&
+    !message.plannerExecution &&
+    !message.plannerReview &&
+    !message.workflowCompletion &&
+    !message.agentError;
   const handleFormSubmit = useCallback(
     (formId: string, text: string, hitlResume?: HumanInTheLoopResume) => {
       if (!onFormSubmit) return;
@@ -383,26 +399,36 @@ export function MessageBubble({
         />
       )}
 
-      {showMainContent &&
-        viewMode !== "main" &&
-        !message.content &&
-        !(showProcessContent && hasVisibleProcessContent) &&
-        !message.questionForm &&
-        !message.humanInterrupt &&
-        !message.userInput &&
-        !message.requestAnalysis &&
-        !message.plannerExecution &&
-        !message.plannerReview &&
-        !message.workflowCompletion &&
-        !message.agentError && (
-          <div className="assistant-bubble is-loading">
-            <Spin
-              indicator={<LoadingOutlined style={{ color: "var(--primary)" }} />}
-              size="small"
-            />{" "}
-            思考中
-          </div>
-        )}
+      {showMainContent && showLoadingPlaceholder &&
+        !(showProcessContent && hasVisibleProcessContent) && (
+        <>
+          {viewMode !== "main" && (
+            <div className="assistant-bubble is-loading">
+              <Spin
+                indicator={
+                  <LoadingOutlined style={{ color: "var(--primary)" }} />
+                }
+                size="small"
+              />{" "}
+              思考中
+            </div>
+          )}
+          {viewMode === "main" && runningAgents.length > 0 && (
+            <div className="assistant-bubble is-loading">
+              <Spin
+                indicator={
+                  <LoadingOutlined
+                    style={{ color: getAgentColor(runningAgents[0]!) }}
+                  />
+                }
+                size="small"
+              />{" "}
+              {runningAgents.map((a) => getAgentLabel(a)).join("、")}
+              {runningAgents.length > 1 ? " 并行执行中" : " 执行中"}
+            </div>
+          )}
+        </>
+      )}
 
     </div>
   );
@@ -914,7 +940,14 @@ function ThinkingSection({
 }) {
   const [open, setOpen] = useState(active);
   const [userToggled, setUserToggled] = useState(false);
+  const [userScrolled, setUserScrolled] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+
+  const isAtBottom = useCallback(() => {
+    const el = contentRef.current;
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+  }, []);
 
   useEffect(() => {
     if (active) {
@@ -926,6 +959,17 @@ function ThinkingSection({
       setOpen(false);
     }
   }, [active, userToggled]);
+
+  // 流式输出时自动追随底部，除非用户手动向上滚动。
+  useEffect(() => {
+    if (!userScrolled && contentRef.current && open) {
+      contentRef.current.scrollTop = contentRef.current.scrollHeight;
+    }
+  }, [content, open, userScrolled]);
+
+  const handleScroll = useCallback(() => {
+    setUserScrolled(!isAtBottom());
+  }, [isAtBottom]);
 
   const handleChange = (keys: string | string[]) => {
     setUserToggled(true);
@@ -957,6 +1001,7 @@ function ThinkingSection({
             children: (
               <div
                 ref={contentRef}
+                onScroll={handleScroll}
                 className="max-h-[220px] overflow-y-auto whitespace-pre-wrap themed-scrollbar text-[13px] leading-relaxed text-[var(--ink-mute)]"
               >
                 {content}
