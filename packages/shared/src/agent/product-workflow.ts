@@ -1,3 +1,18 @@
+/**
+ * 产品工作流共享契约
+ *
+ * 定义 Planner、Executor、产品知识图谱和工作流确认结果在 runtime、API 与前端之间
+ * 传递时使用的 Zod schema 与 TypeScript 类型。
+ *
+ * Responsibilities:
+ * - 约束产品知识图谱节点、关系、决策、风险和待确认问题结构
+ * - 定义 Planner DAG、Executor 结果和最终工作流结果契约
+ * - 为跨包消费者导出稳定类型
+ *
+ * Notes:
+ * - LLM-facing schema descriptions must remain in English.
+ */
+
 import { z } from "zod";
 
 /**
@@ -46,6 +61,8 @@ export const KnowledgeGraphEntitySchema = z.object({
     "Feature",
     "Component",
     "Metric",
+    "Risk",
+    "OpenQuestion",
     "Custom",
   ]),
   name: z.string().min(1),
@@ -67,6 +84,8 @@ export const KnowledgeGraphNodeInputSchema = z.object({
     "Feature",
     "Component",
     "Metric",
+    "Risk",
+    "OpenQuestion",
     "Custom",
   ]).describe("Entity type"),
   name: z.string().min(1).describe("Node name"),
@@ -129,6 +148,7 @@ export const KnowledgeGraphRelationInputSchema = z.object({
 export const KnowledgeGraphDecisionInputSchema = z.object({
   id: z.string().min(1).describe("Decision ID, e.g. D-001"),
   text: z.string().min(1).describe("Decision text including choice, rationale, and risk assessment"),
+  source_task_id: z.string().optional().describe("Optional executor task ID that produced this decision"),
 });
 
 /**
@@ -137,6 +157,7 @@ export const KnowledgeGraphDecisionInputSchema = z.object({
 export const KnowledgeGraphRiskInputSchema = z.object({
   id: z.string().min(1).describe("Risk ID, e.g. RISK-001"),
   text: z.string().min(1).describe("Risk description including impact and mitigation"),
+  source_task_id: z.string().optional().describe("Optional executor task ID that produced this risk"),
 });
 
 /**
@@ -145,6 +166,7 @@ export const KnowledgeGraphRiskInputSchema = z.object({
 export const KnowledgeGraphOpenQuestionInputSchema = z.object({
   id: z.string().min(1).describe("Question ID, e.g. OQ-001"),
   text: z.string().min(1).describe("Question text explaining what needs to be confirmed"),
+  source_task_id: z.string().optional().describe("Optional executor task ID that raised this question"),
 });
 
 const ProductWorkflowProposalQuestionTypeSchema = z.preprocess((value) => {

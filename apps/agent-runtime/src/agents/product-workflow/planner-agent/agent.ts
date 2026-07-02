@@ -19,6 +19,7 @@ import {
   TaskExecutionPlanSchema,
   type BusinessModelItem,
   type ExecutorAgentResult,
+  type ProductWorkflowProposalQuestion,
   type ProductWorkflowResult,
   type TaskExecutionNode,
   type TaskExecutionPlan,
@@ -511,30 +512,93 @@ function createFallbackProposalQuestions(
   executorResults: ExecutorAgentResult[],
   language: "zh" | "en",
 ): ProductWorkflowResult["proposal_questions"] {
-  return executorResults.flatMap((result) =>
-    result.open_questions.map((question, index) => ({
-      id: `${result.task_id}-slot-${index + 1}`,
-      label:
-        language === "zh"
-          ? `请补充 ${result.task_id} 需要确认的关键信息`
-          : question.text,
-      type: "textarea" as const,
-      required: true,
-      placeholder:
-        language === "zh"
-          ? "请补充这个问题所需的事实、约束或偏好。"
-          : "Add the facts, constraints, or preferences needed for this question.",
-      source_task_id: result.task_id,
-      source_agent: result.agent_type,
-      sources: [
-        {
-          source_task_id: result.task_id,
-          source_agent: result.agent_type,
-        },
-      ],
-      priority: result.open_questions.length - index,
-    })),
+  const questions = new Map<string, ProductWorkflowProposalQuestion>();
+
+  for (const result of executorResults) {
+    result.open_questions.forEach((question, index) => {
+      const label = formatFallbackOpenQuestionLabel(
+        question.text,
+        result.task_id,
+        language,
+      );
+      const key = normalizeFallbackQuestionText(label);
+      if (!key) return;
+
+      const source = {
+        source_task_id: result.task_id,
+        source_agent: result.agent_type,
+      };
+      const priority = result.open_questions.length - index;
+      const existing = questions.get(key);
+      if (existing) {
+        existing.sources = mergeFallbackQuestionSources([
+          ...existing.sources,
+          source,
+        ]);
+        existing.priority = Math.max(existing.priority, priority);
+        return;
+      }
+
+      questions.set(key, {
+        id: `${result.task_id}-${question.id || `slot-${index + 1}`}`,
+        label,
+        type: "textarea",
+        required: true,
+        placeholder:
+          language === "zh"
+            ? "请补充这个问题所需的事实、约束或偏好。"
+            : "Add the facts, constraints, or preferences needed for this question.",
+        source_task_id: result.task_id,
+        source_agent: result.agent_type,
+        sources: [source],
+        priority,
+      });
+    });
+  }
+
+  return [...questions.values()].sort(
+    (left, right) => right.priority - left.priority,
   );
+}
+
+/**
+ * fallback 阶段优先展示 Executor 写入的真实问题文本，只有异常空值才使用兜底文案。
+ */
+function formatFallbackOpenQuestionLabel(
+  text: string,
+  taskId: string,
+  language: "zh" | "en",
+): string {
+  const trimmed = text.trim();
+  if (trimmed) return trimmed;
+
+  return language === "zh"
+    ? `请补充 ${taskId} 需要确认的关键信息`
+    : `Add the key information needed by ${taskId}.`;
+}
+
+/**
+ * 归一化 fallback 问题文本，用于合并不同 Executor 提出的同一用户决策。
+ */
+function normalizeFallbackQuestionText(text: string): string {
+  return text
+    .trim()
+    .replace(/[?？。.!！]+$/g, "")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+/**
+ * 对 fallback 问题来源按 agent/task 去重。
+ */
+function mergeFallbackQuestionSources<
+  T extends ProductWorkflowProposalQuestion["sources"][number],
+>(sources: T[]): T[] {
+  const byKey = new Map<string, T>();
+  for (const source of sources) {
+    byKey.set(`${source.source_agent}:${source.source_task_id}`, source);
+  }
+  return [...byKey.values()];
 }
 
 /**

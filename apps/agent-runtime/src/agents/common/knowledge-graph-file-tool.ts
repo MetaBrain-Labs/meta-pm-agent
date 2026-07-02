@@ -324,7 +324,7 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_add_nodes",
         description:
-          "Write structured nodes to the knowledge graph. Each node must have: id, type, name, description, source_task_id, status. Allowed types: Goal/Requirement/Evidence/Decision/Feature/Component/Metric/Custom.",
+          "Write structured nodes to the knowledge graph. Each node must have: id, type, name, description, source_task_id, status. Allowed types: Goal/Requirement/Evidence/Decision/Feature/Component/Metric/Risk/OpenQuestion/Custom. Prefer kg_file_add_risks and kg_file_add_open_questions for uncertainty records.",
         schema: z.object({
           nodes: z
             .array(nodeInputSchema)
@@ -380,7 +380,7 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_add_decisions",
         description:
-          "Write structured decisions to the knowledge graph. Each decision has id and text fields.",
+          "Write structured decisions to the knowledge graph. Each decision has id, text, and optional source_task_id fields.",
         schema: z.object({
           decisions: z
             .array(decisionInputSchema)
@@ -407,7 +407,7 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_add_risks",
         description:
-          "Write structured risks to the knowledge graph. Each risk has id and text fields.",
+          "Write structured risks to the knowledge graph. Each risk has id, text, and optional source_task_id fields.",
         schema: z.object({
           risks: z
             .array(riskInputSchema)
@@ -436,7 +436,7 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_add_open_questions",
         description:
-          "Write structured open questions to the knowledge graph. Each question has id and text fields.",
+          "Write structured open questions to the knowledge graph. Each question has id, text, and optional source_task_id fields.",
         schema: z.object({
           questions: z
             .array(openQuestionInputSchema)

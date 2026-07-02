@@ -77,6 +77,8 @@ const NODE_COLORS: Record<string, string> = {
   Feature: "#fa541c",
   Component: "#722ed1",
   Metric: "#eb2f96",
+  Risk: "#dc2626",
+  OpenQuestion: "#0891b2",
   Custom: "#64748b",
 };
 
@@ -89,6 +91,8 @@ const NODE_TYPE_LABELS: Record<string, string> = {
   Feature: "功能",
   Component: "组件",
   Metric: "指标",
+  Risk: "风险",
+  OpenQuestion: "待确认问题",
   Custom: "自定义",
 };
 
@@ -101,6 +105,8 @@ const NODE_TYPE_ICONS: Record<string, string> = {
   Feature: "✦",
   Component: "▣",
   Metric: "∑",
+  Risk: "!",
+  OpenQuestion: "?",
   Custom: "•",
 };
 

@@ -2,8 +2,8 @@
  * 产品知识图谱持久化仓库
  *
  * 通过 raw SQL 访问用户维护的 product_knowledge_graph 表。长期持久化只保留
- * nodes 和 relations 两类图谱事实，避免 summary、decisions、risks、
- * open_questions 与图谱节点关系形成重复事实源。
+ * nodes 和 relations 两类 JSONB 字段；运行时 decisions、risks、open_questions
+ * 会在服务层规范化为节点后写入 nodes。
  *
  * Responsibilities:
  * - upsertProductKnowledgeGraph()：按 workspace 保存最新图谱节点和关系
@@ -12,7 +12,7 @@
  * - 维护 conversation/request_form provenance 与图谱版本号
  *
  * Notes:
- * - 运行时 ProductKnowledgeGraph 仍可携带临时 summary/decision/risk/question。
+ * - 仓储层不理解节点语义，只负责保存服务层传入的 nodes/relations。
  */
 
 import { randomUUID } from "node:crypto";

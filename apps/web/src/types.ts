@@ -245,6 +245,9 @@ export interface ProductWorkflowResult {
   knowledge_graph_update: {
     entities: Array<Record<string, unknown>>;
     relations: Array<Record<string, unknown>>;
+    decisions?: Array<Record<string, unknown>>;
+    risks?: Array<Record<string, unknown>>;
+    open_questions?: Array<Record<string, unknown>>;
     markdown?: string;
     notes: string[];
   };

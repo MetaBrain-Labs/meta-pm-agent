@@ -1,3 +1,18 @@
+/**
+ * 聊天与工作区 API 客户端
+ *
+ * 封装浏览器侧访问账号、工作区、聊天历史、知识图谱和文档生成状态的 HTTP 请求，
+ * 并定义这些接口返回给 React 视图层的 DTO 类型。
+ *
+ * Responsibilities:
+ * - 提供 chat/workspace/document/knowledge-graph 相关 fetch 方法
+ * - 定义前端消费的持久化消息和知识图谱数据类型
+ * - 将 API 错误转换为可读异常
+ *
+ * Notes:
+ * - 不负责 SSE 流式 reducer，流式事件处理位于 utils/apply-stream-event。
+ */
+
 import type {
   AccountInfo,
   Message,
@@ -166,7 +181,17 @@ export interface WorkspaceKnowledgeGraphData {
  */
 export interface KnowledgeGraphNodeData {
   id: string;
-  type: "Goal" | "Requirement" | "Evidence" | "Decision" | "Feature" | "Component" | "Metric" | "Custom";
+  type:
+    | "Goal"
+    | "Requirement"
+    | "Evidence"
+    | "Decision"
+    | "Feature"
+    | "Component"
+    | "Metric"
+    | "Risk"
+    | "OpenQuestion"
+    | "Custom";
   name: string;
   description?: string;
   source_task_id?: string;

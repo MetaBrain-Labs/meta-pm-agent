@@ -1,8 +1,26 @@
+/**
+ * 产品运行上下文服务
+ *
+ * 根据会话和工作区加载产品概述文档与当前产品知识图谱，为 Conversation Agent、
+ * Request Agent 和产品工作流提供可恢复的上下文输入。
+ *
+ * Responsibilities:
+ * - 根据 conversationId 找到 workspace 并读取产品概述文件
+ * - 从 product_knowledge_graph.nodes/relations 恢复运行时 ProductKnowledgeGraph
+ * - 将持久化节点中的 Decision/Risk/OpenQuestion 还原为运行时辅助数组
+ *
+ * Notes:
+ * - 不负责写入知识图谱，持久化归档由 product-knowledge-graph-service 处理。
+ */
+
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import type {
+  KnowledgeGraphDecisionInput,
   KnowledgeGraphEntity,
+  KnowledgeGraphOpenQuestionInput,
   KnowledgeGraphRelation,
+  KnowledgeGraphRiskInput,
   ProductKnowledgeGraph,
 } from "@repo/shared";
 import { getConversationWorkspace } from "../repositories/chat-repository";
@@ -67,16 +85,61 @@ async function loadProductKnowledgeGraphForWorkspace(
   const row = await getProductKnowledgeGraphByWorkspaceId(workspaceId);
   if (!row) return null;
 
+  const nodes = asArray<KnowledgeGraphEntity>(row.nodes);
+
   return {
-    entities: asArray<KnowledgeGraphEntity>(row.nodes),
+    entities: nodes,
     relations: asArray<KnowledgeGraphRelation>(row.relations),
-    decisions: [],
-    risks: [],
-    open_questions: [],
+    decisions: restoreDecisionInputs(nodes),
+    risks: restoreRiskInputs(nodes),
+    open_questions: restoreOpenQuestionInputs(nodes),
     summary: [],
     markdown: "",
     notes: [],
   };
+}
+
+/**
+ * 从持久化 nodes 中恢复运行时决策数组，供后续 Planner/Executor 使用。
+ */
+function restoreDecisionInputs(
+  nodes: KnowledgeGraphEntity[],
+): KnowledgeGraphDecisionInput[] {
+  return nodes
+    .filter((node) => node.type === "Decision")
+    .map((node) => ({
+      id: node.id,
+      text: node.description || node.name,
+      ...(node.source_task_id ? { source_task_id: node.source_task_id } : {}),
+    }));
+}
+
+/**
+ * 从持久化 nodes 中恢复运行时风险数组。
+ */
+function restoreRiskInputs(nodes: KnowledgeGraphEntity[]): KnowledgeGraphRiskInput[] {
+  return nodes
+    .filter((node) => node.type === "Risk")
+    .map((node) => ({
+      id: node.id,
+      text: node.description || node.name,
+      ...(node.source_task_id ? { source_task_id: node.source_task_id } : {}),
+    }));
+}
+
+/**
+ * 从持久化 nodes 中恢复运行时待确认问题数组。
+ */
+function restoreOpenQuestionInputs(
+  nodes: KnowledgeGraphEntity[],
+): KnowledgeGraphOpenQuestionInput[] {
+  return nodes
+    .filter((node) => node.type === "OpenQuestion")
+    .map((node) => ({
+      id: node.id,
+      text: node.description || node.name,
+      ...(node.source_task_id ? { source_task_id: node.source_task_id } : {}),
+    }));
 }
 
 /**
