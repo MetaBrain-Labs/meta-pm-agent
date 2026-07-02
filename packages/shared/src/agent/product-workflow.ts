@@ -17,6 +17,22 @@ export const ProductWorkflowAgentTypeSchema = z.enum([
   "executor-interface-craft",
 ]);
 
+const PRODUCT_WORKFLOW_AGENT_TYPES = ProductWorkflowAgentTypeSchema.options;
+
+/**
+ * 归一化模型输出的 Agent 类型，避免局部来源字段写偏导致整个 Planner Review 回退。
+ */
+const LooseProductWorkflowAgentTypeSchema = z.preprocess(
+  (value) =>
+    typeof value === "string" &&
+    PRODUCT_WORKFLOW_AGENT_TYPES.includes(
+      value as (typeof PRODUCT_WORKFLOW_AGENT_TYPES)[number],
+    )
+      ? value
+      : "planner",
+  ProductWorkflowAgentTypeSchema,
+);
+
 /**
  * 产品知识图谱节点的最小 MVP 表达，后续可替换为正式图谱存储。
  */
@@ -131,38 +147,56 @@ export const KnowledgeGraphOpenQuestionInputSchema = z.object({
   text: z.string().min(1).describe("Question text explaining what needs to be confirmed"),
 });
 
+const ProductWorkflowProposalQuestionTypeSchema = z.preprocess((value) => {
+  if (value === "single_choice" || value === "choice") return "radio";
+  if (value === "multiple_choice" || value === "multi_select") return "checkbox";
+  if (
+    value === "radio" ||
+    value === "checkbox" ||
+    value === "select" ||
+    value === "text" ||
+    value === "textarea"
+  ) {
+    return value;
+  }
+  return "textarea";
+}, z.enum(["radio", "checkbox", "select", "text", "textarea"]));
+
+const ProductWorkflowProposalQuestionOptionSchema = z.preprocess((value) => {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    if (typeof record.label === "string") return record.label;
+    if (typeof record.value === "string") return record.value;
+    if (typeof record.text === "string") return record.text;
+  }
+  return "";
+}, z.string().min(1));
+
+const ProductWorkflowProposalQuestionSourceSchema = z.object({
+  source_task_id: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() ? value : "unknown-task"),
+    z.string().min(1).describe("Executor task ID that raised this question"),
+  ),
+  source_agent: LooseProductWorkflowAgentTypeSchema.describe("Agent that raised this question"),
+});
+
 /**
  * Planner Agent 输出给 Conversation Agent 渲染的结构化 Question Form 问题。
  */
 export const ProductWorkflowProposalQuestionSchema = z.object({
   id: z.string().min(1).describe("Stable field ID used in the submitted form answer"),
   label: z.string().min(1).describe("User-facing question label"),
-  type: z.enum(["radio", "checkbox", "select", "text", "textarea"]).describe("Question Form control type chosen by Planner Agent"),
-  options: z.array(z.string().min(1)).optional().describe("Required for radio, checkbox, and select controls"),
+  type: ProductWorkflowProposalQuestionTypeSchema.describe("Question Form control type chosen by Planner Agent"),
+  options: z.array(ProductWorkflowProposalQuestionOptionSchema).optional().catch(undefined).describe("Required for radio, checkbox, and select controls"),
   placeholder: z.string().optional().describe("Optional placeholder for text or textarea controls"),
   required: z.boolean().default(true).describe("Whether the user must answer this field"),
   help: z.string().optional().describe("Optional user-facing help text or source summary"),
   maxSelections: z.number().int().positive().optional().describe("Maximum selected options for checkbox controls"),
   source_task_id: z.string().optional().describe("Primary executor task ID that raised this question"),
-  source_agent: ProductWorkflowAgentTypeSchema.optional().describe("Primary agent that raised this question"),
-  sources: z.array(
-    z.object({
-      source_task_id: z.string().min(1).describe("Executor task ID that raised this question"),
-      source_agent: ProductWorkflowAgentTypeSchema.describe("Agent that raised this question"),
-    }),
-  ).default([]).describe("All executor sources covered by the same merged question"),
+  source_agent: LooseProductWorkflowAgentTypeSchema.optional().describe("Primary agent that raised this question"),
+  sources: z.array(ProductWorkflowProposalQuestionSourceSchema).default([]).catch([]).describe("All executor sources covered by the same merged question"),
   priority: z.number().int().default(0).describe("Higher priority questions should be shown first"),
-}).superRefine((question, ctx) => {
-  if (
-    ["radio", "checkbox", "select"].includes(question.type) &&
-    (!question.options || question.options.length < 2)
-  ) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ["options"],
-      message: "radio, checkbox, and select questions must include at least two options.",
-    });
-  }
 });
 
 /**

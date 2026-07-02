@@ -695,11 +695,15 @@ function toProposalQuestionSlot(
           ]
         : [];
 
+  const type = normalizeProposalQuestionType(question.type, question.options);
+
   return {
     id: question.id,
     question: question.label,
-    type: question.type,
-    ...(question.options ? { options: question.options } : {}),
+    type,
+    ...(type !== "text" && type !== "textarea" && question.options
+      ? { options: question.options }
+      : {}),
     ...(question.placeholder ? { placeholder: question.placeholder } : {}),
     required: question.required,
     ...(question.help ? { help: question.help } : {}),
@@ -709,6 +713,17 @@ function toProposalQuestionSlot(
     sources,
     priority: question.priority,
   };
+}
+
+/**
+ * 结构化问题缺少选项时，仅把该题降级为 textarea，避免整张表单不可用。
+ */
+function normalizeProposalQuestionType(
+  type: ProposalQuestion["type"],
+  options: string[] | undefined,
+): ProposalQuestion["type"] {
+  const needsOptions = type === "radio" || type === "checkbox" || type === "select";
+  return needsOptions && (!options || options.length < 2) ? "textarea" : type;
 }
 
 /**
@@ -786,8 +801,11 @@ function buildDecisionQuestionForm(payload: Record<string, unknown>): string | n
         if (typeof record.id !== "string" || typeof record.question !== "string") {
           return [];
         }
-        const type = parseQuestionType(record.type);
         const options = parseStringArray(record.options);
+        const type = normalizeProposalQuestionType(
+          parseQuestionType(record.type),
+          options,
+        );
         return [
           {
             id: record.id,

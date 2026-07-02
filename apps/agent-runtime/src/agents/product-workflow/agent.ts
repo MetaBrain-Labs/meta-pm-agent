@@ -121,6 +121,7 @@ export async function* streamPlannerProductWorkflow(
     workspaceId: input.workspaceId,
     productContext: input.productContext,
     requestAnalysis: input.requestAnalysis,
+    userInput: input.userInput,
     plan,
     executorResults,
     knowledgeGraph,
@@ -262,12 +263,16 @@ function getProposalFormQuestions(result: ProductWorkflowResult) {
  * 将 Planner Review 结构化问题映射为前端 Question Form JSON 字段。
  */
 function toQuestionFormQuestion(question: ProductWorkflowProposalQuestion) {
+  const type = normalizeQuestionFormType(question);
+
   return {
     id: question.id,
     label: question.label,
-    type: question.type,
+    type,
     required: question.required,
-    ...(question.options ? { options: question.options } : {}),
+    ...(type !== "text" && type !== "textarea" && question.options
+      ? { options: question.options }
+      : {}),
     ...(question.placeholder ? { placeholder: question.placeholder } : {}),
     ...(question.maxSelections ? { maxSelections: question.maxSelections } : {}),
     help:
@@ -285,6 +290,16 @@ function toQuestionFormQuestion(question: ProductWorkflowProposalQuestion) {
             : [],
       ),
   };
+}
+
+/**
+ * 避免单个结构化问题缺少选项时破坏整个 Question Form。
+ */
+function normalizeQuestionFormType(question: ProductWorkflowProposalQuestion) {
+  const needsOptions = ["radio", "checkbox", "select"].includes(question.type);
+  return needsOptions && (!question.options || question.options.length < 2)
+    ? "textarea"
+    : question.type;
 }
 
 /**
