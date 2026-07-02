@@ -17,7 +17,11 @@
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "langchain";
 import type { ChatMessage, ProductWorkflowResult } from "@repo/shared";
 import { calculateCost } from "../../config";
-import { createConversationAgent } from "./agent";
+import { createAgentRunSummaryRecorder } from "../common/agent-run-summary";
+import {
+  createConversationAgent,
+  createConversationAgentSystemPrompt,
+} from "./agent";
 import {
   getReasoningContent,
   getTextContent,
@@ -62,81 +66,137 @@ async function* streamAgentEvents(
 ): AsyncGenerator<ConversationStreamEvent> {
   const startTime = Date.now();
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
-
-  const agent = createConversationAgent({
+  let outputText = "";
+  let completed = false;
+  let failedError: unknown = null;
+  const baseAgentOptions = {
     enabledTools: options.enabledTools,
     knowledgeGraph: options.knowledgeGraph,
+  };
+  const summaryRecorder = createAgentRunSummaryRecorder({
+    agentLabel: "Conversation Agent",
+    agentName: "conversation-agent",
+    agentType: "conversation",
+    context: {
+      enabledTools: options.enabledTools ?? [],
+      knowledgeGraph: options.knowledgeGraph ?? null,
+      payload: {
+        messages: compactConversationMessages(messages),
+      },
+      productContext: options.productContext,
+      requestFormId: options.requestFormId,
+      systemPrompt: createConversationAgentSystemPrompt(baseAgentOptions),
+      workspaceId: options.workspaceId,
+      workflowThreadId: options.workflowThreadId,
+    },
   });
-  const run = await agent.stream(
-    { messages },
-    { streamMode: "messages", signal: options.signal },
-  );
-  for await (const [message] of run) {
-    for (const toolCall of getToolCalls(message)) {
-      yield {
-        type: "tool-call",
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-        toolArgs: toolCall.args,
-        agentType: "conversation",
-      };
-    }
+  const agentOptions = {
+    ...baseAgentOptions,
+    summaryRecorder,
+  };
 
-    const toolResult = getToolResult(message);
-    if (toolResult) {
-      yield {
-        type: "tool-result",
-        toolCallId: toolResult.id,
-        toolName: toolResult.name,
-        toolResult: toolResult.content,
-        agentType: "conversation",
-      };
-      // 工具响应只进入工具卡片，不作为普通助手正文继续输出。
-      continue;
-    }
-
-    const reasoning = getReasoningContent(message);
-    if (reasoning) {
-      yield {
-        type: "reasoning",
-        content: reasoning,
-        agentType: "conversation",
-      };
-    }
-
-    const text = getTextContent(message);
-    const cleanText = stripInternalNoise(text);
-    if (cleanText) {
-      yield { type: "text", content: cleanText, agentType: "conversation" };
-    }
-
-    // 从每次 AIMessage 中累积 token 用量。
-    const usage = getTokenUsage(message);
-    if (usage) {
-      tokenUsage = usage;
-    }
-  }
-
-  // 在流结束时输出 Conversation Agent 的 token 用量和耗时。
-  if (tokenUsage) {
-    const cost = calculateCost(
-      tokenUsage.cacheMissInputTokens,
-      tokenUsage.cacheHitInputTokens,
-      tokenUsage.outputTokens,
+  try {
+    const agent = createConversationAgent(agentOptions);
+    const run = await agent.stream(
+      { messages },
+      { streamMode: "messages", signal: options.signal },
     );
-    yield {
-      type: "token-usage",
-      agentType: "conversation",
-      inputTokens: tokenUsage.inputTokens,
-      cacheHitInputTokens: tokenUsage.cacheHitInputTokens,
-      cacheMissInputTokens: tokenUsage.cacheMissInputTokens,
-      outputTokens: tokenUsage.outputTokens,
-      totalTokens: tokenUsage.totalTokens,
-      costInput: cost.costInput,
-      costOutput: cost.costOutput,
-      costTotal: cost.costTotal,
-      durationMs: Date.now() - startTime,
-    };
+    for await (const [message] of run) {
+      for (const toolCall of getToolCalls(message)) {
+        summaryRecorder.recordToolCall({
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          toolArgs: toolCall.args,
+        });
+        yield {
+          type: "tool-call",
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          toolArgs: toolCall.args,
+          agentType: "conversation",
+        };
+      }
+
+      const toolResult = getToolResult(message);
+      if (toolResult) {
+        summaryRecorder.recordToolResult({
+          toolCallId: toolResult.id,
+          toolName: toolResult.name,
+          toolResult: toolResult.content,
+        });
+        yield {
+          type: "tool-result",
+          toolCallId: toolResult.id,
+          toolName: toolResult.name,
+          toolResult: toolResult.content,
+          agentType: "conversation",
+        };
+        // 工具响应只进入工具卡片，不作为普通助手正文继续输出。
+        continue;
+      }
+
+      const reasoning = getReasoningContent(message);
+      if (reasoning) {
+        summaryRecorder.recordThinking(reasoning);
+        yield {
+          type: "reasoning",
+          content: reasoning,
+          agentType: "conversation",
+        };
+      }
+
+      const text = getTextContent(message);
+      const cleanText = stripInternalNoise(text);
+      if (cleanText) {
+        outputText += cleanText;
+        summaryRecorder.recordOutput(cleanText);
+        yield { type: "text", content: cleanText, agentType: "conversation" };
+      }
+
+      // 从每次 AIMessage 中累积 token 用量。
+      const usage = getTokenUsage(message);
+      if (usage) {
+        tokenUsage = usage;
+      }
+    }
+
+    // 在流结束时输出 Conversation Agent 的 token 用量和耗时。
+    if (tokenUsage) {
+      const cost = calculateCost(
+        tokenUsage.cacheMissInputTokens,
+        tokenUsage.cacheHitInputTokens,
+        tokenUsage.outputTokens,
+      );
+      yield {
+        type: "token-usage",
+        agentType: "conversation",
+        inputTokens: tokenUsage.inputTokens,
+        cacheHitInputTokens: tokenUsage.cacheHitInputTokens,
+        cacheMissInputTokens: tokenUsage.cacheMissInputTokens,
+        outputTokens: tokenUsage.outputTokens,
+        totalTokens: tokenUsage.totalTokens,
+        costInput: cost.costInput,
+        costOutput: cost.costOutput,
+        costTotal: cost.costTotal,
+        durationMs: Date.now() - startTime,
+      };
+    }
+    completed = true;
+  } catch (error) {
+    failedError = error;
+    throw error;
+  } finally {
+    await summaryRecorder.finish({
+      error: failedError,
+      output: outputText,
+      status: failedError ? "failed" : completed ? "completed" : "cancelled",
+      tokenUsage: tokenUsage
+        ? {
+            ...tokenUsage,
+            durationMs: Date.now() - startTime,
+          }
+        : undefined,
+    });
   }
 }
 
@@ -580,6 +640,37 @@ function stripInternalNoise(content: string): string {
  */
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 压缩会话上下文，避免把 LangChain Message 实例的内部状态写入汇总文件。
+ */
+function compactConversationMessages(messages: BaseMessage[]): Array<{
+  content: unknown;
+  type: string;
+}> {
+  return messages.map((message) => ({
+    content: message.content,
+    type: getMessageType(message),
+  }));
+}
+
+/**
+ * 读取 LangChain 消息类型，兼容不同版本的公开/内部方法差异。
+ */
+function getMessageType(message: BaseMessage): string {
+  const maybeTypedMessage = message as BaseMessage & {
+    _getType?: () => string;
+    getType?: () => string;
+  };
+  if (typeof maybeTypedMessage.getType === "function") {
+    return maybeTypedMessage.getType();
+  }
+  if (typeof maybeTypedMessage._getType === "function") {
+    return maybeTypedMessage._getType();
+  }
+
+  return message.constructor.name;
 }
 
 /**

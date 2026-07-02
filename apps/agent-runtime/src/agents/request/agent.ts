@@ -15,13 +15,18 @@
  * - 最多重试 2 次，失败时通过 markdown text 事件输出错误信息
  */
 
-import { HumanMessage } from "langchain";
+import { HumanMessage, type BaseMessage } from "langchain";
 import { createDeepAgent } from "deepagents";
 import { RequestAnalysisSchema, type RequestAnalysis } from "@repo/shared";
 import { createChatModel } from "../common/model";
 import { createDefaultAgentMiddleware } from "../common/middleware";
 import { calculateCost } from "../../config";
 import { REQUEST_AGENT_PROMPT } from "./prompt";
+import {
+  createAgentRunSummaryMiddleware,
+  createAgentRunSummaryRecorder,
+  type AgentRunSummaryRecorder,
+} from "../common/agent-run-summary";
 import {
   getReasoningContent,
   getTextContent,
@@ -61,7 +66,7 @@ export type RequestAgentStreamEvent =
 /**
  * 创建真正的 Request Agent，由 DeepAgent 承载 system prompt 和模型调用。
  */
-export function createRequestAgent() {
+export function createRequestAgent(summaryRecorder?: AgentRunSummaryRecorder) {
   const model = createChatModel({
     enableThinking: false,
     maxTokens: 5120,
@@ -74,7 +79,10 @@ export function createRequestAgent() {
     tools: [],
     name: "request-agent",
     skills: [],
-    middleware: createDefaultAgentMiddleware() as any,
+    middleware: [
+      ...createDefaultAgentMiddleware(),
+      ...createAgentRunSummaryMiddleware(summaryRecorder),
+    ] as any,
   });
 }
 
@@ -108,43 +116,79 @@ export async function* streamRequestAgent(
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
 
   for (let attempt = 1; attempt <= REQUEST_AGENT_MAX_ATTEMPTS; attempt++) {
-    const agent = createRequestAgent();
-
-    const run = await agent.stream(
-      {
-        messages: [
-          new HumanMessage(
-            JSON.stringify({
-              product_context:
-                input.productContext?.trim() || "No product context provided.",
-              user_input: input.userInput,
-              ...(attempt > 1
-                ? {
-                    retry_instruction:
-                      "The previous response failed schema validation. Return only one valid JSON object that matches RequestAnalysisSchema exactly.",
-                  }
-                : {}),
-            }),
-          ),
-        ],
+    const requestPayload = {
+      product_context:
+        input.productContext?.trim() || "No product context provided.",
+      user_input: input.userInput,
+      ...(attempt > 1
+        ? {
+            retry_instruction:
+              "The previous response failed schema validation. Return only one valid JSON object that matches RequestAnalysisSchema exactly.",
+          }
+        : {}),
+    };
+    const summaryRecorder = createAgentRunSummaryRecorder({
+      agentLabel: `Request Agent Attempt ${attempt}`,
+      agentName: `request-agent-attempt-${attempt}`,
+      agentType: "request",
+      context: {
+        attempt,
+        maxAttempts: REQUEST_AGENT_MAX_ATTEMPTS,
+        payload: requestPayload,
+        systemPrompt: REQUEST_AGENT_PROMPT,
       },
-      { streamMode: "messages", signal: input.signal },
-    );
-
+    });
+    const agent = createRequestAgent(summaryRecorder);
     let responseText = "";
-    for await (const [message] of run) {
-      const reasoning = getReasoningContent(message);
-      if (reasoning) {
-        yield { type: "reasoning", content: reasoning, agentType: "request" };
-      }
 
-      responseText += getTextContent(message);
+    let run: AsyncIterable<[BaseMessage, unknown]>;
+    try {
+      run = await agent.stream(
+        {
+          messages: [new HumanMessage(JSON.stringify(requestPayload))],
+        },
+        { streamMode: "messages", signal: input.signal },
+      );
+    } catch (error) {
+      await summaryRecorder.finish({
+        error: getErrorMessage(error),
+        output: responseText,
+        status: "failed",
+      });
+      throw error;
+    }
 
-      // 从每次 AIMessage 中累积 token 用量。
-      const usage = getTokenUsage(message);
-      if (usage) {
-        tokenUsage = usage;
+    try {
+      for await (const [message] of run) {
+        const reasoning = getReasoningContent(message);
+        if (reasoning) {
+          summaryRecorder.recordThinking(reasoning);
+          yield { type: "reasoning", content: reasoning, agentType: "request" };
+        }
+
+        const text = getTextContent(message);
+        responseText += text;
+        summaryRecorder.recordOutput(text);
+
+        // 从每次 AIMessage 中累积 token 用量。
+        const usage = getTokenUsage(message);
+        if (usage) {
+          tokenUsage = usage;
+        }
       }
+    } catch (error) {
+      await summaryRecorder.finish({
+        error: getErrorMessage(error),
+        output: responseText,
+        status: "failed",
+        tokenUsage: tokenUsage
+          ? {
+              ...tokenUsage,
+              durationMs: Date.now() - startTime,
+            }
+          : undefined,
+      });
+      throw error;
     }
 
     try {
@@ -159,6 +203,12 @@ export async function* streamRequestAgent(
 
       assertEveryUserInputCovered(result.data, input.userInput);
 
+      const tokenUsageSummary = tokenUsage
+        ? {
+            ...tokenUsage,
+            durationMs: Date.now() - startTime,
+          }
+        : undefined;
       // 在返回 complete 前输出 token 用量和耗时。
       if (tokenUsage) {
         const cost = calculateCost(
@@ -181,17 +231,35 @@ export async function* streamRequestAgent(
         };
       }
 
+      await summaryRecorder.finish({
+        output: result.data,
+        status: "completed",
+        tokenUsage: tokenUsageSummary,
+      });
       yield { type: "complete", analysis: result.data };
       return;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       if (attempt < REQUEST_AGENT_MAX_ATTEMPTS) {
+        const content = "\nRequest Agent 输出结构校验失败，正在自动重试一次。\n";
+        summaryRecorder.recordThinking(content);
         yield {
           type: "reasoning",
-          content: "\nRequest Agent 输出结构校验失败，正在自动重试一次。\n",
+          content,
           agentType: "request",
         };
       }
+      await summaryRecorder.finish({
+        error: lastError.message,
+        output: responseText,
+        status: attempt < REQUEST_AGENT_MAX_ATTEMPTS ? "retry" : "failed",
+        tokenUsage: tokenUsage
+          ? {
+              ...tokenUsage,
+              durationMs: Date.now() - startTime,
+            }
+          : undefined,
+      });
     }
   }
 
@@ -206,6 +274,13 @@ export async function* streamRequestAgent(
 export function formatRequestAnalysisBlock(analysis: RequestAnalysis): string {
   // 保留可解析的结构化 JSON。
   return `<request-analysis>\n${JSON.stringify(analysis, null, 2)}\n</request-analysis>`;
+}
+
+/**
+ * 提取异常的可读消息，用于本地汇总文件。
+ */
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**

@@ -28,6 +28,10 @@ import { createDefaultAgentMiddleware } from "./middleware";
 import { calculateCost } from "../../config";
 import { parseJsonObject } from "../../utils/json";
 import {
+  createAgentRunSummaryMiddleware,
+  createAgentRunSummaryRecorder,
+} from "./agent-run-summary";
+import {
   getReasoningContent,
   getTextContent,
   getTokenUsage,
@@ -112,6 +116,18 @@ export async function* runJsonAgent<T, AgentType extends string>(
 ): AsyncGenerator<JsonAgentEvent<AgentType>, T, void> {
   const startTime = Date.now();
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
+  const summaryRecorder = createAgentRunSummaryRecorder({
+    agentLabel: options.agentLabel,
+    agentName: options.name,
+    agentType: options.agentType,
+    context: {
+      modelOptions: options.modelOptions,
+      payload: options.payload,
+      skills: options.skills ?? [],
+      systemPrompt: options.systemPrompt,
+      tools: compactToolDefinitions(options.tools ?? []),
+    },
+  });
 
   try {
     const agent = createDeepAgent({
@@ -121,7 +137,10 @@ export async function* runJsonAgent<T, AgentType extends string>(
       name: options.name,
       // 这里接收 DeepAgents 技能目录 sources；具体技能名由 source 内的 SKILL.md 声明。
       skills: options.skills ?? [],
-      middleware: createDefaultAgentMiddleware() as any,
+      middleware: [
+        ...createDefaultAgentMiddleware(),
+        ...createAgentRunSummaryMiddleware(summaryRecorder),
+      ] as any,
     });
 
     const run = await agent.stream(
@@ -134,6 +153,11 @@ export async function* runJsonAgent<T, AgentType extends string>(
     let responseText = "";
     for await (const [message] of run) {
       for (const toolCall of getToolCalls(message)) {
+        summaryRecorder.recordToolCall({
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          toolArgs: toolCall.args,
+        });
         yield {
           type: "tool-call",
           toolCallId: toolCall.id,
@@ -145,6 +169,11 @@ export async function* runJsonAgent<T, AgentType extends string>(
 
       const toolResult = getToolResult(message);
       if (toolResult) {
+        summaryRecorder.recordToolResult({
+          toolCallId: toolResult.id,
+          toolName: toolResult.name,
+          toolResult: toolResult.content,
+        });
         yield {
           type: "tool-result",
           toolCallId: toolResult.id,
@@ -157,13 +186,16 @@ export async function* runJsonAgent<T, AgentType extends string>(
 
       const reasoning = getReasoningContent(message);
       if (reasoning) {
+        summaryRecorder.recordThinking(reasoning);
         yield {
           type: "reasoning",
           agentType: options.agentType,
           content: reasoning,
         };
       }
-      responseText += getTextContent(message);
+      const text = getTextContent(message);
+      responseText += text;
+      summaryRecorder.recordOutput(text);
 
       // 从每次 AIMessage 中累积 token 用量（最终消息包含完整统计）。
       const usage = getTokenUsage(message);
@@ -173,6 +205,12 @@ export async function* runJsonAgent<T, AgentType extends string>(
     }
 
     // 在返回结构化结果前，输出该 Agent 的 token 用量和耗时。
+    const tokenUsageSummary = tokenUsage
+      ? {
+          ...tokenUsage,
+          durationMs: Date.now() - startTime,
+        }
+      : undefined;
     if (tokenUsage) {
       const cost = calculateCost(
         tokenUsage.cacheMissInputTokens,
@@ -196,24 +234,48 @@ export async function* runJsonAgent<T, AgentType extends string>(
 
     const parsed = parseJsonObject(responseText);
     const result = options.schema.safeParse(parsed);
-    if (result.success) return result.data;
+    if (result.success) {
+      await summaryRecorder.finish({
+        output: result.data,
+        status: "completed",
+        tokenUsage: tokenUsageSummary,
+      });
+      return result.data;
+    }
 
+    const fallbackResult = options.fallback("invalid-json");
     if (!options.suppressInvalidJsonReasoning) {
+      const content = `结构化输出校验失败，已使用 ${options.agentLabel} 的 MVP 回退结果。\n`;
+      summaryRecorder.recordThinking(content);
       yield {
         type: "reasoning",
         agentType: options.agentType,
-        content: `结构化输出校验失败，已使用 ${options.agentLabel} 的 MVP 回退结果。\n`,
+        content,
       };
     }
-    return options.fallback("invalid-json");
+    await summaryRecorder.finish({
+      error: "invalid-json",
+      output: fallbackResult,
+      status: "fallback",
+      tokenUsage: tokenUsageSummary,
+    });
+    return fallbackResult;
   } catch (error) {
     const message = getErrorMessage(error);
+    const fallbackResult = options.fallback(message);
+    const content = `${options.agentLabel} 执行失败，已使用 MVP 回退结果：${message}\n`;
+    summaryRecorder.recordThinking(content);
     yield {
       type: "reasoning",
       agentType: options.agentType,
-      content: `${options.agentLabel} 执行失败，已使用 MVP 回退结果：${message}\n`,
+      content,
     };
-    return options.fallback(message);
+    await summaryRecorder.finish({
+      error: message,
+      output: fallbackResult,
+      status: "fallback",
+    });
+    return fallbackResult;
   }
 }
 
@@ -222,6 +284,17 @@ export async function* runJsonAgent<T, AgentType extends string>(
  */
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 压缩工具定义，只保留汇总排查需要的工具名称。
+ */
+function compactToolDefinitions(tools: StructuredTool[]): Array<{
+  name: string;
+}> {
+  return tools.map((tool) => ({
+    name: typeof tool.name === "string" ? tool.name : "unknown",
+  }));
 }
 
 /**
