@@ -39,7 +39,13 @@ export function createGraphContextSummary(
     counts: {
       entities: knowledgeGraph.entities.length,
       relations: knowledgeGraph.relations.length,
+      decisions: knowledgeGraph.decisions.length,
+      risks: knowledgeGraph.risks.length,
+      open_questions: knowledgeGraph.open_questions.length,
     },
+    latest_summaries: takeTail(knowledgeGraph.summary, 4).map((item) =>
+      truncateText(item),
+    ),
     recent_nodes: takeTail(knowledgeGraph.entities, 6).map((entity) => ({
       id: entity.id,
       type: entity.type,

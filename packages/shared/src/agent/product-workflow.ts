@@ -1,3 +1,18 @@
+/**
+ * 产品工作流共享契约
+ *
+ * 定义 Planner、Executor、产品知识图谱和工作流确认结果在 runtime、API 与前端之间
+ * 传递时使用的 Zod schema 与 TypeScript 类型。
+ *
+ * Responsibilities:
+ * - 约束产品知识图谱节点、关系、决策、风险和待确认问题结构
+ * - 定义 Planner DAG、Executor 结果和最终工作流结果契约
+ * - 为跨包消费者导出稳定类型
+ *
+ * Notes:
+ * - LLM-facing schema descriptions must remain in English.
+ */
+
 import { z } from "zod";
 
 /**
@@ -46,6 +61,8 @@ export const KnowledgeGraphEntitySchema = z.object({
     "Feature",
     "Component",
     "Metric",
+    "Risk",
+    "OpenQuestion",
     "Custom",
   ]),
   name: z.string().min(1),
@@ -67,6 +84,8 @@ export const KnowledgeGraphNodeInputSchema = z.object({
     "Feature",
     "Component",
     "Metric",
+    "Risk",
+    "OpenQuestion",
     "Custom",
   ]).describe("Entity type"),
   name: z.string().min(1).describe("Node name"),
@@ -129,6 +148,7 @@ export const KnowledgeGraphRelationInputSchema = z.object({
 export const KnowledgeGraphDecisionInputSchema = z.object({
   id: z.string().min(1).describe("Decision ID, e.g. D-001"),
   text: z.string().min(1).describe("Decision text including choice, rationale, and risk assessment"),
+  source_task_id: z.string().optional().describe("Optional executor task ID that produced this decision"),
 });
 
 /**
@@ -137,6 +157,7 @@ export const KnowledgeGraphDecisionInputSchema = z.object({
 export const KnowledgeGraphRiskInputSchema = z.object({
   id: z.string().min(1).describe("Risk ID, e.g. RISK-001"),
   text: z.string().min(1).describe("Risk description including impact and mitigation"),
+  source_task_id: z.string().optional().describe("Optional executor task ID that produced this risk"),
 });
 
 /**
@@ -145,6 +166,7 @@ export const KnowledgeGraphRiskInputSchema = z.object({
 export const KnowledgeGraphOpenQuestionInputSchema = z.object({
   id: z.string().min(1).describe("Question ID, e.g. OQ-001"),
   text: z.string().min(1).describe("Question text explaining what needs to be confirmed"),
+  source_task_id: z.string().optional().describe("Optional executor task ID that raised this question"),
 });
 
 const ProductWorkflowProposalQuestionTypeSchema = z.preprocess((value) => {
@@ -215,18 +237,83 @@ export const ProductKnowledgeGraphSchema = z.object({
 });
 
 /**
- * Planner 质量检查字段；兼容模型偶尔输出的简短字符串标准。
+ * Planner 质量检查字段；兼容模型输出字符串、字符串数组或省略 status 的 criteria 对象。
  */
-const TaskQualityCheckSchema = z.union([
-  z.object({
-    status: z.enum(["pending", "passed", "failed"]),
-    criteria: z.array(z.string().min(1)),
-    result: z.string().optional(),
-  }),
+const TaskQualityCheckObjectSchema = z.object({
+  status: z.enum(["pending", "passed", "failed"]),
+  criteria: z.array(z.string().min(1)),
+  result: z.string().optional(),
+});
+
+const TaskQualityCheckSchema = z.preprocess((value) => {
+  if (Array.isArray(value)) {
+    return {
+      status: "pending",
+      criteria: value,
+    };
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (Array.isArray(record.criteria) && typeof record.status !== "string") {
+      // Planner 经常只输出 criteria；运行时将其视为待验收状态。
+      return {
+        ...record,
+        status: "pending",
+      };
+    }
+  }
+
+  return value;
+}, z.union([
+  TaskQualityCheckObjectSchema,
   z.string().min(1).transform((criteria) => ({
     status: "pending" as const,
     criteria: [criteria],
   })),
+]));
+
+/**
+ * Planner DAG 边；兼容模型偶尔输出的 from/to 别名，解析后统一为 source/target。
+ */
+const TaskExecutionDagEdgeSchema = z.preprocess((value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+
+  const record = value as Record<string, unknown>;
+  return {
+    source: typeof record.source === "string" ? record.source : record.from,
+    target: typeof record.target === "string" ? record.target : record.to,
+  };
+}, z.object({
+  source: z.string().min(1).describe("Source task ID"),
+  target: z.string().min(1).describe("Target task ID"),
+}));
+
+/**
+ * Planner DAG；兼容模型偶发把 dag 直接输出为边数组的情况。
+ */
+const TaskExecutionDagSchema = z.preprocess((value) => {
+  if (Array.isArray(value)) {
+    return {
+      nodes: [],
+      edges: value,
+    };
+  }
+
+  return value;
+}, z.object({
+  nodes: z.array(z.string().min(1)).default([]),
+  edges: z.array(TaskExecutionDagEdgeSchema),
+}));
+
+/**
+ * Planner 假设项；兼容模型输出结构化 gap/assumption/impact 后统一压缩为字符串。
+ */
+const TaskExecutionAssumptionSchema = z.union([
+  z.string().min(1),
+  z.record(z.unknown()).transform(formatPlannerAssumptionRecord),
 ]);
 
 /**
@@ -252,18 +339,39 @@ export const TaskExecutionNodeSchema = z.object({
 export const TaskExecutionPlanSchema = z.object({
   status: z.enum(["initial", "supplement"]).default("initial"),
   request_summary: z.string().min(1),
-  dag: z.object({
-    nodes: z.array(z.string().min(1)),
-    edges: z.array(
-      z.object({
-        source: z.string().min(1),
-        target: z.string().min(1),
-      }),
-    ),
-  }),
+  dag: TaskExecutionDagSchema,
   tasks: z.array(TaskExecutionNodeSchema),
-  assumptions: z.array(z.string()).default([]),
+  assumptions: z.array(TaskExecutionAssumptionSchema).default([]),
 });
+
+/**
+ * 将 Planner 输出的结构化假设记录压缩为现有运行时可持久化的字符串。
+ */
+function formatPlannerAssumptionRecord(record: Record<string, unknown>): string {
+  const parts = [
+    pickStringField(record, "gap_ref", "Gap"),
+    pickStringField(record, "assumption", "Assumption"),
+    pickStringField(record, "impact", "Impact"),
+  ].filter((part) => part.length > 0);
+
+  if (parts.length > 0) return parts.join(" | ");
+
+  return JSON.stringify(record);
+}
+
+/**
+ * 提取结构化假设字段，保留字段语义，避免降级为不可读 JSON。
+ */
+function pickStringField(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+): string {
+  const value = record[key];
+  return typeof value === "string" && value.trim()
+    ? `${label}: ${value.trim()}`
+    : "";
+}
 
 /**
  * Executor Agent 对单个任务的结构化产出。
@@ -300,6 +408,60 @@ export const ExecutorAgentResultSchema = z.object({
 /**
  * Planner Agent 对完整 MVP 工作流的汇总与确认结果。
  */
+export const ProductWorkflowReviewIssueSchema = z.object({
+  code: z.string().min(1).describe("Stable machine-readable issue code"),
+  severity: z.enum(["error", "warning"]).describe("Issue severity"),
+  task_id: z.string().optional().describe("Related planner task ID when applicable"),
+  message: z.string().min(1).max(500).describe("Concise issue explanation"),
+});
+
+/**
+ * Planner Review 对最终知识图谱状态的轻量审查结论。
+ */
+export const ProductWorkflowKnowledgeGraphReviewSchema = z.object({
+  graph_ref: z.object({
+    version: z.number().int().nonnegative().optional().describe("Persisted graph version when known"),
+    checksum: z.string().optional().describe("Optional checksum or stable graph reference"),
+    entity_count: z.number().int().nonnegative().optional().describe("Final graph entity count"),
+    relation_count: z.number().int().nonnegative().optional().describe("Final graph relation count"),
+  }).optional().describe("Reference to the graph snapshot reviewed by Planner Agent"),
+  accepted_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs whose graph updates are accepted"),
+  rejected_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs whose graph updates are rejected"),
+  retry_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs that should be retried or corrected"),
+  issues: z.array(ProductWorkflowReviewIssueSchema).default([]).describe("Detected graph or execution issues"),
+  notes: z.array(z.string().min(1).max(500)).max(8).default([]).describe("Short review notes; never repeat full graph data"),
+});
+
+/**
+ * Planner Review 模型的瘦身输出契约。
+ *
+ * 模型只输出审查结论、用户补充问题和短摘要；Planner DAG、Executor 结果和完整知识图谱
+ * 由运行时代码按已有状态组合，不再要求模型复制。
+ */
+export const PlannerWorkflowReviewOutputSchema = z.object({
+  status: z.enum([
+    "pending_user_confirmation",
+    "completed",
+    "requires_executor_retry",
+  ]).describe("Review outcome"),
+  confirmation_id: z.string().min(1).describe("Stable question-form ID"),
+  request_summary: z.string().min(1).max(500).describe("Concise request summary"),
+  review: z.object({
+    accepted_task_ids: z.array(z.string().min(1)).describe("Accepted task IDs"),
+    rejected_task_ids: z.array(z.string().min(1)).describe("Rejected task IDs"),
+    retry_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs that require retry or correction"),
+    issues: z.array(ProductWorkflowReviewIssueSchema).default([]).describe("Detected issues"),
+    notes: z.string().min(1).max(1200).describe("Compact review notes"),
+  }).describe("Planner Review decision"),
+  product_context_update: z.string().min(1).max(1200).describe("Short product context update summary"),
+  knowledge_graph_review: ProductWorkflowKnowledgeGraphReviewSchema.describe("Lightweight graph review, not the full graph"),
+  proposal_questions: z.array(ProductWorkflowProposalQuestionSchema).max(3).default([]).describe("At most three high-priority user questions"),
+  confirmation_message: z.string().min(1).max(500).describe("Concise user-facing confirmation message"),
+});
+
+/**
+ * 产品工作流的运行时汇总结果。
+ */
 export const ProductWorkflowResultSchema = z.object({
   status: z.enum(["pending_user_confirmation", "completed", "discarded"]),
   confirmation_id: z.string().min(1),
@@ -309,10 +471,13 @@ export const ProductWorkflowResultSchema = z.object({
   review: z.object({
     accepted_task_ids: z.array(z.string().min(1)),
     rejected_task_ids: z.array(z.string().min(1)),
+    retry_task_ids: z.array(z.string().min(1)).optional(),
+    issues: z.array(ProductWorkflowReviewIssueSchema).optional(),
     notes: z.string(),
   }),
   product_context_update: z.string().min(1),
   knowledge_graph_update: ProductKnowledgeGraphSchema,
+  knowledge_graph_review: ProductWorkflowKnowledgeGraphReviewSchema.optional(),
   proposal_questions: z.array(ProductWorkflowProposalQuestionSchema).default([]),
   confirmation_message: z.string().min(1),
 });
@@ -325,6 +490,9 @@ export type TaskExecutionNode = z.infer<typeof TaskExecutionNodeSchema>;
 export type TaskExecutionPlan = z.infer<typeof TaskExecutionPlanSchema>;
 export type ExecutorAgentResult = z.infer<typeof ExecutorAgentResultSchema>;
 export type ProductWorkflowResult = z.infer<typeof ProductWorkflowResultSchema>;
+export type PlannerWorkflowReviewOutput = z.infer<
+  typeof PlannerWorkflowReviewOutputSchema
+>;
 export type KnowledgeGraphEntity = z.infer<typeof KnowledgeGraphEntitySchema>;
 export type KnowledgeGraphRelation = z.infer<
   typeof KnowledgeGraphRelationSchema

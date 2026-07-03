@@ -36,6 +36,20 @@ import type {
   ProductWorkflowStreamEvent,
 } from "./types";
 
+type ProposalQuestionSource = {
+  source_task_id: string;
+  source_agent: string;
+};
+
+type ProposalSlot = {
+  id: string;
+  question: string;
+  source_task_id: string;
+  source_agent: string;
+  sources: ProposalQuestionSource[];
+  priority: number;
+};
+
 export {
   appendKnowledgeGraphPatch,
   createProductWorkflowKnowledgeGraph,
@@ -121,7 +135,6 @@ export async function* streamPlannerProductWorkflow(
     workspaceId: input.workspaceId,
     productContext: input.productContext,
     requestAnalysis: input.requestAnalysis,
-    userInput: input.userInput,
     plan,
     executorResults,
     knowledgeGraph,
@@ -239,24 +252,12 @@ export function formatProductWorkflowProposalQuestionForm(
 function getProposalFormQuestions(result: ProductWorkflowResult) {
   const proposalQuestions = result.proposal_questions ?? [];
   if (proposalQuestions.length > 0) {
-    return proposalQuestions
-      .slice()
-      .sort((left, right) => right.priority - left.priority)
-      .map(toQuestionFormQuestion);
+    return mergeProposalQuestions(proposalQuestions).map(toQuestionFormQuestion);
   }
 
-  return collectProposalSlots(result).map((slot) =>
-    toQuestionFormQuestion({
-      id: slot.id,
-      label: slot.question,
-      type: "textarea",
-      required: true,
-      source_task_id: slot.source_task_id,
-      source_agent: slot.source_agent as ProductWorkflowProposalQuestion["source_agent"],
-      sources: slot.sources as ProductWorkflowProposalQuestion["sources"],
-      priority: slot.priority,
-    }),
-  );
+  return mergeProposalQuestions(
+    collectProposalSlots(result).map(toProposalQuestionFromSlot),
+  ).map(toQuestionFormQuestion);
 }
 
 /**
@@ -308,8 +309,9 @@ function normalizeQuestionFormType(question: ProductWorkflowProposalQuestion) {
 function formatProposalQuestionSources(
   sources: NonNullable<ProductWorkflowProposalQuestion["sources"]>,
 ): string | undefined {
-  if (sources.length === 0) return undefined;
-  return `来源：${sources
+  const uniqueSources = mergeProposalQuestionSources(sources);
+  if (uniqueSources.length === 0) return undefined;
+  return `来源：${uniqueSources
     .map((source) => `${source.source_agent} / ${source.source_task_id}`)
     .join("；")}`;
 }
@@ -326,25 +328,8 @@ export function getProposalDecisionId(
 /**
  * 汇总、去重并按优先级排序 Executor Agent 提出的补充信息。
  */
-function collectProposalSlots(result: ProductWorkflowResult): Array<{
-  id: string;
-  question: string;
-  source_task_id: string;
-  source_agent: string;
-  sources: Array<{ source_task_id: string; source_agent: string }>;
-  priority: number;
-}> {
-  const slots = new Map<
-    string,
-    {
-      id: string;
-      question: string;
-      source_task_id: string;
-      source_agent: string;
-      sources: Array<{ source_task_id: string; source_agent: string }>;
-      priority: number;
-    }
-  >();
+function collectProposalSlots(result: ProductWorkflowResult): ProposalSlot[] {
+  const slots = new Map<string, ProposalSlot>();
 
   for (const executorResult of result.executor_results) {
     executorResult.open_questions.forEach((question, index) => {
@@ -360,7 +345,10 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
         source_agent: executorResult.agent_type,
       };
       if (existing) {
-        existing.sources.push(source);
+        existing.sources = mergeProposalQuestionSources([
+          ...existing.sources,
+          source,
+        ]);
         existing.priority = Math.max(existing.priority, priority);
         return;
       }
@@ -380,10 +368,112 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
 }
 
 /**
+ * 将旧版 Executor open question slot 转换为结构化问题，统一走合并与表单映射逻辑。
+ */
+function toProposalQuestionFromSlot(
+  slot: ProposalSlot,
+): ProductWorkflowProposalQuestion {
+  return {
+    id: slot.id,
+    label: slot.question,
+    type: "textarea",
+    required: true,
+    source_task_id: slot.source_task_id,
+    source_agent:
+      slot.source_agent as ProductWorkflowProposalQuestion["source_agent"],
+    sources: slot.sources as ProductWorkflowProposalQuestion["sources"],
+    priority: slot.priority,
+  };
+}
+
+/**
+ * 合并 Planner Review 可能重复输出的补充问题，保留所有 Executor 来源。
+ */
+function mergeProposalQuestions(
+  questions: ProductWorkflowProposalQuestion[],
+): ProductWorkflowProposalQuestion[] {
+  const merged = new Map<string, ProductWorkflowProposalQuestion>();
+
+  for (const question of questions) {
+    const key = normalizeSlotQuestion(question.label);
+    if (!key) continue;
+
+    const sources = getProposalQuestionSources(question);
+    const existing = merged.get(key);
+    if (existing) {
+      existing.sources = mergeProposalQuestionSources([
+        ...existing.sources,
+        ...sources,
+      ]);
+      existing.priority = Math.max(existing.priority, question.priority);
+      existing.required = existing.required || question.required;
+      if (!existing.placeholder && question.placeholder) {
+        existing.placeholder = question.placeholder;
+      }
+      if (!existing.help && question.help) {
+        existing.help = question.help;
+      }
+      if (!existing.options?.length && question.options?.length) {
+        existing.options = question.options;
+      }
+      if (!existing.maxSelections && question.maxSelections) {
+        existing.maxSelections = question.maxSelections;
+      }
+      continue;
+    }
+
+    merged.set(key, {
+      ...question,
+      sources,
+    });
+  }
+
+  return [...merged.values()].sort((left, right) => right.priority - left.priority);
+}
+
+/**
+ * 提取问题的来源列表；缺少 sources 时回退到主来源字段。
+ */
+function getProposalQuestionSources(
+  question: ProductWorkflowProposalQuestion,
+): NonNullable<ProductWorkflowProposalQuestion["sources"]> {
+  const sources =
+    question.sources.length > 0
+      ? question.sources
+      : question.source_task_id && question.source_agent
+        ? [
+            {
+              source_task_id: question.source_task_id,
+              source_agent: question.source_agent,
+            },
+          ]
+        : [];
+
+  return mergeProposalQuestionSources(sources);
+}
+
+/**
+ * 对来源按 agent/task 去重，避免同一 Executor 在帮助文本中重复出现。
+ */
+function mergeProposalQuestionSources<T extends ProposalQuestionSource>(
+  sources: T[],
+): T[] {
+  const byKey = new Map<string, T>();
+  for (const source of sources) {
+    byKey.set(`${source.source_agent}:${source.source_task_id}`, source);
+  }
+  return [...byKey.values()];
+}
+
+/**
  * 归一化 slot 文本，用于 MVP 阶段的 Map 去重。
  */
 function normalizeSlotQuestion(question: string): string {
-  return question.trim().replace(/\s+/g, " ").toLowerCase();
+  return question
+    .trim()
+    .replace(/[?？。.!！]+$/g, "")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
 /**

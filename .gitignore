@@ -154,3 +154,4 @@ _tmp*
 .langgraph_api
 
 product-knowledge-graph.md
+.agent-summaries/

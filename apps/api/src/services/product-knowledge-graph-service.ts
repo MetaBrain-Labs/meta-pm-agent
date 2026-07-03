@@ -3,7 +3,7 @@
  *
  * 负责把运行时 ProductKnowledgeGraph 归档到数据库，并为前端知识图谱查看器
  * 返回结构化节点、关系和可下载 Markdown。数据库长期只保留 nodes/relations，
- * 其余运行期辅助字段不再读写 product_knowledge_graph 表。
+ * 运行期辅助字段会在归档边界规范化为节点写入 nodes。
  *
  * Responsibilities:
  * - finalizeWorkspaceKnowledgeGraph()：归档当前工作区的图谱节点和关系
@@ -12,7 +12,8 @@
  * - 对节点和关系按业务 key 去重，避免重试或并行合并造成重复
  *
  * Notes:
- * - summary、decisions、risks、open_questions 保留为运行期结构，不作为 DB 列交互。
+ * - summary 只保留为运行期结构，不作为 DB 列交互。
+ * - decisions、risks、open_questions 以 Decision/Risk/OpenQuestion 节点形式持久化。
  */
 
 import type {
@@ -52,17 +53,17 @@ export async function finalizeWorkspaceKnowledgeGraph({
 }: FinalizeProductKnowledgeGraphInput): Promise<void> {
   if (!workspaceId || !knowledgeGraph) return;
 
+  const normalizedGraph = normalizeKnowledgeGraphForPersistence(knowledgeGraph);
   const hasGraphData =
-    knowledgeGraph.entities.length > 0 || knowledgeGraph.relations.length > 0;
+    normalizedGraph.nodes.length > 0 || normalizedGraph.relations.length > 0;
   if (!hasGraphData) return;
 
-  const normalizedGraph = normalizeKnowledgeGraphForPersistence(knowledgeGraph);
   await upsertProductKnowledgeGraph({
     workspaceId,
     conversationId,
     requestFormId,
     advanceVersion,
-    nodes: normalizedGraph.entities,
+    nodes: normalizedGraph.nodes,
     relations: normalizedGraph.relations,
   });
 }
@@ -81,7 +82,7 @@ export async function clearWorkspaceKnowledgeGraph(
  * 前端知识图谱查询的返回结果。
  */
 export interface WorkspaceKnowledgeGraphData {
-  /** nodes 和 relations 都有数据时可用。 */
+  /** nodes 有数据时可用。 */
   hasData: boolean;
   /** 结构化数据按参考格式生成的 markdown。 */
   markdown: string;
@@ -109,7 +110,7 @@ export async function getWorkspaceKnowledgeGraph(
   const relations = (Array.isArray(normalizedRow.relations)
     ? normalizedRow.relations
     : []) as KnowledgeGraphRelation[];
-  const hasData = nodes.length > 0 && relations.length > 0;
+  const hasData = nodes.length > 0;
 
   return {
     hasData,
@@ -130,7 +131,7 @@ function generateReferenceMarkdown(row: ProductKnowledgeGraphRow): string {
   lines.push("# Product Knowledge Graph");
   lines.push("");
   lines.push(
-    "> 当前文件由 Executor Agent 按任务逐步维护。数据库长期事实源只保留 nodes 和 relations。",
+    "> 当前文件由 Executor Agent 按任务逐步维护。数据库长期事实源只保留 nodes 和 relations；决策、风险和待确认问题会规范化为节点。",
   );
   lines.push("");
   lines.push("## Graph Updates");
@@ -208,10 +209,9 @@ function normalizeKnowledgeGraphRow(
  */
 function normalizeKnowledgeGraphForPersistence(
   knowledgeGraph: ProductKnowledgeGraph,
-): ProductKnowledgeGraph {
+): { nodes: KnowledgeGraphEntity[]; relations: KnowledgeGraphRelation[] } {
   return {
-    ...knowledgeGraph,
-    entities: dedupeByKey(knowledgeGraph.entities, (item) => item.id),
+    nodes: buildPersistentNodes(knowledgeGraph),
     relations: dedupeByKey(
       knowledgeGraph.relations,
       (item) =>
@@ -219,6 +219,76 @@ function normalizeKnowledgeGraphForPersistence(
         `${item.type}:${item.source}:${item.target}:${item.source_task_id ?? ""}`,
     ),
   };
+}
+
+/**
+ * 把运行时图谱中的实体、决策、风险和待确认问题统一归档为 nodes。
+ */
+export function buildPersistentNodes(
+  knowledgeGraph: ProductKnowledgeGraph,
+): KnowledgeGraphEntity[] {
+  const nodes = new Map<string, KnowledgeGraphEntity>();
+
+  for (const entity of knowledgeGraph.entities) {
+    const key = entity.id.trim();
+    if (!key) continue;
+    nodes.set(key, entity);
+  }
+
+  for (const decision of knowledgeGraph.decisions) {
+    addAuxiliaryNode(nodes, {
+      id: decision.id,
+      type: "Decision",
+      name: toNodeName(decision.text),
+      description: decision.text,
+      source_task_id: decision.source_task_id,
+      status: "proposed",
+    });
+  }
+
+  for (const risk of knowledgeGraph.risks) {
+    addAuxiliaryNode(nodes, {
+      id: risk.id,
+      type: "Risk",
+      name: toNodeName(risk.text),
+      description: risk.text,
+      source_task_id: risk.source_task_id,
+      status: "proposed",
+    });
+  }
+
+  for (const question of knowledgeGraph.open_questions) {
+    addAuxiliaryNode(nodes, {
+      id: question.id,
+      type: "OpenQuestion",
+      name: toNodeName(question.text),
+      description: question.text,
+      source_task_id: question.source_task_id,
+      status: "proposed",
+    });
+  }
+
+  return [...nodes.values()];
+}
+
+/**
+ * 追加辅助节点；实体节点已存在时不覆盖，避免 Decision 实体被简化 decision 替换。
+ */
+function addAuxiliaryNode(
+  nodes: Map<string, KnowledgeGraphEntity>,
+  node: KnowledgeGraphEntity,
+): void {
+  const key = node.id.trim();
+  if (!key || nodes.has(key)) return;
+  nodes.set(key, node);
+}
+
+/**
+ * 从长文本生成紧凑节点名。
+ */
+function toNodeName(text: string): string {
+  const normalized = text.trim().replace(/\s+/g, " ");
+  return normalized.length > 80 ? `${normalized.slice(0, 79)}…` : normalized;
 }
 
 /**

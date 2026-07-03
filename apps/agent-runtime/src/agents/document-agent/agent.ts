@@ -19,7 +19,6 @@ import {
   HumanMessage,
   ToolMessage,
   type BaseMessage,
-  createMiddleware,
 } from "langchain";
 import { createDeepAgent, type SubAgent } from "deepagents";
 import type {
@@ -28,8 +27,13 @@ import type {
   KnowledgeGraphRelation,
 } from "@repo/shared";
 import { calculateCost } from "../../config";
+import { createDeepAgentToolAllowlistMiddleware } from "../common/deep-agent-tool-policy";
 import { createDefaultAgentMiddleware } from "../common/middleware";
 import { createChatModel } from "../common/model";
+import {
+  createAgentRunSummaryMiddleware,
+  createAgentRunSummaryRecorder,
+} from "../common/agent-run-summary";
 import {
   getReasoningContent,
   getTextContent,
@@ -103,15 +107,6 @@ export type DocumentAgentStreamEvent =
     };
 
 const VISIBLE_BUILTIN_TOOL_NAMES = new Set(["write_todos", "task"]);
-const DOCUMENT_AGENT_BLOCKED_TOOL_NAMES = new Set([
-  "ls",
-  "read_file",
-  "write_file",
-  "edit_file",
-  "glob",
-  "grep",
-  "execute",
-]);
 const SUBAGENT_RUNTIME_CONTEXT_MAX_CHARS = 120_000;
 const PRD_MARKDOWN_START_PATTERNS = [
   /^#{1,2}\s+.*Product Requirements Document\s*\(PRD\).*$/im,
@@ -127,142 +122,201 @@ export async function* streamPrdDocumentAgent(
 ): AsyncGenerator<DocumentAgentStreamEvent, string, void> {
   const startTime = Date.now();
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
-  const documentToolFilterMiddleware =
-    createDocumentAgentToolFilterMiddleware();
-
-  const agent = createDeepAgent({
-    model: createChatModel({
-      enableThinking: false,
-      temperature: 0.2,
-      maxTokens: 24000,
-    }) as any,
-    systemPrompt: PRD_DOCUMENT_AGENT_PROMPT,
-    name: "document-agent-prd",
-    subagents: createRuntimePrdSubagents(
-      input,
-      documentToolFilterMiddleware,
-    ) as any,
-    middleware: [
-      documentToolFilterMiddleware,
-      ...createDefaultAgentMiddleware(),
-    ] as any,
-  });
-
-  const run = await agent.stream(
-    {
-      messages: [
-        new HumanMessage(
-          JSON.stringify({
-            task: "Generate a complete PRD from the supplied product knowledge graph.",
-            workspaceId: input.workspaceId,
-            runId: input.runId,
-            attemptNumber: input.attemptNumber ?? 1,
-            revisionFeedback: input.revisionFeedback ?? "",
-            taskDelegationPolicy:
-              "When using task subagents, include all relevant graph nodes, relations, section dossier evidence, and draft excerpts directly in the task description. Subagents must not look for files or external graph context.",
-            graph: input.graph,
-            sectionDossiers: input.dossiers,
-          }),
-        ),
-      ],
+  const documentToolAllowlistMiddleware =
+    createDeepAgentToolAllowlistMiddleware({
+      agentName: "document-agent-prd",
+      allowedToolNames: VISIBLE_BUILTIN_TOOL_NAMES,
+    });
+  const documentSubagentToolAllowlistMiddleware =
+    createDeepAgentToolAllowlistMiddleware({
+      agentName: "document-agent-prd-subagent",
+      allowedToolNames: [],
+    });
+  const agentPayload = {
+    task: "Generate a complete PRD from the supplied product knowledge graph.",
+    workspaceId: input.workspaceId,
+    runId: input.runId,
+    attemptNumber: input.attemptNumber ?? 1,
+    revisionFeedback: input.revisionFeedback ?? "",
+    taskDelegationPolicy:
+      "When using task subagents, include all relevant graph nodes, relations, section dossier evidence, and draft excerpts directly in the task description. Subagents must not look for files or external graph context.",
+    graph: input.graph,
+    sectionDossiers: input.dossiers,
+  };
+  const summaryRecorder = createAgentRunSummaryRecorder({
+    agentLabel: "PRD Document Agent",
+    agentName: "document-agent-prd",
+    agentType: "document",
+    context: {
+      payload: agentPayload,
+      subagents: PRD_DOCUMENT_SUBAGENTS.map((subagent) => ({
+        name: subagent.name,
+        description: subagent.description,
+      })),
+      systemPrompt: PRD_DOCUMENT_AGENT_PROMPT,
+      visibleTools: [...VISIBLE_BUILTIN_TOOL_NAMES],
     },
-    { streamMode: "messages", signal: input.signal },
-  );
-
+  });
   let responseText = "";
-  let currentTextBlock = "";
-  for await (const [message] of run) {
-    const visibleToolCalls = getVisibleBuiltinToolCalls(message);
-    const hasAnyToolCalls =
-      AIMessage.isInstance(message) && (message.tool_calls?.length ?? 0) > 0;
-    for (const toolCall of visibleToolCalls) {
-      const todos = extractTodosFromToolArgs(toolCall.args);
-      if (todos.length > 0) {
+
+  try {
+    const agent = createDeepAgent({
+      model: createChatModel({
+        enableThinking: false,
+        temperature: 0.2,
+        maxTokens: 24000,
+      }) as any,
+      systemPrompt: PRD_DOCUMENT_AGENT_PROMPT,
+      name: "document-agent-prd",
+      subagents: createRuntimePrdSubagents(
+        input,
+        documentSubagentToolAllowlistMiddleware,
+      ) as any,
+      middleware: [
+        documentToolAllowlistMiddleware,
+        ...createDefaultAgentMiddleware(),
+        ...createAgentRunSummaryMiddleware(summaryRecorder),
+      ] as any,
+    });
+
+    const run = await agent.stream(
+      {
+        messages: [new HumanMessage(JSON.stringify(agentPayload))],
+      },
+      { streamMode: "messages", signal: input.signal },
+    );
+
+    let currentTextBlock = "";
+    for await (const [message] of run) {
+      const visibleToolCalls = getVisibleBuiltinToolCalls(message);
+      const hasAnyToolCalls =
+        AIMessage.isInstance(message) && (message.tool_calls?.length ?? 0) > 0;
+      for (const toolCall of visibleToolCalls) {
+        const todos = extractTodosFromToolArgs(toolCall.args);
+        if (todos.length > 0) {
+          yield {
+            type: "todo-update",
+            agentType: "document",
+            todos,
+          };
+        }
+        summaryRecorder.recordToolCall({
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          toolArgs: toolCall.args,
+        });
         yield {
-          type: "todo-update",
+          type: "tool-call",
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          toolArgs: toolCall.args,
           agentType: "document",
-          todos,
         };
       }
+      if (hasAnyToolCalls) {
+        // 带工具调用的 AI 文本通常是 DeepAgents 子任务编排说明，不属于最终 PRD 正文。
+        currentTextBlock = "";
+        continue;
+      }
+
+      const toolResult = getVisibleBuiltinToolResult(message);
+      if (toolResult) {
+        const compactedResult = compactToolResult(toolResult.content);
+        summaryRecorder.recordToolResult({
+          toolCallId: toolResult.id,
+          toolName: toolResult.name,
+          toolResult: compactedResult,
+        });
+        yield {
+          type: "tool-result",
+          toolCallId: toolResult.id,
+          toolName: toolResult.name,
+          toolResult: compactedResult,
+          agentType: "document",
+        };
+        currentTextBlock = "";
+        continue;
+      }
+      if (ToolMessage.isInstance(message)) {
+        // 工具结果只进入可观察事件，不参与最终 Markdown 拼接。
+        currentTextBlock = "";
+        continue;
+      }
+
+      const reasoning = getReasoningContent(message);
+      if (reasoning) {
+        summaryRecorder.recordThinking(reasoning);
+        yield {
+          type: "reasoning",
+          agentType: "document",
+          content: reasoning,
+        };
+      }
+      const text = getTextContent(message);
+      if (text) {
+        currentTextBlock += text;
+        responseText = currentTextBlock;
+        summaryRecorder.recordOutput(text);
+      }
+
+      const usage = getTokenUsage(message);
+      if (usage) {
+        tokenUsage = usage;
+      }
+    }
+
+    const tokenUsageSummary = tokenUsage
+      ? {
+          ...tokenUsage,
+          durationMs: Date.now() - startTime,
+        }
+      : undefined;
+    if (tokenUsage) {
+      const cost = calculateCost(
+        tokenUsage.cacheMissInputTokens,
+        tokenUsage.cacheHitInputTokens,
+        tokenUsage.outputTokens,
+      );
       yield {
-        type: "tool-call",
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-        toolArgs: toolCall.args,
+        type: "token-usage",
         agentType: "document",
+        inputTokens: tokenUsage.inputTokens,
+        cacheHitInputTokens: tokenUsage.cacheHitInputTokens,
+        cacheMissInputTokens: tokenUsage.cacheMissInputTokens,
+        outputTokens: tokenUsage.outputTokens,
+        totalTokens: tokenUsage.totalTokens,
+        costInput: cost.costInput,
+        costOutput: cost.costOutput,
+        costTotal: cost.costTotal,
+        durationMs: Date.now() - startTime,
       };
     }
-    if (hasAnyToolCalls) {
-      // 带工具调用的 AI 文本通常是 DeepAgents 子任务编排说明，不属于最终 PRD 正文。
-      currentTextBlock = "";
-      continue;
+
+    const markdown = sanitizePrdMarkdown(responseText);
+    if (!markdown) {
+      throw new Error("Document Agent completed without PRD markdown.");
     }
 
-    const toolResult = getVisibleBuiltinToolResult(message);
-    if (toolResult) {
-      yield {
-        type: "tool-result",
-        toolCallId: toolResult.id,
-        toolName: toolResult.name,
-        toolResult: compactToolResult(toolResult.content),
-        agentType: "document",
-      };
-      currentTextBlock = "";
-      continue;
-    }
-    if (ToolMessage.isInstance(message)) {
-      // 工具结果只进入可观察事件，不参与最终 Markdown 拼接。
-      currentTextBlock = "";
-      continue;
-    }
-
-    const reasoning = getReasoningContent(message);
-    if (reasoning) {
-      yield {
-        type: "reasoning",
-        agentType: "document",
-        content: reasoning,
-      };
-    }
-    const text = getTextContent(message);
-    if (text) {
-      currentTextBlock += text;
-      responseText = currentTextBlock;
-    }
-
-    const usage = getTokenUsage(message);
-    if (usage) {
-      tokenUsage = usage;
-    }
+    await summaryRecorder.finish({
+      output: markdown,
+      status: "completed",
+      tokenUsage: tokenUsageSummary,
+    });
+    return markdown;
+  } catch (error) {
+    await summaryRecorder.finish({
+      error: getErrorMessage(error),
+      output: responseText,
+      status: "failed",
+      tokenUsage: tokenUsage
+        ? {
+            ...tokenUsage,
+            durationMs: Date.now() - startTime,
+          }
+        : undefined,
+    });
+    throw error;
   }
-
-  if (tokenUsage) {
-    const cost = calculateCost(
-      tokenUsage.cacheMissInputTokens,
-      tokenUsage.cacheHitInputTokens,
-      tokenUsage.outputTokens,
-    );
-    yield {
-      type: "token-usage",
-      agentType: "document",
-      inputTokens: tokenUsage.inputTokens,
-      cacheHitInputTokens: tokenUsage.cacheHitInputTokens,
-      cacheMissInputTokens: tokenUsage.cacheMissInputTokens,
-      outputTokens: tokenUsage.outputTokens,
-      totalTokens: tokenUsage.totalTokens,
-      costInput: cost.costInput,
-      costOutput: cost.costOutput,
-      costTotal: cost.costTotal,
-      durationMs: Date.now() - startTime,
-    };
-  }
-
-  const markdown = sanitizePrdMarkdown(responseText);
-  if (!markdown) {
-    throw new Error("Document Agent completed without PRD markdown.");
-  }
-
-  return markdown;
 }
 
 /**
@@ -283,30 +337,10 @@ export function sanitizePrdMarkdown(markdown: string): string {
 }
 
 /**
- * 创建 Document Agent 专用工具过滤中间件。
+ * 提取异常的可读消息，用于本地汇总文件。
  */
-function createDocumentAgentToolFilterMiddleware() {
-  return createMiddleware({
-    name: "DocumentAgentToolFilterMiddleware",
-    wrapModelCall: async (request, handler) => {
-      // 文档由业务数据库持久化，生成阶段只允许规划和子任务编排工具。
-      const tools = request.tools?.filter(
-        (tool) => !DOCUMENT_AGENT_BLOCKED_TOOL_NAMES.has(getToolName(tool)),
-      );
-
-      return handler({
-        ...request,
-        tools,
-      });
-    },
-  });
-}
-
-/**
- * 提取工具名称。
- */
-function getToolName(tool: { name?: unknown }): string {
-  return typeof tool.name === "string" ? tool.name : "";
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**
@@ -314,8 +348,8 @@ function getToolName(tool: { name?: unknown }): string {
  */
 function createRuntimePrdSubagents(
   input: PrdDocumentAgentInput,
-  documentToolFilterMiddleware: ReturnType<
-    typeof createDocumentAgentToolFilterMiddleware
+  documentSubagentToolAllowlistMiddleware: ReturnType<
+    typeof createDeepAgentToolAllowlistMiddleware
   >,
 ): SubAgent[] {
   const runtimeContext = createSubagentRuntimeContext(input);
@@ -325,7 +359,7 @@ function createRuntimePrdSubagents(
     systemPrompt: `${subagent.systemPrompt}\n\n${runtimeContext}`,
     middleware: [
       ...((subagent as { middleware?: unknown[] }).middleware ?? []),
-      documentToolFilterMiddleware,
+      documentSubagentToolAllowlistMiddleware,
     ],
   })) as SubAgent[];
 }

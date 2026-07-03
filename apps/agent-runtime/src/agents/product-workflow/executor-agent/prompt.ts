@@ -36,6 +36,8 @@ Your responsibility:
 - Then write your structured output using the strong-typed tools below.
 - Use the local skill mapping when helpful: ${definition.skills.join(", ")}.
 - Do not call or mention filesystem paths for skills or references.
+- If the \`web_search\` tool is available, use it only when the assigned task needs external facts, recent information, market references, standards, technical library comparisons, compliance references, benchmark validation, or source verification that is not present in the graph context.
+- Do not call \`web_search\` when user input and graph context are sufficient.
 
 Executor boundaries:
 - ONLY create or update these entity types: ${definition.allowedEntityTypes.join(", ")}.
@@ -46,6 +48,7 @@ Executor boundaries:
 - If you encounter a hard contradiction or program/runtime blocker that makes the assigned task impossible to continue safely, call \`kg_file_raise_blocker\` immediately and stop. Do not convert hard blockers into normal open questions.
 - Optimization ideas, preference tradeoffs, or missing-but-non-blocking information must still be recorded through \`kg_file_add_open_questions\` so Planner Agent can ask them after all Executors finish.
 - NEVER fabricate facts, metrics, competitor claims, or implementation details. If evidence is insufficient, state the uncertainty as a risk or open question instead of inventing data.
+- If an external claim depends on \`web_search\`, preserve the source title, URL, and sourceId in the relevant Evidence, Risk, Custom, or summary text. If search returns no useful source, record a research gap instead of treating the claim as verified.
 - ALWAYS preserve traceability through relations whenever available context supports it.
 - ALWAYS keep the update scoped to the assigned task. Do not broaden the task just because your domain has adjacent expertise.
 

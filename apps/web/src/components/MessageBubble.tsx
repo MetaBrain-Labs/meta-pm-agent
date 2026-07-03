@@ -19,7 +19,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Spin, Tag, Tooltip } from "antd";
+import { Collapse, Spin, Tag, Tooltip } from "antd";
 import {
   CaretRightOutlined,
   CheckCircleOutlined,
@@ -44,10 +44,13 @@ import { TodoCard } from "./TodoCard";
 import { ToolCallsCard } from "./ToolCallsCard";
 import { UserInputCard } from "./UserInputCard";
 
+type MessageBubbleViewMode = "combined" | "main" | "process";
+
 interface Props {
   message: Message;
   isLast: boolean;
   streaming: boolean;
+  viewMode?: MessageBubbleViewMode;
   nextUserContent?: string;
   onFormSubmit?: (text: string, hitlResume?: HumanInTheLoopResume) => void;
   onRetry?: () => void;
@@ -60,16 +63,20 @@ export function MessageBubble({
   message,
   isLast,
   streaming,
+  viewMode = "combined",
   nextUserContent,
   onFormSubmit,
   onRetry,
 }: Props) {
-  const [usageOpen, setUsageOpen] = useState(false);
   const [locallySubmitted, setLocallySubmitted] = useState<Set<string>>(
     () => new Set(),
   );
+  const showMainContent = viewMode !== "process";
+  const showProcessContent = viewMode !== "main";
 
   if (message.role === "user") {
+    if (!showMainContent) return null;
+
     const formAnswers = parseFormAnswersMessage(message.content);
 
     return (
@@ -132,8 +139,25 @@ export function MessageBubble({
     streamActive &&
     isAgentActive(message, "planner") &&
     !message.plannerExecution;
-  const hasTokenUsage =
-    (message.tokenUsages?.length ?? 0) > 0 || Boolean(message.usage);
+  const hasVisibleProcessContent = Boolean(
+    message.thinking || message.reasoningBlocks?.length || message.toolCalls?.length,
+  );
+  // 当前消息上正在运行的 Agent 列表，供左栏执行态卡片展示。
+  const runningAgents = message.activeAgents?.length
+    ? message.activeAgents
+    : message.activeAgent
+      ? [message.activeAgent]
+      : [];
+  const showLoadingPlaceholder =
+    !message.content &&
+    !message.questionForm &&
+    !message.humanInterrupt &&
+    !message.userInput &&
+    !message.requestAnalysis &&
+    !message.plannerExecution &&
+    !message.plannerReview &&
+    !message.workflowCompletion &&
+    !message.agentError;
   const handleFormSubmit = useCallback(
     (formId: string, text: string, hitlResume?: HumanInTheLoopResume) => {
       if (!onFormSubmit) return;
@@ -149,39 +173,133 @@ export function MessageBubble({
     [onFormSubmit],
   );
 
+  if (viewMode === "process" && !hasVisibleProcessContent && !streamActive) {
+    return null;
+  }
+
+  if (viewMode === "process" && !hasVisibleProcessContent && streamActive) {
+    return (
+      <div className="flex w-full flex-col self-stretch">
+        <div className="mb-2 flex items-center gap-2 rounded-lg border border-[var(--line-soft)] bg-white px-4 py-3 text-[13px] font-bold text-[var(--ink-faint)]">
+          <Spin
+            indicator={<LoadingOutlined style={{ color: "var(--primary)" }} />}
+            size="small"
+          />
+          等待 Agent 过程
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex w-full flex-col self-stretch">
-      {hasTokenUsage && (
-        <TokenUsageFloatingBox
-          usages={message.tokenUsages ?? []}
-          legacyUsage={message.usage}
-          open={usageOpen}
-          onToggle={() => setUsageOpen(!usageOpen)}
-        />
-      )}
 
-      {message.thinking && (
-        <ThinkingBox
+      {showProcessContent && (
+        <AgentProcessGroup
           agentType="conversation"
-          label={getReasoningLabel("conversation")}
-          content={message.thinking}
-          active={
+          thinkingContent={message.thinking || undefined}
+          thinkingActive={
             streamActive &&
             !message.content &&
             !message.questionForm &&
             !message.userInput &&
             !message.requestAnalysis
           }
+          toolCalls={conversationToolCalls}
+          active={streamActive && isAgentActive(message, "conversation")}
+          hideWhenEmpty
+          tokenUsage={findTokenUsageForAgent(message, "conversation")}
         />
       )}
 
-      {message.todos && message.todos.length > 0 && (
+      {showMainContent && message.todos && message.todos.length > 0 && (
         <TodoCard todos={message.todos} />
       )}
 
-      <AgentToolCalls toolCalls={conversationToolCalls} />
+      {showProcessContent &&
+        requestReasoningBlocks?.map((block) => (
+          <AgentProcessGroup
+            key={block.agentType}
+            agentType={block.agentType}
+            thinkingContent={block.content}
+            thinkingActive={
+              streamActive && message.requestAnalysis?.state !== "complete"
+            }
+            toolCalls={requestToolCalls}
+            active={streamActive && isAgentActive(message, block.agentType)}
+            tokenUsage={findTokenUsageForAgent(message, block.agentType)}
+          />
+        ))}
 
-      {message.content && (
+      {showProcessContent &&
+        plannerReasoningBlocks?.map((block) => (
+          <AgentProcessGroup
+            key={block.agentType}
+            agentType={block.agentType}
+            thinkingContent={block.content}
+            thinkingActive={
+              streamActive && isAgentActive(message, block.agentType)
+            }
+            toolCalls={plannerToolCalls}
+            active={streamActive && isAgentActive(message, block.agentType)}
+            tokenUsage={findTokenUsageForAgent(message, block.agentType)}
+          />
+        ))}
+
+      {showProcessContent &&
+        EXECUTOR_AGENT_TYPES.map((agentType) => {
+          const block = executorReasoningBlocks?.find(
+            (item) => item.agentType === agentType,
+          );
+          const toolCalls = getToolCallsForAgent(message, agentType);
+          if (!block && toolCalls.length === 0) return null;
+
+          return (
+            <AgentProcessGroup
+              key={agentType}
+              agentType={agentType}
+              thinkingContent={block?.content}
+              thinkingActive={
+                streamActive && isAgentActive(message, agentType)
+              }
+              toolCalls={toolCalls}
+              active={streamActive && isAgentActive(message, agentType)}
+              tokenUsage={findTokenUsageForAgent(message, agentType)}
+            />
+          );
+        })}
+
+      {showProcessContent &&
+        productDirectorReasoningBlocks?.map((block) => (
+          <AgentProcessGroup
+            key={block.agentType}
+            agentType={block.agentType}
+            thinkingContent={block.content}
+            thinkingActive={
+              streamActive && isAgentActive(message, block.agentType)
+            }
+            toolCalls={productDirectorToolCalls}
+            active={streamActive && isAgentActive(message, block.agentType)}
+            tokenUsage={findTokenUsageForAgent(message, block.agentType)}
+          />
+        ))}
+
+      {showProcessContent &&
+        otherReasoningBlocks?.map((block) => (
+          <AgentProcessGroup
+            key={block.agentType}
+            agentType={block.agentType}
+            thinkingContent={block.content}
+            thinkingActive={
+              streamActive && isAgentActive(message, block.agentType)
+            }
+            toolCalls={getToolCallsForAgent(message, block.agentType)}
+            active={streamActive && isAgentActive(message, block.agentType)}
+            tokenUsage={findTokenUsageForAgent(message, block.agentType)}
+          />
+        ))}
+
+      {showMainContent && message.content && (
         <div className="assistant-bubble">
           <ProseBlock
             text={message.content}
@@ -195,7 +313,7 @@ export function MessageBubble({
         </div>
       )}
 
-      {message.userInput && (
+      {showMainContent && message.userInput && (
         <div>
           {message.userInput.state === "generating" ? (
             <QFGenerating label="正在整理用户输入" />
@@ -205,21 +323,7 @@ export function MessageBubble({
         </div>
       )}
 
-      {requestReasoningBlocks?.map((block) => (
-        <ThinkingBox
-          key={block.agentType}
-          agentType={block.agentType}
-          label={getReasoningLabel(block.agentType)}
-          content={block.content}
-          active={
-            streamActive && message.requestAnalysis?.state !== "complete"
-          }
-        />
-      ))}
-
-      <AgentToolCalls toolCalls={requestToolCalls} />
-
-      {message.requestAnalysis && (
+      {showMainContent && message.requestAnalysis && (
         <div>
           {message.requestAnalysis.state === "generating" ? (
             <QFGenerating label="Request Agent 正在分析请求" />
@@ -232,7 +336,7 @@ export function MessageBubble({
         </div>
       )}
 
-      {requestError && (
+      {showMainContent && requestError && (
         <AgentErrorCard
           agentType="request"
           message={requestError.message}
@@ -240,21 +344,9 @@ export function MessageBubble({
         />
       )}
 
-      {plannerReasoningBlocks?.map((block) => (
-        <ThinkingBox
-          key={block.agentType}
-          agentType={block.agentType}
-          label={getReasoningLabel(block.agentType)}
-          content={block.content}
-          active={streamActive && isAgentActive(message, block.agentType)}
-        />
-      ))}
+      {showMainContent && plannerDagGenerating && <PlannerExecutionLoadingCard />}
 
-      <AgentToolCalls toolCalls={plannerToolCalls} />
-
-      {plannerDagGenerating && <PlannerExecutionLoadingCard />}
-
-      {message.plannerExecution && (
+      {showMainContent && message.plannerExecution && (
         <PlannerExecutionCard
           plan={message.plannerExecution.plan}
           executorResults={message.executorResults}
@@ -263,59 +355,15 @@ export function MessageBubble({
         />
       )}
 
-      {EXECUTOR_AGENT_TYPES.map((agentType) => {
-        const block = executorReasoningBlocks?.find(
-          (item) => item.agentType === agentType,
-        );
-        const toolCalls = getToolCallsForAgent(message, agentType);
-        if (!block && toolCalls.length === 0) return null;
-
-        return (
-          <div key={agentType}>
-            {block && (
-              <ThinkingBox
-                agentType={block.agentType}
-                label={getReasoningLabel(block.agentType)}
-                content={block.content}
-                active={streamActive && isAgentActive(message, block.agentType)}
-              />
-            )}
-            <AgentToolCalls toolCalls={toolCalls} />
-          </div>
-        );
-      })}
-
-      {message.plannerReview && (
+      {showMainContent && message.plannerReview && (
         <PlannerReviewStatusCard state={message.plannerReview.state} />
       )}
 
-      {message.workflowCompletion && (
+      {showMainContent && message.workflowCompletion && (
         <WorkflowCompletionCard content={message.workflowCompletion.content} />
       )}
 
-      {productDirectorReasoningBlocks?.map((block) => (
-        <ThinkingBox
-          key={block.agentType}
-          agentType={block.agentType}
-          label={getReasoningLabel(block.agentType)}
-          content={block.content}
-          active={streamActive && isAgentActive(message, block.agentType)}
-        />
-      ))}
-
-      <AgentToolCalls toolCalls={productDirectorToolCalls} />
-
-      {otherReasoningBlocks?.map((block) => (
-        <ThinkingBox
-          key={block.agentType}
-          agentType={block.agentType}
-          label={getReasoningLabel(block.agentType)}
-          content={block.content}
-          active={streamActive && isAgentActive(message, block.agentType)}
-        />
-      ))}
-
-      {message.humanInterrupt && (
+      {showMainContent && message.humanInterrupt && (
         <HumanInterruptBlock
           interrupt={message.humanInterrupt.interrupt}
           isLastAssistant={isLast}
@@ -326,7 +374,7 @@ export function MessageBubble({
         />
       )}
 
-      {message.questionForm && !message.humanInterrupt && (
+      {showMainContent && message.questionForm && !message.humanInterrupt && (
         <div>
           {message.questionForm.state === "generating" ? (
             <QFGenerating label="正在生成问题表单" />
@@ -343,7 +391,7 @@ export function MessageBubble({
         </div>
       )}
 
-      {otherError && (
+      {showMainContent && otherError && (
         <AgentErrorCard
           agentType={otherError.agentType}
           message={otherError.message}
@@ -351,25 +399,36 @@ export function MessageBubble({
         />
       )}
 
-      {!message.content &&
-        !message.thinking &&
-        !message.reasoningBlocks?.length &&
-        !message.questionForm &&
-        !message.humanInterrupt &&
-        !message.userInput &&
-        !message.requestAnalysis &&
-        !message.plannerExecution &&
-        !message.plannerReview &&
-        !message.workflowCompletion &&
-        !message.agentError && (
-          <div className="assistant-bubble is-loading">
-            <Spin
-              indicator={<LoadingOutlined style={{ color: "var(--primary)" }} />}
-              size="small"
-            />{" "}
-            思考中
-          </div>
-        )}
+      {showMainContent && showLoadingPlaceholder &&
+        !(showProcessContent && hasVisibleProcessContent) && (
+        <>
+          {viewMode !== "main" && (
+            <div className="assistant-bubble is-loading">
+              <Spin
+                indicator={
+                  <LoadingOutlined style={{ color: "var(--primary)" }} />
+                }
+                size="small"
+              />{" "}
+              思考中
+            </div>
+          )}
+          {viewMode === "main" && runningAgents.length > 0 && (
+            <div className="assistant-bubble is-loading">
+              <Spin
+                indicator={
+                  <LoadingOutlined
+                    style={{ color: getAgentColor(runningAgents[0]!) }}
+                  />
+                }
+                size="small"
+              />{" "}
+              {runningAgents.map((a) => getAgentLabel(a)).join("、")}
+              {runningAgents.length > 1 ? " 并行执行中" : " 执行中"}
+            </div>
+          )}
+        </>
+      )}
 
     </div>
   );
@@ -751,6 +810,226 @@ function QFGenerating({ label }: { label: string }) {
 }
 
 /**
+ * 根据 Agent 类型返回对应的视觉主题色，用于过程栏卡片左边框和标题强调。
+ */
+function getAgentColor(agentType: string): string {
+  if (agentType === "conversation" || agentType === "conversation_confirmation") {
+    return "#1677ff";
+  }
+  if (agentType === "request") return "#722ed1";
+  if (agentType === "planner" || agentType === "product_director") {
+    return "#fa8c16";
+  }
+  if (agentType.startsWith("executor-")) return "#52c41a";
+  return "#8c8c8c";
+}
+
+/**
+ * Agent 过程分组卡片
+ *
+ * 将同一 Agent 的思考过程和工具调用放入统一分组，使用彩色左边框和 Agent
+ * 标题区分不同 Agent，让右侧过程栏各 Agent 一览可见。
+ */
+function AgentProcessGroup({
+  agentType,
+  thinkingContent,
+  thinkingActive,
+  toolCalls,
+  active,
+  hideWhenEmpty,
+  tokenUsage,
+}: {
+  agentType: string;
+  thinkingContent?: string;
+  thinkingActive: boolean;
+  toolCalls: NonNullable<Message["toolCalls"]>;
+  active: boolean;
+  hideWhenEmpty?: boolean;
+  tokenUsage?: TokenUsageInfo;
+}) {
+  const color = getAgentColor(agentType);
+  const label = getAgentLabel(agentType);
+  const hasThinking = Boolean(thinkingContent);
+  const hasTools = toolCalls.length > 0;
+
+  if (hideWhenEmpty && !hasThinking && !hasTools) return null;
+  if (!hasThinking && !hasTools) return null;
+
+  return (
+    <div
+      className="mb-3 overflow-hidden rounded-lg border border-[var(--line-soft)] bg-white"
+      data-agent-thinking={agentType}
+      style={{ borderLeft: `3px solid ${color}` }}
+    >
+      {/* Agent 标题行 */}
+      <div className="flex items-center gap-2 border-b border-[var(--line-soft)] px-4 py-2.5">
+        <span
+          className="h-1.5 w-1.5 shrink-0 rounded-full"
+          style={{ background: color }}
+        />
+        <span className="text-[14px] font-extrabold text-[var(--ink)]">
+          {label}
+        </span>
+        {active && (
+          <Spin
+            indicator={
+              <LoadingOutlined style={{ fontSize: 12, color }} />
+            }
+            size="small"
+            className="ml-auto"
+          />
+        )}
+      </div>
+
+      {/* Token 用量摘要行 */}
+      {tokenUsage && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 border-b border-[var(--line-soft)] px-4 py-1.5 text-[11px] leading-relaxed text-[var(--ink-faint)]">
+          {tokenUsage.durationMs > 0 && (
+            <span className="shrink-0">
+              {formatDuration(tokenUsage.durationMs)}
+            </span>
+          )}
+          <span className="shrink-0">
+            输入 {formatTokens(tokenUsage.inputTokens)}
+          </span>
+          <span className="shrink-0">
+            输出 {formatTokens(tokenUsage.outputTokens)}
+          </span>
+          <span className="shrink-0 font-semibold text-[var(--ink)]">
+            {formatCost(tokenUsage.costTotal)} yuan
+          </span>
+          {(tokenUsage.parallelAgents?.length ?? 0) > 1 && (
+            <Tooltip
+              title={`与 ${(tokenUsage.parallelAgents ?? [])
+                .filter((a) => a !== agentType)
+                .map(getAgentLabel)
+                .join("、")} 并行执行`}
+            >
+              <PartitionOutlined className="shrink-0 cursor-help text-[var(--primary)]" />
+            </Tooltip>
+          )}
+        </div>
+      )}
+
+      {/* 思考过程折叠区 */}
+      {hasThinking && (
+        <ThinkingSection
+          color={color}
+          content={thinkingContent!}
+          active={thinkingActive}
+        />
+      )}
+
+      {/* 工具调用折叠区 */}
+      {hasTools && <ToolCallsSection toolCalls={toolCalls} />}
+    </div>
+  );
+}
+
+/**
+ * 思考过程折叠区 —— 使用 antd Collapse 与工具调用区保持一致的视觉风格。
+ */
+function ThinkingSection({
+  color,
+  content,
+  active,
+}: {
+  color: string;
+  content: string;
+  active: boolean;
+}) {
+  const [open, setOpen] = useState(active);
+  const [userToggled, setUserToggled] = useState(false);
+  const [userScrolled, setUserScrolled] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  const isAtBottom = useCallback(() => {
+    const el = contentRef.current;
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+  }, []);
+
+  useEffect(() => {
+    if (active) {
+      setOpen(true);
+      setUserToggled(false);
+      return;
+    }
+    if (!userToggled) {
+      setOpen(false);
+    }
+  }, [active, userToggled]);
+
+  // 流式输出时自动追随底部，除非用户手动向上滚动。
+  useEffect(() => {
+    if (!userScrolled && contentRef.current && open) {
+      contentRef.current.scrollTop = contentRef.current.scrollHeight;
+    }
+  }, [content, open, userScrolled]);
+
+  const handleScroll = useCallback(() => {
+    setUserScrolled(!isAtBottom());
+  }, [isAtBottom]);
+
+  const handleChange = (keys: string | string[]) => {
+    setUserToggled(true);
+    setOpen(Array.isArray(keys) ? keys.includes("thinking") : keys === "thinking");
+  };
+
+  return (
+    <div className="[&>.ant-collapse]:mb-0 [&>.ant-collapse]:rounded-none [&>.ant-collapse]:border-0">
+      <Collapse
+        activeKey={open ? ["thinking"] : []}
+        onChange={handleChange}
+        expandIcon={({ isActive: isOpen }) => (
+          <CaretRightOutlined
+            rotate={isOpen ? 90 : 0}
+            style={{ fontSize: 12, color }}
+          />
+        )}
+        items={[
+          {
+            key: "thinking",
+            label: (
+              <div className="flex items-center gap-2">
+                <span className="text-[14px] font-extrabold text-[var(--ink)]">
+                  思考过程
+                </span>
+                {active && <span className="loading-dots" />}
+              </div>
+            ),
+            children: (
+              <div
+                ref={contentRef}
+                onScroll={handleScroll}
+                className="max-h-[220px] overflow-y-auto whitespace-pre-wrap themed-scrollbar text-[13px] leading-relaxed text-[var(--ink-mute)]"
+              >
+                {content}
+              </div>
+            ),
+          },
+        ]}
+      />
+    </div>
+  );
+}
+
+/**
+ * 工具调用折叠区 —— 内嵌于 AgentProcessGroup，复用 ToolCallsCard 但去掉外部间距。
+ */
+function ToolCallsSection({
+  toolCalls,
+}: {
+  toolCalls: NonNullable<Message["toolCalls"]>;
+}) {
+  return (
+    <div className="[&>.ant-collapse]:mb-0 [&>.ant-collapse]:rounded-none [&>.ant-collapse]:border-0">
+      <ToolCallsCard toolCalls={toolCalls} />
+    </div>
+  );
+}
+
+/**
  * 展示 Agent 推理过程，流式阶段保持自动滚动。
  */
 function ThinkingBox({
@@ -764,7 +1043,8 @@ function ThinkingBox({
   content: string;
   active: boolean;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(active);
+  const [userToggled, setUserToggled] = useState(false);
   const [userScrolled, setUserScrolled] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -780,6 +1060,19 @@ function ThinkingBox({
     }
   }, [content, open, userScrolled]);
 
+  useEffect(() => {
+    if (active) {
+      setOpen(true);
+      setUserToggled(false);
+      return;
+    }
+
+    // 未被用户手动展开的完成态思考默认收起，降低右侧过程栏噪音。
+    if (!userToggled) {
+      setOpen(false);
+    }
+  }, [active, userToggled]);
+
   const handleScroll = useCallback(() => {
     setUserScrolled(!isAtBottom());
   }, [isAtBottom]);
@@ -792,7 +1085,10 @@ function ThinkingBox({
       <button
         type="button"
         className="flex w-full cursor-pointer select-none items-center gap-1.5 border-none bg-white px-4 py-2 text-left text-[13px] font-bold text-[var(--ink-faint)]"
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          setUserToggled(true);
+          setOpen(!open);
+        }}
       >
         <CaretRightOutlined
           style={{
@@ -893,6 +1189,16 @@ function getToolCallsForAgent(
     const owner = toolCall.agentType ?? message.type;
     return owner === agentType;
   });
+}
+
+/**
+ * 从消息的 token 用量记录中查找指定 Agent 的用量信息。
+ */
+function findTokenUsageForAgent(
+  message: Message,
+  agentType: string,
+): TokenUsageInfo | undefined {
+  return message.tokenUsages?.find((usage) => usage.agentType === agentType);
 }
 
 /**

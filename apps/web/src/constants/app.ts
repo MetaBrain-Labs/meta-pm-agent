@@ -4,6 +4,16 @@
 export const ACTIVE_WORKSPACE_KEY = "pm-agent-active-workspace";
 
 /**
+ * 分栏布局比例缓存，保证切换对话后左右栏宽度沿用上次的手动调整结果。
+ */
+export const SPLIT_SIZES_KEY = "pm-agent-split-sizes";
+
+/**
+ * 右侧过程栏展开/折叠缓存。
+ */
+export const SPLIT_COLLAPSED_KEY = "pm-agent-split-collapsed";
+
+/**
  * 新建会话在后端落库前使用的默认标题。
  */
 export const DEFAULT_CHAT_TITLE = "\u65b0\u5bf9\u8bdd";

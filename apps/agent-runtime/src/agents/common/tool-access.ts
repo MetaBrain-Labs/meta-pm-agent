@@ -7,10 +7,12 @@
  * Responsibilities:
  * - 维护 AGENT_TOOL_ACCESS：Agent → 授权工具集合的映射表
  * - createToolsForAgent()：根据 agentType 和启用的用户工具构建工具数组
+ * - getExecutorDefaultToolNames()：返回 Executor 内部默认启用的工具名称列表
  * - getKnowledgeGraphFileToolNames()：返回知识图谱文件工具名称列表
  *
  * Notes:
- * - web_search 仅授权给 conversation Agent
+ * - conversation 的 web_search 由前端 enabledTools 控制
+ * - 需要外部事实的 Executor 可由 runtime 默认注入 web_search，不依赖前端开关
  * - 知识图谱工具（1 读取 + 6 结构化写入）授权给 planner 和全部 10 个 executor Agent
  * - 工具基于内存 ProductKnowledgeGraph 状态对象，不再依赖文件系统
  */
@@ -58,6 +60,16 @@ const EXECUTOR_AGENT_TYPES = [
   "executor-interface-craft",
 ];
 
+const EXECUTOR_WEB_SEARCH_AGENT_TYPES = new Set([
+  "executor-market-research",
+  "executor-gtm",
+  "executor-marketing-growth",
+  "executor-data-analytics",
+  "executor-ai-shipping",
+  "executor-toolkit",
+  "executor-interface-craft",
+]);
+
 const AGENT_TOOL_ACCESS: Record<string, ReadonlySet<AgentRuntimeTool>> = {
   conversation: new Set(["web_search"]),
   request: new Set(),
@@ -65,7 +77,13 @@ const AGENT_TOOL_ACCESS: Record<string, ReadonlySet<AgentRuntimeTool>> = {
   ...Object.fromEntries(
     EXECUTOR_AGENT_TYPES.map((agentType) => [
       agentType,
-      new Set([...KNOWLEDGE_GRAPH_FILE_TOOLS, ...EXECUTOR_BLOCKER_TOOLS]),
+      new Set([
+        ...KNOWLEDGE_GRAPH_FILE_TOOLS,
+        ...EXECUTOR_BLOCKER_TOOLS,
+        ...(EXECUTOR_WEB_SEARCH_AGENT_TYPES.has(agentType)
+          ? (["web_search"] satisfies AgentRuntimeTool[])
+          : []),
+      ]),
     ]),
   ),
 };
@@ -76,7 +94,7 @@ interface CreateToolsForAgentOptions {
 }
 
 /**
- * 按本轮启用工具和统一授权表，为指定 Agent 构建可见工具列表。
+ * 按本轮运行时工具列表和统一授权表，为指定 Agent 构建可见工具列表。
  */
 export function createToolsForAgent(
   agentType: ToolOwningAgent,
@@ -107,6 +125,24 @@ export function createToolsForAgent(
   }
 
   return tools;
+}
+
+/**
+ * Executor 内部默认启用的工具名称列表。
+ *
+ * 前端 enabledTools 只控制用户可选工具；Executor 为完成 Planner 任务所需的内部
+ * web_search 由 runtime 策略决定，避免 Market Research 等任务无法验证外部事实。
+ */
+export function getExecutorDefaultToolNames(
+  agentType: ToolOwningAgent,
+): AgentRuntimeTool[] {
+  return [
+    ...KNOWLEDGE_GRAPH_FILE_TOOLS,
+    ...EXECUTOR_BLOCKER_TOOLS,
+    ...(EXECUTOR_WEB_SEARCH_AGENT_TYPES.has(agentType)
+      ? (["web_search"] satisfies AgentRuntimeTool[])
+      : []),
+  ];
 }
 
 /**

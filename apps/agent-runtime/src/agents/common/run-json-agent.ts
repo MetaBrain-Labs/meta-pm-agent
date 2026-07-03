@@ -25,8 +25,13 @@ import {
 import { createDeepAgent } from "deepagents";
 import { createChatModel, type ChatModelOptions } from "./model";
 import { createDefaultAgentMiddleware } from "./middleware";
+import { createDeepAgentToolAllowlistMiddleware } from "./deep-agent-tool-policy";
 import { calculateCost } from "../../config";
 import { parseJsonObject } from "../../utils/json";
+import {
+  createAgentRunSummaryMiddleware,
+  createAgentRunSummaryRecorder,
+} from "./agent-run-summary";
 import {
   getReasoningContent,
   getTextContent,
@@ -112,16 +117,36 @@ export async function* runJsonAgent<T, AgentType extends string>(
 ): AsyncGenerator<JsonAgentEvent<AgentType>, T, void> {
   const startTime = Date.now();
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
+  const tools = options.tools ?? [];
+  const summaryRecorder = createAgentRunSummaryRecorder({
+    agentLabel: options.agentLabel,
+    agentName: options.name,
+    agentType: options.agentType,
+    context: {
+      modelOptions: options.modelOptions,
+      payload: options.payload,
+      skills: options.skills ?? [],
+      systemPrompt: options.systemPrompt,
+      tools: compactToolDefinitions(tools),
+    },
+  });
 
   try {
     const agent = createDeepAgent({
       model: createChatModel(options.modelOptions) as any,
       systemPrompt: options.systemPrompt,
-      tools: options.tools ?? [],
+      tools,
       name: options.name,
       // 这里接收 DeepAgents 技能目录 sources；具体技能名由 source 内的 SKILL.md 声明。
       skills: options.skills ?? [],
-      middleware: createDefaultAgentMiddleware() as any,
+      middleware: [
+        createDeepAgentToolAllowlistMiddleware({
+          agentName: options.name,
+          allowedToolNames: tools.map((tool) => tool.name),
+        }),
+        ...createDefaultAgentMiddleware(),
+        ...createAgentRunSummaryMiddleware(summaryRecorder),
+      ] as any,
     });
 
     const run = await agent.stream(
@@ -134,6 +159,11 @@ export async function* runJsonAgent<T, AgentType extends string>(
     let responseText = "";
     for await (const [message] of run) {
       for (const toolCall of getToolCalls(message)) {
+        summaryRecorder.recordToolCall({
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          toolArgs: toolCall.args,
+        });
         yield {
           type: "tool-call",
           toolCallId: toolCall.id,
@@ -145,6 +175,11 @@ export async function* runJsonAgent<T, AgentType extends string>(
 
       const toolResult = getToolResult(message);
       if (toolResult) {
+        summaryRecorder.recordToolResult({
+          toolCallId: toolResult.id,
+          toolName: toolResult.name,
+          toolResult: toolResult.content,
+        });
         yield {
           type: "tool-result",
           toolCallId: toolResult.id,
@@ -157,13 +192,16 @@ export async function* runJsonAgent<T, AgentType extends string>(
 
       const reasoning = getReasoningContent(message);
       if (reasoning) {
+        summaryRecorder.recordThinking(reasoning);
         yield {
           type: "reasoning",
           agentType: options.agentType,
           content: reasoning,
         };
       }
-      responseText += getTextContent(message);
+      const text = getTextContent(message);
+      responseText += text;
+      summaryRecorder.recordOutput(text);
 
       // 从每次 AIMessage 中累积 token 用量（最终消息包含完整统计）。
       const usage = getTokenUsage(message);
@@ -173,6 +211,12 @@ export async function* runJsonAgent<T, AgentType extends string>(
     }
 
     // 在返回结构化结果前，输出该 Agent 的 token 用量和耗时。
+    const tokenUsageSummary = tokenUsage
+      ? {
+          ...tokenUsage,
+          durationMs: Date.now() - startTime,
+        }
+      : undefined;
     if (tokenUsage) {
       const cost = calculateCost(
         tokenUsage.cacheMissInputTokens,
@@ -195,25 +239,77 @@ export async function* runJsonAgent<T, AgentType extends string>(
     }
 
     const parsed = parseJsonObject(responseText);
-    const result = options.schema.safeParse(parsed);
-    if (result.success) return result.data;
+    if (parsed === null) {
+      const invalidJsonReason = formatInvalidJsonReason(
+        responseText,
+        tokenUsage,
+        options.modelOptions?.maxTokens,
+      );
+      const fallbackResult = options.fallback(invalidJsonReason);
+      if (!options.suppressInvalidJsonReasoning) {
+        const content = invalidJsonReason.startsWith("output-truncated")
+          ? `结构化输出疑似在模型 maxTokens 前被截断，已使用 ${options.agentLabel} 的 MVP 回退结果。\n`
+          : `结构化输出不是可解析的 JSON，已使用 ${options.agentLabel} 的 MVP 回退结果。\n`;
+        summaryRecorder.recordThinking(content);
+        yield {
+          type: "reasoning",
+          agentType: options.agentType,
+          content,
+        };
+      }
+      await summaryRecorder.finish({
+        error: invalidJsonReason,
+        output: fallbackResult,
+        status: "fallback",
+        tokenUsage: tokenUsageSummary,
+      });
+      return fallbackResult;
+    }
 
+    const result = options.schema.safeParse(parsed);
+    if (result.success) {
+      await summaryRecorder.finish({
+        output: result.data,
+        status: "completed",
+        tokenUsage: tokenUsageSummary,
+      });
+      return result.data;
+    }
+
+    const schemaError = `schema-validation: ${formatSchemaError(result.error)}`;
+    const fallbackResult = options.fallback(schemaError);
     if (!options.suppressInvalidJsonReasoning) {
+      const content = `结构化输出未通过契约校验，已使用 ${options.agentLabel} 的 MVP 回退结果：${schemaError}\n`;
+      summaryRecorder.recordThinking(content);
       yield {
         type: "reasoning",
         agentType: options.agentType,
-        content: `结构化输出校验失败，已使用 ${options.agentLabel} 的 MVP 回退结果。\n`,
+        content,
       };
     }
-    return options.fallback("invalid-json");
+    await summaryRecorder.finish({
+      error: schemaError,
+      output: fallbackResult,
+      status: "fallback",
+      tokenUsage: tokenUsageSummary,
+    });
+    return fallbackResult;
   } catch (error) {
     const message = getErrorMessage(error);
+    const fallbackResult = options.fallback(message);
+    const content = `${options.agentLabel} 执行失败，已使用 MVP 回退结果：${message}\n`;
+    summaryRecorder.recordThinking(content);
     yield {
       type: "reasoning",
       agentType: options.agentType,
-      content: `${options.agentLabel} 执行失败，已使用 MVP 回退结果：${message}\n`,
+      content,
     };
-    return options.fallback(message);
+    await summaryRecorder.finish({
+      error: message,
+      output: fallbackResult,
+      status: "fallback",
+    });
+    return fallbackResult;
   }
 }
 
@@ -222,6 +318,141 @@ export async function* runJsonAgent<T, AgentType extends string>(
  */
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 区分普通 JSON 格式错误和模型输出截断，避免把截断误诊为 schema 契约问题。
+ */
+function formatInvalidJsonReason(
+  responseText: string,
+  tokenUsage: ReturnType<typeof getTokenUsage>,
+  maxTokens: number | undefined,
+): string {
+  if (
+    isLikelyTruncatedRootJson(responseText) ||
+    didReachModelOutputLimit(tokenUsage, maxTokens)
+  ) {
+    return "output-truncated: model reached maxTokens before completing JSON";
+  }
+
+  return "invalid-json";
+}
+
+/**
+ * 判断模型是否已经顶到输出上限；这通常意味着完整 JSON 被截断。
+ */
+function didReachModelOutputLimit(
+  tokenUsage: ReturnType<typeof getTokenUsage>,
+  maxTokens: number | undefined,
+): boolean {
+  return (
+    typeof maxTokens === "number" &&
+    tokenUsage !== null &&
+    tokenUsage.outputTokens >= maxTokens
+  );
+}
+
+/**
+ * 根 JSON 从响应开头出现却没有闭合时，不应继续解析内部对象。
+ */
+function isLikelyTruncatedRootJson(text: string): boolean {
+  const normalized = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+  if (!normalized.startsWith("{")) return false;
+
+  let depth = 0;
+  let inString = false;
+  let escaping = false;
+
+  for (const char of normalized) {
+    if (escaping) {
+      escaping = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaping = inString;
+      continue;
+    }
+    if (char === "\"") {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char !== "}") continue;
+
+    depth -= 1;
+    if (depth === 0) return false;
+  }
+
+  return depth > 0 || inString;
+}
+
+/**
+ * 压缩 Zod 校验错误，避免把完整 schema 失败对象写入用户流或调试摘要。
+ */
+function formatSchemaError(error: unknown): string {
+  const issues = getSchemaIssues(error);
+  if (issues.length === 0) return getErrorMessage(error);
+
+  return issues
+    .slice(0, 5)
+    .map((issue) => {
+      const path =
+        Array.isArray(issue.path) && issue.path.length > 0
+          ? issue.path.join(".")
+          : "(root)";
+      return `${path}: ${issue.message ?? "Invalid value"}`;
+    })
+    .join("; ");
+}
+
+/**
+ * 兼容 Zod v3/v4 的 issues 形状。
+ */
+function getSchemaIssues(
+  error: unknown,
+): Array<{ path?: Array<string | number>; message?: string }> {
+  if (!error || typeof error !== "object") return [];
+
+  const issues = (error as { issues?: unknown }).issues;
+  if (!Array.isArray(issues)) return [];
+
+  return issues.flatMap((issue) => {
+    if (!issue || typeof issue !== "object") return [];
+    const record = issue as { path?: unknown; message?: unknown };
+    const path = Array.isArray(record.path)
+      ? record.path.flatMap((item) =>
+          typeof item === "string" || typeof item === "number" ? [item] : [],
+        )
+      : undefined;
+
+    return [
+      {
+        path,
+        message:
+          typeof record.message === "string" ? record.message : undefined,
+      },
+    ];
+  });
+}
+
+/**
+ * 压缩工具定义，只保留汇总排查需要的工具名称。
+ */
+function compactToolDefinitions(tools: StructuredTool[]): Array<{
+  name: string;
+}> {
+  return tools.map((tool) => ({
+    name: typeof tool.name === "string" ? tool.name : "unknown",
+  }));
 }
 
 /**

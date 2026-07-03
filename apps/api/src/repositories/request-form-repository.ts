@@ -139,16 +139,8 @@ export async function persistExecutorProposalItems(
     for (const result of results) {
       if (result.open_questions.length === 0) continue;
 
-      // open_questions 现在为结构化对象 {id, text}，提取 text 作为显示文本。
-      const slots = result.open_questions.map((question, index) => ({
-        id: `${result.task_id}-slot-${index + 1}`,
-        question: typeof question === "object" && question !== null && "text" in question
-          ? String((question as Record<string, unknown>).text)
-          : String(question),
-        source_task_id: result.task_id,
-        source_agent: result.agent_type,
-        priority: result.open_questions.length - index,
-      }));
+      const slots = collectExecutorProposalSlots(result);
+      if (slots.length === 0) continue;
 
       await tx.$executeRaw`
         INSERT INTO "request_form_item" (
@@ -356,6 +348,127 @@ interface ProposalQuestion {
 }
 
 /**
+ * 将单个 Executor 的 open questions 转换为待确认 proposal slots，并在写库前合并重复问题。
+ */
+function collectExecutorProposalSlots(
+  result: ExecutorAgentResult,
+): ProposalQuestion[] {
+  const slots = result.open_questions.flatMap((question, index) => {
+    // open_questions 现在为结构化对象 {id, text}，提取 text 作为显示文本。
+    const questionText =
+      typeof question === "object" && question !== null && "text" in question
+        ? String((question as Record<string, unknown>).text)
+        : String(question);
+    const normalized = normalizeSlotQuestion(questionText);
+    if (!normalized) return [];
+
+    return [
+      {
+        id: `${result.task_id}-slot-${index + 1}`,
+        question: questionText,
+        type: "textarea" as const,
+        source_task_id: result.task_id,
+        source_agent: result.agent_type,
+        sources: [
+          {
+            source_task_id: result.task_id,
+            source_agent: result.agent_type,
+          },
+        ],
+        priority: result.open_questions.length - index,
+      },
+    ];
+  });
+
+  return mergeProposalQuestions(slots);
+}
+
+/**
+ * 合并 Planner/Executor 写入的重复补充问题，并保留所有可关闭的来源。
+ */
+function mergeProposalQuestions(questions: ProposalQuestion[]): ProposalQuestion[] {
+  const byKey = new Map<string, ProposalQuestion>();
+
+  for (const question of questions) {
+    const key = normalizeSlotQuestion(question.question);
+    if (!key) continue;
+
+    const sources = getProposalQuestionSources(question);
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.sources = mergeProposalQuestionSources([
+        ...existing.sources,
+        ...sources,
+      ]);
+      existing.priority = Math.max(existing.priority, question.priority);
+      existing.required = existing.required || question.required;
+      if (!existing.placeholder && question.placeholder) {
+        existing.placeholder = question.placeholder;
+      }
+      if (!existing.help && question.help) {
+        existing.help = question.help;
+      }
+      if (!existing.options?.length && question.options?.length) {
+        existing.options = question.options;
+      }
+      if (!existing.maxSelections && question.maxSelections) {
+        existing.maxSelections = question.maxSelections;
+      }
+      continue;
+    }
+
+    byKey.set(key, {
+      ...question,
+      sources,
+    });
+  }
+
+  return [...byKey.values()].sort((left, right) => right.priority - left.priority);
+}
+
+/**
+ * 读取 proposal question 的完整来源列表；旧 payload 缺少 sources 时使用主来源兜底。
+ */
+function getProposalQuestionSources(
+  question: ProposalQuestion,
+): ProposalQuestion["sources"] {
+  const sources =
+    question.sources.length > 0
+      ? question.sources
+      : [
+          {
+            source_task_id: question.source_task_id,
+            source_agent: question.source_agent,
+          },
+        ];
+
+  return mergeProposalQuestionSources(sources);
+}
+
+/**
+ * 按 agent/task 对来源去重，避免恢复表单重复显示同一个来源。
+ */
+function mergeProposalQuestionSources<T extends ProposalQuestion["sources"][number]>(
+  sources: T[],
+): T[] {
+  const byKey = new Map<string, T>();
+  for (const source of sources) {
+    byKey.set(`${source.source_agent}:${source.source_task_id}`, source);
+  }
+  return [...byKey.values()];
+}
+
+/**
+ * 判断合并后的问题列表是否需要回写到 decision payload。
+ */
+function hasProposalQuestionsChanged(
+  currentQuestions: ProposalQuestion[],
+  nextQuestions: ProposalQuestion[],
+): boolean {
+  return JSON.stringify(currentQuestions) !== JSON.stringify(nextQuestions);
+}
+
+/**
  * 读取当前请求表单中下一组待 Conversation Agent 提问的决策项。
  */
 export async function getPendingDecisionQuestionForm(
@@ -418,48 +531,13 @@ async function syncDecisionPayloadWithPendingProposals(
 ): Promise<Record<string, unknown>> {
   const existingQuestions = parseDecisionQuestions(payload.questions);
   const proposalQuestions = await listPendingProposalQuestions(requestFormId);
-  if (proposalQuestions.length === 0) return payload;
+  const combinedQuestions = [...existingQuestions, ...proposalQuestions];
+  if (combinedQuestions.length === 0) return payload;
 
-  const byKey = new Map<string, ProposalQuestion>();
-  for (const question of [...existingQuestions, ...proposalQuestions]) {
-    const key = normalizeSlotQuestion(question.question);
-    const existing = byKey.get(key);
-    if (existing) {
-      existing.sources = [
-        ...(existing.sources ?? [
-          {
-            source_task_id: existing.source_task_id,
-            source_agent: existing.source_agent,
-          },
-        ]),
-        ...(question.sources ?? [
-          {
-            source_task_id: question.source_task_id,
-            source_agent: question.source_agent,
-          },
-        ]),
-      ];
-      existing.priority = Math.max(existing.priority, question.priority);
-      continue;
-    }
-
-    byKey.set(key, {
-      ...question,
-      sources: question.sources ?? [
-        {
-          source_task_id: question.source_task_id,
-          source_agent: question.source_agent,
-        },
-      ],
-    });
-  }
-
-  const questions = [...byKey.values()].sort(
-    (left, right) => right.priority - left.priority,
-  );
+  const questions = mergeProposalQuestions(combinedQuestions);
   const nextPayload = { ...payload, questions };
 
-  if (questions.length !== existingQuestions.length) {
+  if (hasProposalQuestionsChanged(existingQuestions, questions)) {
     await prisma.$executeRaw`
       UPDATE "request_form_item"
       SET
@@ -561,7 +639,7 @@ function parseProposalQuestionSources(
       : [];
   });
 
-  return sources;
+  return mergeProposalQuestionSources(sources);
 }
 
 /**
@@ -597,9 +675,7 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
 }> {
   const proposalQuestions = result.proposal_questions ?? [];
   if (proposalQuestions.length > 0) {
-    return proposalQuestions
-      .map(toProposalQuestionSlot)
-      .sort((left, right) => right.priority - left.priority);
+    return mergeProposalQuestions(proposalQuestions.map(toProposalQuestionSlot));
   }
 
   const slots = new Map<string, {
@@ -634,7 +710,10 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
         source_agent: executorResult.agent_type,
       };
       if (existing) {
-        existing.sources.push(source);
+        existing.sources = mergeProposalQuestionSources([
+          ...existing.sources,
+          source,
+        ]);
         existing.priority = Math.max(existing.priority, priority);
         return;
       }
@@ -737,7 +816,11 @@ function getProposalDecisionId(result: ProductWorkflowResult): string {
  * 归一化 slot 文本，用于 MVP 阶段的 Map 去重。
  */
 function normalizeSlotQuestion(question: string): string {
-  return question.trim().replace(/\s+/g, " ").toLowerCase();
+  return question
+    .trim()
+    .replace(/[?？。.!！]+$/g, "")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
 /**

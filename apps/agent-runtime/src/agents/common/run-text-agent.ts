@@ -24,7 +24,12 @@ import { createDeepAgent } from "deepagents";
 import type { StructuredTool } from "langchain";
 import { createChatModel, type ChatModelOptions } from "./model";
 import { createDefaultAgentMiddleware } from "./middleware";
+import { createDeepAgentToolAllowlistMiddleware } from "./deep-agent-tool-policy";
 import { calculateCost } from "../../config";
+import {
+  createAgentRunSummaryMiddleware,
+  createAgentRunSummaryRecorder,
+} from "./agent-run-summary";
 import {
   getReasoningContent,
   getTextContent,
@@ -105,15 +110,35 @@ export async function* runTextAgent<AgentType extends string>(
 ): AsyncGenerator<TextAgentEvent<AgentType>, string, void> {
   const startTime = Date.now();
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
+  const tools = options.tools ?? [];
+  const summaryRecorder = createAgentRunSummaryRecorder({
+    agentLabel: options.agentLabel,
+    agentName: options.name,
+    agentType: options.agentType,
+    context: {
+      modelOptions: options.modelOptions,
+      payload: options.payload,
+      skills: options.skills ?? [],
+      systemPrompt: options.systemPrompt,
+      tools: compactToolDefinitions(tools),
+    },
+  });
 
   try {
     const agent = createDeepAgent({
       model: createChatModel(options.modelOptions) as any,
       systemPrompt: options.systemPrompt,
-      tools: options.tools ?? [],
+      tools,
       name: options.name,
       skills: options.skills ?? [],
-      middleware: createDefaultAgentMiddleware() as any,
+      middleware: [
+        createDeepAgentToolAllowlistMiddleware({
+          agentName: options.name,
+          allowedToolNames: tools.map((tool) => tool.name),
+        }),
+        ...createDefaultAgentMiddleware(),
+        ...createAgentRunSummaryMiddleware(summaryRecorder),
+      ] as any,
     });
 
     const run = await agent.stream(
@@ -126,6 +151,11 @@ export async function* runTextAgent<AgentType extends string>(
     let responseText = "";
     for await (const [message] of run) {
       for (const toolCall of getToolCalls(message)) {
+        summaryRecorder.recordToolCall({
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          toolArgs: toolCall.args,
+        });
         yield {
           type: "tool-call",
           toolCallId: toolCall.id,
@@ -137,6 +167,11 @@ export async function* runTextAgent<AgentType extends string>(
 
       const toolResult = getToolResult(message);
       if (toolResult) {
+        summaryRecorder.recordToolResult({
+          toolCallId: toolResult.id,
+          toolName: toolResult.name,
+          toolResult: toolResult.content,
+        });
         yield {
           type: "tool-result",
           toolCallId: toolResult.id,
@@ -149,13 +184,16 @@ export async function* runTextAgent<AgentType extends string>(
 
       const reasoning = getReasoningContent(message);
       if (reasoning) {
+        summaryRecorder.recordThinking(reasoning);
         yield {
           type: "reasoning",
           agentType: options.agentType,
           content: reasoning,
         };
       }
-      responseText += getTextContent(message);
+      const text = getTextContent(message);
+      responseText += text;
+      summaryRecorder.recordOutput(text);
 
       // 从每次 AIMessage 中累积 token 用量（最终消息包含完整统计）。
       const usage = getTokenUsage(message);
@@ -165,6 +203,12 @@ export async function* runTextAgent<AgentType extends string>(
     }
 
     // 在返回最终文本前，输出该 Agent 的 token 用量和耗时。
+    const tokenUsageSummary = tokenUsage
+      ? {
+          ...tokenUsage,
+          durationMs: Date.now() - startTime,
+        }
+      : undefined;
     if (tokenUsage) {
       const cost = calculateCost(
         tokenUsage.cacheMissInputTokens,
@@ -187,18 +231,36 @@ export async function* runTextAgent<AgentType extends string>(
     }
 
     const patch = responseText.trim();
-    return patch || options.fallback("empty-output");
+    const output = patch || options.fallback("empty-output");
+    await summaryRecorder.finish({
+      output,
+      status: patch ? "completed" : "fallback",
+      tokenUsage: tokenUsageSummary,
+    });
+    return output;
   } catch (error) {
     const message = getErrorMessage(error);
     if (options.throwOnError) {
+      await summaryRecorder.finish({
+        error: message,
+        status: "failed",
+      });
       throw error;
     }
+    const fallbackResult = options.fallback(message);
+    const content = `${options.agentLabel} 执行失败，已使用知识图谱补丁回退结果：${message}\n`;
+    summaryRecorder.recordThinking(content);
     yield {
       type: "reasoning",
       agentType: options.agentType,
-      content: `${options.agentLabel} 执行失败，已使用知识图谱补丁回退结果：${message}\n`,
+      content,
     };
-    return options.fallback(message);
+    await summaryRecorder.finish({
+      error: message,
+      output: fallbackResult,
+      status: "fallback",
+    });
+    return fallbackResult;
   }
 }
 
@@ -207,6 +269,17 @@ export async function* runTextAgent<AgentType extends string>(
  */
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 压缩工具定义，只保留汇总排查需要的工具名称。
+ */
+function compactToolDefinitions(tools: StructuredTool[]): Array<{
+  name: string;
+}> {
+  return tools.map((tool) => ({
+    name: typeof tool.name === "string" ? tool.name : "unknown",
+  }));
 }
 
 /**

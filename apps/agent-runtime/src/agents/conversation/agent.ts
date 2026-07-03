@@ -13,9 +13,14 @@
 
 import { createDeepAgent } from "deepagents";
 import type { AgentRuntimeTool, ProductKnowledgeGraph } from "@repo/shared";
-import { createToolsForAgent } from "../common/tool-access";
+import { canAgentUseTool, createToolsForAgent } from "../common/tool-access";
 import { createChatModel } from "../common/model";
 import { createDefaultAgentMiddleware } from "../common/middleware";
+import { createDeepAgentToolAllowlistMiddleware } from "../common/deep-agent-tool-policy";
+import {
+  createAgentRunSummaryMiddleware,
+  type AgentRunSummaryRecorder,
+} from "../common/agent-run-summary";
 import {
   getRuntimeDateContext,
   type RuntimeDateContext,
@@ -25,6 +30,7 @@ import { DISCOVERY_PROMPT } from "./prompt";
 export interface ConversationAgentOptions {
   enabledTools?: AgentRuntimeTool[];
   knowledgeGraph?: ProductKnowledgeGraph | null;
+  summaryRecorder?: AgentRunSummaryRecorder;
 }
 
 /**
@@ -33,19 +39,42 @@ export interface ConversationAgentOptions {
 export function createConversationAgent(options: ConversationAgentOptions = {}) {
   const model = createChatModel();
   const tools = createToolsForAgent("conversation", options.enabledTools);
-  const runtimeContext = getRuntimeDateContext();
 
   return createDeepAgent({
     model: model as any,
-    systemPrompt: buildConversationPrompt({
-      runtimeContext,
-      webSearchEnabled: tools.length > 0,
-      knowledgeGraph: options.knowledgeGraph,
-    }),
+    systemPrompt: createConversationAgentSystemPrompt(
+      options,
+      tools.length > 0,
+    ),
     tools,
     name: "conversation-agent",
     skills: [],
-    middleware: createDefaultAgentMiddleware() as any,
+    middleware: [
+      createDeepAgentToolAllowlistMiddleware({
+        agentName: "conversation-agent",
+        allowedToolNames: tools.map((tool) => tool.name),
+      }),
+      ...createDefaultAgentMiddleware(),
+      ...createAgentRunSummaryMiddleware(options.summaryRecorder),
+    ] as any,
+  });
+}
+
+/**
+ * 构造 Conversation Agent 最终注入模型的系统提示，供运行和本地汇总复用。
+ */
+export function createConversationAgentSystemPrompt(
+  options: ConversationAgentOptions = {},
+  webSearchEnabled = canAgentUseTool(
+    "conversation",
+    "web_search",
+    options.enabledTools,
+  ),
+): string {
+  return buildConversationPrompt({
+    runtimeContext: getRuntimeDateContext(),
+    webSearchEnabled,
+    knowledgeGraph: options.knowledgeGraph,
   });
 }
 

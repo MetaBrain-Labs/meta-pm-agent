@@ -101,11 +101,33 @@ const riskInputSchema = z.object({
 });
 
 const openQuestionInputSchema = z.object({
-  id: z.string().min(1).describe("Question ID, e.g. OQ-001"),
+  id: z
+    .string()
+    .min(1)
+    .describe(
+      "Stable question ID used for internal tracking, e.g. OQ-001. Do not translate this value.",
+    ),
+
+  user_language: z
+    .enum(["zh", "en"])
+    .describe(
+      'Language used for all user-facing content. Use "zh" for Simplified Chinese and "en" for English.',
+    ),
+
   text: z
     .string()
     .min(1)
-    .describe("Question text explaining what needs to be confirmed"),
+    .describe(
+      [
+        "The exact user-facing question asking for missing information or confirmation.",
+        "The text MUST be written in the language specified by user_language.",
+        'For "zh", write entirely in natural Simplified Chinese.',
+        'For "en", write entirely in natural English.',
+        "Do not translate IDs, enum values, agent IDs, task IDs, graph IDs, URLs, or technical identifiers.",
+        "Do not default to English.",
+        "Ask one clear and directly answerable question only.",
+      ].join(" "),
+    ),
 });
 
 const blockerInputSchema = z.object({
@@ -135,7 +157,9 @@ const graphQuerySchema = z.object({
     .int()
     .positive()
     .default(12)
-    .describe("Requested result limit. The tool clamps large values internally."),
+    .describe(
+      "Requested result limit. The tool clamps large values internally.",
+    ),
 });
 
 /**
@@ -150,9 +174,7 @@ export interface StructuredToolCallResult<T = unknown> {
 /**
  * 创建知识图谱操作工具集（基于内存状态对象，不写文件）。
  */
-export function createKnowledgeGraphTools(
-  state: ProductKnowledgeGraph,
-) {
+export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
   return [
     // ── 读取 ──
     tool(
@@ -324,7 +346,7 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_add_nodes",
         description:
-          "Write structured nodes to the knowledge graph. Each node must have: id, type, name, description, source_task_id, status. Allowed types: Goal/Requirement/Evidence/Decision/Feature/Component/Metric/Custom.",
+          "Write structured nodes to the knowledge graph. Each node must have: id, type, name, description, source_task_id, status. Allowed types: Goal/Requirement/Evidence/Decision/Feature/Component/Metric/Risk/OpenQuestion/Custom. Prefer kg_file_add_risks and kg_file_add_open_questions for uncertainty records.",
         schema: z.object({
           nodes: z
             .array(nodeInputSchema)
@@ -380,7 +402,7 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_add_decisions",
         description:
-          "Write structured decisions to the knowledge graph. Each decision has id and text fields.",
+          "Write structured decisions to the knowledge graph. Each decision has id, text, and optional source_task_id fields.",
         schema: z.object({
           decisions: z
             .array(decisionInputSchema)
@@ -407,7 +429,7 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_add_risks",
         description:
-          "Write structured risks to the knowledge graph. Each risk has id and text fields.",
+          "Write structured risks to the knowledge graph. Each risk has id, text, and optional source_task_id fields.",
         schema: z.object({
           risks: z
             .array(riskInputSchema)
@@ -436,7 +458,7 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_add_open_questions",
         description:
-          "Write structured open questions to the knowledge graph. Each question has id and text fields.",
+          "Write structured open questions to the knowledge graph. Each question has id, text, and optional source_task_id fields.",
         schema: z.object({
           questions: z
             .array(openQuestionInputSchema)

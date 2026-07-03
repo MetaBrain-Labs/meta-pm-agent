@@ -35,7 +35,7 @@ import {
 } from "../../common/run-text-agent";
 import {
   createToolsForAgent,
-  getKnowledgeGraphFileToolNames,
+  getExecutorDefaultToolNames,
 } from "../../common/tool-access";
 import {
   compactPreviousExecutorResults,
@@ -122,7 +122,7 @@ export async function* streamExecutorAgent(
   const toolKnowledgeGraph = cloneKnowledgeGraph(input.knowledgeGraph);
   const tools = createToolsForAgent(
     definition.agentType,
-    getKnowledgeGraphFileToolNames(),
+    getExecutorDefaultToolNames(definition.agentType),
     { knowledgeGraph: toolKnowledgeGraph },
   );
   // Executor 默认只接收摘要和任务相关子图，完整图谱保留在工具状态中按需查询。
