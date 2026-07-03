@@ -234,9 +234,16 @@ export async function* runJsonAgent<T, AgentType extends string>(
 
     const parsed = parseJsonObject(responseText);
     if (parsed === null) {
-      const fallbackResult = options.fallback("invalid-json");
+      const invalidJsonReason = formatInvalidJsonReason(
+        responseText,
+        tokenUsage,
+        options.modelOptions?.maxTokens,
+      );
+      const fallbackResult = options.fallback(invalidJsonReason);
       if (!options.suppressInvalidJsonReasoning) {
-        const content = `结构化输出不是可解析的 JSON，已使用 ${options.agentLabel} 的 MVP 回退结果。\n`;
+        const content = invalidJsonReason.startsWith("output-truncated")
+          ? `结构化输出疑似在模型 maxTokens 前被截断，已使用 ${options.agentLabel} 的 MVP 回退结果。\n`
+          : `结构化输出不是可解析的 JSON，已使用 ${options.agentLabel} 的 MVP 回退结果。\n`;
         summaryRecorder.recordThinking(content);
         yield {
           type: "reasoning",
@@ -245,7 +252,7 @@ export async function* runJsonAgent<T, AgentType extends string>(
         };
       }
       await summaryRecorder.finish({
-        error: "invalid-json",
+        error: invalidJsonReason,
         output: fallbackResult,
         status: "fallback",
         tokenUsage: tokenUsageSummary,
@@ -305,6 +312,81 @@ export async function* runJsonAgent<T, AgentType extends string>(
  */
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 区分普通 JSON 格式错误和模型输出截断，避免把截断误诊为 schema 契约问题。
+ */
+function formatInvalidJsonReason(
+  responseText: string,
+  tokenUsage: ReturnType<typeof getTokenUsage>,
+  maxTokens: number | undefined,
+): string {
+  if (
+    isLikelyTruncatedRootJson(responseText) ||
+    didReachModelOutputLimit(tokenUsage, maxTokens)
+  ) {
+    return "output-truncated: model reached maxTokens before completing JSON";
+  }
+
+  return "invalid-json";
+}
+
+/**
+ * 判断模型是否已经顶到输出上限；这通常意味着完整 JSON 被截断。
+ */
+function didReachModelOutputLimit(
+  tokenUsage: ReturnType<typeof getTokenUsage>,
+  maxTokens: number | undefined,
+): boolean {
+  return (
+    typeof maxTokens === "number" &&
+    tokenUsage !== null &&
+    tokenUsage.outputTokens >= maxTokens
+  );
+}
+
+/**
+ * 根 JSON 从响应开头出现却没有闭合时，不应继续解析内部对象。
+ */
+function isLikelyTruncatedRootJson(text: string): boolean {
+  const normalized = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+  if (!normalized.startsWith("{")) return false;
+
+  let depth = 0;
+  let inString = false;
+  let escaping = false;
+
+  for (const char of normalized) {
+    if (escaping) {
+      escaping = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaping = inString;
+      continue;
+    }
+    if (char === "\"") {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char !== "}") continue;
+
+    depth -= 1;
+    if (depth === 0) return false;
+  }
+
+  return depth > 0 || inString;
 }
 
 /**

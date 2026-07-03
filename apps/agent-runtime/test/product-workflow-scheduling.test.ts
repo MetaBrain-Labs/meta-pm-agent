@@ -181,6 +181,48 @@ test("normalizes structured planner assumptions without replacing the plan", () 
   );
 });
 
+test("normalizes compact planner quality checks without replacing the plan", () => {
+  const result = TaskExecutionPlanSchema.safeParse({
+    status: "initial",
+    request_summary: "Design a collaborative document tool.",
+    dag: {
+      nodes: ["task-1", "task-2"],
+      edges: [],
+    },
+    tasks: [
+      {
+        ...createTask("task-1", 1, "executor-product-strategy", []),
+        quality_check: {
+          criteria: [
+            "Goal covers must-have features",
+            "Decision candidates stay unconfirmed",
+          ],
+        },
+      },
+      {
+        ...createTask("task-2", 2, "executor-toolkit", []),
+        quality_check: [
+          "Use only allowed entity types",
+          "Keep traceable relations",
+        ],
+      },
+    ],
+    assumptions: [],
+  });
+
+  assert.equal(result.success, true);
+  if (!result.success) return;
+  assert.equal(result.data.tasks[0].quality_check.status, "pending");
+  assert.deepEqual(result.data.tasks[0].quality_check.criteria, [
+    "Goal covers must-have features",
+    "Decision candidates stay unconfirmed",
+  ]);
+  assert.deepEqual(result.data.tasks[1].quality_check, {
+    status: "pending",
+    criteria: ["Use only allowed entity types", "Keep traceable relations"],
+  });
+});
+
 test("creates parallel graph-operation fallback plan for broad MVP requests", () => {
   const plan = createFallbackPlan(
     {
@@ -216,11 +258,12 @@ test("creates parallel graph-operation fallback plan for broad MVP requests", ()
     plan.tasks
       .filter((task) => task.depends_on.length === 0)
       .map((task) => task.assigned_agent),
-    ["executor-product-strategy", "executor-toolkit"],
+    ["executor-product-strategy"],
   );
   assert.deepEqual(
     plan.dag.edges.map((edge) => [edge.source, edge.target]),
     [
+      ["task-01", "task-02"],
       ["task-01", "task-03"],
       ["task-01", "task-04"],
       ["task-04", "task-05"],
@@ -254,6 +297,43 @@ test("creates parallel graph-operation fallback plan for broad MVP requests", ()
       ),
     ),
   );
+  assert.ok(
+    plan.tasks.every((task) => task.quality_check.criteria.length <= 4),
+  );
+});
+
+test("keeps concept-stage fallback focused on strategy, discovery, research, and toolkit", () => {
+  const plan = createFallbackPlan(
+    {
+      productContext: "Workspace: local test",
+      knowledgeGraph: createEmptyKnowledgeGraph(),
+      requestAnalysis: createConceptStageDocumentRequestAnalysis(),
+      userInput: [
+        {
+          index: 1,
+          content:
+            "设计一个 Web 文档协同工具，当前聚焦在产品概念与功能设计阶段，后续再确定具体产出。",
+          type: "request",
+        },
+      ],
+    },
+    "schema-validation: quality_check missing status",
+  );
+
+  assert.deepEqual(
+    plan.tasks.map((task) => task.assigned_agent),
+    [
+      "executor-product-strategy",
+      "executor-toolkit",
+      "executor-market-research",
+      "executor-product-discovery",
+    ],
+  );
+  assert.deepEqual(plan.tasks[1].depends_on, ["task-01"]);
+  assert.ok(
+    plan.tasks.every((task) => task.quality_check.criteria.length <= 4),
+  );
+  assert.ok(plan.tasks.every((task) => task.description.length < 500));
 });
 
 test("selects normalized planner roots and downstream parallel batches", () => {
@@ -427,6 +507,39 @@ function createCollaborativeDocumentRequestAnalysis(): RequestAnalysis {
             description:
               "Permission and security requirements for collaborative editing.",
             importance: 0.6,
+          },
+        ],
+        covered_user_input_indexes: [1],
+      },
+    ],
+    questions: [],
+    chitchat: [],
+  };
+}
+
+function createConceptStageDocumentRequestAnalysis(): RequestAnalysis {
+  return {
+    business_model: [
+      {
+        index: 1,
+        user_goal:
+          "设计一个文档协同工具，让团队能实时共同编辑产品需求文档并追踪变更历史",
+        goal_constraints: [
+          "目标用户为企业内部团队",
+          "当前聚焦在产品概念与功能设计阶段",
+          "首选平台为 Web 端",
+          "必须具备多人实时协同编辑、评论批注、权限与角色管理",
+        ],
+        missing_information: [
+          {
+            index: 1,
+            description: "预期用户规模与并发编辑量级，以确定技术架构选型",
+            importance: 0.9,
+          },
+          {
+            index: 2,
+            description: "是否需要与企业现有系统如 SSO 或项目管理工具集成",
+            importance: 0.8,
           },
         ],
         covered_user_input_indexes: [1],

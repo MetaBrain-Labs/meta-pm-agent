@@ -42,4 +42,44 @@ test("planner prompt preserves graph-semantics guardrails", () => {
     PLANNER_AGENT_PROMPT,
     /Component --Implements--> Feature/,
   );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /whole JSON should stay under about 6000 tokens/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /Do not enumerate detailed components, libraries, frameworks, vendor lists/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /Do not plan beyond the user's intent/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /must not ask its assigned executor to create entity node types outside that executor's Allowed entities list/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /Do not ask Data Analytics to create Custom nodes/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /Evidence --Validates--> Goal is not allowed/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /Evidence must not be the source of Constrains/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /must depend_on every task that produces the evidence, technical comparison, or measurement basis/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /Prefer \{"criteria":\["\.\.\.","\.\.\."\]\}/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /If status is omitted, the runtime treats it as "pending"/,
+  );
 });

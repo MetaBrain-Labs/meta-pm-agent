@@ -237,19 +237,41 @@ export const ProductKnowledgeGraphSchema = z.object({
 });
 
 /**
- * Planner 质量检查字段；兼容模型偶尔输出的简短字符串标准。
+ * Planner 质量检查字段；兼容模型输出字符串、字符串数组或省略 status 的 criteria 对象。
  */
-const TaskQualityCheckSchema = z.union([
-  z.object({
-    status: z.enum(["pending", "passed", "failed"]),
-    criteria: z.array(z.string().min(1)),
-    result: z.string().optional(),
-  }),
+const TaskQualityCheckObjectSchema = z.object({
+  status: z.enum(["pending", "passed", "failed"]),
+  criteria: z.array(z.string().min(1)),
+  result: z.string().optional(),
+});
+
+const TaskQualityCheckSchema = z.preprocess((value) => {
+  if (Array.isArray(value)) {
+    return {
+      status: "pending",
+      criteria: value,
+    };
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    if (Array.isArray(record.criteria) && typeof record.status !== "string") {
+      // Planner 经常只输出 criteria；运行时将其视为待验收状态。
+      return {
+        ...record,
+        status: "pending",
+      };
+    }
+  }
+
+  return value;
+}, z.union([
+  TaskQualityCheckObjectSchema,
   z.string().min(1).transform((criteria) => ({
     status: "pending" as const,
     criteria: [criteria],
   })),
-]);
+]));
 
 /**
  * Planner DAG 边；兼容模型偶尔输出的 from/to 别名，解析后统一为 source/target。

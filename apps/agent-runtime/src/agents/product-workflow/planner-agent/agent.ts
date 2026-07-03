@@ -52,7 +52,7 @@ export async function* streamPlannerAgent(
     name: "planner-agent",
     modelOptions: {
       ...JSON_AGENT_MODEL_OPTIONS,
-      maxTokens: 8192,
+      maxTokens: 10240,
     },
     systemPrompt: PLANNER_AGENT_PROMPT,
     payload: {
@@ -82,7 +82,7 @@ export async function* streamPlannerWorkflowReview(
     name: "planner-agent-review",
     modelOptions: {
       ...JSON_AGENT_MODEL_OPTIONS,
-      maxTokens: 9216,
+      maxTokens: 10240,
     },
     systemPrompt: PLANNER_WORKFLOW_REVIEW_PROMPT,
     payload: {
@@ -96,7 +96,11 @@ export async function* streamPlannerWorkflowReview(
     },
     schema: ProductWorkflowResultSchema,
     fallback: () =>
-      createFallbackWorkflowResult(input.plan, input.executorResults, input.userInput),
+      createFallbackWorkflowResult(
+        input.plan,
+        input.executorResults,
+        input.userInput,
+      ),
     signal: input.signal,
   });
 
@@ -213,8 +217,15 @@ function normalizeTaskDependencies(
     const isSameAgentPreviousTask =
       dependencyAgent === agentType && dependencyTask.sequence < task.sequence;
     const isHardDependency = hardDependencyAgents.includes(dependencyAgent);
+    const isExplicitToolkitStrategyDependency =
+      agentType === "executor-toolkit" &&
+      dependencyAgent === "executor-product-strategy";
 
-    if (isSameAgentPreviousTask || isHardDependency) {
+    if (
+      isSameAgentPreviousTask ||
+      isHardDependency ||
+      isExplicitToolkitStrategyDependency
+    ) {
       dependencies.add(dependencyTask.task_id);
     }
   }
@@ -327,11 +338,13 @@ export function createFallbackPlan(
     dag: {
       nodes: taskSpecs.map(({ taskId }) => taskId),
       edges: taskSpecs.flatMap(({ definition, taskId }) =>
-        getFallbackDependencyAgents(definition.agentType, selectedAgents)
-          .flatMap((agentType) => {
-            const source = taskIdByAgent.get(agentType);
-            return source ? [{ source, target: taskId }] : [];
-          }),
+        getFallbackDependencyAgents(
+          definition.agentType,
+          selectedAgents,
+        ).flatMap((agentType) => {
+          const source = taskIdByAgent.get(agentType);
+          return source ? [{ source, target: taskId }] : [];
+        }),
       ),
     },
     tasks: taskSpecs.map(({ definition, sequence, taskId }) => ({
@@ -517,6 +530,15 @@ function selectFallbackExecutorDefinitions(
     );
   }
 
+  if (
+    isConceptOrFunctionalDesignRequest(requestText) &&
+    !hasExplicitExecutionIntent(requestText)
+  ) {
+    selected.delete("executor-product-execution");
+    selected.delete("executor-ai-shipping");
+    selected.delete("executor-interface-craft");
+  }
+
   return FALLBACK_EXECUTOR_ORDER.flatMap((agentType) => {
     const definition = EXECUTOR_DEFINITIONS.find(
       (item) => item.agentType === agentType,
@@ -554,6 +576,51 @@ function getProductDesignKeywords(): string[] {
 }
 
 /**
+ * 判断请求是否明确停留在方向、概念或功能设计阶段，避免 fallback 过早进入执行链路。
+ */
+function isConceptOrFunctionalDesignRequest(requestText: string): boolean {
+  return matchesAny(requestText, [
+    "concept",
+    "functional design",
+    "product direction",
+    "discuss direction",
+    "before deciding concrete outputs",
+    "概念",
+    "功能设计",
+    "产品方向",
+    "先讨论",
+    "后续再确定",
+    "不确定具体产出",
+  ]);
+}
+
+/**
+ * 判断用户是否明确要求执行、技术架构、原型或 UI 产出。
+ */
+function hasExplicitExecutionIntent(requestText: string): boolean {
+  return matchesAny(requestText, [
+    "implementation plan",
+    "architecture design",
+    "technical design",
+    "design technical architecture",
+    "component breakdown",
+    "prototype",
+    "ui design",
+    "interface design",
+    "build plan",
+    "执行计划",
+    "技术架构设计",
+    "架构设计",
+    "架构方案",
+    "组件拆解",
+    "原型",
+    "界面设计",
+    "ui设计",
+    "落地方案",
+  ]);
+}
+
+/**
  * 为 fallback DAG 生成真实图谱数据依赖。
  */
 function getFallbackDependencyAgents(
@@ -562,8 +629,11 @@ function getFallbackDependencyAgents(
 ): ExecutorAgentType[] {
   switch (agentType) {
     case "executor-product-strategy":
-    case "executor-toolkit":
       return [];
+    case "executor-toolkit":
+      return pickFirstSelectedAgent(selectedAgents, [
+        "executor-product-strategy",
+      ]);
     case "executor-market-research":
     case "executor-gtm":
     case "executor-data-analytics":
@@ -642,36 +712,52 @@ function createFallbackTaskDescription(
   definition: ExecutorAgentDefinition,
   analysis: PlannerAgentInput["requestAnalysis"],
 ): string {
-  const requestContext = [
-    `Request goal: ${summarizeBusinessModels(analysis.business_model)}`,
-    `Explicit constraints: ${summarizeBusinessConstraints(analysis.business_model)}`,
-    `Known uncertainty: ${summarizeMissingInformation(analysis.business_model)}`,
-  ].join("\n");
+  const requestContext = createFallbackRequestContext(analysis);
 
   switch (definition.agentType) {
     case "executor-product-strategy":
-      return `${requestContext}\nCreate foundational Goal, Requirement, and user-stated Evidence entities. Create confirmed Decision entities only for choices explicitly stated by the user or already supported by product_context/current graph evidence. Treat missing information as assumptions, risks, open questions, or clearly labeled decision candidates; do not convert unknown scale, authentication, technical architecture, or similar gaps into confirmed Decisions. Use explicit relation directions such as Goal --Drives--> Decision candidate and Decision --Produces--> Requirement only when the Decision is actually supported.`;
+      return `${requestContext}. Create Goal, Requirement, Evidence, and explicit decision candidates only. Do not convert unknown scale, authentication, architecture, or history granularity into confirmed Decisions.`;
     case "executor-market-research":
-      return `${requestContext}\nUse upstream strategy entities to add market or competitor Evidence, benchmark Requirements, and Metrics only when verifiable sources are available. If no verified source/tool-backed evidence is available, create Custom research-gap entities or unvalidated Evidence with that limitation stated clearly. Link Evidence with explicit directions such as Evidence --Validates--> Requirement or supported Decision candidate. Do not present model memory as verified market fact.`;
+      return `${requestContext}. Add verified market Evidence or clearly labeled research-gap Custom records. Link Evidence only to Requirements or supported Decision candidates; do not present model memory as verified fact.`;
     case "executor-gtm":
-      return `${requestContext}\nUse upstream strategy entities to add GTM Requirements, Metrics, Evidence, and decision candidates when launch, adoption, pricing, or channel implications are relevant. Create confirmed GTM Decisions only when user input, existing graph context, or verified Evidence supports them.`;
+      return `${requestContext}. Add only relevant GTM Requirements, Metrics, Evidence, or decision candidates. Confirm GTM Decisions only when user input, graph context, or verified Evidence supports them.`;
     case "executor-product-discovery":
-      return `${requestContext}\nTranslate strategy requirements into testable Feature hypotheses, user-stated Evidence, and Metrics. Mark inferred features as hypotheses rather than validated facts, and explicitly cover high-impact missing information by creating validation paths or user-facing open questions. Use Feature --Satisfies--> Requirement and Metric --Measures--> Feature or Requirement.`;
+      return `${requestContext}. Translate Requirements into testable Feature hypotheses and validation Metrics. Mark inferred features as hypotheses and use Feature --Satisfies--> Requirement. Do not decompose implementation components here.`;
     case "executor-product-execution":
-      return `${requestContext}\nBreak discovered Feature hypotheses into sub-features and Component entities only where the feature is semantically distinct. Add implementation hierarchy relations and component-level Requirements or Metrics needed by later technical and interface tasks. Use Component --Implements--> Feature and avoid duplicate Components created only to satisfy counts.`;
+      return `${requestContext}. Decompose selected Features into essential Component entities only when execution detail is needed. Use Component --Implements--> Feature and avoid duplicate count-filler Components.`;
     case "executor-marketing-growth":
-      return `${requestContext}\nDefine growth-oriented Metrics, Requirements, and decision candidates only where the request implies adoption, activation, retention, or marketing measurement. Preserve traceability to strategy or GTM nodes and avoid confirmed Decisions without supporting Evidence.`;
+      return `${requestContext}. Define growth Metrics, Requirements, or decision candidates only when adoption or retention is in scope. Keep Decisions evidence-backed.`;
     case "executor-data-analytics":
-      return `${requestContext}\nDefine quantitative Metrics, measurement plans, instrumentation Components, and benchmark gaps that can later validate product decisions or feature success. Because this is a greenfield workflow unless the graph contains real data, do not claim measured results or industry benchmarks without verifiable Evidence. Link Metric --Measures--> Feature or Requirement.`;
+      return `${requestContext}. Define Metrics, measurement plans, and benchmark gaps only. Do not create Custom nodes or claim measured results without verifiable Evidence. Use Metric --Measures--> Feature or Requirement.`;
     case "executor-ai-shipping":
-      return `${requestContext}\nReview implementation Components and compare technical options, constraints, Evidence, and delivery risks. Do not lock options such as CRDT vs OT, Yjs vs Automerge, SAML vs OIDC vs LDAP, or storage architecture unless the user or prior graph explicitly chose them. Capture trade-offs as Evidence, risks, open questions, or decision candidates, then link Evidence --Validates--> a supported Decision candidate when appropriate.`;
+      return `${requestContext}. Compare technical options such as CRDT vs OT only at option-family level. Do not lock libraries, protocols, or storage choices unless already chosen. Record trade-offs as Evidence or risks.`;
     case "executor-toolkit":
-      return `${requestContext}\nCreate Custom scope, assumptions, compliance, and operational guardrail artifacts. Add a small number of Component constraint nodes for cross-cutting non-functional expectations such as security, privacy, workflow, or browser support. If this task runs before Strategy outputs exist, do not create relations to nonexistent Goal, Requirement, or Component IDs; record intended References/Constrains targets in descriptions for later linking.`;
+      return `${requestContext}. After Strategy requirements exist, create compact Custom or Component guardrails for security, permissions, compliance, and workflow. Use Custom/Component constraint --Constrains--> Requirement or Component.`;
     case "executor-interface-craft":
-      return `${requestContext}\nReview UI-facing Components and add craft constraints plus Evidence for UX risks or anti-patterns. Focus on accessibility, responsive behavior, interaction states, and collaboration/editor usability when relevant. Use Component constraint --Constrains--> UI Component and Evidence --Validates--> Requirement or Component when evidence is available.`;
+      return `${requestContext}. Add UI-facing Component constraints and UX Evidence only when interface craft is in scope. Constraint Components may Constrain UI Components; Evidence must not be the source of Constrains.`;
     default:
-      return `${requestContext}\nCreate graph-native updates within this executor's allowed entity and relation boundaries.`;
+      return `${requestContext}. Create graph-native updates within this executor's allowed entity and relation boundaries.`;
   }
+}
+
+/**
+ * 生成紧凑上下文，避免 fallback 在每个任务里重复完整请求分析。
+ */
+function createFallbackRequestContext(
+  analysis: PlannerAgentInput["requestAnalysis"],
+): string {
+  const goal = truncateText(summarizeBusinessModels(analysis.business_model), 180);
+  const missing = summarizeMissingInformation(analysis.business_model);
+  if (missing === "None provided.") return `Goal: ${goal}`;
+
+  return `Goal: ${goal}; Uncertainty: ${truncateText(missing, 160)}`;
+}
+
+/**
+ * 将 fallback 文本限制在较短长度内，避免兜底计划再次变成超长输出。
+ */
+function truncateText(text: string, maxLength: number): string {
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
 }
 
 /**
@@ -680,9 +766,9 @@ function createFallbackTaskDescription(
 function createFallbackExpectedOutput(
   definition: ExecutorAgentDefinition,
 ): string {
-  return `Produce graph-native updates using allowed entity types only: ${definition.allowedEntityTypes.join(
+  return `Allowed entities only: ${definition.allowedEntityTypes.join(
     ", ",
-  )}. Every new or changed entity should have traceable relations to the request goal, upstream graph nodes, or covered business model indexes.`;
+  )}. Include traceable relation updates.`;
 }
 
 /**
@@ -692,20 +778,19 @@ function createFallbackQualityCriteria(
   definition: ExecutorAgentDefinition,
 ): string[] {
   return [
-    `Use only allowed entity types for ${definition.agentType}: ${definition.allowedEntityTypes.join(", ")}.`,
-    "Do not create agent-name placeholder tasks or orphan graph entities.",
-    "Preserve traceability from covered business model indexes to entities, relations, decisions, risks, or open questions.",
-    "Record unresolved subjective gaps as assumptions, risks, or open questions instead of silently deciding them.",
-    "Do not convert missing information or unverified assumptions into confirmed Decision entities.",
-    "Use explicit relation directions, for example Feature --Satisfies--> Requirement and Component --Implements--> Feature.",
-    "Prefer semantic coverage over fixed entity counts; do not create duplicate entities just to satisfy a number.",
+    `Use only allowed entity types: ${definition.allowedEntityTypes.join(", ")}.`,
+    "Keep unresolved gaps as assumptions, risks, or open questions, not confirmed Decisions.",
+    "Use approved explicit relation directions.",
+    "Preserve traceability and avoid duplicate count-filler entities.",
   ];
 }
 
 /**
  * 判断 fallback 计划是否来自用户确认/补充表单。
  */
-function isSupplementPlanInput(userInput: PlannerAgentInput["userInput"]): boolean {
+function isSupplementPlanInput(
+  userInput: PlannerAgentInput["userInput"],
+): boolean {
   return userInput.some((item) =>
     /\[form answers - (product-workflow-confirmation|.*-proposal-decision)\]/i.test(
       item.content,
@@ -749,7 +834,8 @@ function createFallbackWorkflowResult(
   );
 
   return {
-    status: proposalQuestions.length > 0 ? "pending_user_confirmation" : "completed",
+    status:
+      proposalQuestions.length > 0 ? "pending_user_confirmation" : "completed",
     confirmation_id: "product-workflow-confirmation",
     request_summary: plan.request_summary,
     planner: plan,
@@ -923,20 +1009,13 @@ function summarizeBusinessModels(items: BusinessModelItem[]): string {
 }
 
 /**
- * 生成业务约束摘要，供 fallback Executor 任务自包含描述使用。
- */
-function summarizeBusinessConstraints(items: BusinessModelItem[]): string {
-  const constraints = items.flatMap((item) => item.goal_constraints);
-  return constraints.length > 0 ? constraints.join("; ") : "None provided.";
-}
-
-/**
  * 生成缺失信息摘要，提醒 fallback Executor 不要静默假设关键事实。
  */
 function summarizeMissingInformation(items: BusinessModelItem[]): string {
   const missingInformation = items.flatMap((item) =>
     item.missing_information.map(
-      (info) => `${info.index}. ${info.description} (importance ${info.importance})`,
+      (info) =>
+        `${info.index}. ${info.description} (importance ${info.importance})`,
     ),
   );
 

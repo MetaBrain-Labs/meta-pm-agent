@@ -25,8 +25,12 @@ function extractJsonObjectCandidates(text: string): string[] {
     .replace(/```\s*$/i, "")
     .trim();
 
-  if (withoutFence.startsWith("{") && withoutFence.endsWith("}")) {
-    return [withoutFence];
+  if (withoutFence.startsWith("{")) {
+    const rootEnd = findBalancedObjectEnd(withoutFence, 0);
+    // 如果根对象从开头开始但未闭合，说明输出大概率被截断，不能退而解析内部对象。
+    if (rootEnd === -1) return [];
+
+    return [withoutFence.slice(0, rootEnd + 1)];
   }
 
   const starts: number[] = [];
