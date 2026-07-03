@@ -15,7 +15,10 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PLANNER_AGENT_PROMPT } from "../src/agents/product-workflow/planner-agent/prompt";
+import {
+  PLANNER_AGENT_PROMPT,
+  PLANNER_WORKFLOW_REVIEW_PROMPT,
+} from "../src/agents/product-workflow/planner-agent/prompt";
 
 test("planner prompt preserves graph-semantics guardrails", () => {
   assert.match(
@@ -123,4 +126,28 @@ test("planner prompt preserves graph-semantics guardrails", () => {
     PLANNER_AGENT_PROMPT,
     /If status is omitted, the runtime treats it as "pending"/,
   );
+});
+
+test("planner review prompt stays compact and does not request full graph copies", () => {
+  assert.match(
+    PLANNER_WORKFLOW_REVIEW_PROMPT,
+    /The JSON object must include only: status, confirmation_id, request_summary, review, product_context_update, knowledge_graph_review, proposal_questions, confirmation_message/,
+  );
+  assert.match(
+    PLANNER_WORKFLOW_REVIEW_PROMPT,
+    /Never reconstruct entities or relations from executor summaries/,
+  );
+  assert.match(
+    PLANNER_WORKFLOW_REVIEW_PROMPT,
+    /Never output planner, executor_results, product_knowledge_graph, knowledge_graph_update/,
+  );
+  assert.match(
+    PLANNER_WORKFLOW_REVIEW_PROMPT,
+    /Include at most 3 proposal_questions/,
+  );
+  assert.doesNotMatch(
+    PLANNER_WORKFLOW_REVIEW_PROMPT,
+    /knowledge_graph_update must contain the final knowledge graph state/,
+  );
+  assert.doesNotMatch(PLANNER_WORKFLOW_REVIEW_PROMPT, /kg_file_read/);
 });

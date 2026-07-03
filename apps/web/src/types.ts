@@ -239,6 +239,13 @@ export interface ProductWorkflowResult {
   review: {
     accepted_task_ids: string[];
     rejected_task_ids: string[];
+    retry_task_ids?: string[];
+    issues?: Array<{
+      code: string;
+      severity: "error" | "warning";
+      task_id?: string;
+      message: string;
+    }>;
     notes: string;
   };
   product_context_update: string;
@@ -250,6 +257,24 @@ export interface ProductWorkflowResult {
     open_questions?: Array<Record<string, unknown>>;
     markdown?: string;
     notes: string[];
+  };
+  knowledge_graph_review?: {
+    graph_ref?: {
+      version?: number;
+      checksum?: string;
+      entity_count?: number;
+      relation_count?: number;
+    };
+    accepted_task_ids?: string[];
+    rejected_task_ids?: string[];
+    retry_task_ids?: string[];
+    issues?: Array<{
+      code: string;
+      severity: "error" | "warning";
+      task_id?: string;
+      message: string;
+    }>;
+    notes?: string[];
   };
   proposal_questions?: ProductWorkflowProposalQuestion[];
   confirmation_message: string;

@@ -6,19 +6,21 @@
  *
  * Responsibilities:
  * - streamPlannerAgent()：生成 DAG 任务计划（基于 JSON DeepAgent）
- * - streamPlannerWorkflowReview()：汇总 Executor 产出并进行最终审查
- * - 为 Planner 附加知识图谱文件工具（kg_file_create/read/insert/update/delete_content）
+ * - streamPlannerWorkflowReview()：用瘦身 Review 输出汇总 Executor 产出并进行最终审查
+ * - 组合 Planner Review 与运行时已有图谱快照，避免模型复制大对象
  *
  * Notes:
  * - Planner 使用 runJsonAgent 通用执行器，输出 TaskExecutionPlan
- * - Planner Review 使用 runJsonAgent 执行器，输出 ProductWorkflowResult
+ * - Planner Review 模型只输出 PlannerWorkflowReviewOutput，ProductWorkflowResult 由代码组合
  */
 
 import {
-  ProductWorkflowResultSchema,
+  PlannerWorkflowReviewOutputSchema,
   TaskExecutionPlanSchema,
   type BusinessModelItem,
   type ExecutorAgentResult,
+  type PlannerWorkflowReviewOutput,
+  type ProductKnowledgeGraph,
   type ProductWorkflowProposalQuestion,
   type ProductWorkflowResult,
   type TaskExecutionNode,
@@ -76,29 +78,22 @@ export async function* streamPlannerAgent(
 export async function* streamPlannerWorkflowReview(
   input: PlannerWorkflowReviewInput,
 ): AsyncGenerator<ProductWorkflowStreamEvent, ProductWorkflowResult, void> {
-  const result = yield* runJsonAgent({
+  const review = yield* runJsonAgent({
     agentType: "planner",
     agentLabel: "Planner Agent",
     name: "planner-agent-review",
     modelOptions: {
       ...JSON_AGENT_MODEL_OPTIONS,
-      maxTokens: 10240,
+      maxTokens: 4096,
     },
     systemPrompt: PLANNER_WORKFLOW_REVIEW_PROMPT,
-    payload: {
-      product_context: input.productContext || "No product context provided.",
-      request_analysis: input.requestAnalysis,
-      product_knowledge_graph: input.knowledgeGraph,
-      planner: input.plan,
-      executor_results: input.executorResults,
-    },
-    schema: ProductWorkflowResultSchema,
-    fallback: () =>
-      createFallbackWorkflowResult(input.plan, input.executorResults),
+    payload: createPlannerWorkflowReviewPayload(input),
+    schema: PlannerWorkflowReviewOutputSchema,
+    fallback: (reason) => createFallbackWorkflowReviewOutput(input, reason),
     signal: input.signal,
   });
 
-  return result;
+  return composeProductWorkflowResult(input, review);
 }
 
 const NORMALIZED_DAG_ASSUMPTION =
@@ -136,6 +131,38 @@ type FallbackTaskSpec = {
 };
 
 /**
+ * Planner Review 的确定性校验问题。
+ */
+type PlannerReviewValidationIssue = PlannerWorkflowReviewOutput["review"]["issues"][number];
+
+/**
+ * 单个 Executor 图谱提交记录，供 Planner Review 判断是否可接受。
+ */
+type ExecutorUpdateRecord = {
+  task_id: string;
+  assigned_agent: string;
+  actual_agent: string | null;
+  status: "completed" | "missing";
+  created_entity_ids: string[];
+  created_relation_ids: string[];
+  committed_entity_ids: string[];
+  committed_relation_ids: string[];
+  commit_status: "committed" | "rejected" | "conflict" | "not_attempted";
+  validation_errors: PlannerReviewValidationIssue[];
+};
+
+/**
+ * Planner Review 输入中的确定性校验报告。
+ */
+type PlannerReviewValidationReport = {
+  accepted_task_ids: string[];
+  rejected_task_ids: string[];
+  retry_task_ids: string[];
+  issues: PlannerReviewValidationIssue[];
+  executor_update_records: ExecutorUpdateRecord[];
+};
+
+/**
  * 归一化 Planner 生成的 Executor DAG。
  *
  * Planner 模型容易把“产品工作顺序”写成完整瀑布依赖链。这里将任务依赖收敛为真实
@@ -170,6 +197,513 @@ export function normalizeTaskExecutionPlan(
     },
     tasks: normalizedTasks,
     assumptions,
+  };
+}
+
+/**
+ * 构造 Planner Review 的瘦身输入，避免把完整 DAG、Executor 结果和知识图谱交给模型复制。
+ */
+function createPlannerWorkflowReviewPayload(input: PlannerWorkflowReviewInput) {
+  const validationReport = createPlannerReviewValidationReport(input);
+
+  return {
+    product_context: truncateText(
+      input.productContext || "No product context provided.",
+      800,
+    ),
+    request_analysis: compactRequestAnalysisForReview(input.requestAnalysis),
+    planner_summary: compactPlanForReview(input.plan),
+    final_graph_summary: createFinalGraphSummary(input.knowledgeGraph),
+    validation_report: validationReport,
+    open_question_candidates: collectOpenQuestionCandidates(
+      input.executorResults,
+    ),
+  };
+}
+
+/**
+ * 压缩 Request Agent 分析，只保留 Review 判断需要的目标、约束和缺口。
+ */
+function compactRequestAnalysisForReview(
+  analysis: PlannerWorkflowReviewInput["requestAnalysis"],
+) {
+  return {
+    business_model: analysis.business_model.map((item) => ({
+      index: item.index,
+      user_goal: truncateText(item.user_goal, 220),
+      goal_constraints: item.goal_constraints.map((constraint) =>
+        truncateText(constraint, 160),
+      ),
+      missing_information: item.missing_information.map((info) => ({
+        index: info.index,
+        description: truncateText(info.description, 180),
+        importance: info.importance,
+      })),
+      covered_user_input_indexes: item.covered_user_input_indexes,
+    })),
+    questions: analysis.questions,
+    chitchat: analysis.chitchat,
+  };
+}
+
+/**
+ * 压缩 Planner DAG，只保留任务身份、依赖、分配和验收摘要。
+ */
+function compactPlanForReview(plan: TaskExecutionPlan) {
+  return {
+    status: plan.status,
+    request_summary: truncateText(plan.request_summary, 220),
+    task_ids: plan.tasks.map((task) => task.task_id),
+    dag: plan.dag,
+    tasks: plan.tasks.map((task) => ({
+      task_id: task.task_id,
+      title: truncateText(task.title, 120),
+      assigned_agent: task.assigned_agent,
+      depends_on: task.depends_on,
+      covered_business_model_indexes: task.covered_business_model_indexes,
+      expected_output: truncateText(task.expected_output, 180),
+    })),
+  };
+}
+
+/**
+ * 生成最终图谱的统计摘要和来源索引，避免模型读取完整节点描述。
+ */
+function createFinalGraphSummary(knowledgeGraph: ProductKnowledgeGraph) {
+  return {
+    graph_ref: createKnowledgeGraphReviewRef(knowledgeGraph),
+    entity_counts: countBy(knowledgeGraph.entities.map((item) => item.type)),
+    relation_counts: countBy(knowledgeGraph.relations.map((item) => item.type)),
+    decision_count: knowledgeGraph.decisions.length,
+    risk_count: knowledgeGraph.risks.length,
+    open_question_count: knowledgeGraph.open_questions.length,
+    entity_ids_by_task: groupIdsBySourceTask(knowledgeGraph.entities),
+    relation_ids_by_task: groupIdsBySourceTask(knowledgeGraph.relations),
+  };
+}
+
+/**
+ * 生成图谱引用信息；当前运行时无持久化版本号时以规模摘要作为稳定引用。
+ */
+function createKnowledgeGraphReviewRef(knowledgeGraph: ProductKnowledgeGraph) {
+  return {
+    entity_count: knowledgeGraph.entities.length,
+    relation_count: knowledgeGraph.relations.length,
+  };
+}
+
+/**
+ * 统计字符串枚举出现次数。
+ */
+function countBy(items: string[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const item of items) {
+    counts[item] = (counts[item] ?? 0) + 1;
+  }
+  return counts;
+}
+
+/**
+ * 按来源任务聚合图谱 ID，辅助 Review 判断任务提交是否落图。
+ */
+function groupIdsBySourceTask<T extends { id: string; source_task_id?: string }>(
+  items: T[],
+): Record<string, string[]> {
+  const groups: Record<string, string[]> = {};
+  for (const item of items) {
+    const key = item.source_task_id ?? "unknown-task";
+    groups[key] = [...(groups[key] ?? []), item.id];
+  }
+  return groups;
+}
+
+/**
+ * 收集 Executor 提出的待确认问题候选，交给 Planner Review 做语义合并和优先级判断。
+ */
+function collectOpenQuestionCandidates(
+  executorResults: ExecutorAgentResult[],
+) {
+  return executorResults
+    .flatMap((result) =>
+      result.open_questions.map((question, index) => ({
+        id: question.id,
+        text: truncateText(question.text, 240),
+        source_task_id: result.task_id,
+        source_agent: result.agent_type,
+        priority_hint: result.open_questions.length - index,
+      })),
+    )
+    .slice(0, 12);
+}
+
+/**
+ * 生成确定性校验报告，把可由程序判断的错误移出 LLM。
+ */
+function createPlannerReviewValidationReport(
+  input: PlannerWorkflowReviewInput,
+): PlannerReviewValidationReport {
+  const resultByTaskId = new Map(
+    input.executorResults.map((result) => [result.task_id, result]),
+  );
+  const duplicateEntityIds = findDuplicateIdsByTask(input.executorResults, "entities");
+  const duplicateRelationIds = findDuplicateIdsByTask(
+    input.executorResults,
+    "relations",
+  );
+  const graphIndexes = createGraphIndexes(input.knowledgeGraph);
+  const issues: PlannerReviewValidationIssue[] = [];
+  const records: ExecutorUpdateRecord[] = [];
+
+  for (const task of input.plan.tasks) {
+    const result = resultByTaskId.get(task.task_id);
+    const taskIssues: PlannerReviewValidationIssue[] = [];
+
+    if (!result) {
+      taskIssues.push(
+        createReviewIssue({
+          code: "MISSING_EXECUTOR_RESULT",
+          severity: "error",
+          taskId: task.task_id,
+          message: "Planned task has no executor result.",
+        }),
+      );
+      records.push({
+        task_id: task.task_id,
+        assigned_agent: task.assigned_agent,
+        actual_agent: null,
+        status: "missing",
+        created_entity_ids: [],
+        created_relation_ids: [],
+        committed_entity_ids: [],
+        committed_relation_ids: [],
+        commit_status: "not_attempted",
+        validation_errors: taskIssues,
+      });
+      issues.push(...taskIssues);
+      continue;
+    }
+
+    if (result.agent_type !== task.assigned_agent) {
+      taskIssues.push(
+        createReviewIssue({
+          code: "AGENT_TYPE_MISMATCH",
+          severity: "error",
+          taskId: task.task_id,
+          message: `Task assigned to ${task.assigned_agent} but result came from ${result.agent_type}.`,
+        }),
+      );
+    }
+
+    appendDuplicateIdIssues(taskIssues, task.task_id, duplicateEntityIds, {
+      code: "DUPLICATE_ENTITY_ID",
+      label: "entity",
+    });
+    appendDuplicateIdIssues(taskIssues, task.task_id, duplicateRelationIds, {
+      code: "DUPLICATE_RELATION_ID",
+      label: "relation",
+    });
+
+    const commit = validateExecutorCommit(result, graphIndexes);
+    taskIssues.push(...commit.issues);
+
+    const commitStatus = getExecutorCommitStatus({
+      result,
+      taskIssues,
+      committedItemCount: commit.committedItemCount,
+      totalItemCount: commit.totalItemCount,
+    });
+
+    records.push({
+      task_id: result.task_id,
+      assigned_agent: task.assigned_agent,
+      actual_agent: result.agent_type,
+      status: "completed",
+      created_entity_ids: result.entities.map((item) => item.id),
+      created_relation_ids: result.relations.map((item) => item.id),
+      committed_entity_ids: commit.committedEntityIds,
+      committed_relation_ids: commit.committedRelationIds,
+      commit_status: commitStatus,
+      validation_errors: taskIssues,
+    });
+    issues.push(...taskIssues);
+  }
+
+  const issueTaskIds = new Set(
+    issues
+      .filter((issue) => issue.severity === "error" && issue.task_id)
+      .map((issue) => issue.task_id!),
+  );
+  const acceptedTaskIds = input.plan.tasks
+    .map((task) => task.task_id)
+    .filter((taskId) => !issueTaskIds.has(taskId));
+  const rejectedTaskIds = [...issueTaskIds];
+
+  return {
+    accepted_task_ids: acceptedTaskIds,
+    rejected_task_ids: rejectedTaskIds,
+    retry_task_ids: rejectedTaskIds,
+    issues,
+    executor_update_records: records,
+  };
+}
+
+/**
+ * 创建按 ID 查询的图谱索引。
+ */
+function createGraphIndexes(knowledgeGraph: ProductKnowledgeGraph) {
+  return {
+    entityById: new Map(knowledgeGraph.entities.map((item) => [item.id, item])),
+    relationById: new Map(
+      knowledgeGraph.relations.map((item) => [item.id, item]),
+    ),
+    decisionById: new Map(
+      knowledgeGraph.decisions.map((item) => [item.id, item]),
+    ),
+    riskById: new Map(knowledgeGraph.risks.map((item) => [item.id, item])),
+    openQuestionById: new Map(
+      knowledgeGraph.open_questions.map((item) => [item.id, item]),
+    ),
+  };
+}
+
+/**
+ * 查找多个 Executor 产出的重复实体或关系 ID。
+ */
+function findDuplicateIdsByTask(
+  executorResults: ExecutorAgentResult[],
+  field: "entities" | "relations",
+): Map<string, Set<string>> {
+  const tasksById = new Map<string, Set<string>>();
+  for (const result of executorResults) {
+    for (const item of result[field]) {
+      const taskIds = tasksById.get(item.id) ?? new Set<string>();
+      taskIds.add(result.task_id);
+      tasksById.set(item.id, taskIds);
+    }
+  }
+
+  return new Map(
+    [...tasksById.entries()].filter(([, taskIds]) => taskIds.size > 1),
+  );
+}
+
+/**
+ * 将重复 ID 问题挂到相关任务。
+ */
+function appendDuplicateIdIssues(
+  issues: PlannerReviewValidationIssue[],
+  taskId: string,
+  duplicates: Map<string, Set<string>>,
+  options: { code: string; label: string },
+): void {
+  for (const [id, taskIds] of duplicates) {
+    if (!taskIds.has(taskId)) continue;
+    issues.push(
+      createReviewIssue({
+        code: options.code,
+        severity: "error",
+        taskId,
+        message: `Duplicate ${options.label} id ${id} appears in tasks ${[
+          ...taskIds,
+        ].join(", ")}.`,
+      }),
+    );
+  }
+}
+
+/**
+ * 校验 Executor 结构化产出是否真的存在于最终图谱状态。
+ */
+function validateExecutorCommit(
+  result: ExecutorAgentResult,
+  graphIndexes: ReturnType<typeof createGraphIndexes>,
+): {
+  issues: PlannerReviewValidationIssue[];
+  committedEntityIds: string[];
+  committedRelationIds: string[];
+  committedItemCount: number;
+  totalItemCount: number;
+} {
+  const issues: PlannerReviewValidationIssue[] = [];
+  const committedEntityIds: string[] = [];
+  const committedRelationIds: string[] = [];
+  let committedItemCount = 0;
+  const totalItemCount =
+    result.entities.length +
+    result.relations.length +
+    result.decisions.length +
+    result.risks.length +
+    result.open_questions.length;
+
+  for (const entity of result.entities) {
+    const committed = graphIndexes.entityById.get(entity.id);
+    if (!committed) {
+      issues.push(
+        createReviewIssue({
+          code: "ENTITY_NOT_COMMITTED",
+          severity: "error",
+          taskId: result.task_id,
+          message: `Entity ${entity.id} exists in executor output but not in final graph.`,
+        }),
+      );
+      continue;
+    }
+    if (hasSourceConflict(entity.source_task_id, committed.source_task_id, result.task_id)) {
+      issues.push(
+        createReviewIssue({
+          code: "ENTITY_SOURCE_CONFLICT",
+          severity: "error",
+          taskId: result.task_id,
+          message: `Entity ${entity.id} is committed under a different source task.`,
+        }),
+      );
+      continue;
+    }
+    committedEntityIds.push(entity.id);
+    committedItemCount += 1;
+  }
+
+  for (const relation of result.relations) {
+    const committed = graphIndexes.relationById.get(relation.id);
+    if (!committed) {
+      issues.push(
+        createReviewIssue({
+          code: "RELATION_NOT_COMMITTED",
+          severity: "error",
+          taskId: result.task_id,
+          message: `Relation ${relation.id} exists in executor output but not in final graph.`,
+        }),
+      );
+      continue;
+    }
+    if (
+      !graphIndexes.entityById.has(relation.source) ||
+      !graphIndexes.entityById.has(relation.target)
+    ) {
+      issues.push(
+        createReviewIssue({
+          code: "RELATION_ENDPOINT_MISSING",
+          severity: "error",
+          taskId: result.task_id,
+          message: `Relation ${relation.id} references a missing source or target node.`,
+        }),
+      );
+      continue;
+    }
+    if (hasSourceConflict(relation.source_task_id, committed.source_task_id, result.task_id)) {
+      issues.push(
+        createReviewIssue({
+          code: "RELATION_SOURCE_CONFLICT",
+          severity: "error",
+          taskId: result.task_id,
+          message: `Relation ${relation.id} is committed under a different source task.`,
+        }),
+      );
+      continue;
+    }
+    committedRelationIds.push(relation.id);
+    committedItemCount += 1;
+  }
+
+  committedItemCount += countCommittedAuxiliaryItems(result, graphIndexes);
+
+  if (totalItemCount === 0) {
+    issues.push(
+      createReviewIssue({
+        code: "NO_STRUCTURED_GRAPH_PATCH",
+        severity: "error",
+        taskId: result.task_id,
+        message: "Executor result contains no structured graph patch items.",
+      }),
+    );
+  }
+
+  return {
+    issues,
+    committedEntityIds,
+    committedRelationIds,
+    committedItemCount,
+    totalItemCount,
+  };
+}
+
+/**
+ * 判断最终图谱中的来源任务是否与 Executor 产出冲突。
+ */
+function hasSourceConflict(
+  expectedSource: string | undefined,
+  committedSource: string | undefined,
+  fallbackTaskId: string,
+): boolean {
+  const expected = expectedSource ?? fallbackTaskId;
+  return Boolean(committedSource && committedSource !== expected);
+}
+
+/**
+ * 统计决策、风险和开放问题等非节点/边辅助项是否已经进入最终图谱。
+ */
+function countCommittedAuxiliaryItems(
+  result: ExecutorAgentResult,
+  graphIndexes: ReturnType<typeof createGraphIndexes>,
+): number {
+  let count = 0;
+  for (const item of result.decisions) {
+    if (graphIndexes.decisionById.has(item.id)) count += 1;
+  }
+  for (const item of result.risks) {
+    if (graphIndexes.riskById.has(item.id)) count += 1;
+  }
+  for (const item of result.open_questions) {
+    if (graphIndexes.openQuestionById.has(item.id)) count += 1;
+  }
+  return count;
+}
+
+/**
+ * 将校验结果收敛为可机读的提交状态。
+ */
+function getExecutorCommitStatus({
+  result,
+  taskIssues,
+  committedItemCount,
+  totalItemCount,
+}: {
+  result: ExecutorAgentResult;
+  taskIssues: PlannerReviewValidationIssue[];
+  committedItemCount: number;
+  totalItemCount: number;
+}): ExecutorUpdateRecord["commit_status"] {
+  if (!result.quality_result.passed || totalItemCount === 0) {
+    return "not_attempted";
+  }
+  if (taskIssues.some((issue) => issue.code.includes("DUPLICATE"))) {
+    return "conflict";
+  }
+  if (taskIssues.some((issue) => issue.severity === "error")) {
+    return "rejected";
+  }
+  return committedItemCount >= totalItemCount ? "committed" : "rejected";
+}
+
+/**
+ * 生成稳定校验问题。
+ */
+function createReviewIssue({
+  code,
+  severity,
+  taskId,
+  message,
+}: {
+  code: string;
+  severity: "error" | "warning";
+  taskId?: string;
+  message: string;
+}): PlannerReviewValidationIssue {
+  return {
+    code,
+    severity,
+    ...(taskId ? { task_id: taskId } : {}),
+    message,
   };
 }
 
@@ -521,9 +1055,10 @@ function selectFallbackExecutorDefinitions(
     "权限",
   ]);
   addExecutorWhenMatches(selected, requestText, "executor-interface-craft", [
-    "ui",
-    "ux",
-    "interface",
+    "ui design",
+    "ux design",
+    "user interface",
+    "interface design",
     "screen",
     "prototype",
     "wireframe",
@@ -1050,45 +1585,176 @@ function matchesAny(text: string, keywords: string[]): boolean {
 }
 
 /**
- * Planner Agent 不可用时生成待用户确认的工作流汇总结果。
+ * 将瘦身 Planner Review 输出与运行时已有状态组合成完整工作流结果。
  */
-function createFallbackWorkflowResult(
-  plan: TaskExecutionPlan,
-  executorResults: ExecutorAgentResult[],
+function composeProductWorkflowResult(
+  input: PlannerWorkflowReviewInput,
+  review: PlannerWorkflowReviewOutput,
 ): ProductWorkflowResult {
-  const proposalQuestions = createFallbackProposalQuestions(executorResults);
+  const needsConfirmation =
+    review.status !== "completed" ||
+    review.proposal_questions.length > 0 ||
+    review.review.retry_task_ids.length > 0;
 
   return {
-    status:
-      proposalQuestions.length > 0 ? "pending_user_confirmation" : "completed",
-    confirmation_id: "product-workflow-confirmation",
-    request_summary: plan.request_summary,
-    planner: plan,
-    executor_results: executorResults,
+    status: needsConfirmation ? "pending_user_confirmation" : "completed",
+    confirmation_id: review.confirmation_id,
+    request_summary: review.request_summary,
+    planner: input.plan,
+    executor_results: input.executorResults,
     review: {
-      accepted_task_ids: executorResults.map((item) => item.task_id),
-      rejected_task_ids: [],
-      notes: "Planner Agent 使用 MVP 回退汇总，所有结构化结果等待用户确认。",
+      accepted_task_ids: review.review.accepted_task_ids,
+      rejected_task_ids: review.review.rejected_task_ids,
+      retry_task_ids: review.review.retry_task_ids,
+      issues: review.review.issues,
+      notes: review.review.notes,
     },
-    product_context_update: [
-      `请求摘要：${plan.request_summary}`,
-      ...executorResults.map((item) => `${item.focus_layer}：${item.summary}`),
-    ].join("\n"),
+    product_context_update: review.product_context_update,
     knowledge_graph_update: {
-      entities: executorResults.flatMap((item) => item.entities),
-      relations: executorResults.flatMap((item) => item.relations),
-      decisions: executorResults.flatMap((item) => item.decisions),
-      risks: executorResults.flatMap((item) => item.risks),
-      open_questions: executorResults.flatMap((item) => item.open_questions),
-      summary: executorResults.map((item) => item.summary),
-      markdown: "",
-      notes: ["最终知识图谱以结构化 JSON 为准。"],
+      ...input.knowledgeGraph,
+      notes: mergeTextList([
+        ...input.knowledgeGraph.notes,
+        ...review.knowledge_graph_review.notes.map(
+          (note) => `Planner Review：${note}`,
+        ),
+      ]),
+    },
+    knowledge_graph_review: review.knowledge_graph_review,
+    proposal_questions: review.proposal_questions,
+    confirmation_message: review.confirmation_message,
+  };
+}
+
+/**
+ * Planner Review 不可用时生成瘦身回退审查结果，不再复制 Planner DAG、Executor 结果或完整图谱。
+ */
+function createFallbackWorkflowReviewOutput(
+  input: PlannerWorkflowReviewInput,
+  reason: string,
+): PlannerWorkflowReviewOutput {
+  const validationReport = createPlannerReviewValidationReport(input);
+  const retryQuestion = createFallbackRetryQuestion(
+    input.plan,
+    validationReport,
+  );
+  const proposalQuestions = [
+    ...(retryQuestion ? [retryQuestion] : []),
+    ...createFallbackProposalQuestions(input.executorResults),
+  ].slice(0, 3);
+  const hasRetry = validationReport.retry_task_ids.length > 0;
+  const status = hasRetry
+    ? "requires_executor_retry"
+    : proposalQuestions.length > 0
+      ? "pending_user_confirmation"
+      : "completed";
+  const notes = createFallbackReviewNotes(validationReport, reason);
+
+  return {
+    status,
+    confirmation_id: "product-workflow-confirmation",
+    request_summary: truncateText(input.plan.request_summary, 500),
+    review: {
+      accepted_task_ids: validationReport.accepted_task_ids,
+      rejected_task_ids: validationReport.rejected_task_ids,
+      retry_task_ids: validationReport.retry_task_ids,
+      issues: validationReport.issues,
+      notes: truncateText(notes.join("；"), 1200),
+    },
+    product_context_update: createFallbackProductContextUpdate(
+      input.plan,
+      validationReport,
+    ),
+    knowledge_graph_review: {
+      graph_ref: createKnowledgeGraphReviewRef(input.knowledgeGraph),
+      accepted_task_ids: validationReport.accepted_task_ids,
+      rejected_task_ids: validationReport.rejected_task_ids,
+      retry_task_ids: validationReport.retry_task_ids,
+      issues: validationReport.issues,
+      notes,
     },
     proposal_questions: proposalQuestions,
-    confirmation_message:
-      proposalQuestions.length > 0
-        ? "Planner Agent 使用 fallback 汇总完成本轮规划，请先补充 Executor Agent 提出的关键问题。"
-        : "Planner Agent 使用 fallback 汇总完成本轮规划，当前结果默认确认并结束本轮流程。",
+    confirmation_message: createFallbackConfirmationMessage({
+      hasRetry,
+      proposalQuestionCount: proposalQuestions.length,
+    }),
+  };
+}
+
+/**
+ * 生成回退审查说明，供用户和历史记录理解为什么进入 fallback。
+ */
+function createFallbackReviewNotes(
+  validationReport: PlannerReviewValidationReport,
+  reason: string,
+): string[] {
+  return [
+    `Fallback reason: ${truncateText(reason, 160)}.`,
+    `Accepted tasks: ${validationReport.accepted_task_ids.join(", ") || "none"}.`,
+    `Tasks needing correction: ${validationReport.retry_task_ids.join(", ") || "none"}.`,
+  ].slice(0, 8);
+}
+
+/**
+ * 生成短产品上下文更新，避免 fallback 汇总重复所有 Executor 摘要。
+ */
+function createFallbackProductContextUpdate(
+  plan: TaskExecutionPlan,
+  validationReport: PlannerReviewValidationReport,
+): string {
+  return [
+    `请求摘要：${truncateText(plan.request_summary, 180)}`,
+    `已接受任务：${validationReport.accepted_task_ids.join(", ") || "无"}`,
+    `待修正任务：${validationReport.retry_task_ids.join(", ") || "无"}`,
+  ].join("\n");
+}
+
+/**
+ * 基于确定性校验结果生成回退确认文案。
+ */
+function createFallbackConfirmationMessage({
+  hasRetry,
+  proposalQuestionCount,
+}: {
+  hasRetry: boolean;
+  proposalQuestionCount: number;
+}): string {
+  if (hasRetry) {
+    return "Planner Review 发现部分任务的图谱提交需要修正，请先确认重试或补充方向。";
+  }
+  if (proposalQuestionCount > 0) {
+    return "Planner Review 已完成轻量汇总，请先补充最高优先级问题。";
+  }
+  return "Planner Review 已完成轻量汇总，当前结果默认确认并结束本轮流程。";
+}
+
+/**
+ * 确定性校验发现提交失败时，生成一个高优先级确认问题，避免流程静默完成。
+ */
+function createFallbackRetryQuestion(
+  plan: TaskExecutionPlan,
+  validationReport: PlannerReviewValidationReport,
+): ProductWorkflowProposalQuestion | null {
+  if (validationReport.retry_task_ids.length === 0) return null;
+
+  const retryTasks = plan.tasks.filter((task) =>
+    validationReport.retry_task_ids.includes(task.task_id),
+  );
+  const sources = retryTasks.map((task) => ({
+    source_task_id: task.task_id,
+    source_agent: task.assigned_agent,
+  }));
+  const firstSource = sources[0];
+
+  return {
+    id: "planner-review-retry",
+    label: `审查发现 ${validationReport.retry_task_ids.join("、")} 的图谱写入存在问题，是否基于当前审查结论生成补充修正任务？`,
+    type: "radio",
+    required: true,
+    options: ["生成补充修正任务", "先接受当前结果", "我补充修正要求"],
+    source_task_id: firstSource?.source_task_id,
+    source_agent: firstSource?.source_agent,
+    sources,
+    priority: 100,
   };
 }
 
@@ -1097,7 +1763,7 @@ function createFallbackWorkflowResult(
  */
 function createFallbackProposalQuestions(
   executorResults: ExecutorAgentResult[],
-): ProductWorkflowResult["proposal_questions"] {
+): PlannerWorkflowReviewOutput["proposal_questions"] {
   const questions = new Map<string, ProductWorkflowProposalQuestion>();
 
   for (const result of executorResults) {
@@ -1140,7 +1806,14 @@ function createFallbackProposalQuestions(
 
   return [...questions.values()].sort(
     (left, right) => right.priority - left.priority,
-  );
+  ).slice(0, 3);
+}
+
+/**
+ * 合并文本列表，保持原始顺序并去掉空值。
+ */
+function mergeTextList(items: string[]): string[] {
+  return [...new Set(items.map((item) => item.trim()).filter(Boolean))];
 }
 
 /**

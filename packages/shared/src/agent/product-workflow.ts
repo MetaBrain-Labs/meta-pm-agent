@@ -408,6 +408,60 @@ export const ExecutorAgentResultSchema = z.object({
 /**
  * Planner Agent 对完整 MVP 工作流的汇总与确认结果。
  */
+export const ProductWorkflowReviewIssueSchema = z.object({
+  code: z.string().min(1).describe("Stable machine-readable issue code"),
+  severity: z.enum(["error", "warning"]).describe("Issue severity"),
+  task_id: z.string().optional().describe("Related planner task ID when applicable"),
+  message: z.string().min(1).max(500).describe("Concise issue explanation"),
+});
+
+/**
+ * Planner Review 对最终知识图谱状态的轻量审查结论。
+ */
+export const ProductWorkflowKnowledgeGraphReviewSchema = z.object({
+  graph_ref: z.object({
+    version: z.number().int().nonnegative().optional().describe("Persisted graph version when known"),
+    checksum: z.string().optional().describe("Optional checksum or stable graph reference"),
+    entity_count: z.number().int().nonnegative().optional().describe("Final graph entity count"),
+    relation_count: z.number().int().nonnegative().optional().describe("Final graph relation count"),
+  }).optional().describe("Reference to the graph snapshot reviewed by Planner Agent"),
+  accepted_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs whose graph updates are accepted"),
+  rejected_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs whose graph updates are rejected"),
+  retry_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs that should be retried or corrected"),
+  issues: z.array(ProductWorkflowReviewIssueSchema).default([]).describe("Detected graph or execution issues"),
+  notes: z.array(z.string().min(1).max(500)).max(8).default([]).describe("Short review notes; never repeat full graph data"),
+});
+
+/**
+ * Planner Review 模型的瘦身输出契约。
+ *
+ * 模型只输出审查结论、用户补充问题和短摘要；Planner DAG、Executor 结果和完整知识图谱
+ * 由运行时代码按已有状态组合，不再要求模型复制。
+ */
+export const PlannerWorkflowReviewOutputSchema = z.object({
+  status: z.enum([
+    "pending_user_confirmation",
+    "completed",
+    "requires_executor_retry",
+  ]).describe("Review outcome"),
+  confirmation_id: z.string().min(1).describe("Stable question-form ID"),
+  request_summary: z.string().min(1).max(500).describe("Concise request summary"),
+  review: z.object({
+    accepted_task_ids: z.array(z.string().min(1)).describe("Accepted task IDs"),
+    rejected_task_ids: z.array(z.string().min(1)).describe("Rejected task IDs"),
+    retry_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs that require retry or correction"),
+    issues: z.array(ProductWorkflowReviewIssueSchema).default([]).describe("Detected issues"),
+    notes: z.string().min(1).max(1200).describe("Compact review notes"),
+  }).describe("Planner Review decision"),
+  product_context_update: z.string().min(1).max(1200).describe("Short product context update summary"),
+  knowledge_graph_review: ProductWorkflowKnowledgeGraphReviewSchema.describe("Lightweight graph review, not the full graph"),
+  proposal_questions: z.array(ProductWorkflowProposalQuestionSchema).max(3).default([]).describe("At most three high-priority user questions"),
+  confirmation_message: z.string().min(1).max(500).describe("Concise user-facing confirmation message"),
+});
+
+/**
+ * 产品工作流的运行时汇总结果。
+ */
 export const ProductWorkflowResultSchema = z.object({
   status: z.enum(["pending_user_confirmation", "completed", "discarded"]),
   confirmation_id: z.string().min(1),
@@ -417,10 +471,13 @@ export const ProductWorkflowResultSchema = z.object({
   review: z.object({
     accepted_task_ids: z.array(z.string().min(1)),
     rejected_task_ids: z.array(z.string().min(1)),
+    retry_task_ids: z.array(z.string().min(1)).optional(),
+    issues: z.array(ProductWorkflowReviewIssueSchema).optional(),
     notes: z.string(),
   }),
   product_context_update: z.string().min(1),
   knowledge_graph_update: ProductKnowledgeGraphSchema,
+  knowledge_graph_review: ProductWorkflowKnowledgeGraphReviewSchema.optional(),
   proposal_questions: z.array(ProductWorkflowProposalQuestionSchema).default([]),
   confirmation_message: z.string().min(1),
 });
@@ -433,6 +490,9 @@ export type TaskExecutionNode = z.infer<typeof TaskExecutionNodeSchema>;
 export type TaskExecutionPlan = z.infer<typeof TaskExecutionPlanSchema>;
 export type ExecutorAgentResult = z.infer<typeof ExecutorAgentResultSchema>;
 export type ProductWorkflowResult = z.infer<typeof ProductWorkflowResultSchema>;
+export type PlannerWorkflowReviewOutput = z.infer<
+  typeof PlannerWorkflowReviewOutputSchema
+>;
 export type KnowledgeGraphEntity = z.infer<typeof KnowledgeGraphEntitySchema>;
 export type KnowledgeGraphRelation = z.infer<
   typeof KnowledgeGraphRelationSchema

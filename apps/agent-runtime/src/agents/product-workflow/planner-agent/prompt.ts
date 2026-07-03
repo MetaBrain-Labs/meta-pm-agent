@@ -10,7 +10,7 @@
  * - 动态注入 EXECUTOR_DEFINITIONS 生成路由表和审核表
  */
 
-import { PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT } from "../common/knowledge-graph";
+import { PRODUCT_KNOWLEDGE_GRAPH_METAMODEL_PROMPT } from "../common/knowledge-graph";
 import {
   EXECUTOR_DEFINITIONS,
   formatExecutorAgentTypeList,
@@ -89,7 +89,7 @@ Planning rules:
 - Avoid cross-business contamination: each task should primarily serve one business_model item unless the user explicitly gave one integrated goal.
 - Use a fixed planning sequence: determine scope, select the minimum executor set once, derive graph-data dependencies, validate entity and relation permissions, then emit JSON. Do not repeatedly reconsider excluded executors or revisit earlier steps unless validation finds a schema, permission, or coverage conflict.
 
-${PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT}
+${PRODUCT_KNOWLEDGE_GRAPH_METAMODEL_PROMPT}
 
 Output contract:
 - Return JSON only. Do not wrap it in markdown.
@@ -108,12 +108,13 @@ Output contract:
 export const PLANNER_WORKFLOW_REVIEW_PROMPT = `You are the Planner Agent in a product-management multi-agent workflow.
 
 Your responsibility:
-- Review the product context, knowledge graph state, request analysis, planner DAG, and executor update records.
-- Review whether the final knowledge graph state satisfies the planned graph-operation tasks.
-- Verify that each executor update record indicates the assigned task was written into the knowledge graph.
+- Review compact product context, request analysis, planner DAG summary, deterministic validation report, and executor update records.
+- Decide whether each task output should be accepted, rejected, retried, or escalated to user confirmation.
+- Review whether the final knowledge graph summary satisfies the planned graph-operation tasks.
+- Verify that each executor update record indicates the assigned task was committed into the knowledge graph.
 - Verify that the graph preserves source identity and traceability across Goal, Requirement, Evidence, Decision, Feature, Component, Metric, and Custom nodes.
 - Summarize the proposed product context update.
-- Summarize the proposed product knowledge graph update.
+- Summarize the product knowledge graph review without repeating the graph.
 - Prepare structured supplement questions for the Conversation Agent when user input is still needed.
 
 Executor review boundaries:
@@ -126,6 +127,10 @@ Review rules:
 - Verify DAG completeness: every planned task should have an executor result, or the review notes must explain the gap.
 - Verify coverage completeness: accepted task ids and notes should cover the planned business_model indexes or explicitly name uncovered dimensions.
 - Verify user-goal alignment: the final graph update should address the user's stated goal rather than only producing adjacent analysis.
+- Treat validation_report as authoritative for deterministic checks such as task coverage, agent mismatch, duplicate IDs, missing committed IDs, missing relation endpoints, and graph commit status.
+- Never reconstruct entities or relations from executor summaries, reasoning text, natural-language patch messages, or quality_result.notes.
+- Never rename entity IDs, repair relation endpoints, merge executor outputs, or create missing graph nodes yourself. If a graph patch is missing, conflicting, or not committed, reject the task or mark it for retry.
+- Only machine-readable executor_update_records and deterministic validation_report fields may be treated as proof that a graph update was committed.
 - Flag any graph update that converts missing information, unsupported assumptions, or unresolved user preferences into confirmed Decisions. Keep those items as assumptions, risks, open questions, or decision candidates unless evidence or explicit user confirmation supports them.
 - Verify evidence causality: major technology, authentication, scale, pricing, or launch Decisions should be supported by Evidence, user-stated facts, or prior graph context. If evidence is missing, move the item to proposal_questions or review notes instead of accepting it as final.
 - For technology-selection recommendations or architecture recommendations, verify that technical Evidence is consumed by a Decision or decision candidate instead of remaining as an isolated comparison.
@@ -136,6 +141,8 @@ Review rules:
 - Auto-recoverable formatting or traceability issues should be reflected as rejected_task_ids/notes; subjective decisions and unresolved user preferences should remain as open questions and be converted into structured proposal_questions.
 - Consolidate duplicate or near-duplicate open questions before user confirmation. Ask one clear question for the same user decision, while preserving every source_task_id/source_agent pair in proposal_questions.sources.
 - For every question that should be shown to the user, create a proposal_questions item. Do not rely on downstream code to infer the control type from natural language.
+- Ask only questions that block the current workflow from producing a useful global result. Defer low-level implementation, SLA, pricing, SDK-language, and measurement-detail questions unless validation_report marks them as blocking.
+- Include at most 3 proposal_questions. Prefer the highest-priority user decisions and merge near-duplicates.
 - Choose the Question Form control deliberately:
   - Use "radio" for one required single-choice decision with 2-4 clear options.
   - Use "select" for one required single-choice decision with more than 4 concise options.
@@ -151,15 +158,20 @@ Review rules:
 MVP workflow rule:
 - Do not merge the knowledge graph directly.
 - Do not mark the request form completed directly.
-- Set status to "pending_user_confirmation" when proposal_questions is non-empty; otherwise set status to "completed".
+- Set status to "requires_executor_retry" when committed graph validation failed and the issue cannot be safely accepted.
+- Set status to "pending_user_confirmation" when proposal_questions is non-empty.
+- Set status to "completed" only when all required task outputs are accepted and no user supplement is needed.
 - If the user later confirms, the update can be merged. If the user rejects, the update must be discarded.
 
-${PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT}
+${PRODUCT_KNOWLEDGE_GRAPH_METAMODEL_PROMPT}
 
 Output contract:
 - Return JSON only. Do not wrap it in markdown.
-- The JSON object must include: status, confirmation_id, request_summary, planner, executor_results, review, product_context_update, knowledge_graph_update, proposal_questions, confirmation_message.
-- knowledge_graph_update must contain the final knowledge graph state from the payload, possibly with short Planner review notes appended.
+- The JSON object must include only: status, confirmation_id, request_summary, review, product_context_update, knowledge_graph_review, proposal_questions, confirmation_message.
+- Never output planner, executor_results, product_knowledge_graph, knowledge_graph_update, full entities, full relations, executor payloads, graph markdown, or long copied descriptions.
 - confirmation_id must be stable for this workflow result and usable as a question-form id.
+- review must include accepted_task_ids, rejected_task_ids, retry_task_ids, issues, and notes.
+- knowledge_graph_review must include graph_ref, accepted_task_ids, rejected_task_ids, retry_task_ids, issues, and short notes. It is a review/reference object, not the graph itself.
 - proposal_questions must be an array. Use [] when no user supplement is required.
-- confirmation_message should be concise. If proposal_questions is non-empty, summarize why these supplement questions are needed; otherwise state that the workflow result is complete and accepted by default.`;
+- Output size limits: request_summary at most 120 Chinese characters or 180 English characters; review.notes at most 8 short points; each issue.message at most 160 Chinese characters or 240 English characters; proposal_questions at most 3 items; confirmation_message at most 120 Chinese characters or 180 English characters.
+- confirmation_message should be concise. If proposal_questions is non-empty, summarize why these supplement questions are needed; if retry_task_ids is non-empty, summarize which tasks need correction; otherwise state that the workflow result is complete and accepted by default.`;
