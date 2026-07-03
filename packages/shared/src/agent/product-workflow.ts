@@ -292,6 +292,23 @@ const TaskExecutionDagEdgeSchema = z.preprocess((value) => {
 }));
 
 /**
+ * Planner DAG；兼容模型偶发把 dag 直接输出为边数组的情况。
+ */
+const TaskExecutionDagSchema = z.preprocess((value) => {
+  if (Array.isArray(value)) {
+    return {
+      nodes: [],
+      edges: value,
+    };
+  }
+
+  return value;
+}, z.object({
+  nodes: z.array(z.string().min(1)).default([]),
+  edges: z.array(TaskExecutionDagEdgeSchema),
+}));
+
+/**
  * Planner 假设项；兼容模型输出结构化 gap/assumption/impact 后统一压缩为字符串。
  */
 const TaskExecutionAssumptionSchema = z.union([
@@ -322,10 +339,7 @@ export const TaskExecutionNodeSchema = z.object({
 export const TaskExecutionPlanSchema = z.object({
   status: z.enum(["initial", "supplement"]).default("initial"),
   request_summary: z.string().min(1),
-  dag: z.object({
-    nodes: z.array(z.string().min(1)),
-    edges: z.array(TaskExecutionDagEdgeSchema),
-  }),
+  dag: TaskExecutionDagSchema,
   tasks: z.array(TaskExecutionNodeSchema),
   assumptions: z.array(TaskExecutionAssumptionSchema).default([]),
 });

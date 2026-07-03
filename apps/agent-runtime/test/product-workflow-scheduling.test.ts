@@ -135,6 +135,26 @@ test("parses planner DAG edge aliases from model output", () => {
   ]);
 });
 
+test("parses planner DAG edge arrays from model output", () => {
+  const result = TaskExecutionPlanSchema.safeParse({
+    status: "initial",
+    request_summary: "Design a collaborative document MVP.",
+    dag: [{ from: "task-01", to: "task-02" }],
+    tasks: [
+      createTask("task-01", 1, "executor-product-strategy", []),
+      createTask("task-02", 2, "executor-product-discovery", ["task-01"]),
+    ],
+    assumptions: [],
+  });
+
+  assert.equal(result.success, true);
+  if (!result.success) return;
+  assert.deepEqual(result.data.dag.nodes, []);
+  assert.deepEqual(result.data.dag.edges, [
+    { source: "task-01", target: "task-02" },
+  ]);
+});
+
 test("normalizes structured planner assumptions without replacing the plan", () => {
   const result = TaskExecutionPlanSchema.safeParse({
     status: "initial",
@@ -251,7 +271,6 @@ test("creates parallel graph-operation fallback plan for broad MVP requests", ()
       "executor-product-discovery",
       "executor-product-execution",
       "executor-ai-shipping",
-      "executor-interface-craft",
     ],
   );
   assert.deepEqual(
@@ -268,7 +287,6 @@ test("creates parallel graph-operation fallback plan for broad MVP requests", ()
       ["task-01", "task-04"],
       ["task-04", "task-05"],
       ["task-05", "task-06"],
-      ["task-05", "task-07"],
     ],
   );
   assert.notEqual(
@@ -287,9 +305,16 @@ test("creates parallel graph-operation fallback plan for broad MVP requests", ()
   assert.match(strategyTask.description, /decision candidates/i);
   assert.match(strategyTask.description, /do not convert unknown/i);
   assert.ok(shippingTask);
-  assert.match(shippingTask.description, /compare technical options/i);
-  assert.match(shippingTask.description, /CRDT vs OT/i);
+  assert.match(shippingTask.description, /compare technical option families/i);
+  assert.doesNotMatch(shippingTask.description, /CRDT vs OT/i);
   assert.doesNotMatch(shippingTask.description, /selected CRDT/i);
+  assert.equal(
+    plan.tasks.filter(
+      (task) => task.assigned_agent === "executor-product-strategy",
+    ).length,
+    1,
+  );
+  assertNoDagCycle(plan);
   assert.ok(
     plan.tasks.every((task) =>
       task.quality_check.criteria.some((criterion) =>
@@ -300,6 +325,85 @@ test("creates parallel graph-operation fallback plan for broad MVP requests", ()
   assert.ok(
     plan.tasks.every((task) => task.quality_check.criteria.length <= 4),
   );
+});
+
+test("keeps document approval fallback focused and acyclic", () => {
+  const plan = createFallbackPlan(
+    {
+      productContext: "Workspace: local test",
+      knowledgeGraph: createEmptyKnowledgeGraph(),
+      requestAnalysis: createApprovalDocumentRequestAnalysis(),
+      userInput: [
+        {
+          index: 1,
+          content:
+            "从零开始设计一个全新的文档协同工具，面向中型企业，支持多人同时编辑同一文档和文档审批流转，优先在Web端实现。",
+          type: "request",
+        },
+      ],
+    },
+    "schema-validation: dag: Expected object, received array",
+  );
+
+  assert.deepEqual(
+    plan.tasks.map((task) => task.assigned_agent),
+    [
+      "executor-product-strategy",
+      "executor-toolkit",
+      "executor-market-research",
+      "executor-product-discovery",
+      "executor-product-execution",
+      "executor-ai-shipping",
+    ],
+  );
+  assert.equal(
+    plan.tasks.some((task) => task.assigned_agent === "executor-data-analytics"),
+    false,
+  );
+  assert.equal(
+    plan.tasks.some((task) => task.assigned_agent === "executor-interface-craft"),
+    false,
+  );
+  assert.equal(
+    plan.tasks.filter(
+      (task) => task.assigned_agent === "executor-product-strategy",
+    ).length,
+    1,
+  );
+  assertNoDagCycle(plan);
+  assert.ok(
+    plan.assumptions.some((assumption) =>
+      assumption.includes("Unresolved request gaps"),
+    ),
+  );
+});
+
+test("keeps strategy refinement dependencies downstream only", () => {
+  const plan = normalizeTaskExecutionPlan(
+    createPlan([
+      createTask("task-01", 1, "executor-product-strategy", []),
+      createTask("task-02", 2, "executor-product-discovery", ["task-01"]),
+      createTask("task-03", 3, "executor-product-execution", ["task-02"]),
+      createTask("task-04", 4, "executor-ai-shipping", ["task-03"]),
+      createTask("task-05", 5, "executor-product-strategy", [
+        "task-01",
+        "task-03",
+        "task-04",
+      ]),
+    ]),
+  );
+
+  assert.deepEqual(
+    plan.tasks.map((task) => [task.task_id, task.depends_on]),
+    [
+      ["task-01", []],
+      ["task-02", ["task-01"]],
+      ["task-03", ["task-02"]],
+      ["task-04", ["task-03"]],
+      ["task-05", ["task-01", "task-03", "task-04"]],
+    ],
+  );
+  assertNoDagCycle(plan);
 });
 
 test("keeps concept-stage fallback focused on strategy, discovery, research, and toolkit", () => {
@@ -425,6 +529,7 @@ function createState({
 
 function createPlan(tasks: TaskExecutionNode[]): TaskExecutionPlan {
   return {
+    status: "initial",
     request_summary: "Test request",
     dag: {
       nodes: tasks.map((task) => task.task_id),
@@ -438,6 +543,39 @@ function createPlan(tasks: TaskExecutionNode[]): TaskExecutionPlan {
     tasks,
     assumptions: [],
   };
+}
+
+/**
+ * 验证测试计划没有形成循环依赖，覆盖 Planner DAG 归一化的关键业务约束。
+ */
+function assertNoDagCycle(plan: TaskExecutionPlan): void {
+  const incomingCount = new Map(plan.dag.nodes.map((node) => [node, 0]));
+  const outgoing = new Map<string, string[]>();
+
+  for (const edge of plan.dag.edges) {
+    incomingCount.set(edge.target, (incomingCount.get(edge.target) ?? 0) + 1);
+    const targets = outgoing.get(edge.source) ?? [];
+    targets.push(edge.target);
+    outgoing.set(edge.source, targets);
+  }
+
+  const queue = [...incomingCount.entries()].flatMap(([node, count]) =>
+    count === 0 ? [node] : [],
+  );
+  const visited: string[] = [];
+
+  while (queue.length > 0) {
+    const node = queue.shift()!;
+    visited.push(node);
+
+    for (const target of outgoing.get(node) ?? []) {
+      const nextCount = (incomingCount.get(target) ?? 0) - 1;
+      incomingCount.set(target, nextCount);
+      if (nextCount === 0) queue.push(target);
+    }
+  }
+
+  assert.equal(visited.length, plan.dag.nodes.length);
 }
 
 function createTask(
@@ -507,6 +645,44 @@ function createCollaborativeDocumentRequestAnalysis(): RequestAnalysis {
             description:
               "Permission and security requirements for collaborative editing.",
             importance: 0.6,
+          },
+        ],
+        covered_user_input_indexes: [1],
+      },
+    ],
+    questions: [],
+    chitchat: [],
+  };
+}
+
+function createApprovalDocumentRequestAnalysis(): RequestAnalysis {
+  return {
+    business_model: [
+      {
+        index: 1,
+        user_goal:
+          "从零开始设计一个全新的文档协同工具，面向中型企业（16-200人），支持多人同时编辑同一文档和文档审批流转，优先在Web端实现。",
+        goal_constraints: [
+          "面向中型企业团队使用",
+          "支持多人同时编辑同一文档",
+          "支持文档审批流转",
+          "优先在 Web 端实现",
+        ],
+        missing_information: [
+          {
+            index: 1,
+            description: "文档数据安全和权限管理的具体要求",
+            importance: 0.9,
+          },
+          {
+            index: 2,
+            description: "是否需要支持离线编辑或移动端",
+            importance: 0.7,
+          },
+          {
+            index: 3,
+            description: "期望支持的文档格式范围（纯文本、表格、演示文稿等）",
+            importance: 0.8,
           },
         ],
         covered_user_input_indexes: [1],

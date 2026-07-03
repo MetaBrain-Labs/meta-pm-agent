@@ -127,6 +127,21 @@ const FALLBACK_EXECUTOR_ORDER: ExecutorAgentType[] = [
 ];
 
 /**
+ * fallback 任务角色，用于区分普通领域任务和下游策略收敛任务。
+ */
+type FallbackTaskRole = "default" | "strategy-refinement";
+
+/**
+ * fallback DAG 的内部任务规格，先保存角色再统一生成 TaskExecutionNode。
+ */
+type FallbackTaskSpec = {
+  definition: ExecutorAgentDefinition;
+  sequence: number;
+  taskId: string;
+  role: FallbackTaskRole;
+};
+
+/**
  * 归一化 Planner 生成的 Executor DAG。
  *
  * Planner 模型容易把“产品工作顺序”写成完整瀑布依赖链。这里将任务依赖收敛为真实
@@ -220,24 +235,48 @@ function normalizeTaskDependencies(
     const isExplicitToolkitStrategyDependency =
       agentType === "executor-toolkit" &&
       dependencyAgent === "executor-product-strategy";
+    const isStrategyRefinementDependency =
+      isDownstreamStrategyRefinementTask(task, tasksByAgent) &&
+      dependencyTask.sequence < task.sequence;
 
     if (
       isSameAgentPreviousTask ||
       isHardDependency ||
-      isExplicitToolkitStrategyDependency
+      isExplicitToolkitStrategyDependency ||
+      isStrategyRefinementDependency
     ) {
       dependencies.add(dependencyTask.task_id);
     }
   }
 
   for (const dependencyAgent of hardDependencyAgents) {
-    const upstreamTask = getLastTaskForAgent(dependencyAgent, tasksByAgent);
+    const upstreamTask = getLastTaskForAgentBefore(
+      dependencyAgent,
+      task,
+      tasksByAgent,
+    );
     if (upstreamTask && upstreamTask.task_id !== task.task_id) {
       dependencies.add(upstreamTask.task_id);
     }
   }
 
   return [...dependencies];
+}
+
+/**
+ * 判断当前 Product Strategy 任务是否为下游证据收敛任务。
+ *
+ * 这类任务需要消费 AI Shipping、Execution、Analytics 等上游图谱输出形成 Decision，
+ * 不能被普通并行归一化逻辑剥掉跨 Executor 依赖。
+ */
+function isDownstreamStrategyRefinementTask(
+  task: TaskExecutionNode,
+  tasksByAgent: Map<ExecutorAgentType, TaskExecutionNode[]>,
+): boolean {
+  const agentType = task.assigned_agent as ExecutorAgentType;
+  if (agentType !== "executor-product-strategy") return false;
+
+  return Boolean(getPreviousTaskForAgent(agentType, task, tasksByAgent));
 }
 
 /**
@@ -301,13 +340,19 @@ function getPreviousTaskForAgent(
 }
 
 /**
- * 获取某个 Executor 的最后一个任务，代表该 Executor 图谱输出已就绪。
+ * 获取当前任务之前某个 Executor 的最后一个任务，避免未来收敛任务形成反向依赖。
  */
-function getLastTaskForAgent(
+function getLastTaskForAgentBefore(
   agentType: ExecutorAgentType,
+  task: TaskExecutionNode,
   tasksByAgent: Map<ExecutorAgentType, TaskExecutionNode[]>,
 ): TaskExecutionNode | null {
-  return tasksByAgent.get(agentType)?.at(-1) ?? null;
+  const tasks = tasksByAgent.get(agentType) ?? [];
+  const previousTasks = tasks.filter(
+    (candidate) => candidate.sequence < task.sequence,
+  );
+
+  return previousTasks.at(-1) ?? null;
 }
 
 /**
@@ -323,53 +368,47 @@ export function createFallbackPlan(
   const selectedAgents = new Set(
     selectedDefinitions.map((definition) => definition.agentType),
   );
-  const taskSpecs = selectedDefinitions.map((definition, index) => ({
-    definition,
-    sequence: index + 1,
-    taskId: createTaskId(index + 1),
-  }));
-  const taskIdByAgent = new Map(
-    taskSpecs.map(({ definition, taskId }) => [definition.agentType, taskId]),
+  const taskSpecs = createFallbackTaskSpecs(
+    selectedDefinitions,
+    shouldPlanFallbackStrategyRefinement(analysis, selectedAgents),
   );
+  const primaryTaskIdByAgent = createFallbackPrimaryTaskIdByAgent(taskSpecs);
+  const tasks = taskSpecs.map(({ definition, sequence, taskId, role }) => ({
+    task_id: taskId,
+    sequence,
+    title: createFallbackTaskTitle(definition.agentType, role),
+    description: createFallbackTaskDescription(definition, analysis, role),
+    assigned_agent: definition.agentType,
+    depends_on: getFallbackTaskDependencies(
+      { definition, taskId, role },
+      selectedAgents,
+      primaryTaskIdByAgent,
+    ),
+    covered_business_model_indexes: [...coveredIndexes],
+    expected_output: createFallbackExpectedOutput(definition, role),
+    quality_check: {
+      status: "pending" as const,
+      criteria: createFallbackQualityCriteria(definition, role),
+    },
+  }));
 
   const plan: TaskExecutionPlan = {
     status: isSupplementPlanInput(input.userInput) ? "supplement" : "initial",
-    request_summary: summarizeBusinessModels(analysis.business_model),
+    request_summary: createFallbackRequestSummary(analysis),
     dag: {
-      nodes: taskSpecs.map(({ taskId }) => taskId),
-      edges: taskSpecs.flatMap(({ definition, taskId }) =>
-        getFallbackDependencyAgents(
-          definition.agentType,
-          selectedAgents,
-        ).flatMap((agentType) => {
-          const source = taskIdByAgent.get(agentType);
-          return source ? [{ source, target: taskId }] : [];
-        }),
+      nodes: tasks.map((task) => task.task_id),
+      edges: tasks.flatMap((task) =>
+        task.depends_on.map((dependency) => ({
+          source: dependency,
+          target: task.task_id,
+        })),
       ),
     },
-    tasks: taskSpecs.map(({ definition, sequence, taskId }) => ({
-      task_id: taskId,
-      sequence,
-      title: createFallbackTaskTitle(definition.agentType),
-      description: createFallbackTaskDescription(definition, analysis),
-      assigned_agent: definition.agentType,
-      depends_on: getFallbackDependencyAgents(
-        definition.agentType,
-        selectedAgents,
-      ).flatMap((agentType) => {
-        const dependencyTaskId = taskIdByAgent.get(agentType);
-        return dependencyTaskId ? [dependencyTaskId] : [];
-      }),
-      covered_business_model_indexes: [...coveredIndexes],
-      expected_output: createFallbackExpectedOutput(definition),
-      quality_check: {
-        status: "pending",
-        criteria: createFallbackQualityCriteria(definition),
-      },
-    })),
+    tasks,
     assumptions: [
       FALLBACK_PLAN_ASSUMPTION,
       `Fallback reason: ${reason}.`,
+      ...createFallbackUncertaintyAssumptions(analysis),
       "Only executors relevant to the request were selected; unresolved subjective gaps must be recorded as assumptions, risks, or open questions instead of blocking execution.",
     ],
   };
@@ -383,16 +422,7 @@ export function createFallbackPlan(
 function selectFallbackExecutorDefinitions(
   analysis: PlannerAgentInput["requestAnalysis"],
 ): ExecutorAgentDefinition[] {
-  const requestText = analysis.business_model
-    .map((item) =>
-      [
-        item.user_goal,
-        ...item.goal_constraints,
-        ...item.missing_information.map((info) => info.description),
-      ].join(" "),
-    )
-    .join(" ")
-    .toLowerCase();
+  const requestText = createRequestAnalysisText(analysis);
   const selected = new Set<ExecutorAgentType>([
     "executor-product-strategy",
     "executor-product-discovery",
@@ -443,7 +473,9 @@ function selectFallbackExecutorDefinitions(
     "experiment",
     "dashboard",
     "指标",
-    "数据",
+    "数据分析",
+    "埋点",
+    "度量",
     "实验",
     "看板",
   ]);
@@ -460,10 +492,8 @@ function selectFallbackExecutorDefinitions(
     "websocket",
     "crdt",
     "ot",
-    "multi-user",
-    "collaboration",
-    "browser",
-    "web",
+    "multi-user editing",
+    "collaborative editing",
     "技术",
     "架构",
     "模型",
@@ -472,8 +502,7 @@ function selectFallbackExecutorDefinitions(
     "实时",
     "同步",
     "多人",
-    "协同",
-    "浏览器",
+    "多人编辑",
   ]);
   addExecutorWhenMatches(selected, requestText, "executor-toolkit", [
     "policy",
@@ -503,23 +532,15 @@ function selectFallbackExecutorDefinitions(
     "interface",
     "screen",
     "prototype",
-    "editor",
-    "document",
-    "browser",
-    "web",
-    "collaboration",
+    "wireframe",
     "toolbar",
-    "sharing",
     "界面",
     "交互",
     "原型",
     "页面",
-    "编辑器",
-    "文档",
-    "浏览器",
-    "协同",
+    "线框",
+    "线框图",
     "工具栏",
-    "分享",
   ]);
 
   if (
@@ -539,12 +560,146 @@ function selectFallbackExecutorDefinitions(
     selected.delete("executor-interface-craft");
   }
 
+  // 技术选型闭环优先于泛化市场扫描，除非用户明确要求市场研究。
+  if (
+    shouldPrioritizeTechnicalSelectionRefinement(requestText) &&
+    selected.has("executor-ai-shipping") &&
+    !hasExplicitMarketResearchIntent(requestText)
+  ) {
+    selected.delete("executor-market-research");
+  }
+
   return FALLBACK_EXECUTOR_ORDER.flatMap((agentType) => {
     const definition = EXECUTOR_DEFINITIONS.find(
       (item) => item.agentType === agentType,
     );
     return definition && selected.has(definition.agentType) ? [definition] : [];
   });
+}
+
+/**
+ * 将 Request Agent 分析压缩为 fallback 关键词选择用文本。
+ */
+function createRequestAnalysisText(
+  analysis: PlannerAgentInput["requestAnalysis"],
+): string {
+  return analysis.business_model
+    .map((item) =>
+      [
+        item.user_goal,
+        ...item.goal_constraints,
+        ...item.missing_information.map((info) => info.description),
+      ].join(" "),
+    )
+    .join(" ")
+    .toLowerCase();
+}
+
+/**
+ * 判断 fallback 是否需要保留市场研究 Executor。
+ */
+function hasExplicitMarketResearchIntent(requestText: string): boolean {
+  return matchesAny(requestText, [
+    "market research",
+    "competitor",
+    "competitive",
+    "benchmark",
+    "survey",
+    "市场调研",
+    "竞品",
+    "竞争分析",
+    "用户调研",
+    "基准",
+  ]);
+}
+
+/**
+ * 判断请求是否明确需要技术选型或架构建议闭环。
+ */
+function shouldPrioritizeTechnicalSelectionRefinement(
+  requestText: string,
+): boolean {
+  return matchesAny(requestText, [
+    "technology selection",
+    "technical selection",
+    "technical recommendation",
+    "architecture recommendation",
+    "architecture choice",
+    "architecture design",
+    "technical design",
+    "technical architecture",
+    "技术选型",
+    "技术建议",
+    "技术方案",
+    "技术架构",
+    "架构建议",
+    "架构方案",
+  ]);
+}
+
+/**
+ * 判断 fallback 计划是否需要追加 Product Strategy 技术决策收敛任务。
+ */
+function shouldPlanFallbackStrategyRefinement(
+  analysis: PlannerAgentInput["requestAnalysis"],
+  selectedAgents: Set<ExecutorAgentType>,
+): boolean {
+  return (
+    selectedAgents.has("executor-product-strategy") &&
+    selectedAgents.has("executor-ai-shipping") &&
+    shouldPrioritizeTechnicalSelectionRefinement(
+      createRequestAnalysisText(analysis),
+    )
+  );
+}
+
+/**
+ * 生成 fallback 任务规格，必要时追加下游策略收敛任务。
+ */
+function createFallbackTaskSpecs(
+  selectedDefinitions: ExecutorAgentDefinition[],
+  includeStrategyRefinement: boolean,
+): FallbackTaskSpec[] {
+  const baseSpecs = selectedDefinitions.map((definition, index) => ({
+    definition,
+    sequence: index + 1,
+    taskId: createTaskId(index + 1),
+    role: "default" as const,
+  }));
+
+  if (!includeStrategyRefinement) return baseSpecs;
+
+  const strategyDefinition = EXECUTOR_DEFINITIONS.find(
+    (item) => item.agentType === "executor-product-strategy",
+  );
+  if (!strategyDefinition) return baseSpecs;
+
+  return [
+    ...baseSpecs,
+    {
+      definition: strategyDefinition,
+      sequence: baseSpecs.length + 1,
+      taskId: createTaskId(baseSpecs.length + 1),
+      role: "strategy-refinement",
+    },
+  ];
+}
+
+/**
+ * 记录每个 Executor 的首个 fallback 任务 ID，供依赖计算复用。
+ */
+function createFallbackPrimaryTaskIdByAgent(
+  taskSpecs: FallbackTaskSpec[],
+): Map<ExecutorAgentType, string> {
+  const taskIdByAgent = new Map<ExecutorAgentType, string>();
+
+  for (const spec of taskSpecs) {
+    if (!taskIdByAgent.has(spec.definition.agentType)) {
+      taskIdByAgent.set(spec.definition.agentType, spec.taskId);
+    }
+  }
+
+  return taskIdByAgent;
 }
 
 /**
@@ -665,6 +820,39 @@ function getFallbackDependencyAgents(
 }
 
 /**
+ * 生成单个 fallback 任务的真实图谱数据依赖。
+ */
+function getFallbackTaskDependencies(
+  spec: {
+    definition: ExecutorAgentDefinition;
+    taskId: string;
+    role: FallbackTaskRole;
+  },
+  selectedAgents: Set<ExecutorAgentType>,
+  primaryTaskIdByAgent: Map<ExecutorAgentType, string>,
+): string[] {
+  if (spec.role === "strategy-refinement") {
+    return [
+      "executor-product-strategy",
+      "executor-product-execution",
+      "executor-ai-shipping",
+      "executor-data-analytics",
+    ].flatMap((agentType) => {
+      const taskId = primaryTaskIdByAgent.get(agentType as ExecutorAgentType);
+      return taskId && taskId !== spec.taskId ? [taskId] : [];
+    });
+  }
+
+  return getFallbackDependencyAgents(
+    spec.definition.agentType,
+    selectedAgents,
+  ).flatMap((agentType) => {
+    const dependencyTaskId = primaryTaskIdByAgent.get(agentType);
+    return dependencyTaskId ? [dependencyTaskId] : [];
+  });
+}
+
+/**
  * 从候选上游中选择第一个已入选的 Executor。
  */
 function pickFirstSelectedAgent(
@@ -678,7 +866,14 @@ function pickFirstSelectedAgent(
 /**
  * 为 fallback 任务生成图谱操作标题。
  */
-function createFallbackTaskTitle(agentType: ExecutorAgentType): string {
+function createFallbackTaskTitle(
+  agentType: ExecutorAgentType,
+  role: FallbackTaskRole = "default",
+): string {
+  if (role === "strategy-refinement") {
+    return "Converge evidence into a technology-selection decision";
+  }
+
   switch (agentType) {
     case "executor-product-strategy":
       return "Establish goals, requirements, and decision candidates";
@@ -711,30 +906,35 @@ function createFallbackTaskTitle(agentType: ExecutorAgentType): string {
 function createFallbackTaskDescription(
   definition: ExecutorAgentDefinition,
   analysis: PlannerAgentInput["requestAnalysis"],
+  role: FallbackTaskRole = "default",
 ): string {
   const requestContext = createFallbackRequestContext(analysis);
 
+  if (role === "strategy-refinement") {
+    return `${requestContext}. Consume technical Evidence and Component boundaries from upstream tasks to create a supported technology-selection Decision or an explicitly labeled decision candidate. Do not treat unverified option comparisons as confirmed facts; use Goal --Drives--> Decision, Evidence --Validates--> Decision, and Decision --Produces--> Requirement only when supported.`;
+  }
+
   switch (definition.agentType) {
     case "executor-product-strategy":
-      return `${requestContext}. Create Goal, Requirement, Evidence, and explicit decision candidates only. Do not convert unknown scale, authentication, architecture, or history granularity into confirmed Decisions.`;
+      return `${requestContext}. Create only user-explicit Goal and Requirement nodes plus evidence-backed or clearly labeled decision candidates. Do not convert unknown scale, authentication, storage, integration, architecture, or history granularity into confirmed Requirements or Decisions.`;
     case "executor-market-research":
       return `${requestContext}. Add verified market Evidence or clearly labeled research-gap Custom records. Link Evidence only to Requirements or supported Decision candidates; do not present model memory as verified fact.`;
     case "executor-gtm":
       return `${requestContext}. Add only relevant GTM Requirements, Metrics, Evidence, or decision candidates. Confirm GTM Decisions only when user input, graph context, or verified Evidence supports them.`;
     case "executor-product-discovery":
-      return `${requestContext}. Translate Requirements into testable Feature hypotheses and validation Metrics. Mark inferred features as hypotheses and use Feature --Satisfies--> Requirement. Do not decompose implementation components here.`;
+      return `${requestContext}. Translate explicit Requirements into testable Feature nodes. Mark inferred management, permission, history, or collaboration-awareness capabilities as hypotheses, and use Feature --Satisfies--> Requirement. Do not decompose implementation components here.`;
     case "executor-product-execution":
       return `${requestContext}. Decompose selected Features into essential Component entities only when execution detail is needed. Use Component --Implements--> Feature and avoid duplicate count-filler Components.`;
     case "executor-marketing-growth":
       return `${requestContext}. Define growth Metrics, Requirements, or decision candidates only when adoption or retention is in scope. Keep Decisions evidence-backed.`;
     case "executor-data-analytics":
-      return `${requestContext}. Define Metrics, measurement plans, and benchmark gaps only. Do not create Custom nodes or claim measured results without verifiable Evidence. Use Metric --Measures--> Feature or Requirement.`;
+      return `${requestContext}. Define product-operability Metrics, measurement plans, and benchmark gaps only. Do not create Custom nodes or claim measured results, adoption metrics, or industry benchmarks without verifiable Evidence. Use Metric --Measures--> Feature or Requirement.`;
     case "executor-ai-shipping":
-      return `${requestContext}. Compare technical options such as CRDT vs OT only at option-family level. Do not lock libraries, protocols, or storage choices unless already chosen. Record trade-offs as Evidence or risks.`;
+      return `${requestContext}. Compare technical option families, synchronization models, integration approaches, and delivery constraints. Do not lock libraries, protocols, vendors, or storage choices unless already chosen. Record source-backed trade-offs as Evidence and unsupported claims as research gaps.`;
     case "executor-toolkit":
-      return `${requestContext}. After Strategy requirements exist, create compact Custom or Component guardrails for security, permissions, compliance, and workflow. Use Custom/Component constraint --Constrains--> Requirement or Component.`;
+      return `${requestContext}. After Strategy requirements exist, create compact Custom or Component guardrails for security, permissions, compliance, and workflow. Do not create Risk nodes; record unconfirmed compliance risk in Custom/Component descriptions, uncertainty, risks, or open questions.`;
     case "executor-interface-craft":
-      return `${requestContext}. Add UI-facing Component constraints and UX Evidence only when interface craft is in scope. Constraint Components may Constrain UI Components; Evidence must not be the source of Constrains.`;
+      return `${requestContext}. Add UI-facing Component constraints and UX Evidence only when interface craft is in scope. Use Component constraint --Constrains--> UI Component and Evidence --Validates--> Component constraint; Evidence must not be the source of Constrains.`;
     default:
       return `${requestContext}. Create graph-native updates within this executor's allowed entity and relation boundaries.`;
   }
@@ -754,6 +954,27 @@ function createFallbackRequestContext(
 }
 
 /**
+ * 生成 fallback 请求摘要，避免模型失败时把长用户目标完整灌入 request_summary。
+ */
+function createFallbackRequestSummary(
+  analysis: PlannerAgentInput["requestAnalysis"],
+): string {
+  return truncateText(summarizeBusinessModels(analysis.business_model), 100);
+}
+
+/**
+ * 将 Request Agent 缺失信息保留到根级 assumptions，避免只藏在任务描述里。
+ */
+function createFallbackUncertaintyAssumptions(
+  analysis: PlannerAgentInput["requestAnalysis"],
+): string[] {
+  const missing = summarizeMissingInformation(analysis.business_model);
+  if (missing === "None provided.") return [];
+
+  return [`Unresolved request gaps: ${truncateText(missing, 220)}`];
+}
+
+/**
  * 将 fallback 文本限制在较短长度内，避免兜底计划再次变成超长输出。
  */
 function truncateText(text: string, maxLength: number): string {
@@ -765,7 +986,12 @@ function truncateText(text: string, maxLength: number): string {
  */
 function createFallbackExpectedOutput(
   definition: ExecutorAgentDefinition,
+  role: FallbackTaskRole = "default",
 ): string {
+  if (role === "strategy-refinement") {
+    return "Technology Decision or decision candidate linked to upstream Evidence and Requirements.";
+  }
+
   return `Allowed entities only: ${definition.allowedEntityTypes.join(
     ", ",
   )}. Include traceable relation updates.`;
@@ -776,7 +1002,17 @@ function createFallbackExpectedOutput(
  */
 function createFallbackQualityCriteria(
   definition: ExecutorAgentDefinition,
+  role: FallbackTaskRole = "default",
 ): string[] {
+  if (role === "strategy-refinement") {
+    return [
+      "Consume upstream technical Evidence and Component boundaries.",
+      "Create a supported Decision or explicitly labeled decision candidate.",
+      "Do not promote unverified option comparisons into confirmed facts.",
+      "Use approved explicit relation directions.",
+    ];
+  }
+
   return [
     `Use only allowed entity types: ${definition.allowedEntityTypes.join(", ")}.`,
     "Keep unresolved gaps as assumptions, risks, or open questions, not confirmed Decisions.",

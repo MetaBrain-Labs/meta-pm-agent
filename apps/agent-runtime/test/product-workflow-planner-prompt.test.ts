@@ -24,11 +24,24 @@ test("planner prompt preserves graph-semantics guardrails", () => {
   );
   assert.match(
     PLANNER_AGENT_PROMPT,
-    /first plan Goal\/Requirement\/OpenQuestion work plus evidence-producing tasks, then add a downstream strategy refinement task/,
+    /first plan Goal\/Requirement work plus evidence-producing tasks, then add a downstream Product Strategy refinement task/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /include an explicit Product Strategy refinement task/,
   );
   assert.match(
     PLANNER_AGENT_PROMPT,
     /Do not lock technical options in Planner task text/,
+  );
+  assert.doesNotMatch(PLANNER_AGENT_PROMPT, /CRDT|Yjs|Automerge|SAML|OIDC|LDAP/);
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /Keep confirmed user facts separate from planning assumptions/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /Feature-planning tasks must prioritize user-explicit Features/,
   );
   assert.match(
     PLANNER_AGENT_PROMPT,
@@ -37,6 +50,10 @@ test("planner prompt preserves graph-semantics guardrails", () => {
   assert.match(
     PLANNER_AGENT_PROMPT,
     /Goal --Drives--> Decision/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /Do not request Goal --Drives--> Requirement/,
   );
   assert.match(
     PLANNER_AGENT_PROMPT,
@@ -72,7 +89,31 @@ test("planner prompt preserves graph-semantics guardrails", () => {
   );
   assert.match(
     PLANNER_AGENT_PROMPT,
+    /Component constraint --Constrains--> UI Component/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /Toolkit compliance or guardrail work must not ask the executor to create Risk nodes/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
     /must depend_on every task that produces the evidence, technical comparison, or measurement basis/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /Artifact coverage must be explicit in the task set/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /Use a fixed planning sequence/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /dag must be an object exactly shaped as/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /Never return dag as an array/,
   );
   assert.match(
     PLANNER_AGENT_PROMPT,
