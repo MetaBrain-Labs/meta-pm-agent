@@ -1,7 +1,7 @@
 /**
  * 联网搜索工具
  *
- * 为 Conversation Agent 提供 web_search 工具，优先使用 Tavily API，
+ * 为授权 Agent 提供 web_search 工具，优先使用 Tavily API，
  * 失败时自动回退到 DuckDuckGo 免费搜索。搜索结果以结构化 JSON 返回，
  * 包含来源编号、标题、URL 和摘要。
  *
