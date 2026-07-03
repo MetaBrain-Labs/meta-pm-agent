@@ -20,6 +20,7 @@ import { createDeepAgent } from "deepagents";
 import { RequestAnalysisSchema, type RequestAnalysis } from "@repo/shared";
 import { createChatModel } from "../common/model";
 import { createDefaultAgentMiddleware } from "../common/middleware";
+import { createDeepAgentToolAllowlistMiddleware } from "../common/deep-agent-tool-policy";
 import { calculateCost } from "../../config";
 import { REQUEST_AGENT_PROMPT } from "./prompt";
 import {
@@ -80,6 +81,10 @@ export function createRequestAgent(summaryRecorder?: AgentRunSummaryRecorder) {
     name: "request-agent",
     skills: [],
     middleware: [
+      createDeepAgentToolAllowlistMiddleware({
+        agentName: "request-agent",
+        allowedToolNames: [],
+      }),
       ...createDefaultAgentMiddleware(),
       ...createAgentRunSummaryMiddleware(summaryRecorder),
     ] as any,

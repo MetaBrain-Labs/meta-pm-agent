@@ -20,6 +20,7 @@ import {
   createToolsForAgent,
   getExecutorDefaultToolNames,
 } from "../src/agents/common/tool-access";
+import { filterToolsByAllowedNames } from "../src/agents/common/deep-agent-tool-policy";
 
 test("conversation web search remains controlled by enabledTools", () => {
   assert.equal(
@@ -59,6 +60,85 @@ test("strategy executor does not receive web search by default", () => {
   assert.equal(toolNames.includes("web_search"), false);
   assert.equal(toolNames.includes("kg_file_read"), true);
 });
+
+test("conversation allowlist removes DeepAgents built-in tools unless web search is enabled", () => {
+  const deepAgentInjectedTools = createNamedTools([
+    "write_todos",
+    "task",
+    "edit_file",
+    "web_search",
+  ]);
+  const disabledAllowedNames = new Set(
+    createToolsForAgent("conversation", []).map((tool) => tool.name),
+  );
+  const enabledAllowedNames = new Set(
+    createToolsForAgent("conversation", ["web_search"]).map(
+      (tool) => tool.name,
+    ),
+  );
+
+  assert.deepEqual(
+    filterToolsByAllowedNames(
+      deepAgentInjectedTools,
+      disabledAllowedNames,
+    )?.map((tool) => tool.name),
+    [],
+  );
+  assert.deepEqual(
+    filterToolsByAllowedNames(
+      deepAgentInjectedTools,
+      enabledAllowedNames,
+    )?.map((tool) => tool.name),
+    ["web_search"],
+  );
+});
+
+test("product workflow allowlist keeps only runtime-authorized tools", () => {
+  const deepAgentInjectedTools = createNamedTools([
+    "write_todos",
+    "task",
+    "edit_file",
+    "web_search",
+    "kg_file_read",
+    "kg_file_add_nodes",
+  ]);
+  const allowedNames = new Set(
+    createToolsForAgent(
+      "executor-market-research",
+      getExecutorDefaultToolNames("executor-market-research"),
+      { knowledgeGraph: createEmptyKnowledgeGraph() },
+    ).map((tool) => tool.name),
+  );
+
+  assert.deepEqual(
+    filterToolsByAllowedNames(deepAgentInjectedTools, allowedNames)?.map(
+      (tool) => tool.name,
+    ),
+    ["web_search", "kg_file_read", "kg_file_add_nodes"],
+  );
+});
+
+test("document allowlist keeps only the explicitly required builtin tools", () => {
+  const deepAgentInjectedTools = createNamedTools([
+    "write_todos",
+    "task",
+    "read_file",
+    "edit_file",
+    "web_search",
+  ]);
+
+  assert.deepEqual(
+    filterToolsByAllowedNames(
+      deepAgentInjectedTools,
+      new Set(["write_todos", "task"]),
+    )?.map((tool) => tool.name),
+    ["write_todos", "task"],
+  );
+});
+
+function createNamedTools(names: string[]): Array<{ name: string }> {
+  return names.map((name) => ({ name }));
+}
 
 function createEmptyKnowledgeGraph(): ProductKnowledgeGraph {
   return {

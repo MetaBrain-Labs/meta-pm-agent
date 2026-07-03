@@ -16,6 +16,7 @@ import type { AgentRuntimeTool, ProductKnowledgeGraph } from "@repo/shared";
 import { canAgentUseTool, createToolsForAgent } from "../common/tool-access";
 import { createChatModel } from "../common/model";
 import { createDefaultAgentMiddleware } from "../common/middleware";
+import { createDeepAgentToolAllowlistMiddleware } from "../common/deep-agent-tool-policy";
 import {
   createAgentRunSummaryMiddleware,
   type AgentRunSummaryRecorder,
@@ -49,6 +50,10 @@ export function createConversationAgent(options: ConversationAgentOptions = {}) 
     name: "conversation-agent",
     skills: [],
     middleware: [
+      createDeepAgentToolAllowlistMiddleware({
+        agentName: "conversation-agent",
+        allowedToolNames: tools.map((tool) => tool.name),
+      }),
       ...createDefaultAgentMiddleware(),
       ...createAgentRunSummaryMiddleware(options.summaryRecorder),
     ] as any,

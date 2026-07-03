@@ -25,6 +25,7 @@ import {
 import { createDeepAgent } from "deepagents";
 import { createChatModel, type ChatModelOptions } from "./model";
 import { createDefaultAgentMiddleware } from "./middleware";
+import { createDeepAgentToolAllowlistMiddleware } from "./deep-agent-tool-policy";
 import { calculateCost } from "../../config";
 import { parseJsonObject } from "../../utils/json";
 import {
@@ -116,6 +117,7 @@ export async function* runJsonAgent<T, AgentType extends string>(
 ): AsyncGenerator<JsonAgentEvent<AgentType>, T, void> {
   const startTime = Date.now();
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
+  const tools = options.tools ?? [];
   const summaryRecorder = createAgentRunSummaryRecorder({
     agentLabel: options.agentLabel,
     agentName: options.name,
@@ -125,7 +127,7 @@ export async function* runJsonAgent<T, AgentType extends string>(
       payload: options.payload,
       skills: options.skills ?? [],
       systemPrompt: options.systemPrompt,
-      tools: compactToolDefinitions(options.tools ?? []),
+      tools: compactToolDefinitions(tools),
     },
   });
 
@@ -133,11 +135,15 @@ export async function* runJsonAgent<T, AgentType extends string>(
     const agent = createDeepAgent({
       model: createChatModel(options.modelOptions) as any,
       systemPrompt: options.systemPrompt,
-      tools: options.tools ?? [],
+      tools,
       name: options.name,
       // 这里接收 DeepAgents 技能目录 sources；具体技能名由 source 内的 SKILL.md 声明。
       skills: options.skills ?? [],
       middleware: [
+        createDeepAgentToolAllowlistMiddleware({
+          agentName: options.name,
+          allowedToolNames: tools.map((tool) => tool.name),
+        }),
         ...createDefaultAgentMiddleware(),
         ...createAgentRunSummaryMiddleware(summaryRecorder),
       ] as any,

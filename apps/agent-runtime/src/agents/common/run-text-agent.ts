@@ -24,6 +24,7 @@ import { createDeepAgent } from "deepagents";
 import type { StructuredTool } from "langchain";
 import { createChatModel, type ChatModelOptions } from "./model";
 import { createDefaultAgentMiddleware } from "./middleware";
+import { createDeepAgentToolAllowlistMiddleware } from "./deep-agent-tool-policy";
 import { calculateCost } from "../../config";
 import {
   createAgentRunSummaryMiddleware,
@@ -109,6 +110,7 @@ export async function* runTextAgent<AgentType extends string>(
 ): AsyncGenerator<TextAgentEvent<AgentType>, string, void> {
   const startTime = Date.now();
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
+  const tools = options.tools ?? [];
   const summaryRecorder = createAgentRunSummaryRecorder({
     agentLabel: options.agentLabel,
     agentName: options.name,
@@ -118,7 +120,7 @@ export async function* runTextAgent<AgentType extends string>(
       payload: options.payload,
       skills: options.skills ?? [],
       systemPrompt: options.systemPrompt,
-      tools: compactToolDefinitions(options.tools ?? []),
+      tools: compactToolDefinitions(tools),
     },
   });
 
@@ -126,10 +128,14 @@ export async function* runTextAgent<AgentType extends string>(
     const agent = createDeepAgent({
       model: createChatModel(options.modelOptions) as any,
       systemPrompt: options.systemPrompt,
-      tools: options.tools ?? [],
+      tools,
       name: options.name,
       skills: options.skills ?? [],
       middleware: [
+        createDeepAgentToolAllowlistMiddleware({
+          agentName: options.name,
+          allowedToolNames: tools.map((tool) => tool.name),
+        }),
         ...createDefaultAgentMiddleware(),
         ...createAgentRunSummaryMiddleware(summaryRecorder),
       ] as any,

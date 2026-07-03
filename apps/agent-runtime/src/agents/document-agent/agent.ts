@@ -19,7 +19,6 @@ import {
   HumanMessage,
   ToolMessage,
   type BaseMessage,
-  createMiddleware,
 } from "langchain";
 import { createDeepAgent, type SubAgent } from "deepagents";
 import type {
@@ -28,6 +27,7 @@ import type {
   KnowledgeGraphRelation,
 } from "@repo/shared";
 import { calculateCost } from "../../config";
+import { createDeepAgentToolAllowlistMiddleware } from "../common/deep-agent-tool-policy";
 import { createDefaultAgentMiddleware } from "../common/middleware";
 import { createChatModel } from "../common/model";
 import {
@@ -107,15 +107,6 @@ export type DocumentAgentStreamEvent =
     };
 
 const VISIBLE_BUILTIN_TOOL_NAMES = new Set(["write_todos", "task"]);
-const DOCUMENT_AGENT_BLOCKED_TOOL_NAMES = new Set([
-  "ls",
-  "read_file",
-  "write_file",
-  "edit_file",
-  "glob",
-  "grep",
-  "execute",
-]);
 const SUBAGENT_RUNTIME_CONTEXT_MAX_CHARS = 120_000;
 const PRD_MARKDOWN_START_PATTERNS = [
   /^#{1,2}\s+.*Product Requirements Document\s*\(PRD\).*$/im,
@@ -131,8 +122,16 @@ export async function* streamPrdDocumentAgent(
 ): AsyncGenerator<DocumentAgentStreamEvent, string, void> {
   const startTime = Date.now();
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
-  const documentToolFilterMiddleware =
-    createDocumentAgentToolFilterMiddleware();
+  const documentToolAllowlistMiddleware =
+    createDeepAgentToolAllowlistMiddleware({
+      agentName: "document-agent-prd",
+      allowedToolNames: VISIBLE_BUILTIN_TOOL_NAMES,
+    });
+  const documentSubagentToolAllowlistMiddleware =
+    createDeepAgentToolAllowlistMiddleware({
+      agentName: "document-agent-prd-subagent",
+      allowedToolNames: [],
+    });
   const agentPayload = {
     task: "Generate a complete PRD from the supplied product knowledge graph.",
     workspaceId: input.workspaceId,
@@ -171,10 +170,10 @@ export async function* streamPrdDocumentAgent(
       name: "document-agent-prd",
       subagents: createRuntimePrdSubagents(
         input,
-        documentToolFilterMiddleware,
+        documentSubagentToolAllowlistMiddleware,
       ) as any,
       middleware: [
-        documentToolFilterMiddleware,
+        documentToolAllowlistMiddleware,
         ...createDefaultAgentMiddleware(),
         ...createAgentRunSummaryMiddleware(summaryRecorder),
       ] as any,
@@ -345,39 +344,12 @@ function getErrorMessage(error: unknown): string {
 }
 
 /**
- * 创建 Document Agent 专用工具过滤中间件。
- */
-function createDocumentAgentToolFilterMiddleware() {
-  return createMiddleware({
-    name: "DocumentAgentToolFilterMiddleware",
-    wrapModelCall: async (request, handler) => {
-      // 文档由业务数据库持久化，生成阶段只允许规划和子任务编排工具。
-      const tools = request.tools?.filter(
-        (tool) => !DOCUMENT_AGENT_BLOCKED_TOOL_NAMES.has(getToolName(tool)),
-      );
-
-      return handler({
-        ...request,
-        tools,
-      });
-    },
-  });
-}
-
-/**
- * 提取工具名称。
- */
-function getToolName(tool: { name?: unknown }): string {
-  return typeof tool.name === "string" ? tool.name : "";
-}
-
-/**
  * 为 PRD 子代理注入当前运行的知识图谱上下文。
  */
 function createRuntimePrdSubagents(
   input: PrdDocumentAgentInput,
-  documentToolFilterMiddleware: ReturnType<
-    typeof createDocumentAgentToolFilterMiddleware
+  documentSubagentToolAllowlistMiddleware: ReturnType<
+    typeof createDeepAgentToolAllowlistMiddleware
   >,
 ): SubAgent[] {
   const runtimeContext = createSubagentRuntimeContext(input);
@@ -387,7 +359,7 @@ function createRuntimePrdSubagents(
     systemPrompt: `${subagent.systemPrompt}\n\n${runtimeContext}`,
     middleware: [
       ...((subagent as { middleware?: unknown[] }).middleware ?? []),
-      documentToolFilterMiddleware,
+      documentSubagentToolAllowlistMiddleware,
     ],
   })) as SubAgent[];
 }
