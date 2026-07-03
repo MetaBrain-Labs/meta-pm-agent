@@ -54,11 +54,19 @@ Planning rules:
 - Only include executors whose responsibilities are relevant to the request; do not force all 10 agents for a narrow task.
 - Split tasks by graph entity operation, for example creating Evidence nodes, refining Feature nodes, adding Component constraints, or connecting Metric relations.
 - Each task description must be self-contained because the Executor may not see the full business model. Include the business goal, relevant constraints, expected entity/relation changes, and any existing graph IDs that should be used or avoided.
+- Missing information, unverified assumptions, and unresolved user preferences must not be planned as confirmed Decision nodes. Represent them as assumptions, risks, open questions, or explicitly labeled decision candidates until supporting evidence or user confirmation exists.
+- Major technology, architecture, authentication, scale, pricing, or launch Decisions should be created only after the graph has evidence for them. For greenfield or uncertain requests, first plan Goal/Requirement/OpenQuestion work plus evidence-producing tasks, then add a downstream strategy refinement task that can convert evidence into Decisions.
+- Do not lock technical options in Planner task text unless the user explicitly chose them. Ask downstream executors to compare options such as CRDT vs OT, SAML vs OIDC vs LDAP, or Yjs vs Automerge vs centralized sync instead of treating one option as the chosen solution.
+- Evidence-producing tasks must state whether they can use verified sources. If no verified source or tool-backed evidence is available, they must create research gaps, assumptions, risks, or unvalidated hypothesis Evidence rather than presenting model knowledge as fact.
+- Data Analytics tasks for a greenfield product should define metrics, measurement plans, instrumentation, and benchmark gaps. They must not claim measured quantitative results or industry benchmarks unless verifiable evidence is available.
+- Use quantity targets as soft coverage guidance only. Do not ask executors to create duplicate or semantically weak entities just to satisfy a count.
+- Every relation requirement must specify an explicit direction using this convention: Goal --Drives--> Decision; Decision --Produces--> Requirement; Feature --Satisfies--> Requirement; Component --Implements--> Feature; Metric --Measures--> Feature or Requirement; Evidence --Validates--> Decision or Requirement; Custom/Component constraint --Constrains--> Requirement or Component; Custom/OpenQuestion/Risk --References--> the affected Goal, Requirement, Decision candidate, Feature, or Component.
 - Use depends_on to express graph data dependencies, especially when a task needs upstream entity ids from another executor.
 - Use the minimum necessary depends_on edges. Do not add a dependency only to express preferred order, presentation order, or executor seniority.
 - A task must not depend on the immediately previous task unless it consumes IDs, entities, relations, or decisions produced by that task.
 - Prefer parallel-ready DAG layers. If two tasks can run from the same current knowledge graph snapshot without needing each other's new node IDs, leave both depends_on arrays empty or tied only to their true shared upstream task.
 - For broad bootstrap requests, Product Strategy and Toolkit can usually start together; Market Research and GTM can usually start once their true strategy/input gates are available; downstream tasks should wait only for the specific task IDs whose graph outputs they consume.
+- If Toolkit runs in parallel before Strategy nodes exist, it may create standalone Custom/Component constraint nodes but must not create relations to nonexistent Goal, Requirement, or Component IDs. If security/compliance constraints must attach to Strategy requirements immediately, make Toolkit depend on the Strategy task.
 - If the request asks for an artifact such as PRD, policy, report, or UI review, plan graph updates that let a later Document Agent assemble that artifact from the graph.
 - Preserve completed task intent when updating an existing plan. Add or adjust only the minimum tasks needed for the new business input.
 - If user_input contains a [form answers - product-workflow-confirmation] or [form answers - *-proposal-decision] payload, create a supplement DAG with status "supplement". Plan only the graph corrections or additions required by that answer and the current product_knowledge_graph; do not repeat the original baseline DAG.
@@ -72,6 +80,7 @@ Output contract:
 - status must be "initial" for the first DAG and "supplement" for a DAG created from Planner question-form answers.
 - Each task must include: sequence, task_id, title, description, assigned_agent, depends_on, covered_business_model_indexes, expected_output, quality_check.
 - Each dag node should be a task_id, and each dag edge should connect task_id values.
+- Each assumptions item may be either a concise string or an object with gap_ref, assumption, and impact fields.
 - assigned_agent must be one of: ${formatExecutorAgentTypeList()}.`;
 
 /**
@@ -100,6 +109,9 @@ Review rules:
 - Verify DAG completeness: every planned task should have an executor result, or the review notes must explain the gap.
 - Verify coverage completeness: accepted task ids and notes should cover the planned business_model indexes or explicitly name uncovered dimensions.
 - Verify user-goal alignment: the final graph update should address the user's stated goal rather than only producing adjacent analysis.
+- Flag any graph update that converts missing information, unsupported assumptions, or unresolved user preferences into confirmed Decisions. Keep those items as assumptions, risks, open questions, or decision candidates unless evidence or explicit user confirmation supports them.
+- Verify evidence causality: major technology, authentication, scale, pricing, or launch Decisions should be supported by Evidence, user-stated facts, or prior graph context. If evidence is missing, move the item to proposal_questions or review notes instead of accepting it as final.
+- Verify relation direction using the Planner convention: Goal --Drives--> Decision; Decision --Produces--> Requirement; Feature --Satisfies--> Requirement; Component --Implements--> Feature; Metric --Measures--> Feature or Requirement; Evidence --Validates--> Decision or Requirement; Custom/Component constraint --Constrains--> Requirement or Component; Custom/OpenQuestion/Risk --References--> the affected graph item.
 - Auto-recoverable formatting or traceability issues should be reflected as rejected_task_ids/notes; subjective decisions and unresolved user preferences should remain as open questions and be converted into structured proposal_questions.
 - Consolidate duplicate or near-duplicate open questions before user confirmation. Ask one clear question for the same user decision, while preserving every source_task_id/source_agent pair in proposal_questions.sources.
 - For every question that should be shown to the user, create a proposal_questions item. Do not rely on downstream code to infer the control type from natural language.

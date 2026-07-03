@@ -252,6 +252,32 @@ const TaskQualityCheckSchema = z.union([
 ]);
 
 /**
+ * Planner DAG 边；兼容模型偶尔输出的 from/to 别名，解析后统一为 source/target。
+ */
+const TaskExecutionDagEdgeSchema = z.preprocess((value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+
+  const record = value as Record<string, unknown>;
+  return {
+    source: typeof record.source === "string" ? record.source : record.from,
+    target: typeof record.target === "string" ? record.target : record.to,
+  };
+}, z.object({
+  source: z.string().min(1).describe("Source task ID"),
+  target: z.string().min(1).describe("Target task ID"),
+}));
+
+/**
+ * Planner 假设项；兼容模型输出结构化 gap/assumption/impact 后统一压缩为字符串。
+ */
+const TaskExecutionAssumptionSchema = z.union([
+  z.string().min(1),
+  z.record(z.unknown()).transform(formatPlannerAssumptionRecord),
+]);
+
+/**
  * Planner Agent 生成的 DAG 节点，描述执行顺序、分配对象和验收标准。
  */
 export const TaskExecutionNodeSchema = z.object({
@@ -276,16 +302,40 @@ export const TaskExecutionPlanSchema = z.object({
   request_summary: z.string().min(1),
   dag: z.object({
     nodes: z.array(z.string().min(1)),
-    edges: z.array(
-      z.object({
-        source: z.string().min(1),
-        target: z.string().min(1),
-      }),
-    ),
+    edges: z.array(TaskExecutionDagEdgeSchema),
   }),
   tasks: z.array(TaskExecutionNodeSchema),
-  assumptions: z.array(z.string()).default([]),
+  assumptions: z.array(TaskExecutionAssumptionSchema).default([]),
 });
+
+/**
+ * 将 Planner 输出的结构化假设记录压缩为现有运行时可持久化的字符串。
+ */
+function formatPlannerAssumptionRecord(record: Record<string, unknown>): string {
+  const parts = [
+    pickStringField(record, "gap_ref", "Gap"),
+    pickStringField(record, "assumption", "Assumption"),
+    pickStringField(record, "impact", "Impact"),
+  ].filter((part) => part.length > 0);
+
+  if (parts.length > 0) return parts.join(" | ");
+
+  return JSON.stringify(record);
+}
+
+/**
+ * 提取结构化假设字段，保留字段语义，避免降级为不可读 JSON。
+ */
+function pickStringField(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+): string {
+  const value = record[key];
+  return typeof value === "string" && value.trim()
+    ? `${label}: ${value.trim()}`
+    : "";
+}
 
 /**
  * Executor Agent 对单个任务的结构化产出。

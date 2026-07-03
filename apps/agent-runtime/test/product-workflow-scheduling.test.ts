@@ -15,13 +15,19 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import type {
+import {
+  TaskExecutionPlanSchema,
+  type ProductKnowledgeGraph,
+  type RequestAnalysis,
   ExecutorAgentResult,
   ProductWorkflowResult,
   TaskExecutionNode,
   TaskExecutionPlan,
 } from "@repo/shared";
-import { normalizeTaskExecutionPlan } from "../src/agents/product-workflow/planner-agent/agent";
+import {
+  createFallbackPlan,
+  normalizeTaskExecutionPlan,
+} from "../src/agents/product-workflow/planner-agent/agent";
 import { selectNextExecutorRouterTargets } from "../src/graph/nodes/product-workflow-node";
 import type { WorkflowGraphStateValue } from "../src/graph/state";
 
@@ -105,6 +111,149 @@ test("normalizes waterfall planner DAG into parallel-ready layers", () => {
     { source: "task-03", target: "task-05" },
     { source: "task-03", target: "task-07" },
   ]);
+});
+
+test("parses planner DAG edge aliases from model output", () => {
+  const result = TaskExecutionPlanSchema.safeParse({
+    status: "initial",
+    request_summary: "Design a collaborative document MVP.",
+    dag: {
+      nodes: ["task-01", "task-02"],
+      edges: [{ from: "task-01", to: "task-02" }],
+    },
+    tasks: [
+      createTask("task-01", 1, "executor-product-strategy", []),
+      createTask("task-02", 2, "executor-product-discovery", ["task-01"]),
+    ],
+    assumptions: [],
+  });
+
+  assert.equal(result.success, true);
+  if (!result.success) return;
+  assert.deepEqual(result.data.dag.edges, [
+    { source: "task-01", target: "task-02" },
+  ]);
+});
+
+test("normalizes structured planner assumptions without replacing the plan", () => {
+  const result = TaskExecutionPlanSchema.safeParse({
+    status: "initial",
+    request_summary:
+      "先讨论产品方向，后续再确定具体产出。",
+    dag: {
+      nodes: ["task-1", "task-2"],
+      edges: [],
+    },
+    tasks: [
+      createTask("task-1", 1, "executor-product-strategy", []),
+      createTask("task-2", 2, "executor-toolkit", []),
+    ],
+    assumptions: [
+      {
+        gap_ref: "missing_information[1] - 目标平台",
+        assumption: "默认假设为 Web 优先平台，后续需要用户确认。",
+        impact: "影响前端技术栈和编辑器渲染方案。",
+      },
+      {
+        gap_ref: "user_input[5] - 先讨论产品方向",
+        assumption:
+          "当前 DAG 只讨论战略层和开放问题，不进入执行层产出。",
+        impact: "不调度 Discovery、Execution、AI Shipping 或 Interface Craft。",
+      },
+    ],
+  });
+
+  assert.equal(result.success, true);
+  if (!result.success) return;
+  assert.deepEqual(result.data.dag.nodes, ["task-1", "task-2"]);
+  assert.equal(result.data.tasks.length, 2);
+  assert.deepEqual(
+    result.data.tasks.map((task) => task.assigned_agent),
+    ["executor-product-strategy", "executor-toolkit"],
+  );
+  assert.match(
+    result.data.assumptions[0],
+    /Gap: missing_information\[1\] - 目标平台/,
+  );
+  assert.match(
+    result.data.assumptions[1],
+    /不调度 Discovery、Execution、AI Shipping 或 Interface Craft/,
+  );
+});
+
+test("creates parallel graph-operation fallback plan for broad MVP requests", () => {
+  const plan = createFallbackPlan(
+    {
+      productContext: "Workspace: local test",
+      knowledgeGraph: createEmptyKnowledgeGraph(),
+      requestAnalysis: createCollaborativeDocumentRequestAnalysis(),
+      userInput: [
+        {
+          index: 1,
+          content:
+            "Design an MVP for a real-time collaborative document editing tool for 5-20 person teams, Web browser first.",
+          type: "request",
+        },
+      ],
+    },
+    "schema-validation: dag.edges.0.source missing",
+  );
+
+  assert.ok(plan.tasks.length >= 5);
+  assert.deepEqual(
+    plan.tasks.map((task) => task.assigned_agent),
+    [
+      "executor-product-strategy",
+      "executor-toolkit",
+      "executor-market-research",
+      "executor-product-discovery",
+      "executor-product-execution",
+      "executor-ai-shipping",
+      "executor-interface-craft",
+    ],
+  );
+  assert.deepEqual(
+    plan.tasks
+      .filter((task) => task.depends_on.length === 0)
+      .map((task) => task.assigned_agent),
+    ["executor-product-strategy", "executor-toolkit"],
+  );
+  assert.deepEqual(
+    plan.dag.edges.map((edge) => [edge.source, edge.target]),
+    [
+      ["task-01", "task-03"],
+      ["task-01", "task-04"],
+      ["task-04", "task-05"],
+      ["task-05", "task-06"],
+      ["task-05", "task-07"],
+    ],
+  );
+  assert.notEqual(
+    plan.tasks[0].covered_business_model_indexes,
+    plan.tasks[1].covered_business_model_indexes,
+  );
+
+  const strategyTask = plan.tasks.find(
+    (task) => task.assigned_agent === "executor-product-strategy",
+  );
+  const shippingTask = plan.tasks.find(
+    (task) => task.assigned_agent === "executor-ai-shipping",
+  );
+
+  assert.ok(strategyTask);
+  assert.match(strategyTask.description, /decision candidates/i);
+  assert.match(strategyTask.description, /do not convert unknown/i);
+  assert.ok(shippingTask);
+  assert.match(shippingTask.description, /compare technical options/i);
+  assert.match(shippingTask.description, /CRDT vs OT/i);
+  assert.doesNotMatch(shippingTask.description, /selected CRDT/i);
+  assert.ok(
+    plan.tasks.every((task) =>
+      task.quality_check.criteria.some((criterion) =>
+        criterion.includes("explicit relation directions"),
+      ),
+    ),
+  );
 });
 
 test("selects normalized planner roots and downstream parallel batches", () => {
@@ -251,5 +400,52 @@ function createResult(
       passed: true,
       notes: "ok",
     },
+  };
+}
+
+function createCollaborativeDocumentRequestAnalysis(): RequestAnalysis {
+  return {
+    business_model: [
+      {
+        index: 1,
+        user_goal:
+          "Design an MVP for a real-time collaborative document editing tool.",
+        goal_constraints: [
+          "Supports multi-user real-time editing similar to Google Docs.",
+          "Targets internal use by small teams of 5-20 people.",
+          "Prioritizes Web browser support.",
+        ],
+        missing_information: [
+          {
+            index: 1,
+            description:
+              "Document format types required for MVP, such as plain text, rich text, or spreadsheets.",
+            importance: 0.7,
+          },
+          {
+            index: 2,
+            description:
+              "Permission and security requirements for collaborative editing.",
+            importance: 0.6,
+          },
+        ],
+        covered_user_input_indexes: [1],
+      },
+    ],
+    questions: [],
+    chitchat: [],
+  };
+}
+
+function createEmptyKnowledgeGraph(): ProductKnowledgeGraph {
+  return {
+    entities: [],
+    relations: [],
+    decisions: [],
+    risks: [],
+    open_questions: [],
+    summary: [],
+    markdown: "",
+    notes: [],
   };
 }

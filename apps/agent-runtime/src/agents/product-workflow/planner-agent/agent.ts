@@ -62,7 +62,7 @@ export async function* streamPlannerAgent(
       user_input: input.userInput,
     },
     schema: TaskExecutionPlanSchema,
-    fallback: () => createFallbackPlan(input.requestAnalysis),
+    fallback: (reason) => createFallbackPlan(input, reason),
     suppressInvalidJsonReasoning: true,
     signal: input.signal,
   });
@@ -104,7 +104,23 @@ export async function* streamPlannerWorkflowReview(
 }
 
 const NORMALIZED_DAG_ASSUMPTION =
-  "Planner DAG 已归一化：仅保留真实图谱数据依赖，移除只表达展示顺序的串行边以支持并行 Executor 执行。";
+  "Planner DAG was normalized to keep only real graph-data dependencies and remove serial edges that only expressed presentation order.";
+
+const FALLBACK_PLAN_ASSUMPTION =
+  "Planner Agent used a deterministic graph-operation fallback DAG that preserves parallel executor layers and task-level quality checks.";
+
+const FALLBACK_EXECUTOR_ORDER: ExecutorAgentType[] = [
+  "executor-product-strategy",
+  "executor-toolkit",
+  "executor-market-research",
+  "executor-product-discovery",
+  "executor-gtm",
+  "executor-data-analytics",
+  "executor-product-execution",
+  "executor-marketing-growth",
+  "executor-ai-shipping",
+  "executor-interface-craft",
+];
 
 /**
  * 归一化 Planner 生成的 Executor DAG。
@@ -119,6 +135,9 @@ export function normalizeTaskExecutionPlan(
   const tasksByAgent = groupTasksByAgent(plan.tasks);
   const normalizedTasks = plan.tasks.map((task) => ({
     ...task,
+    covered_business_model_indexes: [
+      ...new Set(task.covered_business_model_indexes),
+    ],
     depends_on: normalizeTaskDependencies(task, taskById, tasksByAgent),
   }));
   const assumptions = plan.assumptions.includes(NORMALIZED_DAG_ASSUMPTION)
@@ -281,47 +300,64 @@ function getLastTaskForAgent(
 }
 
 /**
- * 在 Planner Agent 不可用时生成稳定的十 Executor 图谱 DAG。
+ * 在 Planner Agent 不可用时生成稳定的图谱操作 DAG。
  */
-function createFallbackPlan(
-  analysis: PlannerAgentInput["requestAnalysis"],
+export function createFallbackPlan(
+  input: PlannerAgentInput,
+  reason: string,
 ): TaskExecutionPlan {
+  const analysis = input.requestAnalysis;
   const coveredIndexes = analysis.business_model.map((item) => item.index);
   const selectedDefinitions = selectFallbackExecutorDefinitions(analysis);
+  const selectedAgents = new Set(
+    selectedDefinitions.map((definition) => definition.agentType),
+  );
   const taskSpecs = selectedDefinitions.map((definition, index) => ({
     definition,
     sequence: index + 1,
+    taskId: createTaskId(index + 1),
   }));
+  const taskIdByAgent = new Map(
+    taskSpecs.map(({ definition, taskId }) => [definition.agentType, taskId]),
+  );
 
   const plan: TaskExecutionPlan = {
-    status: "initial",
+    status: isSupplementPlanInput(input.userInput) ? "supplement" : "initial",
     request_summary: summarizeBusinessModels(analysis.business_model),
     dag: {
-      nodes: taskSpecs.map(({ sequence }) => createTaskId(sequence)),
-      edges: taskSpecs.slice(1).map((_taskSpec, index) => ({
-        source: createTaskId(index + 1),
-        target: createTaskId(index + 2),
-      })),
+      nodes: taskSpecs.map(({ taskId }) => taskId),
+      edges: taskSpecs.flatMap(({ definition, taskId }) =>
+        getFallbackDependencyAgents(definition.agentType, selectedAgents)
+          .flatMap((agentType) => {
+            const source = taskIdByAgent.get(agentType);
+            return source ? [{ source, target: taskId }] : [];
+          }),
+      ),
     },
-    tasks: taskSpecs.map(({ definition, sequence }, index) => ({
-      task_id: createTaskId(sequence),
+    tasks: taskSpecs.map(({ definition, sequence, taskId }) => ({
+      task_id: taskId,
       sequence,
-      title: definition.displayName,
-      description: definition.graphRole,
+      title: createFallbackTaskTitle(definition.agentType),
+      description: createFallbackTaskDescription(definition, analysis),
       assigned_agent: definition.agentType,
-      depends_on: index === 0 ? [] : [createTaskId(index)],
-      covered_business_model_indexes: coveredIndexes,
-      expected_output: `Produce graph-native ${definition.allowedEntityTypes.join(", ")} updates with traceable relations.`,
+      depends_on: getFallbackDependencyAgents(
+        definition.agentType,
+        selectedAgents,
+      ).flatMap((agentType) => {
+        const dependencyTaskId = taskIdByAgent.get(agentType);
+        return dependencyTaskId ? [dependencyTaskId] : [];
+      }),
+      covered_business_model_indexes: [...coveredIndexes],
+      expected_output: createFallbackExpectedOutput(definition),
       quality_check: {
         status: "pending",
-        criteria: [
-          "覆盖 Request Agent 的 business_model",
-          "保留待用户确认的不确定信息",
-        ],
+        criteria: createFallbackQualityCriteria(definition),
       },
     })),
     assumptions: [
-      "Planner Agent 使用相关性回退 DAG，仅调度与当前请求最相关的 Executor。",
+      FALLBACK_PLAN_ASSUMPTION,
+      `Fallback reason: ${reason}.`,
+      "Only executors relevant to the request were selected; unresolved subjective gaps must be recorded as assumptions, risks, or open questions instead of blocking execution.",
     ],
   };
 
@@ -350,6 +386,11 @@ function selectFallbackExecutorDefinitions(
     "executor-product-execution",
   ]);
 
+  if (matchesAny(requestText, getProductDesignKeywords())) {
+    selected.add("executor-market-research");
+    selected.add("executor-toolkit");
+  }
+
   addExecutorWhenMatches(selected, requestText, "executor-market-research", [
     "market",
     "competitor",
@@ -359,6 +400,8 @@ function selectFallbackExecutorDefinitions(
     "市场",
     "调研",
     "用户研究",
+    "benchmark",
+    "competitive",
   ]);
   addExecutorWhenMatches(selected, requestText, "executor-gtm", [
     "gtm",
@@ -397,20 +440,49 @@ function selectFallbackExecutorDefinitions(
     "agent",
     "model",
     "technical",
+    "architecture",
+    "real-time",
+    "realtime",
+    "sync",
+    "websocket",
+    "crdt",
+    "ot",
+    "multi-user",
+    "collaboration",
+    "browser",
+    "web",
     "技术",
+    "架构",
     "模型",
     "智能体",
     "工程",
+    "实时",
+    "同步",
+    "多人",
+    "协同",
+    "浏览器",
   ]);
   addExecutorWhenMatches(selected, requestText, "executor-toolkit", [
     "policy",
     "compliance",
     "legal",
     "workflow",
+    "mvp",
+    "scope",
+    "assumption",
+    "security",
+    "privacy",
+    "permission",
+    "access control",
     "合规",
     "政策",
     "法务",
     "流程",
+    "范围",
+    "假设",
+    "安全",
+    "隐私",
+    "权限",
   ]);
   addExecutorWhenMatches(selected, requestText, "executor-interface-craft", [
     "ui",
@@ -418,10 +490,23 @@ function selectFallbackExecutorDefinitions(
     "interface",
     "screen",
     "prototype",
+    "editor",
+    "document",
+    "browser",
+    "web",
+    "collaboration",
+    "toolbar",
+    "sharing",
     "界面",
     "交互",
     "原型",
     "页面",
+    "编辑器",
+    "文档",
+    "浏览器",
+    "协同",
+    "工具栏",
+    "分享",
   ]);
 
   if (
@@ -432,8 +517,199 @@ function selectFallbackExecutorDefinitions(
     );
   }
 
-  return EXECUTOR_DEFINITIONS.filter((definition) =>
-    selected.has(definition.agentType),
+  return FALLBACK_EXECUTOR_ORDER.flatMap((agentType) => {
+    const definition = EXECUTOR_DEFINITIONS.find(
+      (item) => item.agentType === agentType,
+    );
+    return definition && selected.has(definition.agentType) ? [definition] : [];
+  });
+}
+
+/**
+ * 识别需要更完整图谱启动链路的产品设计类请求。
+ */
+function getProductDesignKeywords(): string[] {
+  return [
+    "mvp",
+    "product design",
+    "design an",
+    "design a",
+    "roadmap",
+    "requirements",
+    "feature",
+    "collaboration",
+    "document",
+    "tool",
+    "workflow",
+    "solution",
+    "产品设计",
+    "设计",
+    "方案",
+    "需求",
+    "功能",
+    "文档",
+    "协同",
+    "工具",
+  ];
+}
+
+/**
+ * 为 fallback DAG 生成真实图谱数据依赖。
+ */
+function getFallbackDependencyAgents(
+  agentType: ExecutorAgentType,
+  selectedAgents: Set<ExecutorAgentType>,
+): ExecutorAgentType[] {
+  switch (agentType) {
+    case "executor-product-strategy":
+    case "executor-toolkit":
+      return [];
+    case "executor-market-research":
+    case "executor-gtm":
+    case "executor-data-analytics":
+    case "executor-product-discovery":
+      return pickFirstSelectedAgent(selectedAgents, [
+        "executor-product-strategy",
+      ]);
+    case "executor-product-execution":
+      return pickFirstSelectedAgent(selectedAgents, [
+        "executor-product-discovery",
+        "executor-product-strategy",
+      ]);
+    case "executor-marketing-growth":
+      return pickFirstSelectedAgent(selectedAgents, [
+        "executor-gtm",
+        "executor-product-discovery",
+        "executor-product-strategy",
+      ]);
+    case "executor-ai-shipping":
+    case "executor-interface-craft":
+      return pickFirstSelectedAgent(selectedAgents, [
+        "executor-product-execution",
+        "executor-product-discovery",
+        "executor-product-strategy",
+      ]);
+    default:
+      return [];
+  }
+}
+
+/**
+ * 从候选上游中选择第一个已入选的 Executor。
+ */
+function pickFirstSelectedAgent(
+  selectedAgents: Set<ExecutorAgentType>,
+  candidates: ExecutorAgentType[],
+): ExecutorAgentType[] {
+  const match = candidates.find((candidate) => selectedAgents.has(candidate));
+  return match ? [match] : [];
+}
+
+/**
+ * 为 fallback 任务生成图谱操作标题。
+ */
+function createFallbackTaskTitle(agentType: ExecutorAgentType): string {
+  switch (agentType) {
+    case "executor-product-strategy":
+      return "Establish goals, requirements, and decision candidates";
+    case "executor-market-research":
+      return "Add market evidence and requirement benchmarks";
+    case "executor-gtm":
+      return "Translate strategy into GTM decisions";
+    case "executor-product-discovery":
+      return "Create feature hypotheses and validation metrics";
+    case "executor-product-execution":
+      return "Decompose features into implementation components";
+    case "executor-marketing-growth":
+      return "Define growth metrics and decision chain";
+    case "executor-data-analytics":
+      return "Define measurement plan and metric gaps";
+    case "executor-ai-shipping":
+      return "Compare technical options and delivery risks";
+    case "executor-toolkit":
+      return "Create scope, assumptions, and guardrail artifacts";
+    case "executor-interface-craft":
+      return "Add UI craft constraints and UX evidence";
+    default:
+      return "Create graph-native product workflow updates";
+  }
+}
+
+/**
+ * 为 fallback 任务生成自包含描述，避免 Executor 只收到领域名称。
+ */
+function createFallbackTaskDescription(
+  definition: ExecutorAgentDefinition,
+  analysis: PlannerAgentInput["requestAnalysis"],
+): string {
+  const requestContext = [
+    `Request goal: ${summarizeBusinessModels(analysis.business_model)}`,
+    `Explicit constraints: ${summarizeBusinessConstraints(analysis.business_model)}`,
+    `Known uncertainty: ${summarizeMissingInformation(analysis.business_model)}`,
+  ].join("\n");
+
+  switch (definition.agentType) {
+    case "executor-product-strategy":
+      return `${requestContext}\nCreate foundational Goal, Requirement, and user-stated Evidence entities. Create confirmed Decision entities only for choices explicitly stated by the user or already supported by product_context/current graph evidence. Treat missing information as assumptions, risks, open questions, or clearly labeled decision candidates; do not convert unknown scale, authentication, technical architecture, or similar gaps into confirmed Decisions. Use explicit relation directions such as Goal --Drives--> Decision candidate and Decision --Produces--> Requirement only when the Decision is actually supported.`;
+    case "executor-market-research":
+      return `${requestContext}\nUse upstream strategy entities to add market or competitor Evidence, benchmark Requirements, and Metrics only when verifiable sources are available. If no verified source/tool-backed evidence is available, create Custom research-gap entities or unvalidated Evidence with that limitation stated clearly. Link Evidence with explicit directions such as Evidence --Validates--> Requirement or supported Decision candidate. Do not present model memory as verified market fact.`;
+    case "executor-gtm":
+      return `${requestContext}\nUse upstream strategy entities to add GTM Requirements, Metrics, Evidence, and decision candidates when launch, adoption, pricing, or channel implications are relevant. Create confirmed GTM Decisions only when user input, existing graph context, or verified Evidence supports them.`;
+    case "executor-product-discovery":
+      return `${requestContext}\nTranslate strategy requirements into testable Feature hypotheses, user-stated Evidence, and Metrics. Mark inferred features as hypotheses rather than validated facts, and explicitly cover high-impact missing information by creating validation paths or user-facing open questions. Use Feature --Satisfies--> Requirement and Metric --Measures--> Feature or Requirement.`;
+    case "executor-product-execution":
+      return `${requestContext}\nBreak discovered Feature hypotheses into sub-features and Component entities only where the feature is semantically distinct. Add implementation hierarchy relations and component-level Requirements or Metrics needed by later technical and interface tasks. Use Component --Implements--> Feature and avoid duplicate Components created only to satisfy counts.`;
+    case "executor-marketing-growth":
+      return `${requestContext}\nDefine growth-oriented Metrics, Requirements, and decision candidates only where the request implies adoption, activation, retention, or marketing measurement. Preserve traceability to strategy or GTM nodes and avoid confirmed Decisions without supporting Evidence.`;
+    case "executor-data-analytics":
+      return `${requestContext}\nDefine quantitative Metrics, measurement plans, instrumentation Components, and benchmark gaps that can later validate product decisions or feature success. Because this is a greenfield workflow unless the graph contains real data, do not claim measured results or industry benchmarks without verifiable Evidence. Link Metric --Measures--> Feature or Requirement.`;
+    case "executor-ai-shipping":
+      return `${requestContext}\nReview implementation Components and compare technical options, constraints, Evidence, and delivery risks. Do not lock options such as CRDT vs OT, Yjs vs Automerge, SAML vs OIDC vs LDAP, or storage architecture unless the user or prior graph explicitly chose them. Capture trade-offs as Evidence, risks, open questions, or decision candidates, then link Evidence --Validates--> a supported Decision candidate when appropriate.`;
+    case "executor-toolkit":
+      return `${requestContext}\nCreate Custom scope, assumptions, compliance, and operational guardrail artifacts. Add a small number of Component constraint nodes for cross-cutting non-functional expectations such as security, privacy, workflow, or browser support. If this task runs before Strategy outputs exist, do not create relations to nonexistent Goal, Requirement, or Component IDs; record intended References/Constrains targets in descriptions for later linking.`;
+    case "executor-interface-craft":
+      return `${requestContext}\nReview UI-facing Components and add craft constraints plus Evidence for UX risks or anti-patterns. Focus on accessibility, responsive behavior, interaction states, and collaboration/editor usability when relevant. Use Component constraint --Constrains--> UI Component and Evidence --Validates--> Requirement or Component when evidence is available.`;
+    default:
+      return `${requestContext}\nCreate graph-native updates within this executor's allowed entity and relation boundaries.`;
+  }
+}
+
+/**
+ * 生成 fallback 任务的预期产出说明。
+ */
+function createFallbackExpectedOutput(
+  definition: ExecutorAgentDefinition,
+): string {
+  return `Produce graph-native updates using allowed entity types only: ${definition.allowedEntityTypes.join(
+    ", ",
+  )}. Every new or changed entity should have traceable relations to the request goal, upstream graph nodes, or covered business model indexes.`;
+}
+
+/**
+ * 生成 fallback 任务的验收标准。
+ */
+function createFallbackQualityCriteria(
+  definition: ExecutorAgentDefinition,
+): string[] {
+  return [
+    `Use only allowed entity types for ${definition.agentType}: ${definition.allowedEntityTypes.join(", ")}.`,
+    "Do not create agent-name placeholder tasks or orphan graph entities.",
+    "Preserve traceability from covered business model indexes to entities, relations, decisions, risks, or open questions.",
+    "Record unresolved subjective gaps as assumptions, risks, or open questions instead of silently deciding them.",
+    "Do not convert missing information or unverified assumptions into confirmed Decision entities.",
+    "Use explicit relation directions, for example Feature --Satisfies--> Requirement and Component --Implements--> Feature.",
+    "Prefer semantic coverage over fixed entity counts; do not create duplicate entities just to satisfy a number.",
+  ];
+}
+
+/**
+ * 判断 fallback 计划是否来自用户确认/补充表单。
+ */
+function isSupplementPlanInput(userInput: PlannerAgentInput["userInput"]): boolean {
+  return userInput.some((item) =>
+    /\[form answers - (product-workflow-confirmation|.*-proposal-decision)\]/i.test(
+      item.content,
+    ),
   );
 }
 
@@ -640,6 +916,31 @@ function createTaskId(sequence: number): string {
  * 生成简短的业务模型摘要，供 Planner 回退计划使用。
  */
 function summarizeBusinessModels(items: BusinessModelItem[]): string {
-  if (items.length === 0) return "Request Agent 未识别到业务建模项。";
-  return items.map((item) => item.user_goal).join("；");
+  if (items.length === 0) {
+    return "No business model item was identified by Request Agent.";
+  }
+  return items.map((item) => item.user_goal).join("; ");
+}
+
+/**
+ * 生成业务约束摘要，供 fallback Executor 任务自包含描述使用。
+ */
+function summarizeBusinessConstraints(items: BusinessModelItem[]): string {
+  const constraints = items.flatMap((item) => item.goal_constraints);
+  return constraints.length > 0 ? constraints.join("; ") : "None provided.";
+}
+
+/**
+ * 生成缺失信息摘要，提醒 fallback Executor 不要静默假设关键事实。
+ */
+function summarizeMissingInformation(items: BusinessModelItem[]): string {
+  const missingInformation = items.flatMap((item) =>
+    item.missing_information.map(
+      (info) => `${info.index}. ${info.description} (importance ${info.importance})`,
+    ),
+  );
+
+  return missingInformation.length > 0
+    ? missingInformation.join("; ")
+    : "None provided.";
 }

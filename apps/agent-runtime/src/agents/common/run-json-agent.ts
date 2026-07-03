@@ -233,6 +233,26 @@ export async function* runJsonAgent<T, AgentType extends string>(
     }
 
     const parsed = parseJsonObject(responseText);
+    if (parsed === null) {
+      const fallbackResult = options.fallback("invalid-json");
+      if (!options.suppressInvalidJsonReasoning) {
+        const content = `结构化输出不是可解析的 JSON，已使用 ${options.agentLabel} 的 MVP 回退结果。\n`;
+        summaryRecorder.recordThinking(content);
+        yield {
+          type: "reasoning",
+          agentType: options.agentType,
+          content,
+        };
+      }
+      await summaryRecorder.finish({
+        error: "invalid-json",
+        output: fallbackResult,
+        status: "fallback",
+        tokenUsage: tokenUsageSummary,
+      });
+      return fallbackResult;
+    }
+
     const result = options.schema.safeParse(parsed);
     if (result.success) {
       await summaryRecorder.finish({
@@ -243,9 +263,10 @@ export async function* runJsonAgent<T, AgentType extends string>(
       return result.data;
     }
 
-    const fallbackResult = options.fallback("invalid-json");
+    const schemaError = `schema-validation: ${formatSchemaError(result.error)}`;
+    const fallbackResult = options.fallback(schemaError);
     if (!options.suppressInvalidJsonReasoning) {
-      const content = `结构化输出校验失败，已使用 ${options.agentLabel} 的 MVP 回退结果。\n`;
+      const content = `结构化输出未通过契约校验，已使用 ${options.agentLabel} 的 MVP 回退结果：${schemaError}\n`;
       summaryRecorder.recordThinking(content);
       yield {
         type: "reasoning",
@@ -254,7 +275,7 @@ export async function* runJsonAgent<T, AgentType extends string>(
       };
     }
     await summaryRecorder.finish({
-      error: "invalid-json",
+      error: schemaError,
       output: fallbackResult,
       status: "fallback",
       tokenUsage: tokenUsageSummary,
@@ -284,6 +305,55 @@ export async function* runJsonAgent<T, AgentType extends string>(
  */
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 压缩 Zod 校验错误，避免把完整 schema 失败对象写入用户流或调试摘要。
+ */
+function formatSchemaError(error: unknown): string {
+  const issues = getSchemaIssues(error);
+  if (issues.length === 0) return getErrorMessage(error);
+
+  return issues
+    .slice(0, 5)
+    .map((issue) => {
+      const path =
+        Array.isArray(issue.path) && issue.path.length > 0
+          ? issue.path.join(".")
+          : "(root)";
+      return `${path}: ${issue.message ?? "Invalid value"}`;
+    })
+    .join("; ");
+}
+
+/**
+ * 兼容 Zod v3/v4 的 issues 形状。
+ */
+function getSchemaIssues(
+  error: unknown,
+): Array<{ path?: Array<string | number>; message?: string }> {
+  if (!error || typeof error !== "object") return [];
+
+  const issues = (error as { issues?: unknown }).issues;
+  if (!Array.isArray(issues)) return [];
+
+  return issues.flatMap((issue) => {
+    if (!issue || typeof issue !== "object") return [];
+    const record = issue as { path?: unknown; message?: unknown };
+    const path = Array.isArray(record.path)
+      ? record.path.flatMap((item) =>
+          typeof item === "string" || typeof item === "number" ? [item] : [],
+        )
+      : undefined;
+
+    return [
+      {
+        path,
+        message:
+          typeof record.message === "string" ? record.message : undefined,
+      },
+    ];
+  });
 }
 
 /**
