@@ -70,7 +70,7 @@ export type RequestAgentStreamEvent =
 export function createRequestAgent(summaryRecorder?: AgentRunSummaryRecorder) {
   const model = createChatModel({
     enableThinking: false,
-    maxTokens: 5120,
+    maxTokens: 8192,
     responseFormat: "json_object",
     temperature: 0,
   });

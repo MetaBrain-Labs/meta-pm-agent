@@ -54,7 +54,7 @@ export async function* streamPlannerAgent(
     name: "planner-agent",
     modelOptions: {
       ...JSON_AGENT_MODEL_OPTIONS,
-      maxTokens: 10240,
+      maxTokens: 16384,
     },
     systemPrompt: PLANNER_AGENT_PROMPT,
     payload: {
@@ -84,7 +84,7 @@ export async function* streamPlannerWorkflowReview(
     name: "planner-agent-review",
     modelOptions: {
       ...JSON_AGENT_MODEL_OPTIONS,
-      maxTokens: 4096,
+      maxTokens: 16384,
     },
     systemPrompt: PLANNER_WORKFLOW_REVIEW_PROMPT,
     payload: createPlannerWorkflowReviewPayload(input),
@@ -133,7 +133,8 @@ type FallbackTaskSpec = {
 /**
  * Planner Review 的确定性校验问题。
  */
-type PlannerReviewValidationIssue = PlannerWorkflowReviewOutput["review"]["issues"][number];
+type PlannerReviewValidationIssue =
+  PlannerWorkflowReviewOutput["review"]["issues"][number];
 
 /**
  * 单个 Executor 图谱提交记录，供 Planner Review 判断是否可接受。
@@ -306,9 +307,9 @@ function countBy(items: string[]): Record<string, number> {
 /**
  * 按来源任务聚合图谱 ID，辅助 Review 判断任务提交是否落图。
  */
-function groupIdsBySourceTask<T extends { id: string; source_task_id?: string }>(
-  items: T[],
-): Record<string, string[]> {
+function groupIdsBySourceTask<
+  T extends { id: string; source_task_id?: string },
+>(items: T[]): Record<string, string[]> {
   const groups: Record<string, string[]> = {};
   for (const item of items) {
     const key = item.source_task_id ?? "unknown-task";
@@ -320,9 +321,7 @@ function groupIdsBySourceTask<T extends { id: string; source_task_id?: string }>
 /**
  * 收集 Executor 提出的待确认问题候选，交给 Planner Review 做语义合并和优先级判断。
  */
-function collectOpenQuestionCandidates(
-  executorResults: ExecutorAgentResult[],
-) {
+function collectOpenQuestionCandidates(executorResults: ExecutorAgentResult[]) {
   return executorResults
     .flatMap((result) =>
       result.open_questions.map((question, index) => ({
@@ -345,7 +344,10 @@ function createPlannerReviewValidationReport(
   const resultByTaskId = new Map(
     input.executorResults.map((result) => [result.task_id, result]),
   );
-  const duplicateEntityIds = findDuplicateIdsByTask(input.executorResults, "entities");
+  const duplicateEntityIds = findDuplicateIdsByTask(
+    input.executorResults,
+    "entities",
+  );
   const duplicateRelationIds = findDuplicateIdsByTask(
     input.executorResults,
     "relations",
@@ -548,7 +550,13 @@ function validateExecutorCommit(
       );
       continue;
     }
-    if (hasSourceConflict(entity.source_task_id, committed.source_task_id, result.task_id)) {
+    if (
+      hasSourceConflict(
+        entity.source_task_id,
+        committed.source_task_id,
+        result.task_id,
+      )
+    ) {
       issues.push(
         createReviewIssue({
           code: "ENTITY_SOURCE_CONFLICT",
@@ -590,7 +598,13 @@ function validateExecutorCommit(
       );
       continue;
     }
-    if (hasSourceConflict(relation.source_task_id, committed.source_task_id, result.task_id)) {
+    if (
+      hasSourceConflict(
+        relation.source_task_id,
+        committed.source_task_id,
+        result.task_id,
+      )
+    ) {
       issues.push(
         createReviewIssue({
           code: "RELATION_SOURCE_CONFLICT",
@@ -1475,7 +1489,10 @@ function createFallbackTaskDescription(
 function createFallbackRequestContext(
   analysis: PlannerAgentInput["requestAnalysis"],
 ): string {
-  const goal = truncateText(summarizeBusinessModels(analysis.business_model), 180);
+  const goal = truncateText(
+    summarizeBusinessModels(analysis.business_model),
+    180,
+  );
   const missing = summarizeMissingInformation(analysis.business_model);
   if (missing === "None provided.") return `Goal: ${goal}`;
 
@@ -1804,9 +1821,9 @@ function createFallbackProposalQuestions(
     });
   }
 
-  return [...questions.values()].sort(
-    (left, right) => right.priority - left.priority,
-  ).slice(0, 3);
+  return [...questions.values()]
+    .sort((left, right) => right.priority - left.priority)
+    .slice(0, 3);
 }
 
 /**
@@ -1819,10 +1836,7 @@ function mergeTextList(items: string[]): string[] {
 /**
  * fallback 阶段优先展示 Executor 写入的真实问题文本，只有异常空值才使用兜底文案。
  */
-function formatFallbackOpenQuestionLabel(
-  text: string,
-  taskId: string,
-): string {
+function formatFallbackOpenQuestionLabel(text: string, taskId: string): string {
   const trimmed = text.trim();
   if (trimmed) return trimmed;
 
