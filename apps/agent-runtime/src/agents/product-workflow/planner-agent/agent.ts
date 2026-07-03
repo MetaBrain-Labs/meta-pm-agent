@@ -88,19 +88,13 @@ export async function* streamPlannerWorkflowReview(
     payload: {
       product_context: input.productContext || "No product context provided.",
       request_analysis: input.requestAnalysis,
-      user_input: input.userInput,
-      user_language: detectUserInputLanguage(input.userInput),
       product_knowledge_graph: input.knowledgeGraph,
       planner: input.plan,
       executor_results: input.executorResults,
     },
     schema: ProductWorkflowResultSchema,
     fallback: () =>
-      createFallbackWorkflowResult(
-        input.plan,
-        input.executorResults,
-        input.userInput,
-      ),
+      createFallbackWorkflowResult(input.plan, input.executorResults),
     signal: input.signal,
   });
 
@@ -1061,13 +1055,8 @@ function matchesAny(text: string, keywords: string[]): boolean {
 function createFallbackWorkflowResult(
   plan: TaskExecutionPlan,
   executorResults: ExecutorAgentResult[],
-  userInput: PlannerWorkflowReviewInput["userInput"],
 ): ProductWorkflowResult {
-  const language = detectUserInputLanguage(userInput);
-  const proposalQuestions = createFallbackProposalQuestions(
-    executorResults,
-    language,
-  );
+  const proposalQuestions = createFallbackProposalQuestions(executorResults);
 
   return {
     status:
@@ -1098,8 +1087,8 @@ function createFallbackWorkflowResult(
     proposal_questions: proposalQuestions,
     confirmation_message:
       proposalQuestions.length > 0
-        ? formatFallbackSupplementMessage(language)
-        : formatFallbackCompletedMessage(language),
+        ? "Planner Agent 使用 fallback 汇总完成本轮规划，请先补充 Executor Agent 提出的关键问题。"
+        : "Planner Agent 使用 fallback 汇总完成本轮规划，当前结果默认确认并结束本轮流程。",
   };
 }
 
@@ -1108,7 +1097,6 @@ function createFallbackWorkflowResult(
  */
 function createFallbackProposalQuestions(
   executorResults: ExecutorAgentResult[],
-  language: "zh" | "en",
 ): ProductWorkflowResult["proposal_questions"] {
   const questions = new Map<string, ProductWorkflowProposalQuestion>();
 
@@ -1117,7 +1105,6 @@ function createFallbackProposalQuestions(
       const label = formatFallbackOpenQuestionLabel(
         question.text,
         result.task_id,
-        language,
       );
       const key = normalizeFallbackQuestionText(label);
       if (!key) return;
@@ -1142,10 +1129,7 @@ function createFallbackProposalQuestions(
         label,
         type: "textarea",
         required: true,
-        placeholder:
-          language === "zh"
-            ? "请补充这个问题所需的事实、约束或偏好。"
-            : "Add the facts, constraints, or preferences needed for this question.",
+        placeholder: "请补充这个问题所需的事实、约束或偏好。",
         source_task_id: result.task_id,
         source_agent: result.agent_type,
         sources: [source],
@@ -1165,14 +1149,11 @@ function createFallbackProposalQuestions(
 function formatFallbackOpenQuestionLabel(
   text: string,
   taskId: string,
-  language: "zh" | "en",
 ): string {
   const trimmed = text.trim();
   if (trimmed) return trimmed;
 
-  return language === "zh"
-    ? `请补充 ${taskId} 需要确认的关键信息`
-    : `Add the key information needed by ${taskId}.`;
+  return `请补充 ${taskId} 需要确认的关键信息`;
 }
 
 /**
@@ -1197,34 +1178,6 @@ function mergeFallbackQuestionSources<
     byKey.set(`${source.source_agent}:${source.source_task_id}`, source);
   }
   return [...byKey.values()];
-}
-
-/**
- * 根据用户原始输入粗略识别用户语言，用于 fallback 文案兜底。
- */
-function detectUserInputLanguage(
-  userInput: PlannerWorkflowReviewInput["userInput"],
-): "zh" | "en" {
-  const text = userInput.map((item) => item.content).join("\n");
-  return /[\u4e00-\u9fff]/.test(text) ? "zh" : "en";
-}
-
-/**
- * 生成 fallback 补充问题提示。
- */
-function formatFallbackSupplementMessage(language: "zh" | "en"): string {
-  return language === "zh"
-    ? "Planner Agent 使用 fallback 汇总完成本轮规划，请先补充 Executor Agent 提出的关键问题。"
-    : "Planner Agent completed this workflow with a fallback summary. Please answer the key questions raised by the Executor Agents.";
-}
-
-/**
- * 生成 fallback 默认完成提示。
- */
-function formatFallbackCompletedMessage(language: "zh" | "en"): string {
-  return language === "zh"
-    ? "Planner Agent 使用 fallback 汇总完成本轮规划，当前结果默认确认并结束本轮流程。"
-    : "Planner Agent completed this workflow with a fallback summary. The current result is accepted by default and this round is complete.";
 }
 
 /**

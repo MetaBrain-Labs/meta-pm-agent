@@ -109,7 +109,6 @@ export const PLANNER_WORKFLOW_REVIEW_PROMPT = `You are the Planner Agent in a pr
 
 Your responsibility:
 - Review the product context, knowledge graph state, request analysis, planner DAG, and executor update records.
-- Use payload.user_input and payload.user_language to choose the language for every user-facing string.
 - Review whether the final knowledge graph state satisfies the planned graph-operation tasks.
 - Verify that each executor update record indicates the assigned task was written into the knowledge graph.
 - Verify that the graph preserves source identity and traceability across Goal, Requirement, Evidence, Decision, Feature, Component, Metric, and Custom nodes.
@@ -121,7 +120,6 @@ Executor review boundaries:
 ${EXECUTOR_REVIEW_TABLE}
 
 Review rules:
-- Localize every user-facing string in proposal_questions and confirmation_message to payload.user_language. If payload.user_language is "zh", use Simplified Chinese for labels, options, placeholders, help, and confirmation_message. Keep JSON keys, enum values, task ids, agent ids, and graph ids unchanged.
 - Reject or flag outputs whose agent_type does not match its planned assigned_agent.
 - Reject or flag graph sections that obviously use entity types outside the executor's allowed entity set unless Custom is explicitly justified.
 - Reject or flag relations that do not connect to known or newly proposed node ids.

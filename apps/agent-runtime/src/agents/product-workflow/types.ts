@@ -65,7 +65,6 @@ export interface PlannerWorkflowReviewInput {
   workspaceId?: string;
   productContext?: string;
   requestAnalysis: RequestAnalysis;
-  userInput: UserInputRecord[];
   plan: TaskExecutionPlan;
   executorResults: ExecutorAgentResult[];
   knowledgeGraph: ProductKnowledgeGraph;

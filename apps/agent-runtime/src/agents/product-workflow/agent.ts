@@ -135,7 +135,6 @@ export async function* streamPlannerProductWorkflow(
     workspaceId: input.workspaceId,
     productContext: input.productContext,
     requestAnalysis: input.requestAnalysis,
-    userInput: input.userInput,
     plan,
     executorResults,
     knowledgeGraph,
