@@ -1665,16 +1665,21 @@ function createFallbackWorkflowReviewOutput(
       ? "pending_user_confirmation"
       : "completed";
   const notes = createFallbackReviewNotes(validationReport, reason);
+  const acceptedTaskIds = [...validationReport.accepted_task_ids];
+  const rejectedTaskIds = [...validationReport.rejected_task_ids];
+  const retryTaskIds = [...validationReport.retry_task_ids];
+  const reviewIssues = cloneReviewIssues(validationReport.issues);
+  const graphReviewIssues = cloneReviewIssues(validationReport.issues);
 
   return {
     status,
     confirmation_id: "product-workflow-confirmation",
     request_summary: truncateText(input.plan.request_summary, 500),
     review: {
-      accepted_task_ids: validationReport.accepted_task_ids,
-      rejected_task_ids: validationReport.rejected_task_ids,
-      retry_task_ids: validationReport.retry_task_ids,
-      issues: validationReport.issues,
+      accepted_task_ids: acceptedTaskIds,
+      rejected_task_ids: rejectedTaskIds,
+      retry_task_ids: retryTaskIds,
+      issues: reviewIssues,
       notes: truncateText(notes.join("；"), 1200),
     },
     product_context_update: createFallbackProductContextUpdate(
@@ -1683,11 +1688,11 @@ function createFallbackWorkflowReviewOutput(
     ),
     knowledge_graph_review: {
       graph_ref: createKnowledgeGraphReviewRef(input.knowledgeGraph),
-      accepted_task_ids: validationReport.accepted_task_ids,
-      rejected_task_ids: validationReport.rejected_task_ids,
-      retry_task_ids: validationReport.retry_task_ids,
-      issues: validationReport.issues,
-      notes,
+      accepted_task_ids: [...acceptedTaskIds],
+      rejected_task_ids: [...rejectedTaskIds],
+      retry_task_ids: [...retryTaskIds],
+      issues: graphReviewIssues,
+      notes: [...notes],
     },
     proposal_questions: proposalQuestions,
     confirmation_message: createFallbackConfirmationMessage({
@@ -1698,7 +1703,16 @@ function createFallbackWorkflowReviewOutput(
 }
 
 /**
- * 生成回退审查说明，供用户和历史记录理解为什么进入 fallback。
+ * 复制 Review 问题对象，避免本地诊断序列化器把跨字段复用引用误判为循环引用。
+ */
+function cloneReviewIssues(
+  issues: PlannerReviewValidationIssue[],
+): PlannerReviewValidationIssue[] {
+  return issues.map((issue) => ({ ...issue }));
+}
+
+/**
+ * 生成 fallback 审查说明，帮助恢复流程理解需要修正的任务范围。
  */
 function createFallbackReviewNotes(
   validationReport: PlannerReviewValidationReport,

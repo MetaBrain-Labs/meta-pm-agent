@@ -95,6 +95,9 @@ function mergeExecutorResults(
   current: ExecutorAgentResult[],
   update: ExecutorAgentResult[],
 ): ExecutorAgentResult[] {
+  // 新一轮恢复运行需要用空数组显式清理旧 checkpoint 中的 Executor 结果。
+  if (update.length === 0) return [];
+
   const merged = new Map(current.map((item) => [item.task_id, item]));
   for (const item of update) {
     merged.set(item.task_id, item);
@@ -113,8 +116,9 @@ function mergeKnowledgeGraphSnapshots(
   current: ProductKnowledgeGraph | null,
   update: ProductKnowledgeGraph | null,
 ): ProductKnowledgeGraph | null {
+  // 工作区图谱被重置时，不能继续沿用旧 checkpoint 中的图谱快照。
+  if (update === null) return null;
   if (!current) return update;
-  if (!update) return current;
 
   return {
     ...current,

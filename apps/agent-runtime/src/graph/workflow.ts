@@ -239,6 +239,7 @@ function createWorkflowInitialState(input: WorkflowGraphInput) {
     plan,
     executorResults,
     knowledgeGraph: resume?.knowledgeGraph ?? input.knowledgeGraph ?? null,
+    productWorkflow: null,
   };
 }
 

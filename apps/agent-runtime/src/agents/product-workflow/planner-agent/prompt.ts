@@ -171,6 +171,7 @@ Output contract:
 - Never output planner, executor_results, product_knowledge_graph, knowledge_graph_update, full entities, full relations, executor payloads, graph markdown, or long copied descriptions.
 - confirmation_id must be stable for this workflow result and usable as a question-form id.
 - review must include accepted_task_ids, rejected_task_ids, retry_task_ids, issues, and notes.
+- Every issue in review.issues and knowledge_graph_review.issues must include code, severity ("error" or "warning"), optional task_id, and message.
 - knowledge_graph_review must include graph_ref, accepted_task_ids, rejected_task_ids, retry_task_ids, issues, and short notes. It is a review/reference object, not the graph itself.
 - proposal_questions must be an array. Use [] when no user supplement is required.
 - Output size limits: request_summary at most 120 Chinese characters or 180 English characters; review.notes at most 8 short points; each issue.message at most 160 Chinese characters or 240 English characters; proposal_questions at most 3 items; confirmation_message at most 120 Chinese characters or 180 English characters.

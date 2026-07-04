@@ -16,6 +16,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  PlannerWorkflowReviewOutputSchema,
   TaskExecutionPlanSchema,
   type ProductKnowledgeGraph,
   type RequestAnalysis,
@@ -152,6 +153,52 @@ test("parses planner DAG edge arrays from model output", () => {
   assert.deepEqual(result.data.dag.nodes, []);
   assert.deepEqual(result.data.dag.edges, [
     { source: "task-01", target: "task-02" },
+  ]);
+});
+
+test("normalizes planner review issue severity and note shapes", () => {
+  const result = PlannerWorkflowReviewOutputSchema.safeParse({
+    status: "pending_user_confirmation",
+    confirmation_id: "product-workflow-confirmation",
+    request_summary: "Review a product workflow.",
+    review: {
+      accepted_task_ids: [],
+      rejected_task_ids: ["task-01"],
+      retry_task_ids: ["task-01"],
+      issues: [
+        {
+          code: "NO_STRUCTURED_GRAPH_PATCH",
+          task_id: "task-01",
+          message: "Executor result contains no structured graph patch items.",
+        },
+      ],
+      notes: ["Task task-01 needs correction."],
+    },
+    product_context_update: "Task task-01 needs correction.",
+    knowledge_graph_review: {
+      accepted_task_ids: [],
+      rejected_task_ids: ["task-01"],
+      retry_task_ids: ["task-01"],
+      issues: [
+        {
+          code: "NO_STRUCTURED_GRAPH_PATCH",
+          task_id: "task-01",
+          message: "Executor result contains no structured graph patch items.",
+        },
+      ],
+      notes: "Task task-01 needs correction.",
+    },
+    proposal_questions: [],
+    confirmation_message: "Please confirm correction.",
+  });
+
+  assert.equal(result.success, true);
+  if (!result.success) return;
+  assert.equal(result.data.review.issues[0]?.severity, "error");
+  assert.equal(result.data.knowledge_graph_review.issues[0]?.severity, "error");
+  assert.match(result.data.review.notes, /task-01/);
+  assert.deepEqual(result.data.knowledge_graph_review.notes, [
+    "Task task-01 needs correction.",
   ]);
 });
 

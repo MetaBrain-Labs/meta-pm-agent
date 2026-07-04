@@ -410,10 +410,33 @@ export const ExecutorAgentResultSchema = z.object({
  */
 export const ProductWorkflowReviewIssueSchema = z.object({
   code: z.string().min(1).describe("Stable machine-readable issue code"),
-  severity: z.enum(["error", "warning"]).describe("Issue severity"),
+  severity: z
+    .enum(["error", "warning"])
+    .default("error")
+    .catch("error")
+    .describe("Issue severity"),
   task_id: z.string().optional().describe("Related planner task ID when applicable"),
   message: z.string().min(1).max(500).describe("Concise issue explanation"),
 });
+
+const ProductWorkflowReviewNotesSchema = z.preprocess((value) => {
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((item) => (typeof item === "string" && item.trim() ? [item.trim()] : []))
+      .slice(0, 8)
+      .join("\n");
+  }
+
+  return value;
+}, z.string().min(1).max(1200));
+
+const ProductWorkflowKnowledgeGraphReviewNotesSchema = z.preprocess((value) => {
+  if (typeof value === "string" && value.trim()) {
+    return [value.trim()];
+  }
+
+  return value;
+}, z.array(z.string().min(1).max(500)).max(8).default([]));
 
 /**
  * Planner Review 对最终知识图谱状态的轻量审查结论。
@@ -429,7 +452,7 @@ export const ProductWorkflowKnowledgeGraphReviewSchema = z.object({
   rejected_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs whose graph updates are rejected"),
   retry_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs that should be retried or corrected"),
   issues: z.array(ProductWorkflowReviewIssueSchema).default([]).describe("Detected graph or execution issues"),
-  notes: z.array(z.string().min(1).max(500)).max(8).default([]).describe("Short review notes; never repeat full graph data"),
+  notes: ProductWorkflowKnowledgeGraphReviewNotesSchema.describe("Short review notes; never repeat full graph data"),
 });
 
 /**
@@ -451,7 +474,7 @@ export const PlannerWorkflowReviewOutputSchema = z.object({
     rejected_task_ids: z.array(z.string().min(1)).describe("Rejected task IDs"),
     retry_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs that require retry or correction"),
     issues: z.array(ProductWorkflowReviewIssueSchema).default([]).describe("Detected issues"),
-    notes: z.string().min(1).max(1200).describe("Compact review notes"),
+    notes: ProductWorkflowReviewNotesSchema.describe("Compact review notes"),
   }).describe("Planner Review decision"),
   product_context_update: z.string().min(1).max(1200).describe("Short product context update summary"),
   knowledge_graph_review: ProductWorkflowKnowledgeGraphReviewSchema.describe("Lightweight graph review, not the full graph"),

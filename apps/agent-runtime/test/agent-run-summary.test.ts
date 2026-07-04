@@ -161,6 +161,58 @@ test("writes enabled summary sections as markdown after finish", async () => {
 });
 
 /**
+ * 验证重复引用不会被误写成循环引用，便于排查 Planner Review fallback 输出。
+ */
+test("keeps repeated non-cyclic references in summary output", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "agent-summary-ref-"));
+  const outputDir = path.join(tempRoot, "summaries");
+  const sharedRetryTaskIds = ["task-01"];
+
+  try {
+    await withSummaryEnv(
+      {
+        AGENT_SUMMARY_CONTEXT_ENABLED: "false",
+        AGENT_SUMMARY_OUTPUT_DIR: outputDir,
+        AGENT_SUMMARY_OUTPUT_ENABLED: "true",
+        AGENT_SUMMARY_THINKING_ENABLED: "false",
+        AGENT_SUMMARY_TOOL_CALLS_ENABLED: "false",
+      },
+      async () => {
+        const recorder = createAgentRunSummaryRecorder({
+          agentLabel: "Test Agent",
+          agentName: "test-agent",
+          agentType: "test",
+        });
+
+        await recorder.finish({
+          output: {
+            review: {
+              retry_task_ids: sharedRetryTaskIds,
+            },
+            knowledge_graph_review: {
+              retry_task_ids: sharedRetryTaskIds,
+            },
+          },
+          status: "completed",
+        });
+
+        const dateDirs = await readdir(outputDir);
+        const files = await readdir(path.join(outputDir, dateDirs[0]));
+        const markdown = await readFile(
+          path.join(outputDir, dateDirs[0], files[0]),
+          "utf8",
+        );
+
+        assert.doesNotMatch(markdown, /\[Circular\]/);
+        assert.match(markdown, /"task-01"/);
+      },
+    );
+  } finally {
+    await rm(tempRoot, { force: true, recursive: true });
+  }
+});
+
+/**
  * 临时覆盖汇总环境变量，避免测试之间互相污染。
  */
 async function withSummaryEnv(
