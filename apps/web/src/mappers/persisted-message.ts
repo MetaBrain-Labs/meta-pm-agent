@@ -85,6 +85,10 @@ export function mapPersistedMessageToMessage(
     ...(message.productWorkflow
       ? {
           executorResults: message.productWorkflow.executor_results,
+          plannerReview: {
+            state: "complete" as const,
+            result: message.productWorkflow,
+          },
         }
       : {}),
     ...(message.executorResults && message.executorResults.length > 0

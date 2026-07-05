@@ -2,7 +2,7 @@
  * 产品工作流编排与格式化
  *
  * 作为 product-workflow 模块的聚合入口，负责：
- * - 编排 Planner -> Executor -> Planner Review 的完整产品工作流流式执行
+ * - 编排 Planner -> Executor -> Critique 的完整产品工作流流式执行
  * - 格式化各环节的展示 block（任务计划、执行结果、确认表单等）
  * - 协调知识图谱的创建、追加与归档
  *
@@ -12,7 +12,7 @@
  * - formatExecutorResultBlock()：格式化 Executor 结果块
  * - formatProductWorkflowBlock()：格式化完整产出块
  * - formatProductWorkflowConfirmationQuestionForm / ProposalQuestionForm：生成确认表单
- * - 聚合导出子模块（knowledge-graph、tasks、executor-agent、planner-agent）
+ * - 聚合导出子模块（knowledge-graph、tasks、executor-agent、planner-agent、critique-agent）
  *
  * Notes:
  * - 此文件仅做编排与格式化，不包含 Planner/Executor 的 prompt 或模型执行逻辑
@@ -26,11 +26,9 @@ import type {
 } from "@repo/shared";
 import { createProductWorkflowKnowledgeGraph, appendKnowledgeGraphPatch } from "./common/knowledge-graph";
 import { orderTasksBySequence } from "./common/tasks";
+import { streamCritiqueAgent } from "./critique-agent/agent";
 import { streamExecutorAgent } from "./executor-agent/agent";
-import {
-  streamPlannerAgent,
-  streamPlannerWorkflowReview,
-} from "./planner-agent/agent";
+import { streamPlannerAgent } from "./planner-agent/agent";
 import type {
   ProductWorkflowInput,
   ProductWorkflowStreamEvent,
@@ -55,21 +53,20 @@ export {
   createProductWorkflowKnowledgeGraph,
 } from "./common/knowledge-graph";
 export { orderTasksBySequence } from "./common/tasks";
+export { streamCritiqueAgent } from "./critique-agent/agent";
 export { streamExecutorAgent } from "./executor-agent/agent";
-export {
-  streamPlannerAgent,
-  streamPlannerWorkflowReview,
-} from "./planner-agent/agent";
+export { streamPlannerAgent } from "./planner-agent/agent";
 export type {
   ExecutorAgentInput,
   PlannerAgentInput,
+  CritiqueAgentInput,
   PlannerWorkflowReviewInput,
   ProductWorkflowInput,
   ProductWorkflowStreamEvent,
 } from "./types";
 
 /**
- * Planner 主工作流：负责编排 DAG、Executor 与最终确认阶段。
+ * Planner 主工作流：负责编排 DAG、Executor、Critique 与最终确认阶段。
  */
 export async function* streamPlannerProductWorkflow(
   input: ProductWorkflowInput,
@@ -131,7 +128,7 @@ export async function* streamPlannerProductWorkflow(
     };
   }
 
-  const workflowResult = yield* streamPlannerWorkflowReview({
+  const workflowResult = yield* streamCritiqueAgent({
     workspaceId: input.workspaceId,
     productContext: input.productContext,
     requestAnalysis: input.requestAnalysis,
@@ -247,7 +244,7 @@ export function formatProductWorkflowProposalQuestionForm(
 }
 
 /**
- * 读取 Planner Review 输出的结构化问题；旧结果只降级为 textarea，不做类型猜测。
+ * 读取 Critique Agent 输出的结构化问题；旧结果只降级为 textarea，不做类型猜测。
  */
 function getProposalFormQuestions(result: ProductWorkflowResult) {
   const proposalQuestions = result.proposal_questions ?? [];
@@ -261,7 +258,7 @@ function getProposalFormQuestions(result: ProductWorkflowResult) {
 }
 
 /**
- * 将 Planner Review 结构化问题映射为前端 Question Form JSON 字段。
+ * 将 Critique Agent 结构化问题映射为前端 Question Form JSON 字段。
  */
 function toQuestionFormQuestion(question: ProductWorkflowProposalQuestion) {
   const type = normalizeQuestionFormType(question);
@@ -387,7 +384,7 @@ function toProposalQuestionFromSlot(
 }
 
 /**
- * 合并 Planner Review 可能重复输出的补充问题，保留所有 Executor 来源。
+ * 合并 Critique Agent 可能重复输出的补充问题，保留所有 Executor 来源。
  */
 function mergeProposalQuestions(
   questions: ProductWorkflowProposalQuestion[],

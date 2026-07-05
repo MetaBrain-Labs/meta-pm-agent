@@ -169,6 +169,7 @@ export interface StructuredToolCallResult<T = unknown> {
   action: string;
   count: number;
   items: T[];
+  skipped?: Array<{ id: string; reason: string }>;
 }
 
 /**
@@ -332,12 +333,17 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
     tool(
       async ({ nodes }) => {
         const validated = nodes.map((n) => nodeInputSchema.parse(n));
-        state.entities.push(...validated);
+        const appendResult = filterAppendOnlyItems(
+          validated,
+          state.entities.map((item) => item.id),
+        );
+        state.entities.push(...appendResult.items);
         return JSON.stringify(
           {
             action: "add_nodes",
-            count: validated.length,
-            items: validated as unknown[],
+            count: appendResult.items.length,
+            items: appendResult.items as unknown[],
+            skipped: appendResult.skipped,
           } satisfies StructuredToolCallResult,
           null,
           2,
@@ -346,7 +352,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
       {
         name: "kg_file_add_nodes",
         description:
-          "Write structured nodes to the knowledge graph. Each node must have: id, type, name, description, source_task_id, status. Allowed types: Goal/Requirement/Evidence/Decision/Feature/Component/Metric/Risk/OpenQuestion/Custom. Prefer kg_file_add_risks and kg_file_add_open_questions for uncertainty records.",
+          "Append structured nodes to the knowledge graph. Each node must have a new unique id, type, name, description, source_task_id, and status. Duplicate IDs are skipped instead of updated. Allowed types: Goal/Requirement/Evidence/Decision/Feature/Component/Metric/Risk/OpenQuestion/Custom. Prefer kg_file_add_risks and kg_file_add_open_questions for uncertainty records.",
         schema: z.object({
           nodes: z
             .array(nodeInputSchema)
@@ -359,12 +365,14 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
     tool(
       async ({ relations }) => {
         const validated = relations.map((r) => relationInputSchema.parse(r));
-        state.relations.push(...validated);
+        const appendResult = filterAppendOnlyRelations(validated, state);
+        state.relations.push(...appendResult.items);
         return JSON.stringify(
           {
             action: "add_relations",
-            count: validated.length,
-            items: validated as unknown[],
+            count: appendResult.items.length,
+            items: appendResult.items as unknown[],
+            skipped: appendResult.skipped,
           } satisfies StructuredToolCallResult,
           null,
           2,
@@ -373,7 +381,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
       {
         name: "kg_file_add_relations",
         description:
-          "Write structured relations to the knowledge graph. Each relation must have: id, type, source, target, description, source_task_id. Allowed types: Drives/Satisfies/Promotes/Produces/Constrains/Implements/Measures/Validates/References/Composes/Custom. source/target must reference existing node IDs.",
+          "Append structured relations to the knowledge graph. Each relation must have a new unique id, type, source, target, description, and source_task_id. Duplicate relation IDs and relations whose source/target nodes are missing are skipped instead of updated. Allowed types: Drives/Satisfies/Promotes/Produces/Constrains/Implements/Measures/Validates/References/Composes/Custom.",
         schema: z.object({
           relations: z
             .array(relationInputSchema)
@@ -388,12 +396,17 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
     tool(
       async ({ decisions }) => {
         const validated = decisions.map((d) => decisionInputSchema.parse(d));
-        state.decisions.push(...validated);
+        const appendResult = filterAppendOnlyItems(
+          validated,
+          state.decisions.map((item) => item.id),
+        );
+        state.decisions.push(...appendResult.items);
         return JSON.stringify(
           {
             action: "add_decisions",
-            count: validated.length,
-            items: validated as unknown[],
+            count: appendResult.items.length,
+            items: appendResult.items as unknown[],
+            skipped: appendResult.skipped,
           } satisfies StructuredToolCallResult,
           null,
           2,
@@ -402,7 +415,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
       {
         name: "kg_file_add_decisions",
         description:
-          "Write structured decisions to the knowledge graph. Each decision has id, text, and optional source_task_id fields.",
+          "Append structured decisions to the knowledge graph. Each decision must use a new unique id and has text plus optional source_task_id fields. Duplicate IDs are skipped instead of updated.",
         schema: z.object({
           decisions: z
             .array(decisionInputSchema)
@@ -415,12 +428,17 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
     tool(
       async ({ risks }) => {
         const validated = risks.map((r) => riskInputSchema.parse(r));
-        state.risks.push(...validated);
+        const appendResult = filterAppendOnlyItems(
+          validated,
+          state.risks.map((item) => item.id),
+        );
+        state.risks.push(...appendResult.items);
         return JSON.stringify(
           {
             action: "add_risks",
-            count: validated.length,
-            items: validated as unknown[],
+            count: appendResult.items.length,
+            items: appendResult.items as unknown[],
+            skipped: appendResult.skipped,
           } satisfies StructuredToolCallResult,
           null,
           2,
@@ -444,12 +462,17 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
         const validated = questions.map((q) =>
           openQuestionInputSchema.parse(q),
         );
-        state.open_questions.push(...validated);
+        const appendResult = filterAppendOnlyItems(
+          validated,
+          state.open_questions.map((item) => item.id),
+        );
+        state.open_questions.push(...appendResult.items);
         return JSON.stringify(
           {
             action: "add_open_questions",
-            count: validated.length,
-            items: validated as unknown[],
+            count: appendResult.items.length,
+            items: appendResult.items as unknown[],
+            skipped: appendResult.skipped,
           } satisfies StructuredToolCallResult,
           null,
           2,
@@ -458,7 +481,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
       {
         name: "kg_file_add_open_questions",
         description:
-          "Write structured open questions to the knowledge graph. Each question has id, text, and optional source_task_id fields.",
+          "Append structured open questions to the knowledge graph. Each question must use a new unique id and has text plus optional source_task_id fields. Duplicate IDs are skipped instead of updated.",
         schema: z.object({
           questions: z
             .array(openQuestionInputSchema)
@@ -484,6 +507,63 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
       },
     ),
   ];
+}
+
+/**
+ * 过滤追加式写入中的重复 ID，避免 Executor 用旧 ID 模拟原地更新。
+ */
+function filterAppendOnlyItems<T extends { id: string }>(
+  items: T[],
+  existingIds: string[],
+): { items: T[]; skipped: Array<{ id: string; reason: string }> } {
+  const seenIds = new Set(existingIds);
+  const accepted: T[] = [];
+  const skipped: Array<{ id: string; reason: string }> = [];
+
+  for (const item of items) {
+    if (seenIds.has(item.id)) {
+      skipped.push({
+        id: item.id,
+        reason: "duplicate_id_append_only_graph",
+      });
+      continue;
+    }
+    seenIds.add(item.id);
+    accepted.push(item);
+  }
+
+  return { items: accepted, skipped };
+}
+
+/**
+ * 过滤追加式关系写入，确保关系 ID 唯一且端点已存在于当前图谱。
+ */
+function filterAppendOnlyRelations<
+  T extends { id: string; source: string; target: string },
+>(
+  relations: T[],
+  state: ProductKnowledgeGraph,
+): { items: T[]; skipped: Array<{ id: string; reason: string }> } {
+  const appendResult = filterAppendOnlyItems(
+    relations,
+    state.relations.map((item) => item.id),
+  );
+  const entityIds = new Set(state.entities.map((item) => item.id));
+  const accepted: T[] = [];
+  const skipped = [...appendResult.skipped];
+
+  for (const relation of appendResult.items) {
+    if (!entityIds.has(relation.source) || !entityIds.has(relation.target)) {
+      skipped.push({
+        id: relation.id,
+        reason: "missing_relation_endpoint",
+      });
+      continue;
+    }
+    accepted.push(relation);
+  }
+
+  return { items: accepted, skipped };
 }
 
 /**

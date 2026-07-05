@@ -269,7 +269,7 @@ function applyAgentStatus(message: Message, event: StreamEvent): Message {
       activeAgent: event.agentType,
       activeAgents: addActiveAgent(message.activeAgents, event.agentType),
       parallelExecutorAgents: rememberParallelExecutors(message, event),
-      ...(event.agentType === "planner" && event.phase === "review"
+      ...(event.agentType === "critique" && event.phase === "review"
         ? { plannerReview: { state: "generating" as const } }
         : {}),
     };
@@ -281,9 +281,14 @@ function applyAgentStatus(message: Message, event: StreamEvent): Message {
       message.activeAgent === event.agentType ? undefined : message.activeAgent,
     activeAgents: removeActiveAgent(message.activeAgents, event.agentType),
     toolCalls: markAgentToolsComplete(message.toolCalls ?? [], event.agentType),
-    ...(event.agentType === "planner" && event.phase === "review"
-      ? { plannerReview: { state: "complete" as const } }
-      : {}),
+    ...(event.agentType === "critique" && event.phase === "review"
+        ? {
+            plannerReview: {
+              ...(message.plannerReview ?? {}),
+              state: "complete" as const,
+            },
+          }
+        : {}),
   };
 }
 
@@ -309,31 +314,16 @@ function rememberParallelExecutors(
 }
 
 /**
- * 将 SSE 错误负载转换为简洁可展示的文本。
+ * 将 SSE 错误负载转换为完整可展示文本，预览截断交给错误卡片处理。
  */
 function normalizeErrorMessage(error: unknown): string {
-  if (typeof error === "string") return compactErrorText(error);
-  if (error instanceof Error) return compactErrorText(error.message);
+  if (typeof error === "string") return error.trim();
+  if (error instanceof Error) return error.message.trim();
   try {
-    return compactErrorText(JSON.stringify(error));
+    return JSON.stringify(error, null, 2);
   } catch {
-    return compactErrorText(String(error));
+    return String(error);
   }
-}
-
-/**
- * 压缩错误卡片文案，只保留最关键的一行。
- */
-function compactErrorText(text: string, maxLength = 240): string {
-  const firstLine =
-    text
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((line) => line && !line.startsWith("at ")) ?? text.trim();
-  const compacted = firstLine.replace(/\s+/g, " ");
-  return compacted.length > maxLength
-    ? `${compacted.slice(0, maxLength).trimEnd()}...`
-    : compacted;
 }
 
 /**
@@ -583,7 +573,10 @@ function applyTextChunk(
             activeAgent: undefined,
             activeAgents: [],
             executorResults: result.executor_results,
-            plannerReview: { state: "complete" as const },
+            plannerReview: {
+              state: "complete" as const,
+              result,
+            },
           }
         : {}),
     };

@@ -12,8 +12,11 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { ChatMessage } from "@repo/shared";
-import { createWorkflowResumeContextFromMessages } from "../src/agents/conversation/workflow-resume";
+import type { ChatMessage, ProductWorkflowResult } from "@repo/shared";
+import {
+  createWorkflowContinuationResumeContextFromMessages,
+  createWorkflowResumeContextFromMessages,
+} from "../src/agents/conversation/workflow-resume";
 
 test("restores direct executor blocker context from history", () => {
   const context = createWorkflowResumeContextFromMessages({
@@ -41,6 +44,21 @@ test("restores proposal context for executors with open questions", () => {
   assert.deepEqual(context?.rerunTaskIds, ["task-01"]);
 });
 
+test("restores planner review retry task ids from proposal answers", () => {
+  const messages = createMessages(
+    "[form answers - product-workflow-confirmation-proposal-decision]\n- Fix graph?: yes",
+  );
+  messages.splice(
+    messages.length - 1,
+    0,
+    message("a5", "assistant", createProductWorkflowBlock()),
+  );
+
+  const context = createWorkflowResumeContextFromMessages({ messages });
+
+  assert.deepEqual(context?.rerunTaskIds, ["task-02", "task-01"]);
+});
+
 test("restores final confirmation context for executors with open questions", () => {
   const context = createWorkflowResumeContextFromMessages({
     messages: createMessages(
@@ -49,6 +67,26 @@ test("restores final confirmation context for executors with open questions", ()
   });
 
   assert.deepEqual(context?.rerunTaskIds, ["task-01"]);
+});
+
+test("restores latest supplement DAG for continue intent", () => {
+  const messages = createMessages("继续");
+  messages.splice(
+    messages.length - 1,
+    0,
+    message("a5", "assistant", createSupplementTaskExecutionBlock()),
+  );
+
+  const context = createWorkflowContinuationResumeContextFromMessages({
+    messages,
+  });
+
+  assert.equal(context?.plan?.status, "supplement");
+  assert.deepEqual(context?.rerunTaskIds, ["task-01"]);
+  assert.equal(
+    context?.executorResults?.some((result) => result.task_id === "task-01"),
+    false,
+  );
 });
 
 test("does not restore interrupted workflow by matching latest user text", () => {
@@ -103,6 +141,133 @@ function createMessages(latestAnswer: string): ChatMessage[] {
     message("a4", "assistant", createExecutorResultBlock("task-02", false)),
     message("u2", "user", latestAnswer),
   ];
+}
+
+function createSupplementTaskExecutionBlock(): string {
+  return `<task-execution>\n${JSON.stringify({
+    status: "supplement",
+    request_summary: "Supplement workflow",
+    dag: {
+      nodes: ["task-01"],
+      edges: [],
+    },
+    tasks: [
+      {
+        task_id: "task-01",
+        sequence: 1,
+        title: "Supplement strategy",
+        description: "Correct the strategy graph",
+        assigned_agent: "executor-product-strategy",
+        depends_on: [],
+        covered_business_model_indexes: [1],
+        expected_output: "Corrected strategy graph",
+        quality_check: { status: "pending", criteria: ["traceable"] },
+      },
+    ],
+    assumptions: [],
+  })}\n</task-execution>`;
+}
+
+function createProductWorkflowBlock(): string {
+  const result: ProductWorkflowResult = {
+    status: "pending_user_confirmation",
+    confirmation_id: "product-workflow-confirmation",
+    request_summary: "Build MVP",
+    planner: {
+      status: "initial",
+      request_summary: "Build MVP",
+      dag: {
+        nodes: ["task-01", "task-02"],
+        edges: [{ source: "task-01", target: "task-02" }],
+      },
+      tasks: [
+        {
+          task_id: "task-01",
+          sequence: 1,
+          title: "Strategy",
+          description: "Clarify strategy",
+          assigned_agent: "executor-product-strategy",
+          depends_on: [],
+          covered_business_model_indexes: [1],
+          expected_output: "Strategy graph",
+          quality_check: { status: "pending", criteria: ["traceable"] },
+        },
+        {
+          task_id: "task-02",
+          sequence: 2,
+          title: "Execution",
+          description: "Plan execution",
+          assigned_agent: "executor-product-execution",
+          depends_on: ["task-01"],
+          covered_business_model_indexes: [1],
+          expected_output: "Execution graph",
+          quality_check: { status: "pending", criteria: ["traceable"] },
+        },
+      ],
+      assumptions: [],
+    },
+    executor_results: [],
+    review: {
+      accepted_task_ids: ["task-01"],
+      rejected_task_ids: ["task-02"],
+      retry_task_ids: ["task-02"],
+      issues: [
+        {
+          code: "NO_STRUCTURED_GRAPH_PATCH",
+          severity: "error",
+          task_id: "task-02",
+          message: "Executor result contains no structured graph patch items.",
+        },
+      ],
+      notes: "task-02 needs correction.",
+    },
+    product_context_update: "task-02 needs correction.",
+    knowledge_graph_update: {
+      entities: [],
+      relations: [],
+      decisions: [],
+      risks: [],
+      open_questions: [],
+      summary: [],
+      markdown: "",
+      notes: [],
+    },
+    knowledge_graph_review: {
+      accepted_task_ids: ["task-01"],
+      rejected_task_ids: ["task-02"],
+      retry_task_ids: ["task-02"],
+      issues: [
+        {
+          code: "NO_STRUCTURED_GRAPH_PATCH",
+          severity: "error",
+          task_id: "task-02",
+          message: "Executor result contains no structured graph patch items.",
+        },
+      ],
+      notes: ["task-02 needs correction."],
+    },
+    proposal_questions: [
+      {
+        id: "planner-review-retry",
+        label: "Fix graph?",
+        type: "radio",
+        required: true,
+        options: ["yes", "no"],
+        source_task_id: "task-02",
+        source_agent: "executor-product-execution",
+        sources: [
+          {
+            source_task_id: "task-02",
+            source_agent: "executor-product-execution",
+          },
+        ],
+        priority: 100,
+      },
+    ],
+    confirmation_message: "Please confirm correction.",
+  };
+
+  return `<product-workflow>\n${JSON.stringify(result)}\n</product-workflow>`;
 }
 
 function createMessagesWithRequestAnalysisOnly(

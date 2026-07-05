@@ -19,7 +19,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Collapse, Spin, Tag, Tooltip } from "antd";
+import { Collapse, Modal, Spin, Tag, Tooltip } from "antd";
 import {
   CaretRightOutlined,
   CheckCircleOutlined,
@@ -35,9 +35,9 @@ import type {
 } from "../types";
 import { ProseBlock } from "./ProseBlock";
 import {
+  CritiqueAgentReviewCard,
   PlannerExecutionCard,
   PlannerExecutionLoadingCard,
-  PlannerReviewStatusCard,
 } from "./PlannerExecutionCard";
 import { RequestAnalysisCard } from "./RequestAnalysisCard";
 import { TodoCard } from "./TodoCard";
@@ -107,12 +107,16 @@ export function MessageBubble({
   const conversationToolCalls = getToolCallsForAgent(message, "conversation");
   const requestToolCalls = getToolCallsForAgent(message, "request");
   const plannerToolCalls = getToolCallsForAgent(message, "planner");
+  const critiqueToolCalls = getToolCallsForAgent(message, "critique");
   const productDirectorToolCalls = getToolCallsForAgent(
     message,
     "product_director",
   );
   const plannerReasoningBlocks = message.reasoningBlocks?.filter(
     (block) => block.agentType === "planner",
+  );
+  const critiqueReasoningBlocks = message.reasoningBlocks?.filter(
+    (block) => block.agentType === "critique",
   );
   const executorReasoningBlocks = message.reasoningBlocks?.filter((block) =>
     isExecutorAgent(block.agentType),
@@ -131,6 +135,7 @@ export function MessageBubble({
       ![
         "request",
         "planner",
+        "critique",
         "product_director",
         ...EXECUTOR_AGENT_TYPES,
       ].includes(block.agentType),
@@ -270,6 +275,21 @@ export function MessageBubble({
         })}
 
       {showProcessContent &&
+        critiqueReasoningBlocks?.map((block) => (
+          <AgentProcessGroup
+            key={block.agentType}
+            agentType={block.agentType}
+            thinkingContent={block.content}
+            thinkingActive={
+              streamActive && isAgentActive(message, block.agentType)
+            }
+            toolCalls={critiqueToolCalls}
+            active={streamActive && isAgentActive(message, block.agentType)}
+            tokenUsage={findTokenUsageForAgent(message, block.agentType)}
+          />
+        ))}
+
+      {showProcessContent &&
         productDirectorReasoningBlocks?.map((block) => (
           <AgentProcessGroup
             key={block.agentType}
@@ -356,7 +376,10 @@ export function MessageBubble({
       )}
 
       {showMainContent && message.plannerReview && (
-        <PlannerReviewStatusCard state={message.plannerReview.state} />
+        <CritiqueAgentReviewCard
+          state={message.plannerReview.state}
+          result={message.plannerReview.result}
+        />
       )}
 
       {showMainContent && message.workflowCompletion && (
@@ -736,27 +759,62 @@ function AgentErrorCard({
   message: string;
   onRetry?: () => void;
 }) {
+  const [detailOpen, setDetailOpen] = useState(false);
+
   return (
-    <div className="mb-2 rounded-lg border border-[#fca5a5] bg-[#fef2f2] px-4 py-3 text-[#991b1b]">
-      <div className="mb-1 flex items-center justify-between gap-3">
-        <span className="text-[13px] font-extrabold">
-          {getAgentLabel(agentType ?? "agent")} 执行失败
-        </span>
-        {onRetry && (
-          <button
-            type="button"
-            className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-[#fca5a5] bg-white px-2 py-1 text-[12px] font-bold text-[#991b1b]"
-            onClick={onRetry}
+    <>
+      <div className="mb-2 rounded-lg border border-[#fca5a5] bg-[#fef2f2] px-4 py-3 text-[#991b1b]">
+        <div className="mb-1 flex items-center justify-between gap-3">
+          <span className="text-[13px] font-extrabold">
+            {getAgentLabel(agentType ?? "agent")} 执行失败
+          </span>
+          {onRetry && (
+            <button
+              type="button"
+              className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-[#fca5a5] bg-white px-2 py-1 text-[12px] font-bold text-[#991b1b]"
+              onClick={(event) => {
+                event.stopPropagation();
+                onRetry();
+              }}
+            >
+              <ReloadOutlined />
+              重试
+            </button>
+          )}
+        </div>
+        <button
+          type="button"
+          className="block w-full cursor-pointer border-0 bg-transparent p-0 text-left text-[#991b1b]"
+          onClick={() => setDetailOpen(true)}
+        >
+          <span
+            className="whitespace-pre-wrap text-[13px] leading-relaxed"
+            style={{
+              display: "-webkit-box",
+              WebkitBoxOrient: "vertical",
+              WebkitLineClamp: 3,
+              overflow: "hidden",
+            }}
           >
-            <ReloadOutlined />
-            重试
-          </button>
-        )}
+            {message}
+          </span>
+          <span className="mt-2 block text-[12px] font-bold text-[#b91c1c]">
+            点击查看完整错误
+          </span>
+        </button>
       </div>
-      <div className="whitespace-pre-wrap text-[13px] leading-relaxed">
-        {message}
-      </div>
-    </div>
+      <Modal
+        title={`${getAgentLabel(agentType ?? "agent")} 详细报错`}
+        open={detailOpen}
+        footer={null}
+        width={760}
+        onCancel={() => setDetailOpen(false)}
+      >
+        <pre className="themed-scrollbar max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-md bg-[#111827] p-4 text-[12px] leading-relaxed text-[#f9fafb]">
+          {message}
+        </pre>
+      </Modal>
+    </>
   );
 }
 
@@ -820,6 +878,7 @@ function getAgentColor(agentType: string): string {
   if (agentType === "planner" || agentType === "product_director") {
     return "#fa8c16";
   }
+  if (agentType === "critique") return "#fa8c16";
   if (agentType.startsWith("executor-")) return "#52c41a";
   return "#8c8c8c";
 }
@@ -1126,8 +1185,9 @@ function getReasoningLabel(agentType: string): string {
     return "思考过程（Conversation Agent）";
   }
   if (agentType === "planner") return "思考过程（Planner Agent）";
+  if (agentType === "critique") return "思考过程（Critique Agent）";
   if (agentType === "product_director") {
-    return "思考过程（Planner Agent）";
+    return "思考过程（Critique Agent）";
   }
   return `思考过程（${getAgentLabel(agentType)}）`;
 }
@@ -1148,7 +1208,8 @@ const EXECUTOR_AGENT_TYPES = [
 const AGENT_LABELS: Record<string, string> = {
   request: "Request Agent",
   planner: "Planner Agent",
-  product_director: "Planner Agent",
+  critique: "Critique Agent",
+  product_director: "Critique Agent",
   "executor-product-strategy": "Product Strategy Executor",
   "executor-market-research": "Market Research Executor",
   "executor-gtm": "Go-to-Market Executor",

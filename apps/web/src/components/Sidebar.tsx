@@ -6,27 +6,34 @@
  *
  * Responsibilities:
  * - 提供新建对话、知识图谱和策划产出文档入口
- * - 展示当前工作区的会话列表
+ * - 展示当前工作区的会话列表，每项支持点击弹出操作菜单
  * - 支持展开/收起状态
  *
  * Notes:
  * - 文档生成页面由上层路由切换，本组件只触发导航。
+ * - 对话操作菜单通过点击 RightOutlined 图标触发 Dropdown popup。
  */
 
-import { Layout, Button, Tooltip } from "antd";
+import { Layout, Button, Tooltip, Dropdown } from "antd";
+import type { MenuProps } from "antd";
 import {
   ApartmentOutlined,
   DeleteOutlined,
   EditOutlined,
   FolderOpenOutlined,
+  InboxOutlined,
   LinuxOutlined,
   MenuFoldOutlined,
+  MenuOutlined,
   MenuUnfoldOutlined,
+  PushpinOutlined,
   RightOutlined,
 } from "@ant-design/icons";
 import type { ThreadInfo, WorkspaceInfo } from "../types";
 
 const { Sider } = Layout;
+
+type MenuItem = Required<MenuProps>["items"][number];
 
 const TEXT = {
   appName: "问渠",
@@ -40,6 +47,10 @@ const TEXT = {
   today: "今天",
   account: "账号",
   untitledConversation: "对话总结对话总结对话总结对话总结对话对...",
+  renameThread: "对话重命名",
+  pinThread: "对话置顶",
+  archiveThread: "对话归档",
+  deleteThread: "删除对话",
 };
 
 interface Props {
@@ -55,7 +66,26 @@ interface Props {
   onDocuments: () => void;
   onNew: () => void | Promise<void>;
   onToggle: () => void;
+  /** 对话重命名回调 */
+  onThreadRename?: (id: string) => void;
+  /** 对话置顶回调 */
+  onThreadPin?: (id: string) => void;
+  /** 对话归档回调 */
+  onThreadArchive?: (id: string) => void;
+  /** 删除对话回调 */
+  onThreadDelete?: (id: string) => void;
 }
+
+/**
+ * 对话操作 Dropdown 菜单项，点击对话行右侧图标弹出。
+ */
+const threadActionItems: MenuItem[] = [
+  { key: "rename", icon: <EditOutlined />, label: "对话重命名" },
+  { key: "pin", icon: <PushpinOutlined />, label: "对话置顶" },
+  { key: "archive", icon: <InboxOutlined />, label: "对话归档" },
+  { type: "divider" },
+  { key: "delete", icon: <DeleteOutlined />, label: "删除对话", danger: true },
+];
 
 export function Sidebar({
   workspaces,
@@ -70,6 +100,10 @@ export function Sidebar({
   onDocuments,
   onNew,
   onToggle,
+  onThreadRename,
+  onThreadPin,
+  onThreadArchive,
+  onThreadDelete,
 }: Props) {
   const activeWorkspace =
     workspaces.find((workspace) => workspace.id === activeWorkspaceId) ??
@@ -89,6 +123,24 @@ export function Sidebar({
   ]
     .filter(Boolean)
     .join(" ");
+
+  /** 处理对话操作菜单项点击 */
+  const handleThreadAction = (threadId: string, action: string) => {
+    switch (action) {
+      case "rename":
+        onThreadRename?.(threadId);
+        break;
+      case "pin":
+        onThreadPin?.(threadId);
+        break;
+      case "archive":
+        onThreadArchive?.(threadId);
+        break;
+      case "delete":
+        onThreadDelete?.(threadId);
+        break;
+    }
+  };
 
   return (
     <Sider
@@ -193,19 +245,36 @@ export function Sidebar({
           <>
             <div className="chat-history-date">{TEXT.today}</div>
             {threads.map((thread) => (
-              <button
+              <div
                 key={thread.id}
-                type="button"
                 className={`chat-thread ${
                   thread.id === activeId ? "is-active" : ""
                 }`}
-                onClick={() => onSelect(thread.id)}
               >
-                <div className="w-full flex justify-between items-center">
-                  <span>{thread.title || TEXT.untitledConversation}</span>
-                  <div>{<DeleteOutlined />}</div>
+                <div className="w-full flex justify-between items-center gap-2">
+                  <div
+                    className="flex-1 min-w-0 truncate cursor-pointer"
+                    onClick={() => onSelect(thread.id)}
+                  >
+                    <span>{thread.title || TEXT.untitledConversation}</span>
+                  </div>
+                  <div>
+                    <Dropdown
+                      trigger={["click"]}
+                      menu={{
+                        items: threadActionItems,
+                        onClick: ({ key }) =>
+                          handleThreadAction(thread.id, key),
+                      }}
+                    >
+                      <MenuOutlined
+                        className="cursor-pointer shrink-0 p-1 rounded hover:bg-gray-200 transition-colors"
+                        style={{ fontSize: "12px", color: "#999" }}
+                      />
+                    </Dropdown>
+                  </div>
                 </div>
-              </button>
+              </div>
             ))}
           </>
         )}

@@ -36,6 +36,7 @@ import {
   type ExecutorHumanInputRequired,
 } from "../product-workflow/executor-agent/agent";
 import {
+  createWorkflowContinuationResumeContextFromMessages,
   createWorkflowResumeContextFromMessages,
 } from "./workflow-resume";
 import { streamWorkflowGraph } from "../../graph/workflow";
@@ -263,7 +264,7 @@ export async function* streamConversation(
     }
 
     if (event.type === "workflow-resume-complete") {
-      yield* streamWorkflowCheckpointResume(options);
+      yield* streamWorkflowCheckpointResume(options, messages);
       return;
     }
 
@@ -510,16 +511,52 @@ async function* streamPlanningAfterUserInput(
 }
 
 /**
- * 根据 Conversation Agent 的恢复意图，从 LangGraph checkpoint 继续主产品工作流。
+ * 根据 Conversation Agent 的恢复意图优先从 checkpoint 继续，空跑时再使用历史 DAG 兜底。
  */
 async function* streamWorkflowCheckpointResume(
   options: ConversationStreamOptions,
+  messages: ChatMessage[],
 ): AsyncGenerator<ConversationStreamEvent> {
-  yield* streamPlanningAfterUserInput(
+  let emittedCheckpointEvent = false;
+  let checkpointError: ConversationStreamEvent | null = null;
+  for await (const event of streamPlanningAfterUserInput(
     createEmptyUserInputBlock(),
     options,
     [],
     { resumeFromCheckpoint: true },
+  )) {
+    if (!emittedCheckpointEvent && event.type === "error") {
+      checkpointError = event;
+      continue;
+    }
+
+    if (checkpointError) {
+      yield checkpointError;
+      checkpointError = null;
+    }
+    emittedCheckpointEvent = true;
+    yield event;
+  }
+
+  if (emittedCheckpointEvent) return;
+
+  const resumeContext = createWorkflowContinuationResumeContextFromMessages({
+    messages,
+    knowledgeGraph: options.knowledgeGraph,
+  });
+  if (!resumeContext) {
+    if (checkpointError) yield checkpointError;
+    return;
+  }
+
+  yield* streamPlanningAfterUserInput(
+    createEmptyUserInputBlock(),
+    options,
+    messages,
+    {
+      resumeContext,
+      suppressRestoredRequestAnalysis: true,
+    },
   );
 }
 

@@ -5,7 +5,7 @@
  * 避免 Conversation Agent 向用户重复展示同一补充信息字段。
  *
  * Responsibilities:
- * - 覆盖 Planner Review 结构化 proposal_questions 的去重
+ * - 覆盖 Critique Agent 结构化 proposal_questions 的去重
  * - 覆盖旧版 Executor open_questions 降级表单的去重
  * - 校验来源 help 文案仍保留所有相关 Executor/task
  */

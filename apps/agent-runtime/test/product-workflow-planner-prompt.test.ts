@@ -15,10 +15,10 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  PLANNER_AGENT_PROMPT,
-  PLANNER_WORKFLOW_REVIEW_PROMPT,
-} from "../src/agents/product-workflow/planner-agent/prompt";
+import { PLANNER_AGENT_PROMPT } from "../src/agents/product-workflow/planner-agent/prompt";
+import { CRITIQUE_AGENT_PROMPT } from "../src/agents/product-workflow/critique-agent/prompt";
+import { createExecutorAgentPrompt } from "../src/agents/product-workflow/executor-agent/prompt";
+import { productStrategyExecutorProfile } from "../src/agents/product-workflow/executor-agent/product-strategy-executor/profile";
 
 test("planner prompt preserves graph-semantics guardrails", () => {
   assert.match(
@@ -126,28 +126,73 @@ test("planner prompt preserves graph-semantics guardrails", () => {
     PLANNER_AGENT_PROMPT,
     /If status is omitted, the runtime treats it as "pending"/,
   );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /knowledge graph write tools are append-only/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /Do not ask an Executor to "update D-001", "delete REL-001"/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /Never describe Requirement --Produces--> Decision/,
+  );
 });
 
-test("planner review prompt stays compact and does not request full graph copies", () => {
+test("critique agent prompt stays compact and does not request full graph copies", () => {
   assert.match(
-    PLANNER_WORKFLOW_REVIEW_PROMPT,
+    CRITIQUE_AGENT_PROMPT,
     /The JSON object must include only: status, confirmation_id, request_summary, review, product_context_update, knowledge_graph_review, proposal_questions, confirmation_message/,
   );
   assert.match(
-    PLANNER_WORKFLOW_REVIEW_PROMPT,
+    CRITIQUE_AGENT_PROMPT,
     /Never reconstruct entities or relations from executor summaries/,
   );
   assert.match(
-    PLANNER_WORKFLOW_REVIEW_PROMPT,
+    CRITIQUE_AGENT_PROMPT,
     /Never output planner, executor_results, product_knowledge_graph, knowledge_graph_update/,
   );
   assert.match(
-    PLANNER_WORKFLOW_REVIEW_PROMPT,
+    CRITIQUE_AGENT_PROMPT,
     /Include at most 3 proposal_questions/,
   );
+  assert.match(
+    CRITIQUE_AGENT_PROMPT,
+    /Status is a critique classification, not an execution command/,
+  );
+  assert.match(
+    CRITIQUE_AGENT_PROMPT,
+    /graph_ref must be an object/,
+  );
+  assert.match(
+    CRITIQUE_AGENT_PROMPT,
+    /Review content only/,
+  );
+  assert.match(
+    CRITIQUE_AGENT_PROMPT,
+    /Single-task critique dimensions/,
+  );
+  assert.match(
+    CRITIQUE_AGENT_PROMPT,
+    /Global critique dimensions/,
+  );
+  assert.match(
+    CRITIQUE_AGENT_PROMPT,
+    /No silent truncation/,
+  );
   assert.doesNotMatch(
-    PLANNER_WORKFLOW_REVIEW_PROMPT,
+    CRITIQUE_AGENT_PROMPT,
     /knowledge_graph_update must contain the final knowledge graph state/,
   );
-  assert.doesNotMatch(PLANNER_WORKFLOW_REVIEW_PROMPT, /kg_file_read/);
+  assert.doesNotMatch(CRITIQUE_AGENT_PROMPT, /kg_file_read/);
+});
+
+test("executor prompt preserves append-only graph writing semantics", () => {
+  const prompt = createExecutorAgentPrompt(productStrategyExecutorProfile);
+
+  assert.match(prompt, /ONLY create new traceable records/);
+  assert.match(prompt, /The graph tools are append-only/);
+  assert.match(prompt, /Never reuse an existing node, relation, decision, risk, or open-question ID/);
+  assert.match(prompt, /all new IDs unique/);
 });

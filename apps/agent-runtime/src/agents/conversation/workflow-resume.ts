@@ -21,6 +21,7 @@ import {
   type ChatMessage,
   type ExecutorAgentResult,
   type ProductKnowledgeGraph,
+  type ProductWorkflowResult,
 } from "@repo/shared";
 import { getFormAnswerId } from "../../utils/form-parser";
 import type { WorkflowResumeContext } from "../product-workflow/types";
@@ -41,6 +42,42 @@ export function createWorkflowResumeContextFromMessages({
   const formId = parseLatestFormAnswerId(messages);
   if (!formId) return null;
 
+  return createWorkflowResumeContext({
+    formId,
+    knowledgeGraph,
+    messages,
+  });
+}
+
+/**
+ * 基于 Conversation Agent 明确识别出的继续意图，从历史消息恢复最近的工作流上下文。
+ */
+export function createWorkflowContinuationResumeContextFromMessages({
+  messages,
+  knowledgeGraph,
+}: {
+  messages: ChatMessage[];
+  knowledgeGraph?: ProductKnowledgeGraph | null;
+}): WorkflowResumeContext | null {
+  return createWorkflowResumeContext({
+    formId: null,
+    knowledgeGraph,
+    messages,
+  });
+}
+
+/**
+ * 统一构造表单恢复和继续恢复上下文，避免两条路径遗漏 Planner/Executor 历史产物。
+ */
+function createWorkflowResumeContext({
+  formId,
+  messages,
+  knowledgeGraph,
+}: {
+  formId: string | null;
+  messages: ChatMessage[];
+  knowledgeGraph?: ProductKnowledgeGraph | null;
+}): WorkflowResumeContext | null {
   const requestAnalysis =
     findLatestTaggedPayload(
       messages,
@@ -85,12 +122,19 @@ export function createWorkflowResumeContextFromMessages({
     };
   }
 
+  const continuationExecutorResults =
+    !formId && plan.status === "supplement"
+      ? removeExecutorResultsForPlanTasks(executorResults, plan)
+      : executorResults;
+
   return {
     requestAnalysis,
     plan,
-    executorResults,
+    executorResults: continuationExecutorResults,
     knowledgeGraph: knowledgeGraph ?? null,
-    rerunTaskIds: formId ? inferRerunTaskIds(formId, executorResults) : [],
+    rerunTaskIds: formId
+      ? inferRerunTaskIds(formId, executorResults, productWorkflow)
+      : inferContinuationRerunTaskIds(plan, productWorkflow),
     forceSupplementPlan: formId ? isPlannerConfirmationFormId(formId) : false,
   };
 }
@@ -111,20 +155,76 @@ function parseLatestFormAnswerId(messages: ChatMessage[]): string | null {
 function inferRerunTaskIds(
   formId: string,
   executorResults: ExecutorAgentResult[],
+  productWorkflow: ProductWorkflowResult | null,
 ): string[] {
   if (formId.startsWith(EXECUTOR_BLOCKER_FORM_PREFIX)) {
     return [formId.slice(EXECUTOR_BLOCKER_FORM_PREFIX.length)].filter(Boolean);
   }
 
   if (formId.endsWith("-proposal-decision")) {
-    return inferOpenQuestionTaskIds(executorResults);
+    return mergeTaskIds([
+      ...inferProductWorkflowRerunTaskIds(productWorkflow),
+      ...inferOpenQuestionTaskIds(executorResults),
+    ]);
   }
 
   if (formId === PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID) {
-    return inferOpenQuestionTaskIds(executorResults);
+    return mergeTaskIds([
+      ...inferProductWorkflowRerunTaskIds(productWorkflow),
+      ...inferOpenQuestionTaskIds(executorResults),
+    ]);
   }
 
   return [];
+}
+
+/**
+ * 继续恢复时优先执行已经生成但未运行的 supplement DAG，否则沿用 Review 指定的修正任务。
+ */
+function inferContinuationRerunTaskIds(
+  plan: NonNullable<WorkflowResumeContext["plan"]>,
+  productWorkflow: ProductWorkflowResult | null,
+): string[] {
+  if (plan.status === "supplement") {
+    return plan.tasks.map((task) => task.task_id);
+  }
+
+  return inferProductWorkflowRerunTaskIds(productWorkflow);
+}
+
+/**
+ * 从 Critique Agent 的结构化结论中提取需要重跑或补充的任务。
+ */
+function inferProductWorkflowRerunTaskIds(
+  productWorkflow: ProductWorkflowResult | null,
+): string[] {
+  if (!productWorkflow) return [];
+
+  return mergeTaskIds([
+    ...(productWorkflow.review.retry_task_ids ?? []),
+    ...productWorkflow.proposal_questions.flatMap((question) => [
+      ...(question.source_task_id ? [question.source_task_id] : []),
+      ...question.sources.map((source) => source.source_task_id),
+    ]),
+  ]);
+}
+
+/**
+ * supplement DAG 已经重新生成时，旧 DAG 的同名 Executor 结果不能让新 DAG 被误判为完成。
+ */
+function removeExecutorResultsForPlanTasks(
+  executorResults: ExecutorAgentResult[],
+  plan: NonNullable<WorkflowResumeContext["plan"]>,
+): ExecutorAgentResult[] {
+  const planTaskIds = new Set(plan.tasks.map((task) => task.task_id));
+  return executorResults.filter((result) => !planTaskIds.has(result.task_id));
+}
+
+/**
+ * 按出现顺序合并任务 ID，并过滤空值。
+ */
+function mergeTaskIds(taskIds: string[]): string[] {
+  return [...new Set(taskIds.map((taskId) => taskId.trim()).filter(Boolean))];
 }
 
 /**

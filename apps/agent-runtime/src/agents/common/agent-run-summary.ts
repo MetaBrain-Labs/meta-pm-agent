@@ -631,16 +631,22 @@ function limitSectionText(value: string): string {
  * 将任意值转换为可读 JSON。
  */
 function safeStringify(value: unknown): string {
-  const seen = new WeakSet<object>();
+  const ancestors: object[] = [];
   const json = JSON.stringify(
     value,
-    (_key, nestedValue) => {
+    function replaceSharedValue(this: unknown, _key, nestedValue) {
       if (typeof nestedValue === "bigint") {
         return nestedValue.toString();
       }
       if (typeof nestedValue === "object" && nestedValue !== null) {
-        if (seen.has(nestedValue)) return "[Circular]";
-        seen.add(nestedValue);
+        while (
+          ancestors.length > 0 &&
+          ancestors[ancestors.length - 1] !== this
+        ) {
+          ancestors.pop();
+        }
+        if (ancestors.includes(nestedValue)) return "[Circular]";
+        ancestors.push(nestedValue);
       }
       return nestedValue;
     },
