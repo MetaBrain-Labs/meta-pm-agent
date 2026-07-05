@@ -2,33 +2,18 @@
  * Conversation Agent 流式主通道
  *
  * 实现从用户消息到完整响应的 SSE 流式管道，包括：
- * - Conversation Agent 深度对话阶段
- * - 标记块检测与分段（question-form、user-input）
+ * - 图内 Conversation Agent 整理阶段
+ * - 图内标记块检测与分段（question-form、user-input）
  * - user-input 完成后自动触发产品工作流图
  * - 工作流确认表单的流式转发
  *
  * Responsibilities:
  * - streamConversation()：主入口，接收历史消息和选项，产出 SSE 事件流
- * - streamAgentEvents()：驱动 Conversation Agent 并过滤仅用户授权的工具事件
  * - 在 user-input-complete 后驱动 streamWorkflowGraph
  * - 在工作流完成后格式化并输出最终结果 block
  */
 
-import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "langchain";
 import type { ChatMessage, ProductWorkflowResult } from "@repo/shared";
-import { calculateCost } from "../../config";
-import { createAgentRunSummaryRecorder } from "../common/agent-run-summary";
-import {
-  createConversationAgent,
-  createConversationAgentSystemPrompt,
-} from "./agent";
-import {
-  getReasoningContent,
-  getTextContent,
-  getTokenUsage,
-  toLangChainMessages,
-} from "../../utils/message-adapter";
-import { streamTaggedBlock } from "../../utils/tagged-block-stream";
 import { getFormAnswerId, isFormAnswer } from "../../utils/form-parser";
 import { formatProductWorkflowProposalQuestionForm } from "../product-workflow/agent";
 import {
@@ -54,152 +39,6 @@ import type {
 const PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID = "product-workflow-confirmation";
 const EXECUTOR_BLOCKER_FORM_PREFIX = "executor-blocker-";
 const EXISTING_GRAPH_NEW_PROJECT_FORM_ID = "existing-graph-new-project-check";
-
-/**
- * 流式获取 Conversation Agent 的原始消息事件。
- *  注：此处拼接最底层的文本内容，yield { type: "reasoning/text", content: reasoning };
- *        后续如果遇到需要标签块的场景，重新封装并抛出，例如：yield { type: "question-form-start" }
- *        否则可以直接使用 yield chunk 的形式抛出原始内容，而无需再次封装
- */
-async function* streamAgentEvents(
-  messages: (HumanMessage | AIMessage)[],
-  options: ConversationStreamOptions,
-): AsyncGenerator<ConversationStreamEvent> {
-  const startTime = Date.now();
-  let tokenUsage: ReturnType<typeof getTokenUsage> = null;
-  let outputText = "";
-  let completed = false;
-  let failedError: unknown = null;
-  const baseAgentOptions = {
-    enabledTools: options.enabledTools,
-    knowledgeGraph: options.knowledgeGraph,
-  };
-  const summaryRecorder = createAgentRunSummaryRecorder({
-    agentLabel: "Conversation Agent",
-    agentName: "conversation-agent",
-    agentType: "conversation",
-    context: {
-      enabledTools: options.enabledTools ?? [],
-      knowledgeGraph: options.knowledgeGraph ?? null,
-      payload: {
-        messages: compactConversationMessages(messages),
-      },
-      productContext: options.productContext,
-      requestFormId: options.requestFormId,
-      systemPrompt: createConversationAgentSystemPrompt(baseAgentOptions),
-      workspaceId: options.workspaceId,
-      workflowThreadId: options.workflowThreadId,
-    },
-  });
-  const agentOptions = {
-    ...baseAgentOptions,
-    summaryRecorder,
-  };
-
-  try {
-    const agent = createConversationAgent(agentOptions);
-    const run = await agent.stream(
-      { messages },
-      { streamMode: "messages", signal: options.signal },
-    );
-    for await (const [message] of run) {
-      for (const toolCall of getToolCalls(message)) {
-        summaryRecorder.recordToolCall({
-          toolCallId: toolCall.id,
-          toolName: toolCall.name,
-          toolArgs: toolCall.args,
-        });
-        yield {
-          type: "tool-call",
-          toolCallId: toolCall.id,
-          toolName: toolCall.name,
-          toolArgs: toolCall.args,
-          agentType: "conversation",
-        };
-      }
-
-      const toolResult = getToolResult(message);
-      if (toolResult) {
-        summaryRecorder.recordToolResult({
-          toolCallId: toolResult.id,
-          toolName: toolResult.name,
-          toolResult: toolResult.content,
-        });
-        yield {
-          type: "tool-result",
-          toolCallId: toolResult.id,
-          toolName: toolResult.name,
-          toolResult: toolResult.content,
-          agentType: "conversation",
-        };
-        // 工具响应只进入工具卡片，不作为普通助手正文继续输出。
-        continue;
-      }
-
-      const reasoning = getReasoningContent(message);
-      if (reasoning) {
-        summaryRecorder.recordThinking(reasoning);
-        yield {
-          type: "reasoning",
-          content: reasoning,
-          agentType: "conversation",
-        };
-      }
-
-      const text = getTextContent(message);
-      const cleanText = stripInternalNoise(text);
-      if (cleanText) {
-        outputText += cleanText;
-        summaryRecorder.recordOutput(cleanText);
-        yield { type: "text", content: cleanText, agentType: "conversation" };
-      }
-
-      // 从每次 AIMessage 中累积 token 用量。
-      const usage = getTokenUsage(message);
-      if (usage) {
-        tokenUsage = usage;
-      }
-    }
-
-    // 在流结束时输出 Conversation Agent 的 token 用量和耗时。
-    if (tokenUsage) {
-      const cost = calculateCost(
-        tokenUsage.cacheMissInputTokens,
-        tokenUsage.cacheHitInputTokens,
-        tokenUsage.outputTokens,
-      );
-      yield {
-        type: "token-usage",
-        agentType: "conversation",
-        inputTokens: tokenUsage.inputTokens,
-        cacheHitInputTokens: tokenUsage.cacheHitInputTokens,
-        cacheMissInputTokens: tokenUsage.cacheMissInputTokens,
-        outputTokens: tokenUsage.outputTokens,
-        totalTokens: tokenUsage.totalTokens,
-        costInput: cost.costInput,
-        costOutput: cost.costOutput,
-        costTotal: cost.costTotal,
-        durationMs: Date.now() - startTime,
-      };
-    }
-    completed = true;
-  } catch (error) {
-    failedError = error;
-    throw error;
-  } finally {
-    await summaryRecorder.finish({
-      error: failedError,
-      output: outputText,
-      status: failedError ? "failed" : completed ? "completed" : "cancelled",
-      tokenUsage: tokenUsage
-        ? {
-            ...tokenUsage,
-            durationMs: Date.now() - startTime,
-          }
-        : undefined,
-    });
-  }
-}
 
 /**
  * 处理完整会话流，并在表单答案整合后接入 Request Agent。
@@ -232,104 +71,15 @@ export async function* streamConversation(
       return;
     }
 
-    yield* streamUserInputIntegration(messages, options);
+    yield* streamPlanningAfterUserInput("", options, messages, {
+      startWithConversationAgent: true,
+    });
     return;
   }
 
-  for await (const event of streamTaggedBlock(
-    streamAgentEvents(toLangChainMessages(messages), options),
-    [
-      {
-        startMarker: "<question-form",
-        endMarker: "</question-form>",
-        startEvent: "question-form-start",
-        completeEvent: "question-form-complete",
-      },
-      {
-        startMarker: "<user-input",
-        endMarker: "</user-input>",
-        startEvent: "user-input-start",
-        completeEvent: "user-input-complete",
-      },
-      {
-        startMarker: "<workflow-resume",
-        endMarker: "</workflow-resume>",
-        startEvent: "workflow-resume-start",
-        completeEvent: "workflow-resume-complete",
-      },
-    ],
-  )) {
-    if (event.type === "workflow-resume-start") {
-      continue;
-    }
-
-    if (event.type === "workflow-resume-complete") {
-      yield* streamWorkflowCheckpointResume(options, messages);
-      return;
-    }
-
-    yield event;
-
-    if (event.type === "question-form-complete") {
-      yield* streamHumanInterruptForQuestionForm(
-        event.content,
-        event.agentType,
-        options,
-      );
-    }
-
-    if (event.type === "user-input-complete") {
-      yield* streamPlanningAfterUserInput(event.content, options, messages);
-    }
-  }
-}
-
-async function* streamUserInputIntegration(
-  messages: ChatMessage[],
-  options: ConversationStreamOptions,
-): AsyncGenerator<ConversationStreamEvent> {
-  let textBuffer = "";
-  let started = false;
-
-  for await (const chunk of streamAgentEvents(
-    toLangChainMessages(messages),
-    options,
-  )) {
-    if (
-      chunk.type === "tool-call" ||
-      chunk.type === "tool-result" ||
-      chunk.type === "token-usage"
-    ) {
-      yield chunk;
-      continue;
-    }
-
-    if (chunk.type === "reasoning") {
-      yield chunk;
-      continue;
-    }
-    if (chunk.type !== "text") {
-      continue;
-    }
-
-    // 保存非推理内容。
-    textBuffer += chunk.content;
-    // 第一次收到非推理内容时，触发 user-input-start 事件，表示用户输入的整理开始。
-    if (!started) {
-      started = true;
-      yield { type: "user-input-start" };
-    }
-  }
-
-  if (started) {
-    const userInputBlock = ensureUserInputBlock(textBuffer);
-    yield {
-      type: "user-input-complete",
-      content: userInputBlock,
-    };
-
-    yield* streamPlanningAfterUserInput(userInputBlock, options, messages);
-  }
+  yield* streamPlanningAfterUserInput("", options, messages, {
+    startWithConversationAgent: true,
+  });
 }
 
 /**
@@ -346,7 +96,9 @@ async function* streamWorkflowResumeAfterFormAnswer(
   });
 
   if (!resumeContext) {
-    yield* streamUserInputIntegration(messages, options);
+    yield* streamPlanningAfterUserInput("", options, messages, {
+      startWithConversationAgent: true,
+    });
     return;
   }
 
@@ -365,7 +117,7 @@ async function* streamWorkflowResumeAfterFormAnswer(
 }
 
 /**
- * Conversation Agent 产出 user_input 后，统一进入 LangGraph 规划流程。
+ * Conversation Agent 完成图内交接后，统一进入 LangGraph 规划流程。
  */
 async function* streamPlanningAfterUserInput(
   userInputBlock: string,
@@ -376,6 +128,7 @@ async function* streamPlanningAfterUserInput(
     suppressRestoredRequestAnalysis?: boolean;
     finalizeOnComplete?: boolean;
     resumeFromCheckpoint?: boolean;
+    startWithConversationAgent?: boolean;
   } = {},
 ): AsyncGenerator<ConversationStreamEvent> {
   try {
@@ -390,14 +143,28 @@ async function* streamPlanningAfterUserInput(
 
     for await (const event of streamWorkflowGraph({
       workspaceId: options.workspaceId,
+      requestFormId: options.requestFormId,
+      messages: resumeOptions.startWithConversationAgent ? messages : undefined,
+      enabledTools: options.enabledTools,
       productContext: options.productContext,
       knowledgeGraph: options.knowledgeGraph,
-      userInputBlock,
+      userInputBlock: resumeOptions.startWithConversationAgent
+        ? undefined
+        : userInputBlock,
       workflowThreadId: options.workflowThreadId,
       resumeFromCheckpoint: resumeOptions.resumeFromCheckpoint,
       resumeContext,
       signal: options.signal,
     })) {
+      if (event.type === "workflow-resume-start") {
+        continue;
+      }
+
+      if (event.type === "workflow-resume-complete") {
+        yield* streamWorkflowCheckpointResume(options, messages);
+        return;
+      }
+
       if (
         resumeOptions.suppressRestoredRequestAnalysis &&
         event.type === "request-analysis-complete"
@@ -413,9 +180,23 @@ async function* streamPlanningAfterUserInput(
         event.type === "tool-call" ||
         event.type === "tool-result" ||
         event.type === "token-usage" ||
+        event.type === "text" ||
+        event.type === "question-form-start" ||
+        event.type === "user-input-start" ||
+        event.type === "user-input-complete" ||
         event.type === "knowledge-graph-update"
       ) {
         yield event;
+        continue;
+      }
+
+      if (event.type === "question-form-complete") {
+        yield event;
+        yield* streamHumanInterruptForQuestionForm(
+          event.content,
+          event.agentType,
+          options,
+        );
         continue;
       }
 
@@ -652,27 +433,6 @@ function compactUserVisibleText(text: string, maxLength = 180): string {
 }
 
 /**
- * 格式化为 <user-input> 块，如果已经是该块则直接返回。
- */
-function ensureUserInputBlock(content: string): string {
-  const trimmed = content.trim();
-  if (/^<user-input\b/i.test(trimmed)) {
-    return trimmed;
-  }
-
-  return `<user-input>\n${trimmed}\n</user-input>`;
-}
-
-/**
- * 剪切内部噪声
- */
-function stripInternalNoise(content: string): string {
-  return content
-    .replace(/(^|\n)No files found in\s+\/\s*/g, "$1")
-    .replace(/(^|\n)No files found in\s+\.\s*/g, "$1");
-}
-
-/**
  * 将 Request Agent 等下游异常转成用户可理解的错误文本。
  */
 function getErrorMessage(error: unknown): string {
@@ -680,79 +440,10 @@ function getErrorMessage(error: unknown): string {
 }
 
 /**
- * 压缩会话上下文，避免把 LangChain Message 实例的内部状态写入汇总文件。
- */
-function compactConversationMessages(messages: BaseMessage[]): Array<{
-  content: unknown;
-  type: string;
-}> {
-  return messages.map((message) => ({
-    content: message.content,
-    type: getMessageType(message),
-  }));
-}
-
-/**
- * 读取 LangChain 消息类型，兼容不同版本的公开/内部方法差异。
- */
-function getMessageType(message: BaseMessage): string {
-  const maybeTypedMessage = message as BaseMessage & {
-    _getType?: () => string;
-    getType?: () => string;
-  };
-  if (typeof maybeTypedMessage.getType === "function") {
-    return maybeTypedMessage.getType();
-  }
-  if (typeof maybeTypedMessage._getType === "function") {
-    return maybeTypedMessage._getType();
-  }
-
-  return message.constructor.name;
-}
-
-/**
- * 从模型消息中提取已完成的工具调用。
- */
-/**
  * 转义 tagged block 属性值，避免标题或 ID 破坏 question-form 标签。
  */
 function escapeAttribute(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
-}
-
-/**
- * 从模型消息中提取已完成的工具调用。
- */
-function getToolCalls(
-  message: BaseMessage,
-): Array<{ id?: string; name: string; args?: Record<string, unknown> }> {
-  if (!AIMessage.isInstance(message)) return [];
-
-  return (message.tool_calls ?? [])
-    .filter((toolCall) => toolCall.name)
-    .map((toolCall) => ({
-      id: toolCall.id,
-      name: toolCall.name,
-      args:
-        typeof toolCall.args === "object" && toolCall.args !== null
-          ? (toolCall.args as Record<string, unknown>)
-          : undefined,
-    }));
-}
-
-/**
- * 从工具响应消息中提取前端可展示的结果摘要。
- */
-function getToolResult(
-  message: BaseMessage,
-): { id?: string; name: string; content: unknown } | null {
-  if (!ToolMessage.isInstance(message)) return null;
-
-  return {
-    id: (message as { tool_call_id?: string }).tool_call_id,
-    name: message.name ?? "unknown",
-    content: message.content,
-  };
 }
 
 /**
@@ -808,22 +499,6 @@ function createEmptyUserInputBlock(): string {
   return `<user-input>\n${JSON.stringify(
     {
       user_input: [],
-    },
-    null,
-    2,
-  )}\n</user-input>`;
-}
-
-function createLegacyContinueUserInputBlock(content: string): string {
-  return `<user-input>\n${JSON.stringify(
-    {
-      user_input: [
-        {
-          index: 1,
-          content: "",
-          type: "继续执行",
-        },
-      ],
     },
     null,
     2,

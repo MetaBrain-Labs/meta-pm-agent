@@ -1,7 +1,7 @@
 /**
  * Request Agent 实现
  *
- * 负责对 Conversation Agent 输出的 user_input 进行业务分类，
+ * 负责对图内适配后的 user_input 进行业务分类，
  * 将每条独立语句归类为 business_model、questions 或 chitchat。
  * 基于 DeepAgent + JSON 输出模式，支持流式推理和结构化分析。
  *

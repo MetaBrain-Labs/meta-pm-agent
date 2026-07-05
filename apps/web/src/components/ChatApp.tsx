@@ -1002,6 +1002,7 @@ function TokenUsageMiniRow({ usage }: { usage: TokenUsageInfo }) {
 const AGENT_LABELS: Record<string, string> = {
   conversation: "Conversation Agent",
   conversation_confirmation: "Conversation Agent",
+  planner_intake: "Planner Agent",
   request: "Request Agent",
   planner: "Planner Agent",
   critique: "Critique Agent",
@@ -1076,7 +1077,9 @@ function hasAgentProcessContent(message: Message): boolean {
 
 const LANGGRAPH_NODE_IDS = [
   "START",
+  "conversation_agent",
   "parse_user_input",
+  "planner_intake",
   "request_agent",
   "planner_agent",
   "executor_router",
@@ -1099,6 +1102,9 @@ const LANGGRAPH_EXECUTOR_NODE_IDS = LANGGRAPH_NODE_IDS.filter((nodeId) =>
 );
 
 const AGENT_TO_LANGGRAPH_NODE: Record<string, string> = {
+  conversation: "conversation_agent",
+  conversation_confirmation: "conversation_agent",
+  planner_intake: "planner_intake",
   request: "request_agent",
   planner: "planner_agent",
   critique: "planner_agent",
@@ -1133,8 +1139,23 @@ function buildLangGraphRuntimeState(
 
   nodeStatuses.START = "completed";
 
+  if (workflowMessage.thinking || workflowMessage.userInput) {
+    nodeStatuses.conversation_agent = "completed";
+  }
+
   if (workflowMessage.userInput?.state === "complete") {
     nodeStatuses.parse_user_input = "completed";
+  }
+
+  if (
+    workflowMessage.reasoningBlocks?.some(
+      (block) => block.agentType === "planner_intake",
+    ) ||
+    workflowMessage.questionForm ||
+    workflowMessage.requestAnalysis ||
+    workflowMessage.plannerExecution
+  ) {
+    nodeStatuses.planner_intake = "completed";
   }
 
   if (workflowMessage.requestAnalysis?.state === "complete") {

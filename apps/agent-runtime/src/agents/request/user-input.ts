@@ -36,7 +36,7 @@ export function parseUserInputBlock(text: string): UserInputRecord[] {
 
   if (!result.success) {
     throw new Error(
-      "Conversation Agent did not produce a valid user_input payload.",
+      "Workflow graph did not produce a valid user_input payload.",
     );
   }
 

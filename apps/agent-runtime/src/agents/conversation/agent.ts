@@ -1,9 +1,8 @@
 /**
  * Conversation Agent 创建
  *
- * 负责创建 Conversation Agent 实例，该 Agent 是用户交互的主入口，
- * 负责意图路由（项目/闲聊）、维护请求表单生命周期、分解用户输入、
- * 并可选地启用 web_search 工具。
+ * 负责创建 Conversation Agent 实例，该 Agent 是图内首个用户消息接收节点，
+ * 负责发出 Planner Intake 交接信号或工作流恢复信号，并可选地启用 web_search 工具。
  *
  * Responsibilities:
  * - createConversationAgent()：根据启用工具创建 DeepAgent 实例
@@ -34,7 +33,7 @@ export interface ConversationAgentOptions {
 }
 
 /**
- * 创建 Conversation Agent，负责和用户交互、生成问题表单并整理 user_input。
+ * 创建 Conversation Agent，负责图内首节点交接并保留用户授权工具能力。
  */
 export function createConversationAgent(options: ConversationAgentOptions = {}) {
   const model = createChatModel();
@@ -111,13 +110,12 @@ ${graphGuardPrompt}
 
 ## Web search tool
 
-- You may call \`web_search\` only when the current turn needs external facts, recent information, source verification, market references, or other information not present in the conversation.
-- Do not call \`web_search\` for routine routing, simple clarification, or form generation when the user-provided context is sufficient.
+- You may call \`web_search\` only when a non-resume handoff cannot preserve an explicit external reference without a compact citation.
+- Do not call \`web_search\` for routine handoff, Planner routing, simple clarification, requirement discovery, or form generation.
 - When the user asks for latest, recent, current, today, this month, this year, or similar relative-time information, interpret it using the runtime date above instead of model memory.
 - When building a \`web_search\` query for relative-time requests, include the current year/date or a concrete recent period from the runtime context when useful. For example, a request for recent GitHub hotspots should search for 2026 or June 2026 GitHub trending repositories instead of older years.
 - If search results look stale or conflict with the runtime date, refine the query once before answering, or explicitly say the latest information could not be verified.
-- When a bullet, headline, or factual claim is supported by a search result, append a compact citation marker using that result's \`sourceId\`, for example \`[[source:1]]\`. Do not invent source ids and do not show raw URLs in normal prose unless the user asks for them.
-- When search results influence your answer, summarize the useful findings in the user's language and keep the project-management workflow intact.`;
+- If search results are used, keep the final output contract unchanged and hand off to Planner Intake. Do not expose raw URLs.`;
 }
 
 /**
@@ -160,9 +158,5 @@ function buildWorkspaceKnowledgeGraphPrompt(
 - Relation count: ${relationCount}.
 - Recent nodes: ${recentNodes || "none"}.
 
-If the latest user request appears to start a different new project instead of revising or extending the current project, do not emit a <user-input> block. Ask exactly one Question Form with id "existing-graph-new-project-check" and one required radio question with id "action". The form must warn that the current workspace already has a product knowledge graph and must ask whether to delete the current graph and continue in this workspace, or create a new workspace for the new project.
-
-This graph guard has priority over ordinary request-discovery forms. A standalone broad project request such as "design/build/create a [product/tool/system]" must be treated as a possible new project unless the user explicitly says they are continuing, revising, extending, or summarizing the current project. Do not infer continuation only because the existing graph has related domain nodes. When uncertain, ask the "existing-graph-new-project-check" form first, before asking any scope, goal, audience, or feature clarification questions.
-
-Use the user's language for the title, description, question label, and submit label. For Chinese, use these exact option labels: "删除当前知识图谱，并在当前工作区开始新项目" and "创建新的工作区开始新项目". For English, use these exact option labels: "Delete the current knowledge graph and start the new project in this workspace" and "Create a new workspace for the new project".`;
+Use this graph summary only to understand whether explicit workflow resume is plausible. Planner Intake Agent owns graph-aware intent judgment and any user-facing Question Form.`;
 }

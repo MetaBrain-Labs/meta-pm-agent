@@ -6,6 +6,7 @@
  * 从 streamExecutorAgent 驱动并输出推理、工具调用和补丁结果。
  *
  * Responsibilities:
+ * - 实现 plannerIntakeNode：在 Request Agent 前执行产品上下文感知的入站判断
  * - 实现 plannerAgentNode：调用 Planner 生成 DAG，并在 Executor 全部完成后执行 Critique Agent
  * - 实现各 Executor 节点：读取知识图谱、执行任务、产出图谱补丁
  * - 实现 executorRouterNode / selectNextExecutorRouterTargets：按 DAG 依赖顺序调度下一批 Executor
@@ -22,6 +23,11 @@ import {
   type ExecutorAgentType,
 } from "../../agents/product-workflow/executor-agent/definitions";
 import {
+  formatPlannerIntakeQuestionForm,
+  streamPlannerIntakeAgent,
+  type PlannerIntakeStreamEvent,
+} from "../../agents/product-workflow/planner-agent/intake";
+import {
   createProductWorkflowKnowledgeGraph,
   appendKnowledgeGraphPatch,
   formatExecutorResultBlock,
@@ -32,6 +38,92 @@ import {
   streamPlannerAgent,
 } from "../../agents/product-workflow/agent";
 import type { WorkflowGraphStateValue } from "../state";
+
+/**
+ * 执行 Planner intake 节点，在正式 Request Agent 前判断是否需要先向用户提问。
+ */
+export async function plannerIntakeNode(
+  state: WorkflowGraphStateValue,
+  config?: LangGraphRunnableConfig,
+) {
+  if (state.requestAnalysis) {
+    return { plannerIntakeOutcome: "ready_for_workflow" as const };
+  }
+
+  const writer = getWriter(config);
+  const knowledgeGraph =
+    state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
+
+  writer?.({
+    type: "agent-status",
+    agentType: "planner_intake",
+    status: "started",
+    phase: "planning",
+  });
+
+  const result = await consumePlannerIntakeStream(
+    streamPlannerIntakeAgent({
+      productContext: state.productContext,
+      userInput: state.userInput,
+      knowledgeGraph,
+      signal: config?.signal,
+    }),
+    writer,
+  );
+
+  writer?.({
+    type: "agent-status",
+    agentType: "planner_intake",
+    status: "completed",
+    phase: "planning",
+  });
+
+  if (result.intent === "chitchat") {
+    writer?.({
+      type: "text",
+      content: result.conversation_message,
+      agentType: "conversation",
+    });
+    return {
+      knowledgeGraph,
+      plannerIntakeOutcome: "conversation_reply" as const,
+    };
+  }
+
+  if (result.intent === "needs_question_form") {
+    const questionForm = formatPlannerIntakeQuestionForm(result);
+    writer?.({
+      type: "text",
+      content: result.conversation_message,
+      agentType: "conversation",
+    });
+    if (questionForm) {
+      writer?.({
+        type: "question-form-start",
+        agentType: "conversation",
+      });
+      writer?.({
+        type: "question-form-complete",
+        content: questionForm,
+        agentType: "conversation",
+      });
+    }
+    return {
+      knowledgeGraph,
+      plannerIntakeOutcome: "waiting_for_user" as const,
+    };
+  }
+
+  writer?.({
+    type: "text",
+    content: result.conversation_message,
+    agentType: "conversation",
+  });
+  return {
+    knowledgeGraph,
+    plannerIntakeOutcome: "ready_for_workflow" as const,
+  };
+}
 
 /**
  * 执行 Planner Agent 节点，把 Request Agent 的分析结果转换为可执行 DAG。
@@ -348,6 +440,21 @@ async function consumeProductWorkflowStream<T>(
   let next = await stream.next();
   while (!next.done) {
     writer?.(withParallelAgents(next.value, options.parallelAgents));
+    next = await stream.next();
+  }
+  return next.value;
+}
+
+/**
+ * 消费 Planner intake 的结构化流，保留最终判断结果。
+ */
+async function consumePlannerIntakeStream<T>(
+  stream: AsyncGenerator<PlannerIntakeStreamEvent, T, void>,
+  writer: ((chunk: unknown) => void) | undefined,
+): Promise<T> {
+  let next = await stream.next();
+  while (!next.done) {
+    writer?.(next.value);
     next = await stream.next();
   }
   return next.value;

@@ -71,6 +71,12 @@ export type ConversationStreamEvent =
   | { type: "question-form-complete"; content: string; agentType?: AgentMessageType }
   | { type: "workflow-resume-start"; agentType?: AgentMessageType }
   | { type: "workflow-resume-complete"; content: string; agentType?: AgentMessageType }
+  | { type: "planner-intake-handoff-start"; agentType?: AgentMessageType }
+  | {
+      type: "planner-intake-handoff-complete";
+      content: string;
+      agentType?: AgentMessageType;
+    }
   | {
       type: "human-interrupt";
       interrupt: HumanInTheLoopInterrupt;

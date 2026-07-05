@@ -15,6 +15,8 @@
 
 import { Annotation } from "@langchain/langgraph";
 import type {
+  AgentRuntimeTool,
+  ChatMessage,
   ExecutorAgentResult,
   ProductKnowledgeGraph,
   ProductWorkflowResult,
@@ -41,8 +43,43 @@ export const WorkflowGraphState = Annotation.Root({
     default: () => undefined,
   }),
 
+  // 当前请求表单 ID，用于 Conversation Agent 汇总和 HITL 线程追踪。
+  requestFormId: Annotation<string | undefined>({
+    reducer: (_current, update) => update,
+    default: () => undefined,
+  }),
+
+  // 当前工作流线程 ID，用于 Conversation Agent 汇总记录运行上下文。
+  workflowThreadId: Annotation<string | undefined>({
+    reducer: (_current, update) => update,
+    default: () => undefined,
+  }),
+
+  // API 传入的完整聊天消息，供图内 Conversation Agent 首节点读取。
+  messages: Annotation<ChatMessage[]>({
+    reducer: (_current, update) => update,
+    default: () => [],
+  }),
+
+  // 用户显式启用的运行时工具列表，仅 Conversation Agent 可读取。
+  enabledTools: Annotation<AgentRuntimeTool[]>({
+    reducer: (_current, update) => update,
+    default: () => [],
+  }),
+
   // Conversation Agent 输出的原始 <user-input> 内容。
-  userInputBlock: Annotation<string>(),
+  userInputBlock: Annotation<string>({
+    reducer: (_current, update) => update,
+    default: () => "",
+  }),
+
+  // Conversation Agent 节点的路由结果，用于决定是否继续进入 Planner intake。
+  conversationOutcome: Annotation<
+    "ready_for_planner" | "waiting_for_user" | "workflow_resume" | null
+  >({
+    reducer: (_current, update) => update,
+    default: () => null,
+  }),
 
   // 解析后的独立语句列表，供 Request Agent 及后续 Agent 使用。
   userInput: Annotation<UserInputRecord[]>({
@@ -60,6 +97,14 @@ export const WorkflowGraphState = Annotation.Root({
   requestAnalysisBlock: Annotation<string>({
     reducer: (_current, update) => update,
     default: () => "",
+  }),
+
+  // Planner intake 对本轮输入的路由判断。
+  plannerIntakeOutcome: Annotation<
+    "ready_for_workflow" | "waiting_for_user" | "conversation_reply" | null
+  >({
+    reducer: (_current, update) => update,
+    default: () => null,
   }),
 
   // 当前产品知识图谱快照，供 Planner 和 Executor 共享上下文。

@@ -119,16 +119,28 @@ const LANGGRAPH_NODES: LangGraphNode[] = [
     description: "LangGraph START，进入产品工作流主图。",
   },
   {
+    id: "conversation_agent",
+    label: "Conversation Agent",
+    type: "agent",
+    description: "图内首个 Agent，整理用户输入并产出 user-input block。",
+  },
+  {
     id: "parse_user_input",
     label: "Parse User Input",
     type: "agent",
     description: "解析 Conversation Agent 输出的 user-input block。",
   },
   {
+    id: "planner_intake",
+    label: "Planner Intake",
+    type: "agent",
+    description: "Planner Agent 入站判断，基于产品上下文决定闲聊、提问或继续工作流。",
+  },
+  {
     id: "request_agent",
     label: "Request Agent",
     type: "agent",
-    description: "把用户输入整理成业务建模项，并决定是否进入产品工作流。",
+    description: "在 Planner intake 确认可继续后，把用户输入整理成业务建模项。",
   },
   {
     id: "planner_agent",
@@ -222,18 +234,39 @@ const EXECUTOR_NODE_IDS = LANGGRAPH_NODES.filter(
 
 const LANGGRAPH_EDGES: LangGraphEdge[] = [
   {
-    id: "start-parse",
+    id: "start-conversation",
     source: "START",
-    target: "parse_user_input",
+    target: "conversation_agent",
     label: "start",
     kind: "static",
   },
   {
-    id: "parse-request",
+    id: "conversation-parse",
+    source: "conversation_agent",
+    target: "parse_user_input",
+    label: "user input",
+    kind: "conditional",
+  },
+  {
+    id: "parse-planner-intake",
     source: "parse_user_input",
-    target: "request_agent",
+    target: "planner_intake",
     label: "parsed",
     kind: "static",
+  },
+  {
+    id: "planner-intake-request",
+    source: "planner_intake",
+    target: "request_agent",
+    label: "ready",
+    kind: "conditional",
+  },
+  {
+    id: "planner-intake-end",
+    source: "planner_intake",
+    target: "END",
+    label: "chat / question",
+    kind: "conditional",
   },
   {
     id: "request-planner",

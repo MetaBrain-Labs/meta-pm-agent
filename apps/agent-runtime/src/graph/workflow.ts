@@ -2,13 +2,14 @@
  * 产品工作流主图定义
  *
  * 使用 LangGraph 构建完整的产品管理工作流图，包含固定骨架：
- * parse_user_input -> request_agent -> planner_agent -> executor_router -> executor-* -> executor_aggregator -> END。
+ * conversation_agent -> parse_user_input -> planner_intake -> request_agent ->
+ * planner_agent -> executor_router -> executor-* -> executor_aggregator -> END。
  * 通过 Router 条件边和 Executor 节点内部任务选择实现 DAG 的动态规划与执行。
  *
  * Responsibilities:
  * - 定义 WorkflowGraphInput / WorkflowGraphResult 接口
  * - 组装 LangGraph StateGraph，连接所有节点和条件边
- * - 导出 streamWorkflowGraph() 流式执行入口（从 conversation 流中截取 <user-input> 后驱动）
+ * - 导出 streamWorkflowGraph() 流式执行入口（由图内 Conversation Agent 或恢复输入驱动）
  * - 导出 runWorkflowGraph() 同步执行入口
  *
  * Notes:
@@ -18,6 +19,8 @@
 import { END, MemorySaver, START, StateGraph } from "@langchain/langgraph";
 import type { BaseCheckpointSaver } from "@langchain/langgraph";
 import type {
+  AgentRuntimeTool,
+  ChatMessage,
   ExecutorAgentResult,
   ProductKnowledgeGraph,
   ProductWorkflowResult,
@@ -27,6 +30,7 @@ import type {
 import type { UserInputRecord } from "../agents/request/user-input";
 import type { ProductWorkflowStreamEvent } from "../agents/product-workflow/agent";
 import type { WorkflowResumeContext } from "../agents/product-workflow/types";
+import type { ConversationStreamEvent } from "../types";
 import {
   aiShippingExecutorNode,
   dataAnalyticsExecutorNode,
@@ -37,21 +41,26 @@ import {
   marketResearchExecutorNode,
   marketingGrowthExecutorNode,
   productDiscoveryExecutorNode,
+  plannerIntakeNode,
   plannerAgentNode,
   productExecutionExecutorNode,
   productStrategyExecutorNode,
   selectNextExecutorRouterTargets,
   toolkitExecutorNode,
 } from "./nodes/product-workflow-node";
+import { conversationAgentNode } from "./nodes/conversation-node";
 import { parseUserInputNode, requestAgentNode } from "./nodes/request-node";
 import { WorkflowGraphState, type WorkflowGraphStateValue } from "./state";
 import { getWorkflowCheckpointer } from "./workflow-checkpointer";
 
 export interface WorkflowGraphInput {
   workspaceId?: string;
+  requestFormId?: string;
+  messages?: ChatMessage[];
+  enabledTools?: AgentRuntimeTool[];
   productContext?: string;
   knowledgeGraph?: ProductKnowledgeGraph | null;
-  userInputBlock: string;
+  userInputBlock?: string;
   workflowThreadId?: string;
   resumeFromCheckpoint?: boolean;
   resumeContext?: WorkflowResumeContext;
@@ -68,14 +77,7 @@ export interface WorkflowGraphResult {
 }
 
 export type WorkflowGraphStreamEvent =
-  | { type: "reasoning"; content: string; agentType: "request" }
-  | { type: "request-analysis-start"; agentType: "request" }
-  | {
-      type: "request-analysis-complete";
-      content: string;
-      analysis: RequestAnalysis;
-      agentType: "request";
-    }
+  | ConversationStreamEvent
   | ProductWorkflowStreamEvent;
 
 /**
@@ -97,6 +99,22 @@ const PRODUCT_WORKFLOW_ROUTE_TARGETS = {
 } as const;
 
 /**
+ * Conversation Agent 输出后的路由目标集合。
+ */
+const CONVERSATION_ROUTE_TARGETS = {
+  parse_user_input: "parse_user_input",
+  end: END,
+} as const;
+
+/**
+ * Planner intake 输出后的路由目标集合。
+ */
+const PLANNER_INTAKE_ROUTE_TARGETS = {
+  request_agent: "request_agent",
+  end: END,
+} as const;
+
+/**
  * Meta PM Agent 的 LangGraph 主图，负责从用户输入整理到产品工作流的阶段规划。
  */
 export const graph = createWorkflowGraph(new MemorySaver());
@@ -108,52 +126,66 @@ let durableGraphPromise: Promise<typeof graph> | null = null;
  */
 function createWorkflowGraph(checkpointer: BaseCheckpointSaver) {
   return new StateGraph(WorkflowGraphState)
-  // 将 Conversation Agent 的 <user-input> block 转成结构化输入。
-  .addNode("parse_user_input", parseUserInputNode)
-  // Request Agent 负责对用户输入进行业务建模分类。
-  .addNode("request_agent", requestAgentNode)
-  // Planner Agent 负责把业务建模项规划为可执行 DAG。
-  .addNode("planner_agent", plannerAgentNode)
-  // Router 在固定图内根据 Planner DAG 动态选择下一批 Executor 分支。
-  .addNode("executor_router", executorRouterNode)
-  // 10 个 Executor Agent 分别负责各自领域的图谱增量。
-  .addNode("executor-product-strategy", productStrategyExecutorNode)
-  .addNode("executor-market-research", marketResearchExecutorNode)
-  .addNode("executor-gtm", gtmExecutorNode)
-  .addNode("executor-product-discovery", productDiscoveryExecutorNode)
-  .addNode("executor-product-execution", productExecutionExecutorNode)
-  .addNode("executor-marketing-growth", marketingGrowthExecutorNode)
-  .addNode("executor-data-analytics", dataAnalyticsExecutorNode)
-  .addNode("executor-ai-shipping", aiShippingExecutorNode)
-  .addNode("executor-toolkit", toolkitExecutorNode)
-  .addNode("executor-interface-craft", interfaceCraftExecutorNode)
-  // Aggregator 汇合同一批 Executor 写入的状态，再把调度权交回 Router。
-  .addNode("executor_aggregator", executorAggregatorNode)
+    // 先由 Conversation Agent 整理用户输入，确保所有消息进入图内首节点。
+    .addNode("conversation_agent", conversationAgentNode)
+    // 将 Conversation Agent 的 <user-input> block 转成结构化输入。
+    .addNode("parse_user_input", parseUserInputNode)
+    // Planner intake 使用产品上下文判断闲聊、补充问题或继续工作流。
+    .addNode("planner_intake", plannerIntakeNode)
+    // Request Agent 负责对用户输入进行业务建模分类。
+    .addNode("request_agent", requestAgentNode)
+    // Planner Agent 负责把业务建模项规划为可执行 DAG。
+    .addNode("planner_agent", plannerAgentNode)
+    // Router 在固定图内根据 Planner DAG 动态选择下一批 Executor 分支。
+    .addNode("executor_router", executorRouterNode)
+    // 10 个 Executor Agent 分别负责各自领域的图谱增量。
+    .addNode("executor-product-strategy", productStrategyExecutorNode)
+    .addNode("executor-market-research", marketResearchExecutorNode)
+    .addNode("executor-gtm", gtmExecutorNode)
+    .addNode("executor-product-discovery", productDiscoveryExecutorNode)
+    .addNode("executor-product-execution", productExecutionExecutorNode)
+    .addNode("executor-marketing-growth", marketingGrowthExecutorNode)
+    .addNode("executor-data-analytics", dataAnalyticsExecutorNode)
+    .addNode("executor-ai-shipping", aiShippingExecutorNode)
+    .addNode("executor-toolkit", toolkitExecutorNode)
+    .addNode("executor-interface-craft", interfaceCraftExecutorNode)
+    // Aggregator 汇合同一批 Executor 写入的状态，再把调度权交回 Router。
+    .addNode("executor_aggregator", executorAggregatorNode)
 
-  .addEdge(START, "parse_user_input")
-  .addEdge("parse_user_input", "request_agent")
-  .addConditionalEdges("request_agent", selectNextNodeAfterRequestAgent, {
-    planner_agent: "planner_agent",
-    end: END,
-  })
-  .addEdge("planner_agent", "executor_router")
-  .addConditionalEdges(
-    "executor_router",
-    selectNextExecutorRouterTargets,
-    PRODUCT_WORKFLOW_ROUTE_TARGETS,
-  )
-  .addEdge("executor-product-strategy", "executor_aggregator")
-  .addEdge("executor-market-research", "executor_aggregator")
-  .addEdge("executor-gtm", "executor_aggregator")
-  .addEdge("executor-product-discovery", "executor_aggregator")
-  .addEdge("executor-product-execution", "executor_aggregator")
-  .addEdge("executor-marketing-growth", "executor_aggregator")
-  .addEdge("executor-data-analytics", "executor_aggregator")
-  .addEdge("executor-ai-shipping", "executor_aggregator")
-  .addEdge("executor-toolkit", "executor_aggregator")
-  .addEdge("executor-interface-craft", "executor_aggregator")
-  .addEdge("executor_aggregator", "executor_router")
-  .compile({ checkpointer });
+    .addEdge(START, "conversation_agent")
+    .addConditionalEdges(
+      "conversation_agent",
+      selectNextNodeAfterConversation,
+      CONVERSATION_ROUTE_TARGETS,
+    )
+    .addEdge("parse_user_input", "planner_intake")
+    .addConditionalEdges(
+      "planner_intake",
+      selectNextNodeAfterPlannerIntake,
+      PLANNER_INTAKE_ROUTE_TARGETS,
+    )
+    .addConditionalEdges("request_agent", selectNextNodeAfterRequestAgent, {
+      planner_agent: "planner_agent",
+      end: END,
+    })
+    .addEdge("planner_agent", "executor_router")
+    .addConditionalEdges(
+      "executor_router",
+      selectNextExecutorRouterTargets,
+      PRODUCT_WORKFLOW_ROUTE_TARGETS,
+    )
+    .addEdge("executor-product-strategy", "executor_aggregator")
+    .addEdge("executor-market-research", "executor_aggregator")
+    .addEdge("executor-gtm", "executor_aggregator")
+    .addEdge("executor-product-discovery", "executor_aggregator")
+    .addEdge("executor-product-execution", "executor_aggregator")
+    .addEdge("executor-marketing-growth", "executor_aggregator")
+    .addEdge("executor-data-analytics", "executor_aggregator")
+    .addEdge("executor-ai-shipping", "executor_aggregator")
+    .addEdge("executor-toolkit", "executor_aggregator")
+    .addEdge("executor-interface-craft", "executor_aggregator")
+    .addEdge("executor_aggregator", "executor_router")
+    .compile({ checkpointer });
 }
 
 /**
@@ -210,6 +242,24 @@ export async function* streamWorkflowGraph(
 }
 
 /**
+ * 根据 Conversation Agent 是否完成 Planner Intake 交接决定是否继续。
+ */
+function selectNextNodeAfterConversation(state: WorkflowGraphStateValue) {
+  return state.conversationOutcome === "ready_for_planner"
+    ? "parse_user_input"
+    : "end";
+}
+
+/**
+ * 根据 Planner intake 的判断决定是否进入 Request Agent 和正式 DAG 规划。
+ */
+function selectNextNodeAfterPlannerIntake(state: WorkflowGraphStateValue) {
+  return state.plannerIntakeOutcome === "ready_for_workflow"
+    ? "request_agent"
+    : "end";
+}
+
+/**
  * 根据 Request Agent 是否识别到业务建模项，决定是否进入产品工作流。
  */
 function selectNextNodeAfterRequestAgent(state: WorkflowGraphStateValue) {
@@ -234,7 +284,13 @@ function createWorkflowInitialState(input: WorkflowGraphInput) {
   return {
     productContext: input.productContext ?? "",
     workspaceId: input.workspaceId,
-    userInputBlock: input.userInputBlock,
+    requestFormId: input.requestFormId,
+    workflowThreadId: input.workflowThreadId,
+    messages: input.messages ?? [],
+    enabledTools: input.enabledTools ?? [],
+    userInputBlock: input.userInputBlock ?? "",
+    conversationOutcome: null,
+    plannerIntakeOutcome: null,
     requestAnalysis: resume?.requestAnalysis ?? null,
     plan,
     executorResults,

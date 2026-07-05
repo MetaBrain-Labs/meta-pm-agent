@@ -875,7 +875,11 @@ function getAgentColor(agentType: string): string {
     return "#1677ff";
   }
   if (agentType === "request") return "#722ed1";
-  if (agentType === "planner" || agentType === "product_director") {
+  if (
+    agentType === "planner" ||
+    agentType === "planner_intake" ||
+    agentType === "product_director"
+  ) {
     return "#fa8c16";
   }
   if (agentType === "critique") return "#fa8c16";
@@ -1185,6 +1189,7 @@ function getReasoningLabel(agentType: string): string {
     return "思考过程（Conversation Agent）";
   }
   if (agentType === "planner") return "思考过程（Planner Agent）";
+  if (agentType === "planner_intake") return "思考过程（Planner Agent）";
   if (agentType === "critique") return "思考过程（Critique Agent）";
   if (agentType === "product_director") {
     return "思考过程（Critique Agent）";
@@ -1206,6 +1211,9 @@ const EXECUTOR_AGENT_TYPES = [
 ];
 
 const AGENT_LABELS: Record<string, string> = {
+  conversation: "Conversation Agent",
+  conversation_confirmation: "Conversation Agent",
+  planner_intake: "Planner Agent",
   request: "Request Agent",
   planner: "Planner Agent",
   critique: "Critique Agent",
