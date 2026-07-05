@@ -1004,7 +1004,8 @@ const AGENT_LABELS: Record<string, string> = {
   conversation_confirmation: "Conversation Agent",
   request: "Request Agent",
   planner: "Planner Agent",
-  product_director: "Planner Agent",
+  critique: "Critique Agent",
+  product_director: "Critique Agent",
   "executor-product-strategy": "Product Strategy Executor",
   "executor-market-research": "Market Research Executor",
   "executor-gtm": "Go-to-Market Executor",
@@ -1100,6 +1101,7 @@ const LANGGRAPH_EXECUTOR_NODE_IDS = LANGGRAPH_NODE_IDS.filter((nodeId) =>
 const AGENT_TO_LANGGRAPH_NODE: Record<string, string> = {
   request: "request_agent",
   planner: "planner_agent",
+  critique: "planner_agent",
   product_director: "planner_agent",
   "executor-product-strategy": "executor-product-strategy",
   "executor-market-research": "executor-market-research",

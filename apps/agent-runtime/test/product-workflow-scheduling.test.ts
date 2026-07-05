@@ -16,7 +16,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  PlannerWorkflowReviewOutputSchema,
+  CritiqueAgentOutputSchema,
   TaskExecutionPlanSchema,
   type ProductKnowledgeGraph,
   type RequestAnalysis,
@@ -156,8 +156,8 @@ test("parses planner DAG edge arrays from model output", () => {
   ]);
 });
 
-test("normalizes planner review issue severity and note shapes", () => {
-  const result = PlannerWorkflowReviewOutputSchema.safeParse({
+test("normalizes critique agent issue severity and note shapes", () => {
+  const result = CritiqueAgentOutputSchema.safeParse({
     status: "pending_user_confirmation",
     confirmation_id: "product-workflow-confirmation",
     request_summary: "Review a product workflow.",
@@ -176,6 +176,7 @@ test("normalizes planner review issue severity and note shapes", () => {
     },
     product_context_update: "Task task-01 needs correction.",
     knowledge_graph_review: {
+      graph_ref: "runtime-graph-snapshot",
       accepted_task_ids: [],
       rejected_task_ids: ["task-01"],
       retry_task_ids: ["task-01"],
@@ -196,6 +197,9 @@ test("normalizes planner review issue severity and note shapes", () => {
   if (!result.success) return;
   assert.equal(result.data.review.issues[0]?.severity, "error");
   assert.equal(result.data.knowledge_graph_review.issues[0]?.severity, "error");
+  assert.deepEqual(result.data.knowledge_graph_review.graph_ref, {
+    checksum: "runtime-graph-snapshot",
+  });
   assert.match(result.data.review.notes, /task-01/);
   assert.deepEqual(result.data.knowledge_graph_review.notes, [
     "Task task-01 needs correction.",

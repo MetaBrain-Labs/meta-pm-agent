@@ -20,6 +20,7 @@ import { z } from "zod";
  */
 export const ProductWorkflowAgentTypeSchema = z.enum([
   "planner",
+  "critique",
   "executor-product-strategy",
   "executor-market-research",
   "executor-gtm",
@@ -35,7 +36,7 @@ export const ProductWorkflowAgentTypeSchema = z.enum([
 const PRODUCT_WORKFLOW_AGENT_TYPES = ProductWorkflowAgentTypeSchema.options;
 
 /**
- * 归一化模型输出的 Agent 类型，避免局部来源字段写偏导致整个 Planner Review 回退。
+ * 归一化模型输出的 Agent 类型，避免局部来源字段写偏导致整个 Critique Agent 回退。
  */
 const LooseProductWorkflowAgentTypeSchema = z.preprocess(
   (value) =>
@@ -326,6 +327,7 @@ export const TaskExecutionNodeSchema = z.object({
   description: z.string().min(1),
   assigned_agent: ProductWorkflowAgentTypeSchema.exclude([
     "planner",
+    "critique",
   ]),
   depends_on: z.array(z.string().min(1)),
   covered_business_model_indexes: z.array(z.number().int().positive()),
@@ -380,6 +382,7 @@ export const ExecutorAgentResultSchema = z.object({
   task_id: z.string().min(1),
   agent_type: ProductWorkflowAgentTypeSchema.exclude([
     "planner",
+    "critique",
   ]),
   focus_layer: z.enum([
     "Goal",
@@ -439,15 +442,26 @@ const ProductWorkflowKnowledgeGraphReviewNotesSchema = z.preprocess((value) => {
 }, z.array(z.string().min(1).max(500)).max(8).default([]));
 
 /**
- * Planner Review 对最终知识图谱状态的轻量审查结论。
+ * Critique Agent 引用的知识图谱快照标识。
+ */
+const ProductWorkflowKnowledgeGraphReviewRefSchema = z.preprocess((value) => {
+  if (typeof value === "string" && value.trim()) {
+    return { checksum: value.trim() };
+  }
+
+  return value;
+}, z.object({
+  version: z.number().int().nonnegative().optional().describe("Persisted graph version when known"),
+  checksum: z.string().optional().describe("Optional checksum or stable graph reference"),
+  entity_count: z.number().int().nonnegative().optional().describe("Final graph entity count"),
+  relation_count: z.number().int().nonnegative().optional().describe("Final graph relation count"),
+}));
+
+/**
+ * Critique Agent 对最终知识图谱状态的轻量审查结论。
  */
 export const ProductWorkflowKnowledgeGraphReviewSchema = z.object({
-  graph_ref: z.object({
-    version: z.number().int().nonnegative().optional().describe("Persisted graph version when known"),
-    checksum: z.string().optional().describe("Optional checksum or stable graph reference"),
-    entity_count: z.number().int().nonnegative().optional().describe("Final graph entity count"),
-    relation_count: z.number().int().nonnegative().optional().describe("Final graph relation count"),
-  }).optional().describe("Reference to the graph snapshot reviewed by Planner Agent"),
+  graph_ref: ProductWorkflowKnowledgeGraphReviewRefSchema.optional().describe("Reference to the graph snapshot reviewed by Critique Agent"),
   accepted_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs whose graph updates are accepted"),
   rejected_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs whose graph updates are rejected"),
   retry_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs that should be retried or corrected"),
@@ -456,12 +470,12 @@ export const ProductWorkflowKnowledgeGraphReviewSchema = z.object({
 });
 
 /**
- * Planner Review 模型的瘦身输出契约。
+ * Critique Agent 模型的瘦身输出契约。
  *
  * 模型只输出审查结论、用户补充问题和短摘要；Planner DAG、Executor 结果和完整知识图谱
  * 由运行时代码按已有状态组合，不再要求模型复制。
  */
-export const PlannerWorkflowReviewOutputSchema = z.object({
+export const CritiqueAgentOutputSchema = z.object({
   status: z.enum([
     "pending_user_confirmation",
     "completed",
@@ -475,12 +489,17 @@ export const PlannerWorkflowReviewOutputSchema = z.object({
     retry_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs that require retry or correction"),
     issues: z.array(ProductWorkflowReviewIssueSchema).default([]).describe("Detected issues"),
     notes: ProductWorkflowReviewNotesSchema.describe("Compact review notes"),
-  }).describe("Planner Review decision"),
+  }).describe("Critique Agent decision"),
   product_context_update: z.string().min(1).max(1200).describe("Short product context update summary"),
   knowledge_graph_review: ProductWorkflowKnowledgeGraphReviewSchema.describe("Lightweight graph review, not the full graph"),
   proposal_questions: z.array(ProductWorkflowProposalQuestionSchema).max(3).default([]).describe("At most three high-priority user questions"),
   confirmation_message: z.string().min(1).max(500).describe("Concise user-facing confirmation message"),
 });
+
+/**
+ * 历史兼容别名：旧代码和持久化恢复仍可引用 PlannerWorkflowReviewOutputSchema。
+ */
+export const PlannerWorkflowReviewOutputSchema = CritiqueAgentOutputSchema;
 
 /**
  * 产品工作流的运行时汇总结果。
@@ -513,9 +532,8 @@ export type TaskExecutionNode = z.infer<typeof TaskExecutionNodeSchema>;
 export type TaskExecutionPlan = z.infer<typeof TaskExecutionPlanSchema>;
 export type ExecutorAgentResult = z.infer<typeof ExecutorAgentResultSchema>;
 export type ProductWorkflowResult = z.infer<typeof ProductWorkflowResultSchema>;
-export type PlannerWorkflowReviewOutput = z.infer<
-  typeof PlannerWorkflowReviewOutputSchema
->;
+export type CritiqueAgentOutput = z.infer<typeof CritiqueAgentOutputSchema>;
+export type PlannerWorkflowReviewOutput = CritiqueAgentOutput;
 export type KnowledgeGraphEntity = z.infer<typeof KnowledgeGraphEntitySchema>;
 export type KnowledgeGraphRelation = z.infer<
   typeof KnowledgeGraphRelationSchema

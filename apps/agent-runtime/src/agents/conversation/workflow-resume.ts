@@ -193,7 +193,7 @@ function inferContinuationRerunTaskIds(
 }
 
 /**
- * 从 Planner Review 的结构化结论中提取需要重跑或补充的任务。
+ * 从 Critique Agent 的结构化结论中提取需要重跑或补充的任务。
  */
 function inferProductWorkflowRerunTaskIds(
   productWorkflow: ProductWorkflowResult | null,

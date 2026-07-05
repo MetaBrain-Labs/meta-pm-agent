@@ -757,7 +757,7 @@ function parseStringArray(value: unknown): string[] | undefined {
 }
 
 /**
- * 将 Planner Review 的结构化问题转换成 request_form_item payload。
+ * 将 Critique Agent 的结构化问题转换成 request_form_item payload。
  */
 function toProposalQuestionSlot(
   question: ProductWorkflowProposalQuestion,

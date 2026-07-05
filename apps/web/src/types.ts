@@ -173,6 +173,7 @@ export interface RequestAnalysis {
 export type ProductWorkflowAgentType =
   | "product_director"
   | "planner"
+  | "critique"
   | "executor-product-strategy"
   | "executor-market-research"
   | "executor-gtm"
@@ -219,9 +220,9 @@ export interface ExecutorAgentResult {
   summary: string;
   entities: Array<Record<string, unknown>>;
   relations: Array<Record<string, unknown>>;
-  decisions: string[];
-  risks: string[];
-  open_questions: string[];
+  decisions: Array<{ id: string; text: string; source_task_id?: string }>;
+  risks: Array<{ id: string; text: string; source_task_id?: string }>;
+  open_questions: Array<{ id: string; text: string; source_task_id?: string }>;
   quality_result: {
     passed: boolean;
     notes: string;
@@ -323,6 +324,7 @@ export interface Message {
   };
   plannerReview?: {
     state: "generating" | "complete";
+    result?: ProductWorkflowResult;
   };
   workflowCompletion?: {
     state: "complete";

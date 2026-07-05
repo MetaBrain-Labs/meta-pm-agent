@@ -161,7 +161,7 @@ test("writes enabled summary sections as markdown after finish", async () => {
 });
 
 /**
- * 验证重复引用不会被误写成循环引用，便于排查 Planner Review fallback 输出。
+ * 验证重复引用不会被误写成循环引用，便于排查 Critique Agent fallback 输出。
  */
 test("keeps repeated non-cyclic references in summary output", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "agent-summary-ref-"));

@@ -1,17 +1,17 @@
 /**
  * Planner 执行计划卡片
  *
- * 展示 Planner Agent 生成的任务 DAG、Executor 实时运行状态，以及 Planner 收尾阶段
- * 对补充问题和确认表单的汇总状态。
+ * 展示 Planner Agent 生成的任务 DAG、Executor 实时运行状态，以及 Critique Agent
+ * 对 Executor 结果和知识图谱一致性的收尾审查。
  *
  * Responsibilities:
  * - 渲染任务 DAG、节点状态和 Executor 结果
  * - 展示 Planner DAG 生成中的加载态
- * - 展示 Planner Review 生成和完成状态
+ * - 展示 Critique Agent 审查生成和完成状态
  */
 
 import { useMemo, type ReactNode } from "react";
-import { Collapse, Empty, List, Space, Tag, Typography } from "antd";
+import { Collapse, Empty, List, Space, Tag } from "antd";
 import {
   CheckCircleOutlined,
   ClockCircleOutlined,
@@ -23,6 +23,7 @@ import {
 import type {
   ExecutorAgentResult,
   ProductWorkflowAgentType,
+  ProductWorkflowResult,
   TaskExecutionNode,
   TaskExecutionPlan,
 } from "../types";
@@ -81,32 +82,39 @@ export function PlannerExecutionCard({
               <span className="text-[14px] font-extrabold text-[var(--ink)]">
                 Planner Agent DAG
               </span>
-              <Tag color="blue">
+              <Tag color={plan.status === "supplement" ? "purple" : "blue"}>
+                {plan.status === "supplement" ? "补充 DAG" : "初始 DAG"}
+              </Tag>
+              <Tag color="green">
                 {completedCount}/{plan.tasks.length} 已完成
               </Tag>
             </div>
           ),
           children: (
             <div className="space-y-4">
-              <Typography.Paragraph className="m-0! text-[13px] text-[var(--ink-soft)]">
-                {plan.request_summary}
-              </Typography.Paragraph>
+              <PlanOverview plan={plan} />
 
-              <div className="flex flex-wrap items-center gap-2">
-                {plan.tasks.map((task, index) => (
-                  <div
-                    key={task.task_id}
-                    className="flex items-center gap-2"
-                  >
-                    <NodePill
-                      task={task}
-                      status={statusByTaskId.get(task.task_id) ?? "waiting"}
-                    />
-                    {index < plan.tasks.length - 1 && (
-                      <RightOutlined className="text-[11px] text-[var(--ink-faint)]" />
-                    )}
-                  </div>
-                ))}
+              <div>
+                <div className="mb-2 flex items-center gap-2 text-[13px] font-bold text-[var(--ink)]">
+                  <PartitionOutlined />
+                  任务流
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {plan.tasks.map((task, index) => (
+                    <div
+                      key={task.task_id}
+                      className="flex min-w-0 items-center gap-2"
+                    >
+                      <NodePill
+                        task={task}
+                        status={statusByTaskId.get(task.task_id) ?? "waiting"}
+                      />
+                      {index < plan.tasks.length - 1 && (
+                        <RightOutlined className="text-[11px] text-[var(--ink-faint)]" />
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
 
               <List
@@ -123,26 +131,7 @@ export function PlannerExecutionCard({
                 )}
               />
 
-              <div>
-                <div className="mb-2 flex items-center gap-2 text-[13px] font-bold text-[var(--ink)]">
-                  <NodeIndexOutlined />
-                  边
-                </div>
-                {plan.dag.edges.length === 0 ? (
-                  <Empty
-                    image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    description="暂无边"
-                  />
-                ) : (
-                  <Space size={6} wrap>
-                    {plan.dag.edges.map((edge) => (
-                      <Tag key={`${edge.source}-${edge.target}`}>
-                        {getAgentLabel(edge.source)} → {getAgentLabel(edge.target)}
-                      </Tag>
-                    ))}
-                  </Space>
-                )}
-              </div>
+              <DagEdges plan={plan} />
             </div>
           ),
         },
@@ -193,57 +182,96 @@ export function PlannerExecutionLoadingCard() {
 }
 
 /**
- * 展示所有 Executor 完成后 Planner Agent 汇总补充问题的状态。
+ * 展示所有 Executor 完成后 Critique Agent 审查工作流结果的状态。
  */
-export function PlannerReviewStatusCard({
+export function CritiqueAgentReviewCard({
   state,
+  result,
 }: {
   state: "generating" | "complete";
+  result?: ProductWorkflowResult;
 }) {
   const complete = state === "complete";
 
   return (
     <div
-      className="mb-2 flex items-center gap-3 rounded-lg border border-[var(--line-soft)] bg-white p-5"
-      data-agent-thinking="planner"
+      className="mb-2 rounded-lg border border-[var(--line-soft)] bg-white p-5"
+      data-agent-thinking="critique"
     >
-      <div
-        className="flex h-5 w-5 items-center justify-center rounded-full border-2"
-        style={{
-          borderColor: complete ? "var(--success)" : "var(--primary)",
-          animation: complete ? undefined : "qf-pulse 1.4s ease-out infinite",
-        }}
-      >
-        {complete && (
-          <CheckCircleOutlined className="text-[11px] text-[var(--success)]" />
+      <div className="flex items-start gap-3">
+        <div
+          className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2"
+          style={{
+            borderColor: complete ? "var(--success)" : "var(--primary)",
+            animation: complete ? undefined : "qf-pulse 1.4s ease-out infinite",
+          }}
+        >
+          {complete && (
+            <CheckCircleOutlined className="text-[11px] text-[var(--success)]" />
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2 text-[13px] font-extrabold text-[var(--ink)]">
+            <PartitionOutlined
+              style={{ color: complete ? "var(--success)" : "var(--primary)" }}
+            />
+            <span>Critique Agent</span>
+            {result && <WorkflowStatusTag status={result.status} />}
+          </div>
+          <div className="mt-1 text-[12px] font-bold text-[var(--ink-faint)]">
+            {complete
+              ? "已完成 Executor 结果与知识图谱审查"
+              : "正在审查 Executor 结果与知识图谱一致性"}
+          </div>
+        </div>
+        {!complete && (
+          <div className="ml-auto flex gap-1">
+            {[0, 1, 2].map((index) => (
+              <span
+                key={index}
+                className="h-1.5 w-1.5 rounded-full bg-[var(--primary)]"
+                style={{
+                  animation: "qf-bounce 1.2s ease-in-out infinite",
+                  animationDelay: `${index * 0.2}s`,
+                }}
+              />
+            ))}
+          </div>
         )}
       </div>
-      <div className="min-w-0">
-        <div className="flex items-center gap-2 text-[13px] font-extrabold text-[var(--ink)]">
-          <PartitionOutlined
-            style={{ color: complete ? "var(--success)" : "var(--primary)" }}
-          />
-          <span>Planner Agent Review</span>
-        </div>
-        <div className="mt-1 text-[12px] font-bold text-[var(--ink-faint)]">
-          {complete ? "已完成补充问题整理" : "正在思考补充问题"}
-        </div>
+
+      {result && <CritiqueReviewResult result={result} />}
+    </div>
+  );
+}
+
+/**
+ * 渲染 DAG 总览信息，帮助用户先理解本轮任务范围。
+ */
+function PlanOverview({ plan }: { plan: TaskExecutionPlan }) {
+  return (
+    <section className="rounded-lg bg-[var(--surface-muted)] px-4 py-3">
+      <div className="mb-1 text-[12px] font-extrabold uppercase tracking-normal text-[var(--ink-faint)]">
+        请求摘要
       </div>
-      {!complete && (
-        <div className="ml-auto flex gap-1">
-          {[0, 1, 2].map((index) => (
-            <span
-              key={index}
-              className="h-1.5 w-1.5 rounded-full bg-[var(--primary)]"
-              style={{
-                animation: "qf-bounce 1.2s ease-in-out infinite",
-                animationDelay: `${index * 0.2}s`,
-              }}
-            />
-          ))}
+      <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink-soft)]">
+        {plan.request_summary}
+      </div>
+      {plan.assumptions.length > 0 && (
+        <div className="mt-3">
+          <div className="mb-1 text-[12px] font-bold text-[var(--ink-faint)]">
+            规划假设
+          </div>
+          <Space size={6} wrap>
+            {plan.assumptions.map((assumption, index) => (
+              <Tag key={`${assumption}-${index}`} className="m-0!">
+                {assumption}
+              </Tag>
+            ))}
+          </Space>
         </div>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -260,16 +288,18 @@ function NodePill({
   const config = getStatusConfig(status);
   return (
     <span
-      className="inline-flex max-w-[220px] items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-bold"
+      className="inline-flex max-w-[260px] items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-bold"
       style={{
         borderColor: config.border,
         background: config.background,
         color: config.color,
       }}
-      title={task.title}
+      title={`${task.task_id} · ${task.title}`}
     >
       {config.icon}
-      <span className="truncate">{task.sequence}. {getAgentLabel(task.assigned_agent)}</span>
+      <span className="truncate">
+        {task.task_id} · {getAgentLabel(task.assigned_agent)}
+      </span>
     </span>
   );
 }
@@ -287,34 +317,465 @@ function TaskRow({
   result?: ExecutorAgentResult;
 }) {
   const config = getStatusConfig(status);
+
   return (
     <List.Item className="px-0!">
-      <div className="min-w-0 flex-1">
-        <div className="mb-2 flex flex-wrap items-center gap-2">
-          <Tag>{task.task_id}</Tag>
-          <Tag color={config.tagColor}>{config.label}</Tag>
-          <Tag>{getAgentLabel(task.assigned_agent)}</Tag>
+      <article className="w-full rounded-lg border border-[var(--line-soft)] bg-white px-4 py-3">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <Tag className="m-0!">{task.task_id}</Tag>
+          <Tag color={config.tagColor} className="m-0!">
+            {config.label}
+          </Tag>
+          <Tag className="m-0!">{getAgentLabel(task.assigned_agent)}</Tag>
           {task.depends_on.length > 0 && (
-            <Tag>依赖：{task.depends_on.join(", ")}</Tag>
+            <Tag className="m-0!">依赖：{task.depends_on.join(", ")}</Tag>
           )}
         </div>
-        <Typography.Text className="block text-[14px] font-bold text-[var(--ink)]">
-          {task.title}
-        </Typography.Text>
-        <Typography.Paragraph className="mb-2! text-[13px] text-[var(--ink-soft)]">
-          {task.description}
-        </Typography.Paragraph>
-        <Typography.Text className="block text-[12px] text-[var(--ink-faint)]">
-          预期产出：{task.expected_output}
-        </Typography.Text>
-        {result && (
-          <Typography.Text className="mt-1 block text-[12px] text-[var(--success)]">
-            已更新至知识图谱：{result.summary}
-          </Typography.Text>
+
+        <div className="mb-3">
+          <div className="text-[14px] font-extrabold text-[var(--ink)]">
+            {task.title}
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-[minmax(0,1.2fr)_minmax(220px,0.8fr)]">
+          <TaskTextPanel label="任务说明" text={task.description} />
+          <TaskTextPanel label="预期产出" text={task.expected_output} />
+        </div>
+
+        {result ? (
+          <ExecutorResultPanel result={result} />
+        ) : (
+          <div className="mt-3 rounded-md bg-[var(--surface-muted)] px-3 py-2 text-[12px] font-semibold text-[var(--ink-faint)]">
+            {status === "running"
+              ? "该任务正在执行，完成后会在这里展示图谱更新结果。"
+              : "等待依赖任务完成后执行。"}
+          </div>
         )}
-      </div>
+      </article>
     </List.Item>
   );
+}
+
+/**
+ * 以轻量信息块展示任务说明、预期产出等不同语义段落。
+ */
+function TaskTextPanel({ label, text }: { label: string; text: string }) {
+  return (
+    <section className="rounded-md bg-[var(--surface-muted)] px-3 py-2">
+      <div className="mb-1 text-[12px] font-bold text-[var(--ink-faint)]">
+        {label}
+      </div>
+      <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink-soft)]">
+        {text}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * 展示单个 Executor 任务完成后的完整结构化结果摘要。
+ */
+function ExecutorResultPanel({ result }: { result: ExecutorAgentResult }) {
+  return (
+    <section className="mt-3 rounded-md border border-[#bbf7d0] bg-[#f0fdf4] px-3 py-3">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <CheckCircleOutlined className="text-[var(--success)]" />
+        <span className="text-[13px] font-extrabold text-[#166534]">
+          已更新至知识图谱
+        </span>
+        <Tag color={result.quality_result.passed ? "green" : "red"} className="m-0!">
+          {result.quality_result.passed ? "质量通过" : "质量未通过"}
+        </Tag>
+        {result.focus_layer && (
+          <Tag color="cyan" className="m-0!">
+            {result.focus_layer}
+          </Tag>
+        )}
+      </div>
+
+      <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-[#166534]">
+        {result.summary}
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+        <MetricPill label="实体" value={result.entities.length} />
+        <MetricPill label="关系" value={result.relations.length} />
+        <MetricPill label="决策" value={result.decisions.length} />
+        <MetricPill label="风险" value={result.risks.length} />
+        <MetricPill label="开放问题" value={result.open_questions.length} />
+      </div>
+
+      {result.quality_result.notes && (
+        <ResultTextBlock label="质量说明" text={result.quality_result.notes} />
+      )}
+      <RecordList title="实体节点" items={result.entities} />
+      <RecordList title="关系边" items={result.relations} />
+      <TextList title="决策" items={result.decisions} />
+      <TextList title="风险" items={result.risks} tone="risk" />
+      <TextList title="开放问题" items={result.open_questions} tone="question" />
+    </section>
+  );
+}
+
+/**
+ * 展示 Executor 结果中的数量指标。
+ */
+function MetricPill({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md bg-white/70 px-2.5 py-2">
+      <div className="text-[11px] font-bold text-[var(--ink-faint)]">
+        {label}
+      </div>
+      <div className="mt-0.5 text-[16px] font-extrabold text-[var(--ink)]">
+        {value}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 展示带标题的长文本结果段落。
+ */
+function ResultTextBlock({ label, text }: { label: string; text: string }) {
+  return (
+    <div className="mt-3 rounded-md bg-white/70 px-3 py-2">
+      <div className="mb-1 text-[12px] font-bold text-[var(--ink-faint)]">
+        {label}
+      </div>
+      <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink-soft)]">
+        {text}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 展示结构化实体或关系记录，尽量提取名称、类型和描述。
+ */
+function RecordList({
+  title,
+  items,
+}: {
+  title: string;
+  items: Array<Record<string, unknown>>;
+}) {
+  if (items.length === 0) return null;
+
+  return (
+    <div className="mt-3">
+      <div className="mb-1 text-[12px] font-bold text-[var(--ink-faint)]">
+        {title}
+      </div>
+      <div className="space-y-1.5">
+        {items.map((item, index) => (
+          <div
+            key={`${title}-${readRecordString(item, "id") || index}`}
+            className="rounded-md bg-white/70 px-3 py-2 text-[12px] leading-relaxed text-[var(--ink-soft)]"
+          >
+            <div className="font-bold text-[var(--ink)]">
+              {formatRecordTitle(item, index)}
+            </div>
+            {formatRecordDescription(item) && (
+              <div className="mt-0.5 whitespace-pre-wrap">
+                {formatRecordDescription(item)}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 展示决策、风险和开放问题等文本列表。
+ */
+/**
+ * 可渲染的文本项：纯字符串或带结构的 {id, text} 对象。
+ */
+type TextItem = string | { id: string; text: string };
+
+/**
+ * 从 TextItem 中提取显示文本。
+ */
+function extractText(item: TextItem): string {
+  return typeof item === "string" ? item : item.text;
+}
+
+function TextList({
+  title,
+  items,
+  tone = "default",
+}: {
+  title: string;
+  items: TextItem[];
+  tone?: "default" | "risk" | "question";
+}) {
+  if (items.length === 0) return null;
+  const toneClass =
+    tone === "risk"
+      ? "border-[#fed7aa] bg-[#fff7ed] text-[#9a3412]"
+      : tone === "question"
+        ? "border-[#bfdbfe] bg-[#eff6ff] text-[#1d4ed8]"
+        : "border-[var(--line-soft)] bg-white/70 text-[var(--ink-soft)]";
+
+  return (
+    <div className="mt-3">
+      <div className="mb-1 text-[12px] font-bold text-[var(--ink-faint)]">
+        {title}
+      </div>
+      <div className="space-y-1.5">
+        {items.map((item, index) => (
+          <div
+            key={`${title}-${index}`}
+            className={`rounded-md border px-3 py-2 text-[12px] leading-relaxed ${toneClass}`}
+          >
+            {extractText(item)}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 渲染 DAG 边信息，并将 task_id 映射到任务标题，便于阅读依赖关系。
+ */
+function DagEdges({ plan }: { plan: TaskExecutionPlan }) {
+  const taskById = new Map(plan.tasks.map((task) => [task.task_id, task]));
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center gap-2 text-[13px] font-bold text-[var(--ink)]">
+        <NodeIndexOutlined />
+        依赖边
+      </div>
+      {plan.dag.edges.length === 0 ? (
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description="暂无依赖边"
+        />
+      ) : (
+        <Space size={6} wrap>
+          {plan.dag.edges.map((edge) => (
+            <Tag key={`${edge.source}-${edge.target}`} className="m-0!">
+              {formatTaskEdgeLabel(taskById.get(edge.source), edge.source)} →{" "}
+              {formatTaskEdgeLabel(taskById.get(edge.target), edge.target)}
+            </Tag>
+          ))}
+        </Space>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 展示 Critique Agent 产出的完整审查结果。
+ */
+function CritiqueReviewResult({ result }: { result: ProductWorkflowResult }) {
+  const reviewIssues = result.review.issues ?? [];
+  const graphReview = result.knowledge_graph_review;
+  const graphIssues = graphReview?.issues ?? [];
+  const graphNotes = graphReview?.notes ?? [];
+  const proposalQuestions = result.proposal_questions ?? [];
+
+  return (
+    <div className="mt-4 space-y-3">
+      <section className="rounded-md bg-[var(--surface-muted)] px-3 py-2">
+        <div className="mb-1 text-[12px] font-bold text-[var(--ink-faint)]">
+          请求摘要
+        </div>
+        <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink-soft)]">
+          {result.request_summary}
+        </div>
+      </section>
+
+      <section className="rounded-md bg-[var(--surface-muted)] px-3 py-2">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <span className="text-[13px] font-extrabold text-[var(--ink)]">
+            任务审查
+          </span>
+          <Tag color="green" className="m-0!">
+            接受 {result.review.accepted_task_ids.length}
+          </Tag>
+          <Tag color="red" className="m-0!">
+            驳回 {result.review.rejected_task_ids.length}
+          </Tag>
+          <Tag color="orange" className="m-0!">
+            待修正 {result.review.retry_task_ids?.length ?? 0}
+          </Tag>
+        </div>
+        <ChipList label="已接受任务" items={result.review.accepted_task_ids} />
+        <ChipList label="驳回任务" items={result.review.rejected_task_ids} />
+        <ChipList label="待修正任务" items={result.review.retry_task_ids ?? []} />
+        <ReviewIssueList title="审查问题" issues={reviewIssues} />
+        {result.review.notes && (
+          <div className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink-soft)]">
+            {result.review.notes}
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-md bg-[var(--surface-muted)] px-3 py-2">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <span className="text-[13px] font-extrabold text-[var(--ink)]">
+            知识图谱更新
+          </span>
+          <Tag color="blue" className="m-0!">
+            实体 {result.knowledge_graph_update.entities.length}
+          </Tag>
+          <Tag color="cyan" className="m-0!">
+            关系 {result.knowledge_graph_update.relations.length}
+          </Tag>
+          <Tag className="m-0!">
+            决策 {result.knowledge_graph_update.decisions?.length ?? 0}
+          </Tag>
+          <Tag className="m-0!">
+            风险 {result.knowledge_graph_update.risks?.length ?? 0}
+          </Tag>
+          <Tag className="m-0!">
+            开放问题 {result.knowledge_graph_update.open_questions?.length ?? 0}
+          </Tag>
+        </div>
+        <TextList title="图谱备注" items={result.knowledge_graph_update.notes} />
+        {graphReview && (
+          <>
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-[12px] text-[var(--ink-faint)]">
+              {typeof graphReview.graph_ref?.version === "number" && (
+                <Tag className="m-0!">版本 {graphReview.graph_ref.version}</Tag>
+              )}
+              {typeof graphReview.graph_ref?.entity_count === "number" && (
+                <Tag className="m-0!">
+                  图谱实体 {graphReview.graph_ref.entity_count}
+                </Tag>
+              )}
+              {typeof graphReview.graph_ref?.relation_count === "number" && (
+                <Tag className="m-0!">
+                  图谱关系 {graphReview.graph_ref.relation_count}
+                </Tag>
+              )}
+              {graphReview.graph_ref?.checksum && (
+                <Tag className="m-0!">校验 {graphReview.graph_ref.checksum}</Tag>
+              )}
+            </div>
+            <ReviewIssueList title="图谱审查问题" issues={graphIssues} />
+            <TextList title="图谱审查备注" items={graphNotes} />
+          </>
+        )}
+      </section>
+
+      {result.product_context_update && (
+        <section className="rounded-md bg-[var(--surface-muted)] px-3 py-2">
+          <div className="mb-1 text-[12px] font-bold text-[var(--ink-faint)]">
+            产品上下文更新
+          </div>
+          <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink-soft)]">
+            {result.product_context_update}
+          </div>
+        </section>
+      )}
+
+      {proposalQuestions.length > 0 && (
+        <section className="rounded-md bg-[#eff6ff] px-3 py-2">
+          <div className="mb-2 text-[13px] font-extrabold text-[#1d4ed8]">
+            待用户确认的问题
+          </div>
+          <div className="space-y-1.5">
+            {proposalQuestions.map((question) => (
+              <div
+                key={question.id}
+                className="rounded-md bg-white/75 px-3 py-2 text-[12px] leading-relaxed text-[#1d4ed8]"
+              >
+                <div className="font-bold">{question.label}</div>
+                {question.help && <div className="mt-0.5">{question.help}</div>}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {result.confirmation_message && (
+        <section className="rounded-md bg-[#f0fdf4] px-3 py-2">
+          <div className="mb-1 text-[12px] font-bold text-[#166534]">
+            确认提示
+          </div>
+          <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-[#166534]">
+            {result.confirmation_message}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 渲染一组任务 ID 标签。
+ */
+function ChipList({ label, items }: { label: string; items: string[] }) {
+  if (items.length === 0) return null;
+
+  return (
+    <div className="mt-2">
+      <span className="mr-2 text-[12px] font-bold text-[var(--ink-faint)]">
+        {label}
+      </span>
+      <Space size={4} wrap>
+        {items.map((item) => (
+          <Tag key={item} className="m-0!">
+            {item}
+          </Tag>
+        ))}
+      </Space>
+    </div>
+  );
+}
+
+/**
+ * 渲染 Critique Agent 审查中的问题列表。
+ */
+function ReviewIssueList({
+  title,
+  issues,
+}: {
+  title: string;
+  issues: NonNullable<ProductWorkflowResult["review"]["issues"]>;
+}) {
+  if (issues.length === 0) return null;
+
+  return (
+    <div className="mt-3">
+      <div className="mb-1 text-[12px] font-bold text-[var(--ink-faint)]">
+        {title}
+      </div>
+      <div className="space-y-1.5">
+        {issues.map((issue, index) => (
+          <div
+            key={`${issue.code}-${issue.task_id ?? "global"}-${index}`}
+            className="rounded-md border border-[#fed7aa] bg-[#fff7ed] px-3 py-2 text-[12px] leading-relaxed text-[#9a3412]"
+          >
+            <div className="mb-0.5 flex flex-wrap items-center gap-1.5 font-bold">
+              <Tag color={issue.severity === "error" ? "red" : "orange"} className="m-0!">
+                {issue.severity === "error" ? "错误" : "警告"}
+              </Tag>
+              <span>{issue.code}</span>
+              {issue.task_id && <span>· {issue.task_id}</span>}
+            </div>
+            <div className="whitespace-pre-wrap">{issue.message}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 展示产品工作流状态标签。
+ */
+function WorkflowStatusTag({ status }: { status: ProductWorkflowResult["status"] }) {
+  if (status === "completed") return <Tag color="green">已完成</Tag>;
+  if (status === "discarded") return <Tag color="red">已放弃</Tag>;
+  return <Tag color="orange">等待确认</Tag>;
 }
 
 /**
@@ -331,13 +792,28 @@ function buildTaskStatus(
   if (activeAgent) {
     runningAgents.add(activeAgent);
   }
+  const runningTaskIds = new Set<string>();
+
+  // 相同 Executor Agent 在 DAG 中可能出现多次，只标记当前依赖已满足的最早任务。
+  for (const agentType of runningAgents) {
+    const runningTask = tasks
+      .filter((task) => task.assigned_agent === agentType)
+      .sort((left, right) => left.sequence - right.sequence)
+      .find((task) => {
+        if (completedTaskIds.has(task.task_id)) return false;
+        return task.depends_on.every((taskId) => completedTaskIds.has(taskId));
+      });
+    if (runningTask) {
+      runningTaskIds.add(runningTask.task_id);
+    }
+  }
 
   return new Map(
     tasks.map((task) => {
       if (completedTaskIds.has(task.task_id)) {
         return [task.task_id, "completed" as const];
       }
-      if (runningAgents.has(task.assigned_agent)) {
+      if (runningTaskIds.has(task.task_id)) {
         return [task.task_id, "running" as const];
       }
       return [task.task_id, "waiting" as const];
@@ -387,8 +863,54 @@ function getStatusConfig(status: NodeStatus): {
 }
 
 /**
- * 将 Agent 类型转换为中文展示名。
+ * 将 Agent 类型转换为展示名。
  */
 function getAgentLabel(agentType: ProductWorkflowAgentType): string {
   return AGENT_LABELS[agentType] ?? agentType;
+}
+
+/**
+ * 为 DAG 边展示任务 ID 和标题。
+ */
+function formatTaskEdgeLabel(
+  task: TaskExecutionNode | undefined,
+  fallbackTaskId: string,
+): string {
+  if (!task) return fallbackTaskId;
+  return `${task.task_id} ${task.title}`;
+}
+
+/**
+ * 从结构化记录中读取字符串字段。
+ */
+function readRecordString(
+  record: Record<string, unknown>,
+  key: string,
+): string {
+  const value = record[key];
+  return typeof value === "string" ? value : "";
+}
+
+/**
+ * 为实体或关系记录生成标题。
+ */
+function formatRecordTitle(record: Record<string, unknown>, index: number): string {
+  const id = readRecordString(record, "id");
+  const type = readRecordString(record, "type");
+  const name = readRecordString(record, "name");
+  const source = readRecordString(record, "source");
+  const target = readRecordString(record, "target");
+  const label = name || (source && target ? `${source} → ${target}` : "");
+  return [id || `#${index + 1}`, type, label].filter(Boolean).join(" · ");
+}
+
+/**
+ * 为实体或关系记录生成描述。
+ */
+function formatRecordDescription(record: Record<string, unknown>): string {
+  return (
+    readRecordString(record, "description") ||
+    readRecordString(record, "summary") ||
+    readRecordString(record, "text")
+  );
 }

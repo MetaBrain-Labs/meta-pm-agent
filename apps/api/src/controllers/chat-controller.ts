@@ -457,7 +457,7 @@ export async function chatStreamHandler(c: Context) {
         conversationId: parsed.data.chatId,
         requestFormId: parsed.data.requestFormId,
         advanceVersion: true,
-        // 最终归档优先使用运行时累计快照，避免 Planner Review 的模型汇总覆盖成局部图谱。
+        // 最终归档优先使用运行时累计快照，避免 Critique Agent 的模型汇总覆盖成局部图谱。
         knowledgeGraph:
           latestKnowledgeGraph ??
           (isProductWorkflowResult(productWorkflowResult)

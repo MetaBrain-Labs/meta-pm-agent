@@ -1,12 +1,12 @@
 /**
  * 产品工作流图节点
  *
- * 实现 Planner Agent、Executor Router、Executor Aggregator 和全部 10 个 Executor Agent 的 LangGraph 节点。
+ * 实现 Planner Agent、Executor Router、Executor Aggregator、Critique Agent 阶段和全部 10 个 Executor Agent 的 LangGraph 节点。
  * Router 根据 Planner 生成的 DAG 动态选择下一批 Executor 分支，每个 Executor 节点按定义
  * 从 streamExecutorAgent 驱动并输出推理、工具调用和补丁结果。
  *
  * Responsibilities:
- * - 实现 plannerAgentNode：调用 Planner 生成 DAG，并在 Executor 全部完成后执行 Planner Review
+ * - 实现 plannerAgentNode：调用 Planner 生成 DAG，并在 Executor 全部完成后执行 Critique Agent
  * - 实现各 Executor 节点：读取知识图谱、执行任务、产出图谱补丁
  * - 实现 executorRouterNode / selectNextExecutorRouterTargets：按 DAG 依赖顺序调度下一批 Executor
  * - 实现 executorAggregatorNode：汇合同批 Executor 状态并发出知识图谱更新
@@ -28,8 +28,8 @@ import {
   formatProductWorkflowBlock,
   formatTaskExecutionPlanBlock,
   streamExecutorAgent,
+  streamCritiqueAgent,
   streamPlannerAgent,
-  streamPlannerWorkflowReview,
 } from "../../agents/product-workflow/agent";
 import type { WorkflowGraphStateValue } from "../state";
 
@@ -42,7 +42,7 @@ export async function plannerAgentNode(
 ) {
   if (!state.requestAnalysis) return {};
   if (state.plan && arePlanTasksFinished(state)) {
-    return executePlannerWorkflowReview(state, config);
+    return executeCritiqueAgentReview(state, config);
   }
   if (state.plan) {
     const writer = getWriter(config);
@@ -180,7 +180,7 @@ export const interfaceCraftExecutorNode = createExecutorAgentNode(
  * 固定骨架中的 Executor Router 节点。
  *
  * 节点本身不修改状态，后续条件边会根据 Planner 生成的 DAG、已完成任务和最终汇总状态，
- * 动态选择下一批 Executor、回到 Planner Review，或结束工作流。
+ * 动态选择下一批 Executor、回到 Critique Agent，或结束工作流。
  */
 export async function executorRouterNode() {
   return {};
@@ -290,9 +290,9 @@ async function executeExecutorAgentTask(
 }
 
 /**
- * 执行 Planner Agent 收尾阶段，汇总 Executor 结果并生成待用户确认的更新。
+ * 执行 Critique Agent 收尾阶段，审查 Executor 结果并生成待用户确认的更新。
  */
-async function executePlannerWorkflowReview(
+async function executeCritiqueAgentReview(
   state: WorkflowGraphStateValue,
   config?: LangGraphRunnableConfig,
 ) {
@@ -303,12 +303,12 @@ async function executePlannerWorkflowReview(
     state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
   writer?.({
     type: "agent-status",
-    agentType: "planner",
+    agentType: "critique",
     status: "started",
     phase: "review",
   });
   const workflowResult = await consumeProductWorkflowStream(
-    streamPlannerWorkflowReview({
+    streamCritiqueAgent({
       workspaceId: state.workspaceId,
       productContext: state.productContext,
       requestAnalysis: state.requestAnalysis,
@@ -320,15 +320,15 @@ async function executePlannerWorkflowReview(
     writer,
   );
 
-  // Planner 的完整汇总结果用于持久化 request_form 和生成确认表单。
+  // Critique Agent 的完整审查结果用于持久化 request_form 和生成确认表单。
   writer?.({
     type: "agent-output",
-    agentType: "planner",
+    agentType: "critique",
     content: formatProductWorkflowBlock(workflowResult),
   });
   writer?.({
     type: "agent-status",
-    agentType: "planner",
+    agentType: "critique",
     status: "completed",
     phase: "review",
   });

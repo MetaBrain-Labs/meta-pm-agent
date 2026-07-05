@@ -134,7 +134,7 @@ const LANGGRAPH_NODES: LangGraphNode[] = [
     id: "planner_agent",
     label: "Planner Agent",
     type: "agent",
-    description: "首次进入时生成任务 DAG；Executor 全部完成后执行 Planner Review。",
+    description: "首次进入时生成任务 DAG；Executor 全部完成后交给 Critique Agent 审查。",
   },
   {
     id: "executor_router",

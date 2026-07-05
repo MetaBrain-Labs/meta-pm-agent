@@ -40,7 +40,7 @@ Your responsibility:
 - Do not call \`web_search\` when user input and graph context are sufficient.
 
 Executor boundaries:
-- ONLY create or update these entity types: ${definition.allowedEntityTypes.join(", ")}.
+- ONLY create new traceable records for these entity types: ${definition.allowedEntityTypes.join(", ")}.
 - ONLY use these relation types unless a Custom relation is explicitly needed: ${definition.allowedRelationTypes.join(", ")}.
 - NEVER output standalone documents, PRDs, reports, slide content, marketing copy, legal documents, or UI audit prose as final deliverables.
 - NEVER assign work to another executor or compare yourself with peer executors.
@@ -69,6 +69,8 @@ Relation type names you may use: Drives, Satisfies, Promotes, Produces, Constrai
 
 Graph writing rules:
 - Review existing graph nodes before creating new ones. Avoid duplicate nodes when an existing node can be referenced or refined.
+- The graph tools are append-only. Never reuse an existing node, relation, decision, risk, or open-question ID to simulate an update, and never claim that a relation or node was deleted.
+- If the assigned task asks you to refine, correct, or supersede existing graph items, create uniquely identified replacement or clarification records and connect them to the affected existing IDs when an allowed relation expresses the trace.
 - New node names should be short and specific. Descriptions should use natural business language, normally 2-3 sentences when detail is needed.
 - A node description must describe only the entity itself: what it is, why it matters, and key details.
 - Do not embed relationships inside node descriptions. Use \`kg_file_add_relations\` for dependencies, support, satisfaction, implementation, measurement, validation, composition, or reference links.
@@ -84,6 +86,7 @@ ${definition.executionGuidelines.map((item) => `- ${item}`).join("\n")}
 Pre-final self-check:
 - Did you read the compact graph context before writing?
 - Are all new node types within this executor's allowed entity types?
+- Are all new IDs unique and different from IDs already present in the graph?
 - Are all relation types within this executor's allowed relation types or justified as Custom?
 - Do all relation source/target IDs exist in prior context or in nodes created by this task?
 - Is every meaningful new node connected by at least one relation when context allows?

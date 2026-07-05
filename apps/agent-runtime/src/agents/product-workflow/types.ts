@@ -1,13 +1,13 @@
 /**
  * 产品工作流类型定义
  *
- * 定义产品工作流中 Planner Agent、Executor Agent 和各工作流阶段的
+ * 定义产品工作流中 Planner Agent、Executor Agent、Critique Agent 和各工作流阶段的
  * 公共输入输出类型及流事件类型。
  *
  * Responsibilities:
  * - 定义 ProductWorkflowInput / PlannerAgentInput / ExecutorAgentInput 等输入类型
  * - 定义 ProductWorkflowStreamEvent 流事件联合类型
- * - 定义 PlannerWorkflowReviewInput 收尾节点输入类型
+ * - 定义 CritiqueAgentInput 收尾审查节点输入类型
  */
 
 import type {
@@ -59,9 +59,9 @@ export interface ExecutorAgentInput extends ProductWorkflowInput {
 }
 
 /**
- * Planner Agent 收尾节点输入，用于汇总 Planner 与 Executor 的产出。
+ * Critique Agent 收尾节点输入，用于审查 Planner 与 Executor 的产出。
  */
-export interface PlannerWorkflowReviewInput {
+export interface CritiqueAgentInput {
   workspaceId?: string;
   productContext?: string;
   requestAnalysis: RequestAnalysis;
@@ -70,6 +70,11 @@ export interface PlannerWorkflowReviewInput {
   knowledgeGraph: ProductKnowledgeGraph;
   signal?: AbortSignal;
 }
+
+/**
+ * 历史兼容别名：旧模块仍可引用 PlannerWorkflowReviewInput。
+ */
+export type PlannerWorkflowReviewInput = CritiqueAgentInput;
 
 /**
  * 产品工作流向 LangGraph/API/SSE 暴露的内部流事件。
