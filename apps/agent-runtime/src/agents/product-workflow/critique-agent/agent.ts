@@ -16,6 +16,8 @@ import {
   CritiqueAgentOutputSchema,
   type ExecutorAgentResult,
   type CritiqueAgentOutput,
+  type KnowledgeGraphEntity,
+  type KnowledgeGraphRelation,
   type ProductKnowledgeGraph,
   type ProductWorkflowProposalQuestion,
   type ProductWorkflowResult,
@@ -29,6 +31,7 @@ import type {
   CritiqueAgentInput,
   ProductWorkflowStreamEvent,
 } from "../types";
+import { areKnowledgeGraphItemsSimilar } from "../common/knowledge-graph-merge";
 import { CRITIQUE_AGENT_PROMPT } from "./prompt";
 
 /**
@@ -225,19 +228,11 @@ function collectOpenQuestionCandidates(executorResults: ExecutorAgentResult[]) {
 /**
  * 生成确定性校验报告，把可由程序判断的错误移出 LLM。
  */
-function createCritiqueValidationReport(
+export function createCritiqueValidationReport(
   input: CritiqueAgentInput,
 ): CritiqueValidationReport {
   const resultByTaskId = new Map(
     input.executorResults.map((result) => [result.task_id, result]),
-  );
-  const duplicateEntityIds = findDuplicateIdsByTask(
-    input.executorResults,
-    "entities",
-  );
-  const duplicateRelationIds = findDuplicateIdsByTask(
-    input.executorResults,
-    "relations",
   );
   const graphIndexes = createGraphIndexes(input.knowledgeGraph);
   const issues: CritiqueValidationIssue[] = [];
@@ -282,15 +277,6 @@ function createCritiqueValidationReport(
         }),
       );
     }
-
-    appendDuplicateIdIssues(taskIssues, task.task_id, duplicateEntityIds, {
-      code: "DUPLICATE_ENTITY_ID",
-      label: "entity",
-    });
-    appendDuplicateIdIssues(taskIssues, task.task_id, duplicateRelationIds, {
-      code: "DUPLICATE_RELATION_ID",
-      label: "relation",
-    });
 
     const commit = validateExecutorCommit(result, graphIndexes);
     taskIssues.push(...commit.issues);
@@ -341,6 +327,11 @@ function createCritiqueValidationReport(
  */
 function createGraphIndexes(knowledgeGraph: ProductKnowledgeGraph) {
   return {
+    entities: knowledgeGraph.entities,
+    relations: knowledgeGraph.relations,
+    decisions: knowledgeGraph.decisions,
+    risks: knowledgeGraph.risks,
+    openQuestions: knowledgeGraph.open_questions,
     entityById: new Map(knowledgeGraph.entities.map((item) => [item.id, item])),
     relationById: new Map(
       knowledgeGraph.relations.map((item) => [item.id, item]),
@@ -353,51 +344,6 @@ function createGraphIndexes(knowledgeGraph: ProductKnowledgeGraph) {
       knowledgeGraph.open_questions.map((item) => [item.id, item]),
     ),
   };
-}
-
-/**
- * 查找多个 Executor 产出的重复实体或关系 ID。
- */
-function findDuplicateIdsByTask(
-  executorResults: ExecutorAgentResult[],
-  field: "entities" | "relations",
-): Map<string, Set<string>> {
-  const tasksById = new Map<string, Set<string>>();
-  for (const result of executorResults) {
-    for (const item of result[field]) {
-      const taskIds = tasksById.get(item.id) ?? new Set<string>();
-      taskIds.add(result.task_id);
-      tasksById.set(item.id, taskIds);
-    }
-  }
-
-  return new Map(
-    [...tasksById.entries()].filter(([, taskIds]) => taskIds.size > 1),
-  );
-}
-
-/**
- * 将重复 ID 问题挂到相关任务。
- */
-function appendDuplicateIdIssues(
-  issues: CritiqueValidationIssue[],
-  taskId: string,
-  duplicates: Map<string, Set<string>>,
-  options: { code: string; label: string },
-): void {
-  for (const [id, taskIds] of duplicates) {
-    if (!taskIds.has(taskId)) continue;
-    issues.push(
-      createReviewIssue({
-        code: options.code,
-        severity: "error",
-        taskId,
-        message: `Duplicate ${options.label} id ${id} appears in tasks ${[
-          ...taskIds,
-        ].join(", ")}.`,
-      }),
-    );
-  }
 }
 
 /**
@@ -416,6 +362,7 @@ function validateExecutorCommit(
   const issues: CritiqueValidationIssue[] = [];
   const committedEntityIds: string[] = [];
   const committedRelationIds: string[] = [];
+  const entityIdMap = new Map<string, string>();
   let committedItemCount = 0;
   const totalItemCount =
     result.entities.length +
@@ -425,7 +372,11 @@ function validateExecutorCommit(
     result.open_questions.length;
 
   for (const entity of result.entities) {
-    const committed = graphIndexes.entityById.get(entity.id);
+    const committed = findCommittedEntity(
+      entity,
+      result.task_id,
+      graphIndexes,
+    );
     if (!committed) {
       issues.push(
         createReviewIssue({
@@ -437,29 +388,18 @@ function validateExecutorCommit(
       );
       continue;
     }
-    if (
-      hasSourceConflict(
-        entity.source_task_id,
-        committed.source_task_id,
-        result.task_id,
-      )
-    ) {
-      issues.push(
-        createReviewIssue({
-          code: "ENTITY_SOURCE_CONFLICT",
-          severity: "error",
-          taskId: result.task_id,
-          message: `Entity ${entity.id} is committed under a different source task.`,
-        }),
-      );
-      continue;
-    }
-    committedEntityIds.push(entity.id);
+    entityIdMap.set(entity.id, committed.id);
+    committedEntityIds.push(committed.id);
     committedItemCount += 1;
   }
 
   for (const relation of result.relations) {
-    const committed = graphIndexes.relationById.get(relation.id);
+    const committed = findCommittedRelation(
+      relation,
+      result.task_id,
+      graphIndexes,
+      entityIdMap,
+    );
     if (!committed) {
       issues.push(
         createReviewIssue({
@@ -472,8 +412,8 @@ function validateExecutorCommit(
       continue;
     }
     if (
-      !graphIndexes.entityById.has(relation.source) ||
-      !graphIndexes.entityById.has(relation.target)
+      !graphIndexes.entityById.has(committed.source) ||
+      !graphIndexes.entityById.has(committed.target)
     ) {
       issues.push(
         createReviewIssue({
@@ -485,24 +425,7 @@ function validateExecutorCommit(
       );
       continue;
     }
-    if (
-      hasSourceConflict(
-        relation.source_task_id,
-        committed.source_task_id,
-        result.task_id,
-      )
-    ) {
-      issues.push(
-        createReviewIssue({
-          code: "RELATION_SOURCE_CONFLICT",
-          severity: "error",
-          taskId: result.task_id,
-          message: `Relation ${relation.id} is committed under a different source task.`,
-        }),
-      );
-      continue;
-    }
-    committedRelationIds.push(relation.id);
+    committedRelationIds.push(committed.id);
     committedItemCount += 1;
   }
 
@@ -529,7 +452,90 @@ function validateExecutorCommit(
 }
 
 /**
- * 判断最终图谱中的来源任务是否与 Executor 产出冲突。
+ * 在最终图谱中寻找 Executor 实体的落图结果，兼容相似去重和冲突重编号。
+ */
+function findCommittedEntity(
+  entity: KnowledgeGraphEntity,
+  taskId: string,
+  graphIndexes: ReturnType<typeof createGraphIndexes>,
+): KnowledgeGraphEntity | null {
+  const exact = graphIndexes.entityById.get(entity.id);
+  if (
+    exact &&
+    !hasSourceConflict(entity.source_task_id, exact.source_task_id, taskId)
+  ) {
+    return exact;
+  }
+  if (exact && areKnowledgeGraphItemsSimilar(entity, exact, "entity")) {
+    return exact;
+  }
+
+  const expectedSource = entity.source_task_id ?? taskId;
+  return (
+    graphIndexes.entities.find(
+      (candidate) =>
+        candidate.id !== entity.id &&
+        candidate.source_task_id === expectedSource &&
+        areKnowledgeGraphItemsSimilar(entity, candidate, "entity"),
+    ) ?? null
+  );
+}
+
+/**
+ * 在最终图谱中寻找 Executor 关系的落图结果，并应用实体重编号映射。
+ */
+function findCommittedRelation(
+  relation: KnowledgeGraphRelation,
+  taskId: string,
+  graphIndexes: ReturnType<typeof createGraphIndexes>,
+  entityIdMap: Map<string, string>,
+): KnowledgeGraphRelation | null {
+  const remappedRelation = remapRelationForCommit(relation, entityIdMap);
+  const exact = graphIndexes.relationById.get(relation.id);
+  if (
+    exact &&
+    !hasSourceConflict(relation.source_task_id, exact.source_task_id, taskId)
+  ) {
+    return exact;
+  }
+  if (
+    exact &&
+    areKnowledgeGraphItemsSimilar(remappedRelation, exact, "relation")
+  ) {
+    return exact;
+  }
+
+  const expectedSource = relation.source_task_id ?? taskId;
+  return (
+    graphIndexes.relations.find(
+      (candidate) =>
+        candidate.id !== relation.id &&
+        candidate.source_task_id === expectedSource &&
+        areKnowledgeGraphItemsSimilar(
+          remappedRelation,
+          candidate,
+          "relation",
+        ),
+    ) ?? null
+  );
+}
+
+/**
+ * 将 Executor 原始关系端点映射到最终图谱中的实体 ID。
+ */
+function remapRelationForCommit(
+  relation: KnowledgeGraphRelation,
+  entityIdMap: Map<string, string>,
+): KnowledgeGraphRelation {
+  return {
+    ...relation,
+    source: entityIdMap.get(relation.source) ?? relation.source,
+    target: entityIdMap.get(relation.target) ?? relation.target,
+  };
+}
+
+/**
+ * 判断提交项来源是否和当前 Executor 产物冲突。
  */
 function hasSourceConflict(
   expectedSource: string | undefined,
@@ -541,7 +547,40 @@ function hasSourceConflict(
 }
 
 /**
- * 统计决策、风险和开放问题等非节点/边辅助项是否已经进入最终图谱。
+ * 在最终图谱中寻找决策、风险、开放问题等辅助项的落图结果。
+ */
+function findCommittedAuxiliaryItem<
+  T extends { id: string; text: string; source_task_id?: string },
+>(
+  item: T,
+  taskId: string,
+  candidates: T[],
+  byId: Map<string, T>,
+): T | null {
+  const exact = byId.get(item.id);
+  if (
+    exact &&
+    !hasSourceConflict(item.source_task_id, exact.source_task_id, taskId)
+  ) {
+    return exact;
+  }
+  if (exact && areKnowledgeGraphItemsSimilar(item, exact, "auxiliary")) {
+    return exact;
+  }
+
+  const expectedSource = item.source_task_id ?? taskId;
+  return (
+    candidates.find(
+      (candidate) =>
+        candidate.id !== item.id &&
+        candidate.source_task_id === expectedSource &&
+        areKnowledgeGraphItemsSimilar(item, candidate, "auxiliary"),
+    ) ?? null
+  );
+}
+
+/**
+ * 统计辅助项是否已经进入最终图谱，兼容重复 ID 被重编号的情况。
  */
 function countCommittedAuxiliaryItems(
   result: ExecutorAgentResult,
@@ -549,13 +588,40 @@ function countCommittedAuxiliaryItems(
 ): number {
   let count = 0;
   for (const item of result.decisions) {
-    if (graphIndexes.decisionById.has(item.id)) count += 1;
+    if (
+      findCommittedAuxiliaryItem(
+        item,
+        result.task_id,
+        graphIndexes.decisions,
+        graphIndexes.decisionById,
+      )
+    ) {
+      count += 1;
+    }
   }
   for (const item of result.risks) {
-    if (graphIndexes.riskById.has(item.id)) count += 1;
+    if (
+      findCommittedAuxiliaryItem(
+        item,
+        result.task_id,
+        graphIndexes.risks,
+        graphIndexes.riskById,
+      )
+    ) {
+      count += 1;
+    }
   }
   for (const item of result.open_questions) {
-    if (graphIndexes.openQuestionById.has(item.id)) count += 1;
+    if (
+      findCommittedAuxiliaryItem(
+        item,
+        result.task_id,
+        graphIndexes.openQuestions,
+        graphIndexes.openQuestionById,
+      )
+    ) {
+      count += 1;
+    }
   }
   return count;
 }

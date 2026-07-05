@@ -21,6 +21,7 @@ import type {
   RequestAnalysis,
   TaskExecutionPlan,
 } from "@repo/shared";
+import { mergeProductKnowledgeGraphSnapshots } from "../agents/product-workflow/common/knowledge-graph-merge";
 import type { UserInputRecord } from "../agents/request/user-input";
 
 /**
@@ -112,7 +113,7 @@ function mergeExecutorResults(
 /**
  * 合并多个 Executor 基于同一图谱快照产出的完整快照，避免并行写覆盖。
  */
-function mergeKnowledgeGraphSnapshots(
+export function mergeKnowledgeGraphSnapshots(
   current: ProductKnowledgeGraph | null,
   update: ProductKnowledgeGraph | null,
 ): ProductKnowledgeGraph | null {
@@ -120,36 +121,7 @@ function mergeKnowledgeGraphSnapshots(
   if (update === null) return null;
   if (!current) return update;
 
-  return {
-    ...current,
-    entities: mergeById(current.entities, update.entities),
-    relations: mergeById(current.relations, update.relations),
-    decisions: mergeById(current.decisions, update.decisions),
-    risks: mergeById(current.risks, update.risks),
-    open_questions: mergeById(current.open_questions, update.open_questions),
-    summary: mergeTextList(current.summary, update.summary),
-    markdown: update.markdown || current.markdown,
-    notes: mergeTextList(current.notes, update.notes),
-  };
-}
-
-/**
- * 按业务 id 合并图谱数组，后到的同 id 项覆盖旧值。
- */
-function mergeById<T extends { id: string }>(current: T[], update: T[]): T[] {
-  const merged = new Map(current.map((item) => [item.id, item]));
-  for (const item of update) {
-    merged.set(item.id, item);
-  }
-
-  return [...merged.values()];
-}
-
-/**
- * 合并摘要和备注，保留首次出现顺序。
- */
-function mergeTextList(current: string[], update: string[]): string[] {
-  return [...new Set([...current, ...update])];
+  return mergeProductKnowledgeGraphSnapshots(current, update);
 }
 
 /**
