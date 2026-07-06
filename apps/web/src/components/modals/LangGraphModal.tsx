@@ -251,8 +251,15 @@ const LANGGRAPH_EDGES: LangGraphEdge[] = [
     id: "parse-planner-intake",
     source: "parse_user_input",
     target: "planner_intake",
-    label: "parsed",
-    kind: "static",
+    label: "new turn",
+    kind: "conditional",
+  },
+  {
+    id: "parse-request-direct",
+    source: "parse_user_input",
+    target: "request_agent",
+    label: "form answer",
+    kind: "conditional",
   },
   {
     id: "planner-intake-request",

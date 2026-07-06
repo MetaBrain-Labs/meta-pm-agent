@@ -39,6 +39,7 @@ import type {
 const PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID = "product-workflow-confirmation";
 const EXECUTOR_BLOCKER_FORM_PREFIX = "executor-blocker-";
 const EXISTING_GRAPH_NEW_PROJECT_FORM_ID = "existing-graph-new-project-check";
+const REQUEST_DISCOVERY_FORM_ID = "request-discovery";
 
 /**
  * 处理完整会话流，并在表单答案整合后接入 Request Agent。
@@ -68,6 +69,17 @@ export async function* streamConversation(
     }
     if (formId && isProductWorkflowResumeFormId(formId)) {
       yield* streamWorkflowResumeAfterFormAnswer(messages, options, formId);
+      return;
+    }
+
+    if (formId === REQUEST_DISCOVERY_FORM_ID) {
+      const userInputBlock = createFormAnswerUserInputBlock(
+        lastMessage.content,
+      );
+      yield* streamPlanningAfterUserInput(userInputBlock, options, messages, {
+        emitUserInputBlock: true,
+        skipPlannerIntake: true,
+      });
       return;
     }
 
@@ -129,6 +141,8 @@ async function* streamPlanningAfterUserInput(
     finalizeOnComplete?: boolean;
     resumeFromCheckpoint?: boolean;
     startWithConversationAgent?: boolean;
+    skipPlannerIntake?: boolean;
+    emitUserInputBlock?: boolean;
   } = {},
 ): AsyncGenerator<ConversationStreamEvent> {
   try {
@@ -140,6 +154,11 @@ async function* streamPlanningAfterUserInput(
           knowledgeGraph: options.knowledgeGraph,
         }) ??
         undefined;
+
+    if (resumeOptions.emitUserInputBlock && userInputBlock.trim()) {
+      yield { type: "user-input-start" };
+      yield { type: "user-input-complete", content: userInputBlock };
+    }
 
     for await (const event of streamWorkflowGraph({
       workspaceId: options.workspaceId,
@@ -154,6 +173,7 @@ async function* streamPlanningAfterUserInput(
       workflowThreadId: options.workflowThreadId,
       resumeFromCheckpoint: resumeOptions.resumeFromCheckpoint,
       resumeContext,
+      skipPlannerIntake: resumeOptions.skipPlannerIntake,
       signal: options.signal,
     })) {
       if (event.type === "workflow-resume-start") {

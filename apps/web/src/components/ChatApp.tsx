@@ -75,6 +75,10 @@ const EXAMPLE_QUERIES = [
 ];
 
 const ACTIVE_MODEL = "DeepSeek V4 Pro";
+const PLANNER_INTAKE_QUESTION_FORM_IDS = [
+  "request-discovery",
+  "existing-graph-new-project-check",
+];
 
 interface Props {
   workspaceId: string | null;
@@ -1151,9 +1155,7 @@ function buildLangGraphRuntimeState(
     workflowMessage.reasoningBlocks?.some(
       (block) => block.agentType === "planner_intake",
     ) ||
-    workflowMessage.questionForm ||
-    workflowMessage.requestAnalysis ||
-    workflowMessage.plannerExecution
+    isPlannerIntakeQuestionForm(workflowMessage.questionForm?.content)
   ) {
     nodeStatuses.planner_intake = "completed";
   }
@@ -1226,4 +1228,14 @@ function findLatestWorkflowMessage(messages: Message[]): Message | null {
   }
 
   return null;
+}
+
+/**
+ * 判断当前问题表单是否由 Planner Intake 阶段生成。
+ */
+function isPlannerIntakeQuestionForm(content: string | undefined): boolean {
+  if (!content) return false;
+  return PLANNER_INTAKE_QUESTION_FORM_IDS.some((formId) =>
+    content.includes(`id="${formId}"`),
+  );
 }

@@ -24,7 +24,10 @@ import {
 import type { UserInputRecord } from "../../request/user-input";
 import { PLANNER_INTAKE_PROMPT } from "./intake-prompt";
 
-const MAX_PLANNER_INTAKE_QUESTIONS = 6;
+const MIN_REQUEST_DISCOVERY_QUESTIONS = 5;
+const TARGET_MAX_REQUEST_DISCOVERY_QUESTIONS = 7;
+const MAX_PLANNER_INTAKE_QUESTIONS = 8;
+const REQUEST_DISCOVERY_FORM_ID = "request-discovery";
 
 const PlannerIntakeQuestionTypeSchema = z.enum([
   "radio",
@@ -73,8 +76,7 @@ const PlannerIntakeQuestionFormSchema = z.object({
   questions: z
     .array(PlannerIntakeQuestionSchema)
     .min(1)
-    .max(MAX_PLANNER_INTAKE_QUESTIONS)
-    .describe("Fewer than seven user-facing questions"),
+    .describe("Five to seven questions by default, never more than eight"),
   submitLabel: z.string().min(1).describe("Submit button label"),
 });
 
@@ -127,11 +129,7 @@ export async function* streamPlannerIntakeAgent(
   const firstResult = yield* runPlannerIntakeJsonAgent(input);
   const text = getUserInputText(input);
 
-  if (
-    firstResult.intent === "ready_for_workflow" &&
-    text &&
-    !isFormAnswerPayload(text)
-  ) {
+  if (shouldForceQuestionForm(firstResult, text)) {
     // 项目相关输入默认先问一次表单；问题仍由 Agent 根据上下文生成。
     yield {
       type: "reasoning",
@@ -139,10 +137,40 @@ export async function* streamPlannerIntakeAgent(
       content:
         "Project-related input should ask one Question Form by default before workflow execution. Regenerating a tailored question form instead of continuing directly.",
     };
-    return yield* runPlannerIntakeJsonAgent(input, { forceQuestionForm: true });
+    const forcedResult = yield* runPlannerIntakeJsonAgent(input, {
+      forceQuestionForm: true,
+    });
+    if (shouldRegenerateForQuestionCount(forcedResult)) {
+      yield {
+        type: "reasoning",
+        agentType: "planner_intake",
+        content:
+          "The generated discovery form has too few questions. Regenerating with five to seven tailored questions.",
+      };
+      const correctedResult = yield* runPlannerIntakeJsonAgent(input, {
+        forceQuestionForm: true,
+        questionCountCorrection: true,
+      });
+      return normalizePlannerIntakeQuestionCount(correctedResult);
+    }
+    return normalizePlannerIntakeQuestionCount(forcedResult);
   }
 
-  return firstResult;
+  if (shouldRegenerateForQuestionCount(firstResult)) {
+    yield {
+      type: "reasoning",
+      agentType: "planner_intake",
+      content:
+        "The generated discovery form has too few questions. Regenerating with five to seven tailored questions.",
+    };
+    const correctedResult = yield* runPlannerIntakeJsonAgent(input, {
+      forceQuestionForm: true,
+      questionCountCorrection: true,
+    });
+    return normalizePlannerIntakeQuestionCount(correctedResult);
+  }
+
+  return normalizePlannerIntakeQuestionCount(firstResult);
 }
 
 /**
@@ -150,19 +178,27 @@ export async function* streamPlannerIntakeAgent(
  */
 function runPlannerIntakeJsonAgent(
   input: PlannerIntakeInput,
-  options: { forceQuestionForm?: boolean } = {},
+  options: {
+    forceQuestionForm?: boolean;
+    questionCountCorrection?: boolean;
+  } = {},
 ): AsyncGenerator<PlannerIntakeStreamEvent, PlannerIntakeResult, void> {
   return runJsonAgent({
     agentType: "planner_intake",
     agentLabel: "Planner Agent Intake",
-    name: options.forceQuestionForm
-      ? "planner-intake-question-form-agent"
-      : "planner-intake-agent",
+    name: options.questionCountCorrection
+      ? "planner-intake-question-count-correction-agent"
+      : options.forceQuestionForm
+        ? "planner-intake-question-form-agent"
+        : "planner-intake-agent",
     modelOptions: {
       ...JSON_AGENT_MODEL_OPTIONS,
       maxTokens: 4096,
     },
-    systemPrompt: buildPlannerIntakePrompt(options.forceQuestionForm === true),
+    systemPrompt: buildPlannerIntakePrompt({
+      forceQuestionForm: options.forceQuestionForm === true,
+      questionCountCorrection: options.questionCountCorrection === true,
+    }),
     payload: {
       product_context: input.productContext || "No product context provided.",
       product_knowledge_graph: input.knowledgeGraph ?? null,
@@ -178,8 +214,19 @@ function runPlannerIntakeJsonAgent(
 /**
  * 构造 Planner Intake 提示词；强制修正时仍要求 Agent 自己生成问题。
  */
-function buildPlannerIntakePrompt(forceQuestionForm: boolean): string {
-  if (!forceQuestionForm) return PLANNER_INTAKE_PROMPT;
+function buildPlannerIntakePrompt(options: {
+  forceQuestionForm: boolean;
+  questionCountCorrection: boolean;
+}): string {
+  if (!options.forceQuestionForm && !options.questionCountCorrection) {
+    return PLANNER_INTAKE_PROMPT;
+  }
+
+  const correction = options.questionCountCorrection
+    ? `
+
+The previous discovery form had too few questions. Regenerate the same request-discovery form with ${MIN_REQUEST_DISCOVERY_QUESTIONS} to ${TARGET_MAX_REQUEST_DISCOVERY_QUESTIONS} tailored questions. Never return more than ${MAX_PLANNER_INTAKE_QUESTIONS} questions.`
+    : "";
 
   return `${PLANNER_INTAKE_PROMPT}
 
@@ -187,9 +234,62 @@ function buildPlannerIntakePrompt(forceQuestionForm: boolean): string {
 
 The previous routing pass returned "ready_for_workflow", but project-related input must ask one Question Form by default before workflow execution unless the latest message is a form answer.
 
-You must return intent "needs_question_form" and generate a tailored question_form from the current request, product_context, and product_knowledge_graph.
+You must return intent "needs_question_form" and generate a tailored request-discovery question_form from the current request, product_context, and product_knowledge_graph.
 
-Do not use a fixed template. Do not ask information already present in user_input. Ask only for information needed to route or understand the user's request. Keep the form under seven questions.`;
+Do not use a fixed template. Do not ask information already present in user_input. Ask only for information needed to route or understand the user's request. Prefer ${MIN_REQUEST_DISCOVERY_QUESTIONS} to ${TARGET_MAX_REQUEST_DISCOVERY_QUESTIONS} questions. Never return more than ${MAX_PLANNER_INTAKE_QUESTIONS} questions.${correction}`;
+}
+
+/**
+ * 判断模型是否错误跳过了项目需求的默认摸查表单。
+ */
+function shouldForceQuestionForm(
+  result: PlannerIntakeResult,
+  text: string,
+): boolean {
+  return (
+    result.intent === "ready_for_workflow" &&
+    Boolean(text) &&
+    !isFormAnswerPayload(text)
+  );
+}
+
+/**
+ * 判断 request-discovery 表单是否低于本轮需求摸查的最小问题数。
+ */
+function shouldRegenerateForQuestionCount(
+  result: PlannerIntakeResult,
+): boolean {
+  return (
+    result.intent === "needs_question_form" &&
+    result.question_form?.id === REQUEST_DISCOVERY_FORM_ID &&
+    result.question_form.questions.length < MIN_REQUEST_DISCOVERY_QUESTIONS
+  );
+}
+
+/**
+ * 对模型生成的问题数量做硬上限保护，避免表单渲染超过产品约定。
+ */
+function normalizePlannerIntakeQuestionCount(
+  result: PlannerIntakeResult,
+): PlannerIntakeResult {
+  if (
+    result.intent !== "needs_question_form" ||
+    result.question_form?.id !== REQUEST_DISCOVERY_FORM_ID ||
+    result.question_form.questions.length <= MAX_PLANNER_INTAKE_QUESTIONS
+  ) {
+    return result;
+  }
+
+  return {
+    ...result,
+    question_form: {
+      ...result.question_form,
+      questions: result.question_form.questions.slice(
+        0,
+        MAX_PLANNER_INTAKE_QUESTIONS,
+      ),
+    },
+  };
 }
 
 /**

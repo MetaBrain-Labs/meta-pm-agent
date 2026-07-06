@@ -64,6 +64,7 @@ export interface WorkflowGraphInput {
   workflowThreadId?: string;
   resumeFromCheckpoint?: boolean;
   resumeContext?: WorkflowResumeContext;
+  skipPlannerIntake?: boolean;
   signal?: AbortSignal;
 }
 
@@ -104,6 +105,14 @@ const PRODUCT_WORKFLOW_ROUTE_TARGETS = {
 const CONVERSATION_ROUTE_TARGETS = {
   parse_user_input: "parse_user_input",
   end: END,
+} as const;
+
+/**
+ * 结构化用户输入后的路由目标集合。
+ */
+const PARSE_USER_INPUT_ROUTE_TARGETS = {
+  planner_intake: "planner_intake",
+  request_agent: "request_agent",
 } as const;
 
 /**
@@ -158,7 +167,11 @@ function createWorkflowGraph(checkpointer: BaseCheckpointSaver) {
       selectNextNodeAfterConversation,
       CONVERSATION_ROUTE_TARGETS,
     )
-    .addEdge("parse_user_input", "planner_intake")
+    .addConditionalEdges(
+      "parse_user_input",
+      selectNextNodeAfterParseUserInput,
+      PARSE_USER_INPUT_ROUTE_TARGETS,
+    )
     .addConditionalEdges(
       "planner_intake",
       selectNextNodeAfterPlannerIntake,
@@ -251,6 +264,13 @@ function selectNextNodeAfterConversation(state: WorkflowGraphStateValue) {
 }
 
 /**
+ * 根据是否已经完成 Planner Intake 摸查，决定是否直达 Request Agent。
+ */
+function selectNextNodeAfterParseUserInput(state: WorkflowGraphStateValue) {
+  return state.skipPlannerIntake ? "request_agent" : "planner_intake";
+}
+
+/**
  * 根据 Planner intake 的判断决定是否进入 Request Agent 和正式 DAG 规划。
  */
 function selectNextNodeAfterPlannerIntake(state: WorkflowGraphStateValue) {
@@ -289,6 +309,7 @@ function createWorkflowInitialState(input: WorkflowGraphInput) {
     messages: input.messages ?? [],
     enabledTools: input.enabledTools ?? [],
     userInputBlock: input.userInputBlock ?? "",
+    skipPlannerIntake: input.skipPlannerIntake ?? false,
     conversationOutcome: null,
     plannerIntakeOutcome: null,
     requestAnalysis: resume?.requestAnalysis ?? null,

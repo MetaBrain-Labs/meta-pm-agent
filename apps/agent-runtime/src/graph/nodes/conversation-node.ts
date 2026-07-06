@@ -34,6 +34,9 @@ import {
 } from "../../utils/message-adapter";
 import { streamTaggedBlock } from "../../utils/tagged-block-stream";
 import type { ConversationStreamEvent } from "../../types";
+import {
+  createWorkflowContinuationResumeContextFromMessages,
+} from "../../agents/conversation/workflow-resume";
 import type { WorkflowGraphStateValue } from "../state";
 
 const CONVERSATION_TAGGED_BLOCKS = [
@@ -82,6 +85,10 @@ export async function conversationAgentNode(
     throw new Error("Conversation Agent requires chat messages.");
   }
 
+  if (!shouldRunConversationModelForWorkflowResume(state)) {
+    return emitDeterministicPlannerIntakeHandoff(state, config);
+  }
+
   const writer = getWriter(config);
   const stream = streamTaggedBlock(
     streamGraphConversationAgentEvents(
@@ -92,53 +99,82 @@ export async function conversationAgentNode(
     CONVERSATION_TAGGED_BLOCKS,
   );
 
-  for await (const event of stream) {
-    if (
-      event.type === "workflow-resume-start" ||
-      event.type === "planner-intake-handoff-start"
-    ) {
-      continue;
-    }
+  try {
+    for await (const event of stream) {
+      if (
+        event.type === "workflow-resume-start" ||
+        event.type === "planner-intake-handoff-start"
+      ) {
+        continue;
+      }
 
-    if (event.type === "planner-intake-handoff-complete") {
-      const userInputBlock = createRawUserInputBlock(state.messages);
-      writer?.({ type: "user-input-start" });
-      writer?.({ type: "user-input-complete", content: userInputBlock });
-      return {
-        conversationOutcome: "ready_for_planner" as const,
-        enabledTools: [],
-        messages: [],
-        userInputBlock,
-      };
-    }
+      if (event.type === "planner-intake-handoff-complete") {
+        return emitDeterministicPlannerIntakeHandoff(state, config);
+      }
 
-    writer?.(event);
+      if (event.type === "workflow-resume-complete") {
+        writer?.(event);
+        return {
+          conversationOutcome: "workflow_resume" as const,
+          enabledTools: [],
+          messages: [],
+        };
+      }
 
-    if (event.type === "workflow-resume-complete") {
-      return {
-        conversationOutcome: "workflow_resume" as const,
-        enabledTools: [],
-        messages: [],
-      };
+      if (event.type === "user-input-complete") {
+        writer?.({ type: "user-input-start" });
+        writer?.({ type: "user-input-complete", content: event.content });
+        return {
+          conversationOutcome: "ready_for_planner" as const,
+          enabledTools: [],
+          messages: [],
+          userInputBlock: event.content,
+        };
+      }
+
+      if (event.type === "token-usage") {
+        writer?.(event);
+      }
     }
-    if (event.type === "question-form-complete") {
-      return {
-        conversationOutcome: "waiting_for_user" as const,
-        enabledTools: [],
-        messages: [],
-      };
-    }
-    if (event.type === "user-input-complete") {
-      return {
-        conversationOutcome: "ready_for_planner" as const,
-        enabledTools: [],
-        messages: [],
-        userInputBlock: event.content,
-      };
-    }
+  } catch {
+    return emitDeterministicPlannerIntakeHandoff(state, config);
   }
 
-  throw new Error("Conversation Agent did not hand off to Planner Intake.");
+  return emitDeterministicPlannerIntakeHandoff(state, config);
+}
+
+/**
+ * 普通消息直接交给 Planner Intake，避免 DeepAgents 默认任务指令污染用户可见输出。
+ */
+function emitDeterministicPlannerIntakeHandoff(
+  state: WorkflowGraphStateValue,
+  config?: LangGraphRunnableConfig,
+) {
+  const writer = getWriter(config);
+  const userInputBlock = createRawUserInputBlock(state.messages);
+  writer?.({ type: "user-input-start" });
+  writer?.({ type: "user-input-complete", content: userInputBlock });
+
+  return {
+    conversationOutcome: "ready_for_planner" as const,
+    enabledTools: [],
+    messages: [],
+    userInputBlock,
+  };
+}
+
+/**
+ * 只有历史中存在可恢复 workflow 产物时，才调用模型识别显式续跑意图。
+ */
+function shouldRunConversationModelForWorkflowResume(
+  state: WorkflowGraphStateValue,
+): boolean {
+  return Boolean(
+    createWorkflowContinuationResumeContextFromMessages({
+      messages: state.messages,
+      knowledgeGraph: undefined,
+    }),
+  );
 }
 
 /**

@@ -73,6 +73,12 @@ export const WorkflowGraphState = Annotation.Root({
     default: () => "",
   }),
 
+  // 表单答案已经完成 Planner Intake 摸查时，可直接进入 Request Agent。
+  skipPlannerIntake: Annotation<boolean>({
+    reducer: (_current, update) => update,
+    default: () => false,
+  }),
+
   // Conversation Agent 节点的路由结果，用于决定是否继续进入 Planner intake。
   conversationOutcome: Annotation<
     "ready_for_planner" | "waiting_for_user" | "workflow_resume" | null
