@@ -51,6 +51,14 @@ export function mapPersistedMessageToMessage(
           })),
         }
       : {}),
+    ...(message.subagentTraces && message.subagentTraces.length > 0
+      ? {
+          subagentTraces: message.subagentTraces.map((trace) => ({
+            ...trace,
+            parentAgentType: trace.parentAgentType ?? message.type ?? undefined,
+          })),
+        }
+      : {}),
     ...(message.userInput
       ? {
           userInput: {

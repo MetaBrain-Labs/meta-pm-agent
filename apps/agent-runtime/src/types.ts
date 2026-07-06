@@ -72,6 +72,27 @@ export type ConversationStreamEvent =
       toolResult: unknown;
       agentType?: AgentMessageType;
     }
+  | {
+      type: "subagent-start";
+      agentType: AgentMessageType;
+      subagentType: string;
+      toolCallId?: string;
+      description?: string;
+    }
+  | {
+      type: "subagent-thinking";
+      agentType: AgentMessageType;
+      subagentType: string;
+      toolCallId?: string;
+      content: string;
+    }
+  | {
+      type: "subagent-result";
+      agentType: AgentMessageType;
+      subagentType: string;
+      toolCallId?: string;
+      result: unknown;
+    }
   | { type: "question-form-start"; agentType?: AgentMessageType }
   | { type: "question-form-complete"; content: string; agentType?: AgentMessageType }
   | { type: "workflow-resume-start"; agentType?: AgentMessageType }
@@ -120,4 +141,6 @@ export interface ConversationStreamOptions {
   contextSource?: OrchestratorContextSource;
   knowledgeGraph?: ProductKnowledgeGraph | null;
   signal?: AbortSignal;
+  /** "chat" 模式使用纯闲聊提示词，不产生标记块或表单 */
+  mode?: "project" | "chat";
 }

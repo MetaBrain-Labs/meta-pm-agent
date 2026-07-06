@@ -29,6 +29,9 @@ export type StreamEventType =
   | "todo-update"
   | "tool-call"
   | "tool-result"
+  | "subagent-start"
+  | "subagent-thinking"
+  | "subagent-result"
   | "token-usage"
   | "conversation-title"
   | "step-finish"
@@ -48,6 +51,9 @@ export interface StreamEvent {
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolResult?: unknown;
+  subagentType?: string;
+  description?: string;
+  result?: unknown;
   usage?: Record<string, unknown>;
   inputTokens?: number;
   cacheHitInputTokens?: number;
@@ -348,6 +354,7 @@ export interface Message {
     agentType?: string;
     status?: "running" | "complete";
   }>;
+  subagentTraces?: SubagentTrace[];
   usage?: Record<string, unknown>;
   tokenUsages?: TokenUsageInfo[];
   timestamp: number;
@@ -357,6 +364,19 @@ export interface Message {
  * Agent 工具调用展示数据，实时流和历史消息恢复共用同一结构。
  */
 export type ToolCallInfo = NonNullable<Message["toolCalls"]>[number];
+
+/**
+ * Orchestrator 内嵌 SubAgent 的前端展示轨迹。
+ */
+export interface SubagentTrace {
+  id?: string;
+  parentAgentType?: string;
+  subagentType: string;
+  description?: string;
+  thinking?: string;
+  result?: unknown;
+  status: "running" | "complete";
+}
 
 /**
  * 按 Agent 阶段记录推理过程，便于在对应业务卡片附近展示。
@@ -411,6 +431,7 @@ export interface PersistedMessageInfo {
   timestamp: string;
   reasoningContent?: string;
   toolCalls?: ToolCallInfo[];
+  subagentTraces?: SubagentTrace[];
   userInput?: Array<{ index: number; content: string; type: string }> | null;
   requestAnalysis?: RequestAnalysis | null;
   taskExecutionPlan?: TaskExecutionPlan | null;

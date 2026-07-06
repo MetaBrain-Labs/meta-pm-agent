@@ -23,6 +23,7 @@ const SUMMARY_ENV_KEYS = [
   "AGENT_SUMMARY_TOOL_CALLS_ENABLED",
   "AGENT_SUMMARY_CONTEXT_ENABLED",
   "AGENT_SUMMARY_OUTPUT_ENABLED",
+  "AGENT_SUMMARY_SUBAGENTS_ENABLED",
   "AGENT_SUMMARY_OUTPUT_DIR",
 ] as const;
 
@@ -36,6 +37,7 @@ test("does not create summary files when all switches are disabled", async () =>
         AGENT_SUMMARY_CONTEXT_ENABLED: "false",
         AGENT_SUMMARY_OUTPUT_DIR: outputDir,
         AGENT_SUMMARY_OUTPUT_ENABLED: "false",
+        AGENT_SUMMARY_SUBAGENTS_ENABLED: "false",
         AGENT_SUMMARY_THINKING_ENABLED: "false",
         AGENT_SUMMARY_TOOL_CALLS_ENABLED: "false",
       },
@@ -163,6 +165,71 @@ test("writes enabled summary sections as markdown after finish", async () => {
 /**
  * 验证重复引用不会被误写成循环引用，便于排查 Critique Agent fallback 输出。
  */
+test("records subagent invocations when AGENT_SUMMARY_SUBAGENTS_ENABLED is on", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "agent-summary-sub-"));
+  const outputDir = path.join(tempRoot, "summaries");
+
+  try {
+    await withSummaryEnv(
+      {
+        AGENT_SUMMARY_CONTEXT_ENABLED: "false",
+        AGENT_SUMMARY_OUTPUT_DIR: outputDir,
+        AGENT_SUMMARY_OUTPUT_ENABLED: "false",
+        AGENT_SUMMARY_THINKING_ENABLED: "false",
+        AGENT_SUMMARY_TOOL_CALLS_ENABLED: "false",
+        AGENT_SUMMARY_SUBAGENTS_ENABLED: "true",
+      },
+      async () => {
+        const recorder = createAgentRunSummaryRecorder({
+          agentLabel: "Test Agent",
+          agentName: "test-agent",
+          agentType: "test",
+        });
+
+        recorder.recordSubagentCall({
+          toolCallId: "call-task-1",
+          subagentType: "planner-agent",
+          description: "Generate DAG from product request",
+          input: { subagent_type: "planner-agent", description: "generate DAG" },
+        });
+        recorder.recordSubagentThinking({
+          toolCallId: "call-task-1",
+          content: "Planner subagent reasoned about task ordering.",
+        });
+        recorder.recordSubagentResult({
+          toolCallId: "call-task-1",
+          subagentType: "planner-agent",
+          output: { tasks: [{ id: "t1", title: "research" }], plan_type: "initial" },
+        });
+
+        await recorder.finish({ status: "completed" });
+
+        const dateDirs = await readdir(outputDir);
+        const files = await readdir(path.join(outputDir, dateDirs[0]));
+        const markdown = await readFile(
+          path.join(outputDir, dateDirs[0], files[0]),
+          "utf8",
+        );
+        assert.match(markdown, /## 5\. SubAgent 执行汇总/);
+        assert.match(markdown, /### 1\. SubAgent: `planner-agent`/);
+        assert.match(markdown, /- 描述: Generate DAG from product request/);
+        assert.match(markdown, /#### 输入/);
+        assert.match(markdown, /planner-agent/);
+        assert.match(markdown, /#### 思考过程/);
+        assert.match(markdown, /Planner subagent reasoned about task ordering/);
+        assert.match(markdown, /#### 返回给主 Agent 的结果/);
+        assert.match(markdown, /t1/);
+        assert.ok(
+          !markdown.includes("## 1. Agent 思考过程汇总"),
+          "non-enabled thinking section should not appear",
+        );
+      },
+    );
+  } finally {
+    await rm(tempRoot, { force: true, recursive: true });
+  }
+});
+
 test("keeps repeated non-cyclic references in summary output", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "agent-summary-ref-"));
   const outputDir = path.join(tempRoot, "summaries");

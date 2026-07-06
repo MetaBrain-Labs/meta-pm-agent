@@ -31,6 +31,8 @@ import { parseJsonObject } from "../../utils/json";
 import {
   createAgentRunSummaryMiddleware,
   createAgentRunSummaryRecorder,
+  extractSubagentTaskCalls,
+  extractSubagentTaskResult,
 } from "./agent-run-summary";
 import {
   getReasoningContent,
@@ -58,6 +60,27 @@ export interface JsonAgentReasoningEvent<AgentType extends string> {
 
 export type JsonAgentEvent<AgentType extends string> =
   | JsonAgentReasoningEvent<AgentType>
+  | {
+      type: "subagent-start";
+      agentType: AgentType;
+      subagentType: string;
+      toolCallId?: string;
+      description?: string;
+    }
+  | {
+      type: "subagent-thinking";
+      agentType: AgentType;
+      subagentType: string;
+      toolCallId?: string;
+      content: string;
+    }
+  | {
+      type: "subagent-result";
+      agentType: AgentType;
+      subagentType: string;
+      toolCallId?: string;
+      result: unknown;
+    }
   | {
       type: "tool-call";
       toolCallId?: string;
@@ -179,7 +202,39 @@ export async function* runJsonAgent<T, AgentType extends string>(
     );
 
     let responseText = "";
+    /** 跟踪 task 工具调用中 tool_call_id -> subagentType 的映射，用于结果匹配。 */
+    const taskCallToSubagent = new Map<string, string>();
+    /** 当前仍在执行的 SubAgent 调用，用于把模型 reasoning 归属到内嵌卡片。 */
+    const openSubagentCalls: Array<{
+      toolCallId?: string;
+      subagentType: string;
+    }> = [];
     for await (const [message] of run) {
+      const subagentTaskCalls = extractSubagentTaskCalls(message);
+      for (const taskCall of subagentTaskCalls) {
+        if (taskCall.toolCallId) {
+          taskCallToSubagent.set(taskCall.toolCallId, taskCall.subagentType);
+        }
+        openSubagentCalls.push({
+          toolCallId: taskCall.toolCallId,
+          subagentType: taskCall.subagentType,
+        });
+        summaryRecorder.recordSubagentCall({
+          toolCallId: taskCall.toolCallId,
+          subagentType: taskCall.subagentType,
+          description: taskCall.description,
+          input: taskCall.input,
+        });
+        yield {
+          type: "subagent-start",
+          agentType: options.agentType,
+          subagentType: taskCall.subagentType,
+          toolCallId: taskCall.toolCallId,
+          description: taskCall.description,
+        };
+      }
+      // 提取全部工具调用（不论可见与否），以便自动捕获 SubAgent 的 task 调用。
+
       for (const toolCall of getToolCalls(message, visibleToolNameSet)) {
         summaryRecorder.recordToolCall({
           toolCallId: toolCall.id,
@@ -212,21 +267,79 @@ export async function* runJsonAgent<T, AgentType extends string>(
         continue;
       }
       if (ToolMessage.isInstance(message)) {
-        // 透出 task 工具返回的 SubAgent 结果，供上层提取结构化产出
-        if (message.name === "task" && options.onTaskToolResult) {
-          options.onTaskToolResult(message.content);
+        const subagentTaskResult = extractSubagentTaskResult(
+          message,
+          taskCallToSubagent,
+        );
+        if (subagentTaskResult) {
+          if (options.onTaskToolResult) {
+            options.onTaskToolResult(subagentTaskResult.output);
+          }
+          summaryRecorder.recordSubagentResult({
+            toolCallId: subagentTaskResult.toolCallId,
+            subagentType: subagentTaskResult.subagentType,
+            output: subagentTaskResult.output,
+          });
+          yield {
+            type: "subagent-result",
+            agentType: options.agentType,
+            subagentType: subagentTaskResult.subagentType,
+            toolCallId: subagentTaskResult.toolCallId,
+            result: subagentTaskResult.output,
+          };
+          closeSubagentCall(openSubagentCalls, subagentTaskResult);
+        } else if (message.name === "task") {
+          if (options.onTaskToolResult) {
+            options.onTaskToolResult(message.content);
+          }
+          const toolCallId = (message as { tool_call_id?: string }).tool_call_id;
+          const subagentType =
+            (toolCallId ? taskCallToSubagent.get(toolCallId) : undefined) ??
+            "unknown";
+          summaryRecorder.recordSubagentResult({
+            toolCallId,
+            subagentType,
+            output: message.content,
+          });
+          yield {
+            type: "subagent-result",
+            agentType: options.agentType,
+            subagentType,
+            toolCallId,
+            result: message.content,
+          };
+          closeSubagentCall(openSubagentCalls, { toolCallId, subagentType });
         }
         continue;
       }
 
       const reasoning = getReasoningContent(message);
       if (reasoning) {
-        summaryRecorder.recordThinking(reasoning);
-        yield {
-          type: "reasoning",
-          agentType: options.agentType,
-          content: reasoning,
-        };
+        const activeSubagent =
+          subagentTaskCalls.length === 0
+            ? openSubagentCalls[openSubagentCalls.length - 1]
+            : undefined;
+        if (activeSubagent) {
+          summaryRecorder.recordSubagentThinking({
+            toolCallId: activeSubagent.toolCallId,
+            subagentType: activeSubagent.subagentType,
+            content: reasoning,
+          });
+          yield {
+            type: "subagent-thinking",
+            agentType: options.agentType,
+            subagentType: activeSubagent.subagentType,
+            toolCallId: activeSubagent.toolCallId,
+            content: reasoning,
+          };
+        } else {
+          summaryRecorder.recordThinking(reasoning);
+          yield {
+            type: "reasoning",
+            agentType: options.agentType,
+            content: reasoning,
+          };
+        }
       }
       const text = getTextContent(message);
       responseText += text;
@@ -347,6 +460,40 @@ export async function* runJsonAgent<T, AgentType extends string>(
  */
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 关闭已返回结果的 SubAgent 调用，避免后续主 Agent reasoning 被错误归属。
+ */
+function closeSubagentCall(
+  openSubagentCalls: Array<{ toolCallId?: string; subagentType: string }>,
+  completed: { toolCallId?: string; subagentType?: string },
+): void {
+  const index = completed.toolCallId
+    ? openSubagentCalls.findIndex(
+        (item) => item.toolCallId === completed.toolCallId,
+      )
+    : findLastSubagentCallIndex(openSubagentCalls, completed.subagentType);
+
+  if (index !== -1) {
+    openSubagentCalls.splice(index, 1);
+  }
+}
+
+/**
+ * 按 SubAgent 类型从后向前匹配最近一次未完成调用。
+ */
+function findLastSubagentCallIndex(
+  openSubagentCalls: Array<{ toolCallId?: string; subagentType: string }>,
+  subagentType: string | undefined,
+): number {
+  for (let index = openSubagentCalls.length - 1; index >= 0; index -= 1) {
+    if (!subagentType || openSubagentCalls[index]?.subagentType === subagentType) {
+      return index;
+    }
+  }
+
+  return -1;
 }
 
 /**

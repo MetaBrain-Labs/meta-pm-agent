@@ -18,9 +18,15 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createMiddleware, type AnyAgentMiddleware } from "langchain";
+import {
+  AIMessage,
+  ToolMessage,
+  createMiddleware,
+  type AnyAgentMiddleware,
+  type BaseMessage,
+} from "langchain";
 
-type AgentRunSummarySection = "thinking" | "tools" | "context" | "output";
+type AgentRunSummarySection = "thinking" | "tools" | "context" | "output" | "subagents";
 
 interface AgentRunSummaryConfig {
   enabledSections: Set<AgentRunSummarySection>;
@@ -41,6 +47,33 @@ export interface AgentRunSummaryFinishOptions {
   tokenUsage?: unknown;
 }
 
+/**
+ * 单次 SubAgent 调用记录，保持主 Agent 能追溯子代理的委派输入和最终输出。
+ */
+interface SubagentInvocationRecord {
+  toolCallId?: string;
+  subagentType: string;
+  description: string;
+  input: unknown;
+  output: unknown;
+  thinkingChunks: string[];
+  startedAt: string;
+  completedAt?: string;
+}
+
+export interface SubagentTaskCallRecord {
+  toolCallId?: string;
+  subagentType: string;
+  description: string;
+  input: Record<string, unknown>;
+}
+
+export interface SubagentTaskResultRecord {
+  toolCallId?: string;
+  subagentType: string;
+  output: unknown;
+}
+
 export interface AgentRunSummaryRecorder {
   finish(options?: AgentRunSummaryFinishOptions): Promise<void>;
   recordOutput(content: string): void;
@@ -56,6 +89,30 @@ export interface AgentRunSummaryRecorder {
     toolCallId?: string;
     toolName: string;
     toolResult: unknown;
+  }): void;
+  /**
+   * 记录主 Agent 通过 task 工具调用的 SubAgent 信息。
+   * 调用时机：检测到 task 工具调用时记录 subagent_type / description 等元数据。
+   */
+  recordSubagentCall(event: {
+    toolCallId?: string;
+    subagentType: string;
+    description: string;
+    input: unknown;
+  }): void;
+  recordSubagentThinking(event: {
+    toolCallId?: string;
+    subagentType?: string;
+    content: string;
+  }): boolean;
+  /**
+   * 记录 SubAgent 返回给主 Agent 的最终输出。
+   * 调用时机：task 工具结果返回时记录输出内容。
+   */
+  recordSubagentResult(event: {
+    toolCallId?: string;
+    subagentType: string;
+    output: unknown;
   }): void;
 }
 
@@ -77,6 +134,11 @@ const NOOP_RECORDER: AgentRunSummaryRecorder = {
   recordThinking() {},
   recordToolCall() {},
   recordToolResult() {},
+  recordSubagentCall() {},
+  recordSubagentThinking() {
+    return false;
+  },
+  recordSubagentResult() {},
 };
 
 let runCounter = 0;
@@ -98,6 +160,8 @@ export function createAgentRunSummaryRecorder(
   const toolRecords: ToolSummaryRecord[] = [];
   const outputChunks: string[] = [];
   const runtimeContexts: unknown[] = [];
+  /** SubAgent 调用记录，按 task 工具调用顺序排列。 */
+  const subagentInvocations: SubagentInvocationRecord[] = [];
   let actualSystemPrompt = "";
   let finished = false;
 
@@ -121,6 +185,7 @@ export function createAgentRunSummaryRecorder(
           actualSystemPrompt,
           thinkingChunks,
           toolRecords,
+          subagentInvocations,
         });
         const dateDir = startedAt.toISOString().slice(0, 10);
         const outputDir = path.join(config.outputDir, dateDir);
@@ -183,6 +248,47 @@ export function createAgentRunSummaryRecorder(
         toolResult: event.toolResult,
       });
     },
+    recordSubagentCall(event) {
+      if (!config.enabledSections.has("subagents")) return;
+      subagentInvocations.push({
+        toolCallId: event.toolCallId,
+        subagentType: event.subagentType,
+        description: event.description,
+        input: event.input,
+        output: undefined,
+        thinkingChunks: [],
+        startedAt: new Date().toISOString(),
+        completedAt: undefined,
+      });
+    },
+    recordSubagentThinking(event) {
+      if (!config.enabledSections.has("subagents") || !event.content) {
+        return false;
+      }
+
+      const invocation = findSubagentInvocation(subagentInvocations, {
+        toolCallId: event.toolCallId,
+        subagentType: event.subagentType,
+        preferOpen: true,
+      });
+      if (!invocation) return false;
+
+      invocation.thinkingChunks.push(event.content);
+      return true;
+    },
+    recordSubagentResult(event) {
+      if (!config.enabledSections.has("subagents")) return;
+      const invocation = findSubagentInvocation(subagentInvocations, {
+        toolCallId: event.toolCallId,
+        subagentType: event.subagentType,
+        preferOpen: true,
+      });
+      if (!invocation) return;
+
+      invocation.output = event.output;
+      invocation.completedAt = new Date().toISOString();
+      return;
+    },
   };
 }
 
@@ -219,6 +325,73 @@ export function createAgentRunSummaryMiddleware(
 /**
  * 判断当前进程是否开启了任一 Agent 汇总开关。
  */
+/**
+ * 从 AIMessage 中提取 DeepAgents task 工具调用，兼容 LangChain 规范化字段和 provider 原始字段。
+ */
+export function extractSubagentTaskCalls(
+  message: BaseMessage,
+): SubagentTaskCallRecord[] {
+  if (!AIMessage.isInstance(message)) return [];
+
+  const calls = new Map<string, SubagentTaskCallRecord>();
+
+  for (const toolCall of message.tool_calls ?? []) {
+    if (toolCall.name !== "task") continue;
+    const input = normalizeToolCallArgs(toolCall.args);
+    const call = createSubagentTaskCallRecord(toolCall.id, input);
+    calls.set(toolCall.id ?? `normalized-${calls.size}`, call);
+  }
+
+  for (const rawToolCall of extractRawToolCalls(message)) {
+    const rawRecord = isPlainRecord(rawToolCall) ? rawToolCall : {};
+    const functionRecord = isPlainRecord(rawRecord.function)
+      ? rawRecord.function
+      : {};
+    const name =
+      readString(functionRecord, "name") ??
+      readString(rawRecord, "name") ??
+      "";
+    if (name !== "task") continue;
+
+    const toolCallId = readString(rawRecord, "id");
+    const input = normalizeToolCallArgs(
+      functionRecord.arguments ?? rawRecord.args ?? rawRecord.arguments,
+    );
+    const key = toolCallId ?? `raw-${calls.size}`;
+    const existing = calls.get(key);
+    const mergedInput =
+      existing && Object.keys(existing.input).length > 0
+        ? { ...input, ...existing.input }
+        : input;
+
+    calls.set(key, createSubagentTaskCallRecord(toolCallId, mergedInput));
+  }
+
+  return Array.from(calls.values());
+}
+
+/**
+ * 从 ToolMessage 中提取 DeepAgents task 返回结果，并根据已知 task 调用映射识别 SubAgent。
+ */
+export function extractSubagentTaskResult(
+  message: BaseMessage,
+  knownTaskCalls: ReadonlyMap<string, string>,
+): SubagentTaskResultRecord | null {
+  if (!ToolMessage.isInstance(message)) return null;
+
+  const toolCallId = getToolMessageCallId(message, knownTaskCalls);
+  const subagentType =
+    (toolCallId ? knownTaskCalls.get(toolCallId) : undefined) ?? "unknown";
+  const isTaskResult = message.name === "task" || subagentType !== "unknown";
+  if (!isTaskResult) return null;
+
+  return {
+    toolCallId,
+    subagentType,
+    output: message.content,
+  };
+}
+
 function getAgentRunSummaryConfig(): AgentRunSummaryConfig {
   const enabledSections = new Set<AgentRunSummarySection>();
 
@@ -233,6 +406,9 @@ function getAgentRunSummaryConfig(): AgentRunSummaryConfig {
   }
   if (isEnabled(process.env.AGENT_SUMMARY_OUTPUT_ENABLED)) {
     enabledSections.add("output");
+  }
+  if (isEnabled(process.env.AGENT_SUMMARY_SUBAGENTS_ENABLED)) {
+    enabledSections.add("subagents");
   }
 
   return {
@@ -249,7 +425,8 @@ function hasAgentRunSummaryEnabledSection(): boolean {
     isEnabled(process.env.AGENT_SUMMARY_THINKING_ENABLED) ||
     isEnabled(process.env.AGENT_SUMMARY_TOOL_CALLS_ENABLED) ||
     isEnabled(process.env.AGENT_SUMMARY_CONTEXT_ENABLED) ||
-    isEnabled(process.env.AGENT_SUMMARY_OUTPUT_ENABLED)
+    isEnabled(process.env.AGENT_SUMMARY_OUTPUT_ENABLED) ||
+    isEnabled(process.env.AGENT_SUMMARY_SUBAGENTS_ENABLED)
   );
 }
 
@@ -324,6 +501,7 @@ function renderAgentRunMarkdown({
   summaryOptions,
   thinkingChunks,
   toolRecords,
+  subagentInvocations,
 }: {
   actualSystemPrompt: string;
   config: AgentRunSummaryConfig;
@@ -337,6 +515,7 @@ function renderAgentRunMarkdown({
   summaryOptions: AgentRunSummaryOptions;
   thinkingChunks: string[];
   toolRecords: ToolSummaryRecord[];
+  subagentInvocations: SubagentInvocationRecord[];
 }): string {
   const lines = [
     "# Agent Run Summary",
@@ -384,6 +563,10 @@ function renderAgentRunMarkdown({
   if (config.enabledSections.has("output")) {
     lines.push("", "## 4. Agent 输出汇总", "");
     lines.push(renderOutputSection(outputChunks, finishOptions.output));
+  }
+  if (config.enabledSections.has("subagents")) {
+    lines.push("", "## 5. SubAgent 执行汇总", "");
+    lines.push(renderSubagentSection(subagentInvocations));
   }
 
   return `${lines.join("\n")}\n`;
@@ -575,6 +758,57 @@ function renderToolSection(records: ToolSummaryRecord[]): string {
 }
 
 /**
+ * 渲染 SubAgent 调用和返回汇总，展示主 Agent 通过 task 工具委派子代理的
+ * 输入信息、输出结果和执行时间。
+ */
+function renderSubagentSection(
+  invocations: SubagentInvocationRecord[],
+): string {
+  if (invocations.length === 0) return "_无 SubAgent 调用记录_";
+
+  return invocations
+    .map((invocation, index) => {
+      const parts: string[] = [
+        `### ${index + 1}. SubAgent: \`${invocation.subagentType}\``,
+        "",
+        `- 调用时间: ${invocation.startedAt}`,
+        `- 完成时间: ${invocation.completedAt ?? "未完成"}`,
+        `- 描述: ${invocation.description}`,
+      ];
+
+      if (invocation.input !== undefined) {
+        parts.push(
+          "",
+          "#### 输入",
+          "",
+          formatUnknownBlock(invocation.input),
+        );
+      }
+
+      if (invocation.thinkingChunks.length > 0) {
+        parts.push(
+          "",
+          "#### 思考过程",
+          "",
+          formatTextBlock(invocation.thinkingChunks.join("")),
+        );
+      }
+
+      if (invocation.output !== undefined) {
+        parts.push(
+          "",
+          "#### 返回给主 Agent 的结果",
+          "",
+          formatUnknownBlock(invocation.output),
+        );
+      }
+
+      return parts.join("\n");
+    })
+    .join("\n\n");
+}
+
+/**
  * 渲染模型文本输出和最终返回值。
  */
 function renderOutputSection(chunks: string[], finalOutput: unknown): string {
@@ -659,6 +893,144 @@ function safeStringify(value: unknown): string {
 /**
  * 提取异常消息，供 Markdown 错误区和写入失败日志使用。
  */
+/**
+ * 匹配 SubAgent 调用记录，优先使用 tool_call_id，兼容缺失 id 时的最近未完成调用。
+ */
+function findSubagentInvocation(
+  invocations: SubagentInvocationRecord[],
+  options: {
+    toolCallId?: string;
+    subagentType?: string;
+    preferOpen?: boolean;
+  },
+): SubagentInvocationRecord | undefined {
+  if (options.toolCallId) {
+    const byToolCall = invocations.find(
+      (invocation) => invocation.toolCallId === options.toolCallId,
+    );
+    if (byToolCall) return byToolCall;
+  }
+
+  for (let index = invocations.length - 1; index >= 0; index -= 1) {
+    const invocation = invocations[index];
+    if (options.preferOpen && invocation.completedAt) continue;
+    if (
+      options.subagentType &&
+      options.subagentType !== "unknown" &&
+      invocation.subagentType !== options.subagentType
+    ) {
+      continue;
+    }
+    return invocation;
+  }
+
+  return invocations[invocations.length - 1];
+}
+
+/**
+ * 构造标准化 SubAgent task 调用记录。
+ */
+function createSubagentTaskCallRecord(
+  toolCallId: string | undefined,
+  input: Record<string, unknown>,
+): SubagentTaskCallRecord {
+  const subagentType =
+    readString(input, "subagent_type") ??
+    readString(input, "subagentType") ??
+    readString(input, "subagent_name") ??
+    readString(input, "subagentName") ??
+    readString(input, "agent") ??
+    "unknown";
+  const description = readString(input, "description") ?? "";
+
+  return {
+    toolCallId,
+    subagentType,
+    description,
+    input,
+  };
+}
+
+/**
+ * 归一化工具调用参数，兼容对象、JSON 字符串和空参数。
+ */
+function normalizeToolCallArgs(args: unknown): Record<string, unknown> {
+  if (isPlainRecord(args)) return args;
+  if (typeof args !== "string") return {};
+
+  try {
+    const parsed = JSON.parse(args);
+    return isPlainRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * 读取 provider 原始 tool_calls，补足 LangChain 规范化字段丢失的 task 参数。
+ */
+function extractRawToolCalls(message: BaseMessage): unknown[] {
+  const record = message as unknown as Record<string, unknown>;
+  const additionalKwargs = isPlainRecord(record.additional_kwargs)
+    ? record.additional_kwargs
+    : {};
+  const responseMetadata = isPlainRecord(record.response_metadata)
+    ? record.response_metadata
+    : {};
+  const rawToolCalls = [
+    additionalKwargs.tool_calls,
+    additionalKwargs.toolCalls,
+    responseMetadata.tool_calls,
+    responseMetadata.toolCalls,
+  ];
+
+  return rawToolCalls.flatMap((value) => (Array.isArray(value) ? value : []));
+}
+
+/**
+ * 提取 ToolMessage 对应的 tool_call_id，兼容不同 LangChain 字段命名。
+ */
+function getToolMessageCallId(
+  message: ToolMessage,
+  knownTaskCalls: ReadonlyMap<string, string>,
+): string | undefined {
+  const record = message as unknown as Record<string, unknown>;
+  const additionalKwargs = isPlainRecord(record.additional_kwargs)
+    ? record.additional_kwargs
+    : {};
+  const responseMetadata = isPlainRecord(record.response_metadata)
+    ? record.response_metadata
+    : {};
+  const candidates = [
+    record.tool_call_id,
+    record.toolCallId,
+    record.id,
+    additionalKwargs.tool_call_id,
+    additionalKwargs.toolCallId,
+    responseMetadata.tool_call_id,
+    responseMetadata.toolCallId,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && knownTaskCalls.has(candidate)) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * 读取字符串字段。
+ */
+function readString(
+  value: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const item = value[key];
+  return typeof item === "string" && item.length > 0 ? item : undefined;
+}
+
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

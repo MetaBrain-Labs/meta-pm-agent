@@ -1,13 +1,15 @@
 /**
  * Conversation Agent 创建
  *
- * 负责创建 Conversation Agent 实例，该 Agent 是用户交互的主入口，
- * 负责意图路由（项目/闲聊）、维护请求表单生命周期、分解用户输入、
- * 并可选地启用 web_search 工具。
+ * 负责创建 Conversation Agent 实例，该 Agent 是用户交互的主入口。
+ * Pre-Orchestrator 完成意图路由后，Conversation Agent 仅负责：
+ * - 闲聊模式：自然语言回复
+ * - 项目模式：用户输入分解、表单答案整合、知识图谱冲突检查
  *
  * Responsibilities:
- * - createConversationAgent()：根据启用工具创建 DeepAgent 实例
- * - buildConversationPrompt()：根据工具能力和运行时日期生成 system prompt
+ * - createConversationAgent()：创建项目模式 DeepAgent 实例
+ * - createConversationAgentSystemPrompt()：根据模式构造 system prompt
+ * - createChatOnlyAgent()：创建纯闲聊模式 Agent 实例
  * - 注入运行时日期上下文，防止 Agent 使用过期年份
  */
 
@@ -25,12 +27,14 @@ import {
   getRuntimeDateContext,
   type RuntimeDateContext,
 } from "../common/runtime-context";
-import { DISCOVERY_PROMPT } from "./prompt";
+import { DISCOVERY_PROMPT, CHAT_ONLY_PROMPT } from "./prompt";
 
 export interface ConversationAgentOptions {
   enabledTools?: AgentRuntimeTool[];
   knowledgeGraph?: ProductKnowledgeGraph | null;
   summaryRecorder?: AgentRunSummaryRecorder;
+  /** 当设为 "chat" 时使用纯闲聊模式，不产生标记块或表单 */
+  mode?: "project" | "chat";
 }
 
 /**
@@ -73,8 +77,9 @@ export function createConversationAgentSystemPrompt(
 ): string {
   return buildConversationPrompt({
     runtimeContext: getRuntimeDateContext(),
-    webSearchEnabled,
-    knowledgeGraph: options.knowledgeGraph,
+    webSearchEnabled: options.mode === "chat" ? false : webSearchEnabled,
+    knowledgeGraph: options.mode === "chat" ? null : options.knowledgeGraph,
+    mode: options.mode ?? "project",
   });
 }
 
@@ -82,17 +87,27 @@ interface ConversationPromptOptions {
   runtimeContext: RuntimeDateContext;
   webSearchEnabled: boolean;
   knowledgeGraph?: ProductKnowledgeGraph | null;
+  mode?: "project" | "chat";
 }
 
 /**
- * 根据本轮工具能力生成 Conversation Agent 系统提示。
+ * 根据本轮工具能力和模式生成 Conversation Agent 系统提示。
  */
 function buildConversationPrompt({
   runtimeContext,
   webSearchEnabled,
   knowledgeGraph,
+  mode,
 }: ConversationPromptOptions): string {
   const runtimePrompt = buildRuntimeContextPrompt(runtimeContext);
+
+  // 纯闲聊模式：只用简短提示，不加图谱保护和工具说明
+  if (mode === "chat") {
+    return `${CHAT_ONLY_PROMPT}
+
+${runtimePrompt}`;
+  }
+
   const graphGuardPrompt = buildWorkspaceKnowledgeGraphPrompt(knowledgeGraph);
 
   if (!webSearchEnabled) {

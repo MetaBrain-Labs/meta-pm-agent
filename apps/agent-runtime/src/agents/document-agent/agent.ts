@@ -33,6 +33,8 @@ import { createChatModel } from "../common/model";
 import {
   createAgentRunSummaryMiddleware,
   createAgentRunSummaryRecorder,
+  extractSubagentTaskCalls,
+  extractSubagentTaskResult,
 } from "../common/agent-run-summary";
 import {
   getReasoningContent,
@@ -187,7 +189,23 @@ export async function* streamPrdDocumentAgent(
     );
 
     let currentTextBlock = "";
+    /** 跟踪 task 工具调用中 tool_call_id -> subagentType 的映射，用于结果匹配。 */
+    const taskCallToSubagent = new Map<string, string>();
     for await (const [message] of run) {
+      const subagentTaskCalls = extractSubagentTaskCalls(message);
+      for (const taskCall of subagentTaskCalls) {
+        if (taskCall.toolCallId) {
+          taskCallToSubagent.set(taskCall.toolCallId, taskCall.subagentType);
+        }
+        summaryRecorder.recordSubagentCall({
+          toolCallId: taskCall.toolCallId,
+          subagentType: taskCall.subagentType,
+          description: taskCall.description,
+          input: taskCall.input,
+        });
+      }
+      // 提取全部 task 工具调用（不论可见与否），以便自动捕获 SubAgent 信息。
+
       const visibleToolCalls = getVisibleBuiltinToolCalls(message);
       const hasAnyToolCalls =
         AIMessage.isInstance(message) && (message.tool_calls?.length ?? 0) > 0;
@@ -238,14 +256,39 @@ export async function* streamPrdDocumentAgent(
         continue;
       }
       if (ToolMessage.isInstance(message)) {
-        // 工具结果只进入可观察事件，不参与最终 Markdown 拼接。
+        const subagentTaskResult = extractSubagentTaskResult(
+          message,
+          taskCallToSubagent,
+        );
+        if (subagentTaskResult) {
+          summaryRecorder.recordSubagentResult({
+            toolCallId: subagentTaskResult.toolCallId,
+            subagentType: subagentTaskResult.subagentType,
+            output: subagentTaskResult.output,
+          });
+        } else if (message.name === "task") {
+          const toolCallId = (message as { tool_call_id?: string }).tool_call_id;
+          const subagentType =
+            (toolCallId ? taskCallToSubagent.get(toolCallId) : undefined) ??
+            "unknown";
+          summaryRecorder.recordSubagentResult({
+            toolCallId,
+            subagentType,
+            output: message.content,
+          });
+        }
         currentTextBlock = "";
         continue;
       }
 
       const reasoning = getReasoningContent(message);
       if (reasoning) {
-        summaryRecorder.recordThinking(reasoning);
+        const attributedToSubagent =
+          subagentTaskCalls.length === 0 &&
+          summaryRecorder.recordSubagentThinking({ content: reasoning });
+        if (!attributedToSubagent) {
+          summaryRecorder.recordThinking(reasoning);
+        }
         yield {
           type: "reasoning",
           agentType: "document",

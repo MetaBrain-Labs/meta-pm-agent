@@ -104,6 +104,27 @@ export type ProductWorkflowStreamEvent =
       content: string;
     }
   | {
+      type: "subagent-start";
+      agentType: ProductWorkflowAgentType;
+      subagentType: string;
+      toolCallId?: string;
+      description?: string;
+    }
+  | {
+      type: "subagent-thinking";
+      agentType: ProductWorkflowAgentType;
+      subagentType: string;
+      toolCallId?: string;
+      content: string;
+    }
+  | {
+      type: "subagent-result";
+      agentType: ProductWorkflowAgentType;
+      subagentType: string;
+      toolCallId?: string;
+      result: unknown;
+    }
+  | {
       type: "agent-output";
       agentType: ProductWorkflowAgentType;
       content: string;

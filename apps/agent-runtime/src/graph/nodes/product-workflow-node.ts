@@ -30,6 +30,7 @@ import {
   streamExecutorAgent,
   streamOrchestratorAgent,
   streamCritiqueAgent,
+  type OrchestratorAgentOutput,
 } from "../../agents/product-workflow/agent";
 import type { WorkflowGraphStateValue } from "../state";
 
@@ -117,7 +118,7 @@ export async function orchestratorAgentNode(
     status: "started",
     phase: "planning",
   });
-  const { decision, plan } = await consumeProductWorkflowStream(
+  const { decision, plan } = (await consumeProductWorkflowStream(
     streamOrchestratorAgent({
       workspaceId: state.workspaceId,
       productContext: state.productContext,
@@ -128,7 +129,7 @@ export async function orchestratorAgentNode(
       signal: config?.signal,
     }),
     writer,
-  );
+  )) as OrchestratorAgentOutput;
   writer?.({
     type: "reasoning",
     agentType: "orchestrator",

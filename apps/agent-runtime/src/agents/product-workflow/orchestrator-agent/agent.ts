@@ -1,17 +1,15 @@
 /**
  * Orchestrator Agent 实现
  *
- * 负责在 Request Agent 之后执行顶层意图路由，识别 casual_chat、new_project
- * 和 project_evolution。对于 product_workflow 路由，通过 DeepAgents task 工具
- * 将完整 DAG 生成委托给 Planner SubAgent，并从工具结果中提取规范化计划。
+ * 负责顶层意图路由和 DAG 生成委托。同一个 Orchestrator Agent 承载两个 SubAgent：
+ * pre-orchestrator（意图分类）和 planner-agent（DAG 生成），通过 payload.mode 选择。
  *
  * Responsibilities:
- * - streamOrchestratorAgent()：输出路由决策并从 Planner SubAgent 结果中提取 TaskExecutionPlan
- * - createFallbackOrchestratorDecision()：模型不可用时给出确定性路由
+ * - streamOrchestratorAgent()：统一入口，根据输入自动选择 pre-check / full 模式
+ * - streamOrchestratorPreCheck()：便捷包装，对 streamOrchestratorAgent 的 pre-check 模式封装
  *
  * Notes:
- * - Orchestrator 不直接生成 TaskExecutionPlan，始终通过 Planner SubAgent 委托。
- * - Planner SubAgent 相关逻辑已抽取至 ./planner-subagent/ 目录。
+ * - 始终携带 pre-orchestrator 和 planner-agent 两个 SubAgent。
  */
 
 import {
@@ -34,45 +32,71 @@ import {
   formatTaskExecutionPlanBlock,
   formatPlannerReasoningSummary,
 } from "./planner-subagent";
+import {
+  createPreOrchestratorSubagent,
+  PreOrchResultSchema,
+  type PreOrchResult,
+  type PreOrchestratorInput,
+  buildPreOrchPayload,
+  createFallbackPreOrchResult,
+  extractPreOrchFromSubagentResult,
+  extractPreOrchReasoning,
+} from "./pre-orchestrator-subagent";
 
-/**
- * Orchestrator Agent 的两阶段输出：路由决策 + 可选的可执行 DAG。
- */
 export interface OrchestratorAgentOutput {
   decision: OrchestratorAgentResult;
   plan?: TaskExecutionPlan;
 }
 
 /**
- * Orchestrator Agent：决定本轮对话是否进入产品工作流，并通过 Planner SubAgent
- * 生成可执行 DAG。手动迭代 runJsonAgent 生成器以拦截 task 工具事件，将 Planner
- * SubAgent 的生命周期事件以 agentType "planner" 输出，供前端在 Orchestrator 卡片
- * 内嵌套展示 Planner 子卡片。
+ * Orchestrator Agent 统一入口。
+ * 同一个 Orchestrator Agent，两个 SubAgent（pre-orchestrator + planner-agent）。
+ * 通过 payload.mode 区分 pre-check / full。
  */
 export async function* streamOrchestratorAgent(
-  input: OrchestratorAgentInput,
-): AsyncGenerator<ProductWorkflowStreamEvent, OrchestratorAgentOutput, void> {
+  input: OrchestratorAgentInput | PreOrchestratorInput,
+): AsyncGenerator<ProductWorkflowStreamEvent, OrchestratorAgentOutput | OrchestratorPreCheckOutput, void> {
+  const isPreCheck = isPreOrchestratorInput(input);
+
+  let preOrchSubagentResult: unknown = undefined;
   let plannerSubagentResult: unknown = undefined;
-  let plannerStarted = false;
   let capturedPlan: TaskExecutionPlan | undefined;
 
+  const payload = isPreCheck
+    ? { mode: "pre-check", pre_check_payload: buildPreOrchPayload(input) }
+    : createOrchestratorPayload(input);
+  const outputSchema = isPreCheck
+    ? PreOrchResultSchema
+    : OrchestratorAgentResultSchema;
+
   const runner = runJsonAgent({
-    agentType: "orchestrator",
+    agentType: "orchestrator" as any,
     agentLabel: "Orchestrator Agent",
     name: "orchestrator-agent",
-    modelOptions: {
-      ...JSON_AGENT_MODEL_OPTIONS,
-      maxTokens: 4096,
-    },
+    // pre-check 模式不使用 responseFormat: "json_object"，否则模型会跳过
+    // task 工具调用直接生成 JSON 输出，导致 SubAgent 从未被调用
+    modelOptions: isPreCheck
+      ? { enableThinking: false, temperature: 0, maxTokens: 4096 }
+      : { ...JSON_AGENT_MODEL_OPTIONS, maxTokens: 4096 },
     systemPrompt: ORCHESTRATOR_AGENT_PROMPT,
-    subagents: [createPlannerSubagent()],
+    subagents: [createPreOrchestratorSubagent(), createPlannerSubagent()],
     allowedBuiltinToolNames: ["task"],
-    visibleBuiltinToolNames: ["task"],
-    payload: createOrchestratorPayload(input),
-    schema: OrchestratorAgentResultSchema,
-    fallback: (reason) => createFallbackOrchestratorDecision(input, reason),
+    // 不将 task 标记为 visible，避免 getToolResult 提前捕获 ToolMessage
+    // 导致 onTaskToolResult 回调无法触发。task 事件由本函数拦截后以
+    // agent-status / reasoning 形式重新发射，无需透传原始事件。
+    visibleBuiltinToolNames: [],
+    payload,
+    schema: outputSchema as any,
+    fallback: (reason: string) =>
+      isPreCheck
+        ? createFallbackPreOrchResult(input)
+        : createFallbackOrchestratorDecision(input, reason),
     onTaskToolResult: (content) => {
-      plannerSubagentResult = content;
+      if (isPreCheck) {
+        preOrchSubagentResult = content;
+      } else {
+        plannerSubagentResult = content;
+      }
     },
     signal: input.signal,
   });
@@ -81,10 +105,9 @@ export async function* streamOrchestratorAgent(
   while (!next.done) {
     const event = next.value;
 
-    // 拦截 task 工具调用，转为 Planner 子代理生命周期事件
-    if (event.type === "tool-call" && event.toolName === "task") {
-      if (!plannerStarted) {
-        plannerStarted = true;
+    if (event.type === "subagent-start") {
+      yield event;
+      if (!isPreCheck && event.subagentType === "planner-agent") {
         yield {
           type: "agent-status",
           agentType: "planner",
@@ -92,30 +115,106 @@ export async function* streamOrchestratorAgent(
           phase: "planning",
         };
       }
-      // 不输出原始 task 工具调用事件（参数体积大且对用户无意义）
+    } else if (event.type === "subagent-result") {
+      yield event;
+      if (isPreCheck && preOrchSubagentResult === undefined) {
+        preOrchSubagentResult = event.result;
+      }
+      if (!isPreCheck) {
+        if (
+          event.subagentType === "planner-agent" &&
+          plannerSubagentResult === undefined
+        ) {
+          plannerSubagentResult = event.result;
+        }
+        if (
+          event.subagentType === "pre-orchestrator" &&
+          preOrchSubagentResult === undefined
+        ) {
+          preOrchSubagentResult = event.result;
+        }
+      }
+      if (isPreCheck) {
+        yield {
+          type: "reasoning",
+          agentType: "orchestrator",
+          content: extractPreOrchReasoning(preOrchSubagentResult),
+        };
+      } else if (event.subagentType === "planner-agent") {
+        capturedPlan = extractPlanFromSubagentResult(plannerSubagentResult, input);
+        yield {
+          type: "reasoning",
+          agentType: "planner",
+          content: formatPlannerReasoningSummary(capturedPlan),
+        };
+        yield {
+          type: "agent-status",
+          agentType: "planner",
+          status: "completed",
+          phase: "planning",
+        };
+        yield {
+          type: "agent-output",
+          agentType: "planner",
+          content: formatTaskExecutionPlanBlock(capturedPlan),
+        };
+      }
+    } else if (event.type === "tool-call" && event.toolName === "task") {
+      // 对 SubAgent task 调用只发出一次 agent-status
+      if (isPreCheck) {
+        yield {
+          type: "agent-status",
+          agentType: "orchestrator",
+          status: "started",
+          phase: "planning",
+        };
+      } else {
+        yield {
+          type: "agent-status",
+          agentType: "planner",
+          status: "started",
+          phase: "planning",
+        };
+      }
     } else if (event.type === "tool-result" && event.toolName === "task") {
-      // 收到 Planner SubAgent 结果，解析并格式化 DAG
-      capturedPlan = extractPlanFromSubagentResult(
-        plannerSubagentResult,
-        input,
-      );
-      yield {
-        type: "reasoning",
-        agentType: "planner",
-        content: formatPlannerReasoningSummary(capturedPlan),
-      };
-      yield {
-        type: "agent-status",
-        agentType: "planner",
-        status: "completed",
-        phase: "planning",
-      };
-      yield {
-        type: "agent-output",
-        agentType: "planner",
-        content: formatTaskExecutionPlanBlock(capturedPlan),
-      };
-      // 不输出原始 task 工具结果（含完整 DAG JSON，会重复且体积大）
+      // 从 tool-result 事件中捕获 SubAgent 输出，作为 onTaskToolResult 的兜底
+      if (isPreCheck && preOrchSubagentResult === undefined) {
+        preOrchSubagentResult = (event as { toolResult: unknown }).toolResult;
+      }
+      // 同样对 full 模式做兜底捕获，优先给 planner，但也可能是 pre-orch
+      if (!isPreCheck) {
+        if (plannerSubagentResult === undefined) {
+          plannerSubagentResult = (event as { toolResult: unknown }).toolResult;
+        }
+        if (preOrchSubagentResult === undefined) {
+          preOrchSubagentResult = (event as { toolResult: unknown }).toolResult;
+        }
+      }
+      if (isPreCheck) {
+        yield {
+          type: "reasoning",
+          agentType: "orchestrator",
+          content: extractPreOrchReasoning(preOrchSubagentResult),
+        };
+      } else {
+        capturedPlan = extractPlanFromSubagentResult(plannerSubagentResult, input);
+        yield {
+          type: "reasoning",
+          agentType: "planner",
+          content: formatPlannerReasoningSummary(capturedPlan),
+        };
+        yield {
+          type: "agent-status",
+          agentType: "planner",
+          status: "completed",
+          phase: "planning",
+        };
+        yield {
+          type: "agent-output",
+          agentType: "planner",
+          content: formatTaskExecutionPlanBlock(capturedPlan),
+        };
+      }
     } else {
       yield event;
     }
@@ -123,10 +222,37 @@ export async function* streamOrchestratorAgent(
     next = await runner.next();
   }
 
-  const decision = next.value;
-  const normalizedDecision = normalizeOrchestratorDecision(input, decision);
+  yield {
+    type: "agent-status",
+    agentType: "orchestrator",
+    status: "completed",
+    phase: "planning",
+  };
 
-  // 如果 Planner 没有被调用但路由到 product_workflow，生成 fallback DAG
+  const rawOutput = next.value;
+
+  if (isPreCheck) {
+    // 优先使用 task 工具返回值；若运行时未暴露 ToolMessage，则使用 Orchestrator 已解析的最终 JSON。
+    const preOrchResult = extractPreOrchFromSubagentResult(
+      preOrchSubagentResult ?? rawOutput,
+      input,
+    );
+    const decision: OrchestratorAgentResult = {
+      intent: preOrchResult.intent,
+      route: preOrchResult.decision === "HANDOFF_CHAT" ? "conversation" : "product_workflow",
+      context_source: "none",
+      has_project_context: input.hasExistingProject,
+      reason_summary: preOrchResult.reason,
+      warnings: [],
+    };
+    return { preOrchResult, decision };
+  }
+
+  const result = OrchestratorAgentResultSchema.safeParse(rawOutput);
+  const decision = result.success
+    ? result.data
+    : createFallbackOrchestratorDecision(input, "invalid-orch-output");
+  const normalizedDecision = normalizeOrchestratorDecision(input, decision);
   const plan =
     capturedPlan ??
     (normalizedDecision.route === "product_workflow"
@@ -137,15 +263,41 @@ export async function* streamOrchestratorAgent(
 }
 
 /**
- * 构造 Orchestrator 路由阶段的载荷。路由判定只需紧凑统计信息，
- * 同时预计算 planner_context 供模型通过 task 工具完整传递给 Planner SubAgent。
+ * Pre-Check 模式便捷包装。
+ * 调用同一个 Orchestrator Agent（含 pre-orchestrator SubAgent）完成意图分类。
  */
+export async function* streamOrchestratorPreCheck(
+  input: PreOrchestratorInput,
+): AsyncGenerator<ProductWorkflowStreamEvent, PreOrchResult, void> {
+  const orchStream = streamOrchestratorAgent(input);
+
+  let next = await orchStream.next();
+  while (!next.done) {
+    yield next.value;
+    next = await orchStream.next();
+  }
+
+  const output = next.value as OrchestratorPreCheckOutput;
+  return output.preOrchResult;
+}
+
+export interface OrchestratorPreCheckOutput {
+  preOrchResult: PreOrchResult;
+  decision: OrchestratorAgentResult;
+}
+
+function isPreOrchestratorInput(
+  input: OrchestratorAgentInput | PreOrchestratorInput,
+): input is PreOrchestratorInput {
+  return "hasExistingProject" in input && "userMessage" in input;
+}
+
 function createOrchestratorPayload(input: OrchestratorAgentInput) {
   return {
+    mode: "full",
     workspace_id: input.workspaceId ?? null,
     context_source: input.contextSource ?? "none",
-    product_context:
-      input.productContext?.trim() || "No product context provided.",
+    product_context: input.productContext?.trim() || "No product context provided.",
     request_analysis: input.requestAnalysis,
     user_input: input.userInput,
     graph_stats: {
@@ -163,8 +315,7 @@ function createOrchestratorPayload(input: OrchestratorAgentInput) {
       status: node.status,
     })),
     planner_context: JSON.stringify({
-      product_context:
-        input.productContext || "No product context provided.",
+      product_context: input.productContext || "No product context provided.",
       product_knowledge_graph: input.knowledgeGraph,
       request_analysis: input.requestAnalysis,
       user_input: input.userInput,
@@ -172,9 +323,6 @@ function createOrchestratorPayload(input: OrchestratorAgentInput) {
   };
 }
 
-/**
- * 模型失败时给出保守且可继续执行的 Orchestrator 决策。
- */
 export function createFallbackOrchestratorDecision(
   input: OrchestratorAgentInput,
   reason: string,
@@ -203,9 +351,6 @@ export function createFallbackOrchestratorDecision(
   });
 }
 
-/**
- * 规范化模型输出，避免 route 与 Request Agent 结构冲突。
- */
 function normalizeOrchestratorDecision(
   input: OrchestratorAgentInput,
   decision: OrchestratorAgentResult,
@@ -233,12 +378,8 @@ function normalizeOrchestratorDecision(
   };
 }
 
-/**
- * 判断本轮是否存在可供项目演化使用的上下文。
- */
 function hasMeaningfulProjectContext(input: OrchestratorAgentInput): boolean {
   if (input.contextSource && input.contextSource !== "none") return true;
-
   return (
     input.knowledgeGraph.entities.length > 0 ||
     input.knowledgeGraph.relations.length > 0 ||
@@ -249,9 +390,6 @@ function hasMeaningfulProjectContext(input: OrchestratorAgentInput): boolean {
   );
 }
 
-/**
- * 识别来自工作流表单答案的补充规划输入。
- */
 function isWorkflowSupplementInput(input: OrchestratorAgentInput): boolean {
   return input.userInput.some((item) =>
     /\[form answers - (product-workflow-confirmation|.*-proposal-decision|executor-blocker-.*)\]/i.test(

@@ -172,6 +172,12 @@ export function applyStreamEvent(
           event.agentType,
         ),
       };
+    case "subagent-start":
+      return applySubagentStart(message, event);
+    case "subagent-thinking":
+      return applySubagentThinking(message, event);
+    case "subagent-result":
+      return applySubagentResult(message, event);
     case "token-usage":
       return appendTokenUsage(message, event);
     case "finish":
@@ -391,6 +397,180 @@ function appendToolCall(message: Message, event: StreamEvent): Message {
             index === existingIndex ? { ...toolCall, ...nextToolCall } : toolCall,
           ),
   };
+}
+
+/**
+ * 创建或刷新 Orchestrator 内嵌 SubAgent 调用卡片。
+ */
+function applySubagentStart(message: Message, event: StreamEvent): Message {
+  if (!event.agentType || !event.subagentType) return message;
+
+  return {
+    ...message,
+    activeAgent: event.agentType,
+    activeAgents: addActiveAgent(message.activeAgents, event.agentType),
+    subagentTraces: upsertSubagentTrace(message.subagentTraces ?? [], {
+      id: event.toolCallId,
+      parentAgentType: event.agentType,
+      subagentType: event.subagentType,
+      description: event.description,
+      status: "running",
+    }),
+  };
+}
+
+/**
+ * 将 SubAgent 的增量 reasoning 追加到所属内嵌卡片。
+ */
+function applySubagentThinking(message: Message, event: StreamEvent): Message {
+  if (!event.agentType || !event.subagentType) return message;
+
+  return {
+    ...message,
+    activeAgent: event.agentType,
+    activeAgents: addActiveAgent(message.activeAgents, event.agentType),
+    subagentTraces: appendSubagentThinking(message.subagentTraces ?? [], {
+      id: event.toolCallId,
+      parentAgentType: event.agentType,
+      subagentType: event.subagentType,
+      content: event.content ?? "",
+    }),
+  };
+}
+
+/**
+ * 写入 SubAgent 返回给 Orchestrator 的结果并关闭该卡片运行态。
+ */
+function applySubagentResult(message: Message, event: StreamEvent): Message {
+  if (!event.agentType || !event.subagentType) return message;
+
+  return {
+    ...message,
+    activeAgent: event.agentType,
+    activeAgents: addActiveAgent(message.activeAgents, event.agentType),
+    subagentTraces: attachSubagentResult(message.subagentTraces ?? [], {
+      id: event.toolCallId,
+      parentAgentType: event.agentType,
+      subagentType: event.subagentType,
+      result: event.result,
+    }),
+  };
+}
+
+/**
+ * 按调用 ID 或 SubAgent 类型合并 trace，避免流式重复事件生成多张卡片。
+ */
+function upsertSubagentTrace(
+  traces: NonNullable<Message["subagentTraces"]>,
+  nextTrace: NonNullable<Message["subagentTraces"]>[number],
+): NonNullable<Message["subagentTraces"]> {
+  const existingIndex = findSubagentTraceIndex(
+    traces,
+    nextTrace.id,
+    nextTrace.subagentType,
+  );
+
+  if (existingIndex === -1) return [...traces, nextTrace];
+
+  return traces.map((trace, index) =>
+    index === existingIndex ? { ...trace, ...nextTrace } : trace,
+  );
+}
+
+/**
+ * 保留 SubAgent reasoning 的到达顺序。
+ */
+function appendSubagentThinking(
+  traces: NonNullable<Message["subagentTraces"]>,
+  event: {
+    id?: string;
+    parentAgentType?: string;
+    subagentType: string;
+    content: string;
+  },
+): NonNullable<Message["subagentTraces"]> {
+  const existingIndex = findSubagentTraceIndex(
+    traces,
+    event.id,
+    event.subagentType,
+  );
+
+  if (existingIndex === -1) {
+    return [
+      ...traces,
+      {
+        id: event.id,
+        parentAgentType: event.parentAgentType,
+        subagentType: event.subagentType,
+        thinking: event.content,
+        status: "running",
+      },
+    ];
+  }
+
+  return traces.map((trace, index) =>
+    index === existingIndex
+      ? { ...trace, thinking: `${trace.thinking ?? ""}${event.content}` }
+      : trace,
+  );
+}
+
+/**
+ * 写入 SubAgent 结果，并将对应 trace 标记为完成。
+ */
+function attachSubagentResult(
+  traces: NonNullable<Message["subagentTraces"]>,
+  event: {
+    id?: string;
+    parentAgentType?: string;
+    subagentType: string;
+    result: unknown;
+  },
+): NonNullable<Message["subagentTraces"]> {
+  const existingIndex = findSubagentTraceIndex(
+    traces,
+    event.id,
+    event.subagentType,
+  );
+
+  if (existingIndex === -1) {
+    return [
+      ...traces,
+      {
+        id: event.id,
+        parentAgentType: event.parentAgentType,
+        subagentType: event.subagentType,
+        result: event.result,
+        status: "complete",
+      },
+    ];
+  }
+
+  return traces.map((trace, index) =>
+    index === existingIndex
+      ? { ...trace, result: event.result, status: "complete" }
+      : trace,
+  );
+}
+
+/**
+ * 优先按调用 ID 匹配；缺少 ID 时使用最近的同类型 SubAgent。
+ */
+function findSubagentTraceIndex(
+  traces: NonNullable<Message["subagentTraces"]>,
+  id: string | undefined,
+  subagentType: string,
+): number {
+  if (id) {
+    const byId = traces.findIndex((trace) => trace.id === id);
+    if (byId !== -1) return byId;
+  }
+
+  for (let index = traces.length - 1; index >= 0; index -= 1) {
+    if (traces[index]?.subagentType === subagentType) return index;
+  }
+
+  return -1;
 }
 
 /**

@@ -2,7 +2,8 @@
  * Conversation Agent 流式主通道
  *
  * 实现从用户消息到完整响应的 SSE 流式管道，包括：
- * - Conversation Agent 深度对话阶段
+ * - Pre-Orchestrator 意图分类（闲聊 / 新项目 / 项目演化）
+ * - Conversation Agent 深度对话阶段（闲聊模式 / 项目模式）
  * - 标记块检测与分段（question-form、user-input）
  * - user-input 完成后自动触发产品工作流图
  * - 工作流确认表单的流式转发
@@ -12,10 +13,11 @@
  * - streamAgentEvents()：驱动 Conversation Agent 并过滤仅用户授权的工具事件
  * - 在 user-input-complete 后驱动 streamWorkflowGraph
  * - 在工作流完成后格式化并输出最终结果 block
+ * - Pre-Orchestrator 在 Conversation Agent 之前执行意图分类和路由
  */
 
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "langchain";
-import type { ChatMessage, ProductWorkflowResult } from "@repo/shared";
+import type { ChatMessage, ProductKnowledgeGraph, ProductWorkflowResult } from "@repo/shared";
 import { calculateCost } from "../../config";
 import { createAgentRunSummaryRecorder } from "../common/agent-run-summary";
 import {
@@ -50,6 +52,12 @@ import type {
   ConversationStreamEvent,
   ConversationStreamOptions,
 } from "../../types";
+import {
+  formatPreOrchQuestionForm,
+  isPreOrchClarificationFormId,
+  type PreOrchResult,
+} from "../product-workflow/orchestrator-agent/pre-orchestrator-subagent";
+import { streamOrchestratorPreCheck } from "../product-workflow/orchestrator-agent/agent";
 
 const PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID = "product-workflow-confirmation";
 const EXECUTOR_BLOCKER_FORM_PREFIX = "executor-blocker-";
@@ -73,6 +81,7 @@ async function* streamAgentEvents(
   const baseAgentOptions = {
     enabledTools: options.enabledTools,
     knowledgeGraph: options.knowledgeGraph,
+    mode: options.mode,
   };
   const summaryRecorder = createAgentRunSummaryRecorder({
     agentLabel: "Conversation Agent",
@@ -202,7 +211,22 @@ async function* streamAgentEvents(
 }
 
 /**
- * 处理完整会话流，并在表单答案整合后接入 Request Agent。
+ * 判断当前工作区是否存在有意义的项目上下文。
+ */
+function hasExistingProject(
+  knowledgeGraph?: ProductKnowledgeGraph | null,
+): boolean {
+  if (!knowledgeGraph) return false;
+  return (
+    knowledgeGraph.entities.length > 0 ||
+    knowledgeGraph.relations.length > 0 ||
+    knowledgeGraph.decisions.length > 0
+  );
+}
+
+/**
+ * 处理完整会话流。Pre-Orchestrator 先进行意图分类，然后根据决策路由到闲聊、
+ * 澄清问题表单或产品工作流。
  */
 export async function* streamConversation(
   messages: ChatMessage[],
@@ -213,8 +237,16 @@ export async function* streamConversation(
     throw new Error("At least one chat message is required.");
   }
 
+  // 处理表单答案
   if (lastMessage.role === "user" && isFormAnswer(lastMessage.content)) {
     const formId = getFormAnswerId(lastMessage.content);
+
+    // Pre-Orchestrator 澄清表单答案 → 整合后直接进入产品工作流
+    if (formId && isPreOrchClarificationFormId(formId)) {
+      yield* streamPreOrchClarificationAnswer(messages, options);
+      return;
+    }
+
     if (formId === EXISTING_GRAPH_NEW_PROJECT_FORM_ID) {
       const action = parseExistingGraphNewProjectAction(lastMessage.content);
       if (action === "create_new_workspace") {
@@ -236,6 +268,151 @@ export async function* streamConversation(
     return;
   }
 
+  // 新消息：先通过 Pre-Orchestrator 进行意图分类
+  yield* streamWithPreOrchestrator(messages, options, lastMessage);
+}
+
+/**
+ * 通过 Orchestrator Agent 的 Pre-Orchestrator SubAgent 完成意图分类并根据结果路由。
+ */
+async function* streamWithPreOrchestrator(
+  messages: ChatMessage[],
+  options: ConversationStreamOptions,
+  lastMessage: ChatMessage,
+): AsyncGenerator<ConversationStreamEvent> {
+  const orchStream = streamOrchestratorPreCheck({
+    userMessage: lastMessage.content ?? "",
+    productContext: options.productContext,
+    knowledgeGraph: options.knowledgeGraph,
+    workspaceId: options.workspaceId,
+    hasExistingProject: hasExistingProject(options.knowledgeGraph),
+    signal: options.signal,
+  });
+
+  let preOrchResult: PreOrchResult;
+  try {
+    let next = await orchStream.next();
+    while (!next.done) {
+      yield next.value as ConversationStreamEvent;
+      next = await orchStream.next();
+    }
+    preOrchResult = next.value;
+  } catch (error) {
+    yield {
+      type: "error",
+      error: `意图分类失败：${getErrorMessage(error)}`,
+      agentType: "orchestrator",
+    };
+    yield {
+      type: "agent-status",
+      agentType: "orchestrator",
+      status: "completed",
+      phase: "planning",
+    };
+    yield* streamNormalProjectFlow(messages, options);
+    return;
+  }
+
+  if (preOrchResult.decision === "HANDOFF_CHAT") {
+    yield* streamChatOnlyFlow(messages, options);
+    return;
+  }
+
+  if (preOrchResult.decision === "ASK_CLARIFICATION") {
+    yield* streamOrchClarificationForm(preOrchResult, options);
+    return;
+  }
+
+  yield* streamNormalProjectFlow(messages, options);
+}
+
+/**
+ * Pre-Orchestrator 澄清表单答案的处理路径。
+ * 将用户答复整合为 user_input 后进入产品工作流。
+ */
+async function* streamPreOrchClarificationAnswer(
+  messages: ChatMessage[],
+  options: ConversationStreamOptions,
+): AsyncGenerator<ConversationStreamEvent> {
+  yield {
+    type: "agent-status",
+    agentType: "orchestrator",
+    status: "started",
+    phase: "planning",
+  };
+  yield {
+    type: "reasoning",
+    content: "收到澄清问题答复，将整合信息后进入产品工作流。",
+    agentType: "orchestrator",
+  };
+  yield {
+    type: "agent-status",
+    agentType: "orchestrator",
+    status: "completed",
+    phase: "planning",
+  };
+
+  yield* streamUserInputIntegration(messages, options);
+}
+
+/**
+ * 闲聊模式：使用纯闲聊提示词驱动 Conversation Agent 进行自然对话。
+ */
+async function* streamChatOnlyFlow(
+  messages: ChatMessage[],
+  options: ConversationStreamOptions,
+): AsyncGenerator<ConversationStreamEvent> {
+  for await (const event of streamAgentEvents(
+    toLangChainMessages(messages),
+    { ...options, mode: "chat" },
+  )) {
+    yield event;
+  }
+}
+
+/**
+ * Orch 澄清问题表单：直接输出 question-form 事件，不调用 Conversation Agent。
+ * 仅当 intent 为 new_project 或 project_evolution 时生效，闲聊意图不会进入此路径。
+ */
+async function* streamOrchClarificationForm(
+  result: PreOrchResult,
+  options: ConversationStreamOptions,
+): AsyncGenerator<ConversationStreamEvent> {
+  // 防御性检查：非产品意图不应输出 question-form
+  if (result.intent === "casual_chat") {
+    yield* streamChatOnlyFlow([], options);
+    return;
+  }
+
+  const formContent = formatPreOrchQuestionForm(result);
+
+  // 简短引导语
+  if (result.form_description) {
+    yield {
+      type: "text",
+      content: result.form_description,
+      agentType: "orchestrator",
+    };
+  }
+
+  yield {
+    type: "question-form-start",
+    agentType: "orchestrator",
+  };
+  yield {
+    type: "question-form-complete",
+    content: formContent,
+    agentType: "orchestrator",
+  };
+}
+
+/**
+ * 正常项目模式：运行 Conversation Agent 完成 user_input 分解并进入产品工作流。
+ */
+async function* streamNormalProjectFlow(
+  messages: ChatMessage[],
+  options: ConversationStreamOptions,
+): AsyncGenerator<ConversationStreamEvent> {
   for await (const event of streamTaggedBlock(
     streamAgentEvents(toLangChainMessages(messages), options),
     [
