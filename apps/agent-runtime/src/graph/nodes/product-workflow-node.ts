@@ -17,6 +17,7 @@
 import { getWriter, type LangGraphRunnableConfig } from "@langchain/langgraph";
 import type { TaskExecutionNode } from "@repo/shared";
 import type { ProductWorkflowStreamEvent } from "../../agents/product-workflow/agent";
+import { streamConversationChitchatReply } from "../../agents/conversation/chitchat";
 import {
   EXECUTOR_DEFINITIONS,
   isExecutorAgentType,
@@ -37,6 +38,7 @@ import {
   streamCritiqueAgent,
   streamPlannerAgent,
 } from "../../agents/product-workflow/agent";
+import type { ConversationStreamEvent } from "../../types";
 import type { WorkflowGraphStateValue } from "../state";
 
 /**
@@ -80,8 +82,28 @@ export async function plannerIntakeNode(
 
   if (result.intent === "chitchat") {
     writer?.({
+      type: "agent-status",
+      agentType: "conversation",
+      status: "started",
+      phase: "planning",
+    });
+    const reply = await consumeConversationReplyStream(
+      streamConversationChitchatReply({
+        productContext: state.productContext,
+        userInput: state.userInput,
+        signal: config?.signal,
+      }),
+      writer,
+    );
+    writer?.({
+      type: "agent-status",
+      agentType: "conversation",
+      status: "completed",
+      phase: "planning",
+    });
+    writer?.({
       type: "text",
-      content: result.conversation_message,
+      content: reply,
       agentType: "conversation",
     });
     return {
@@ -452,6 +474,21 @@ async function consumePlannerIntakeStream<T>(
   stream: AsyncGenerator<PlannerIntakeStreamEvent, T, void>,
   writer: ((chunk: unknown) => void) | undefined,
 ): Promise<T> {
+  let next = await stream.next();
+  while (!next.done) {
+    writer?.(next.value);
+    next = await stream.next();
+  }
+  return next.value;
+}
+
+/**
+ * 消费 Conversation Agent 闲聊回复流，保留最终回复文本。
+ */
+async function consumeConversationReplyStream(
+  stream: AsyncGenerator<ConversationStreamEvent, string, void>,
+  writer: ((chunk: unknown) => void) | undefined,
+): Promise<string> {
   let next = await stream.next();
   while (!next.done) {
     writer?.(next.value);

@@ -16,6 +16,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PLANNER_AGENT_PROMPT } from "../src/agents/product-workflow/planner-agent/prompt";
+import { PLANNER_INTAKE_PROMPT } from "../src/agents/product-workflow/planner-agent/intake-prompt";
 import { CRITIQUE_AGENT_PROMPT } from "../src/agents/product-workflow/critique-agent/prompt";
 import { createExecutorAgentPrompt } from "../src/agents/product-workflow/executor-agent/prompt";
 import { productStrategyExecutorProfile } from "../src/agents/product-workflow/executor-agent/product-strategy-executor/profile";
@@ -137,6 +138,25 @@ test("planner prompt preserves graph-semantics guardrails", () => {
   assert.match(
     PLANNER_AGENT_PROMPT,
     /Never describe Requirement --Produces--> Decision/,
+  );
+});
+
+test("planner intake prompt preserves intent routing boundaries", () => {
+  assert.match(
+    PLANNER_INTAKE_PROMPT,
+    /Classify the latest turn as "new_project", "project_evolution", or "chitchat"/,
+  );
+  assert.match(
+    PLANNER_INTAKE_PROMPT,
+    /any factual or general question unrelated to the current workspace project/,
+  );
+  assert.match(
+    PLANNER_INTAKE_PROMPT,
+    /For intent "chitchat", do not answer the user directly/,
+  );
+  assert.match(
+    PLANNER_INTAKE_PROMPT,
+    /routing_intent must be one of "new_project", "project_evolution", "chitchat", or "form_answer"/,
   );
 });
 

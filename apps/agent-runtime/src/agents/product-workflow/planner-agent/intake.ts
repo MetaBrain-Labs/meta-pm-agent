@@ -80,15 +80,24 @@ const PlannerIntakeQuestionFormSchema = z.object({
   submitLabel: z.string().min(1).describe("Submit button label"),
 });
 
+const PlannerIntakeRoutingIntentSchema = z.enum([
+  "new_project",
+  "project_evolution",
+  "chitchat",
+  "form_answer",
+]);
+
 export const PlannerIntakeResultSchema = z
   .object({
     intent: z
       .enum(["chitchat", "needs_question_form", "ready_for_workflow"])
       .describe("Planner intake routing decision"),
+    routing_intent: PlannerIntakeRoutingIntentSchema.optional()
+      .describe("Product-aware intent classification for the latest turn"),
     conversation_message: z
       .string()
       .min(1)
-      .describe("Short user-facing message rendered by Conversation Agent"),
+      .describe("Short handoff or user-facing message rendered by Conversation Agent"),
     question_form: PlannerIntakeQuestionFormSchema.nullable()
       .default(null)
       .describe("Question Form body when user input is required"),
@@ -126,8 +135,11 @@ export interface PlannerIntakeInput {
 export async function* streamPlannerIntakeAgent(
   input: PlannerIntakeInput,
 ): AsyncGenerator<PlannerIntakeStreamEvent, PlannerIntakeResult, void> {
-  const firstResult = yield* runPlannerIntakeJsonAgent(input);
   const text = getUserInputText(input);
+  const firstResult = normalizePlannerIntakeRoutingIntent(
+    yield* runPlannerIntakeJsonAgent(input),
+    text,
+  );
 
   if (shouldForceQuestionForm(firstResult, text)) {
     // 项目相关输入默认先问一次表单；问题仍由 Agent 根据上下文生成。
@@ -137,9 +149,12 @@ export async function* streamPlannerIntakeAgent(
       content:
         "Project-related input should ask one Question Form by default before workflow execution. Regenerating a tailored question form instead of continuing directly.",
     };
-    const forcedResult = yield* runPlannerIntakeJsonAgent(input, {
-      forceQuestionForm: true,
-    });
+    const forcedResult = normalizePlannerIntakeRoutingIntent(
+      yield* runPlannerIntakeJsonAgent(input, {
+        forceQuestionForm: true,
+      }),
+      text,
+    );
     if (shouldRegenerateForQuestionCount(forcedResult)) {
       yield {
         type: "reasoning",
@@ -147,10 +162,13 @@ export async function* streamPlannerIntakeAgent(
         content:
           "The generated discovery form has too few questions. Regenerating with five to seven tailored questions.",
       };
-      const correctedResult = yield* runPlannerIntakeJsonAgent(input, {
-        forceQuestionForm: true,
-        questionCountCorrection: true,
-      });
+      const correctedResult = normalizePlannerIntakeRoutingIntent(
+        yield* runPlannerIntakeJsonAgent(input, {
+          forceQuestionForm: true,
+          questionCountCorrection: true,
+        }),
+        text,
+      );
       return normalizePlannerIntakeQuestionCount(correctedResult);
     }
     return normalizePlannerIntakeQuestionCount(forcedResult);
@@ -163,10 +181,13 @@ export async function* streamPlannerIntakeAgent(
       content:
         "The generated discovery form has too few questions. Regenerating with five to seven tailored questions.",
     };
-    const correctedResult = yield* runPlannerIntakeJsonAgent(input, {
-      forceQuestionForm: true,
-      questionCountCorrection: true,
-    });
+    const correctedResult = normalizePlannerIntakeRoutingIntent(
+      yield* runPlannerIntakeJsonAgent(input, {
+        forceQuestionForm: true,
+        questionCountCorrection: true,
+      }),
+      text,
+    );
     return normalizePlannerIntakeQuestionCount(correctedResult);
   }
 
@@ -236,6 +257,8 @@ The previous routing pass returned "ready_for_workflow", but project-related inp
 
 You must return intent "needs_question_form" and generate a tailored request-discovery question_form from the current request, product_context, and product_knowledge_graph.
 
+Set routing_intent to "new_project" or "project_evolution" based on the current workspace context.
+
 Do not use a fixed template. Do not ask information already present in user_input. Ask only for information needed to route or understand the user's request. Prefer ${MIN_REQUEST_DISCOVERY_QUESTIONS} to ${TARGET_MAX_REQUEST_DISCOVERY_QUESTIONS} questions. Never return more than ${MAX_PLANNER_INTAKE_QUESTIONS} questions.${correction}`;
 }
 
@@ -264,6 +287,25 @@ function shouldRegenerateForQuestionCount(
     result.question_form?.id === REQUEST_DISCOVERY_FORM_ID &&
     result.question_form.questions.length < MIN_REQUEST_DISCOVERY_QUESTIONS
   );
+}
+
+/**
+ * 补齐模型可能漏掉的 routing_intent，避免分类字段缺失影响后续判断。
+ */
+function normalizePlannerIntakeRoutingIntent(
+  result: PlannerIntakeResult,
+  text: string,
+): PlannerIntakeResult {
+  if (result.routing_intent) return result;
+
+  if (result.intent === "chitchat") {
+    return { ...result, routing_intent: "chitchat" };
+  }
+  if (isFormAnswerPayload(text)) {
+    return { ...result, routing_intent: "form_answer" };
+  }
+
+  return { ...result, routing_intent: "new_project" };
 }
 
 /**
@@ -321,6 +363,7 @@ function createFallbackPlannerIntakeResult(
   if (!text || isLikelyChitChat(text)) {
     return {
       intent: "chitchat",
+      routing_intent: "chitchat",
       conversation_message: isChinese
         ? "我在，你可以继续告诉我要推进的需求。"
         : "I am here. Tell me what project work you want to move forward.",
@@ -330,6 +373,7 @@ function createFallbackPlannerIntakeResult(
 
   return {
     intent: "ready_for_workflow",
+    routing_intent: isFormAnswerPayload(text) ? "form_answer" : "new_project",
     conversation_message: isChinese
       ? "我会基于当前产品上下文继续推进规划。"
       : "I will continue planning with the current product context.",
