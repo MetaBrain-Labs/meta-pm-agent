@@ -2,46 +2,61 @@
  * Orchestrator Agent 实现
  *
  * 负责在 Request Agent 之后执行顶层意图路由，识别 casual_chat、new_project
- * 和 project_evolution，并通过 DeepAgents task 工具把规划可行性检查委派给
- * Planner 子代理。实际可执行 DAG 仍由 canonical Planner Agent 生成。
+ * 和 project_evolution。对于 product_workflow 路由，通过 DeepAgents task 工具
+ * 将完整 DAG 生成委托给 Planner SubAgent，并从工具结果中提取规范化计划。
  *
  * Responsibilities:
- * - streamOrchestratorAgent()：输出 Orchestrator 路由决策
- * - createFallbackOrchestratorDecision()：模型或子代理不可用时给出确定性路由
- * - 创建只读 Planner 子代理并限制其工具权限
+ * - streamOrchestratorAgent()：输出路由决策并从 Planner SubAgent 结果中提取 TaskExecutionPlan
+ * - createFallbackOrchestratorDecision()：模型不可用时给出确定性路由
  *
  * Notes:
- * - Orchestrator 不直接写知识图谱，也不直接生成 TaskExecutionPlan。
+ * - Orchestrator 不直接生成 TaskExecutionPlan，始终通过 Planner SubAgent 委托。
+ * - Planner SubAgent 相关逻辑已抽取至 ./planner-subagent/ 目录。
  */
 
-import type { SubAgent } from "deepagents";
 import {
   OrchestratorAgentResultSchema,
   type OrchestratorAgentResult,
+  type TaskExecutionPlan,
 } from "@repo/shared";
 import {
   JSON_AGENT_MODEL_OPTIONS,
   runJsonAgent,
 } from "../../common/run-json-agent";
-import { createDeepAgentToolAllowlistMiddleware } from "../../common/deep-agent-tool-policy";
 import type {
   OrchestratorAgentInput,
   ProductWorkflowStreamEvent,
 } from "../types";
+import { ORCHESTRATOR_AGENT_PROMPT } from "./prompt";
 import {
-  ORCHESTRATOR_AGENT_PROMPT,
-  ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
-} from "./prompt";
-
-const ORCHESTRATOR_TASK_TOOL = "task";
+  createPlannerSubagent,
+  extractPlanFromSubagentResult,
+  formatTaskExecutionPlanBlock,
+  formatPlannerReasoningSummary,
+} from "./planner-subagent";
 
 /**
- * Orchestrator Agent：决定本轮对话是否进入产品工作流，以及应使用何种上下文。
+ * Orchestrator Agent 的两阶段输出：路由决策 + 可选的可执行 DAG。
+ */
+export interface OrchestratorAgentOutput {
+  decision: OrchestratorAgentResult;
+  plan?: TaskExecutionPlan;
+}
+
+/**
+ * Orchestrator Agent：决定本轮对话是否进入产品工作流，并通过 Planner SubAgent
+ * 生成可执行 DAG。手动迭代 runJsonAgent 生成器以拦截 task 工具事件，将 Planner
+ * SubAgent 的生命周期事件以 agentType "planner" 输出，供前端在 Orchestrator 卡片
+ * 内嵌套展示 Planner 子卡片。
  */
 export async function* streamOrchestratorAgent(
   input: OrchestratorAgentInput,
-): AsyncGenerator<ProductWorkflowStreamEvent, OrchestratorAgentResult, void> {
-  const result = yield* runJsonAgent({
+): AsyncGenerator<ProductWorkflowStreamEvent, OrchestratorAgentOutput, void> {
+  let plannerSubagentResult: unknown = undefined;
+  let plannerStarted = false;
+  let capturedPlan: TaskExecutionPlan | undefined;
+
+  const runner = runJsonAgent({
     agentType: "orchestrator",
     agentLabel: "Orchestrator Agent",
     name: "orchestrator-agent",
@@ -50,39 +65,80 @@ export async function* streamOrchestratorAgent(
       maxTokens: 4096,
     },
     systemPrompt: ORCHESTRATOR_AGENT_PROMPT,
-    subagents: [createPlannerReadinessSubagent()],
-    allowedBuiltinToolNames: [ORCHESTRATOR_TASK_TOOL],
+    subagents: [createPlannerSubagent()],
+    allowedBuiltinToolNames: ["task"],
+    visibleBuiltinToolNames: ["task"],
     payload: createOrchestratorPayload(input),
     schema: OrchestratorAgentResultSchema,
     fallback: (reason) => createFallbackOrchestratorDecision(input, reason),
+    onTaskToolResult: (content) => {
+      plannerSubagentResult = content;
+    },
     signal: input.signal,
   });
 
-  return normalizeOrchestratorDecision(input, result);
+  let next = await runner.next();
+  while (!next.done) {
+    const event = next.value;
+
+    // 拦截 task 工具调用，转为 Planner 子代理生命周期事件
+    if (event.type === "tool-call" && event.toolName === "task") {
+      if (!plannerStarted) {
+        plannerStarted = true;
+        yield {
+          type: "agent-status",
+          agentType: "planner",
+          status: "started",
+          phase: "planning",
+        };
+      }
+      // 不输出原始 task 工具调用事件（参数体积大且对用户无意义）
+    } else if (event.type === "tool-result" && event.toolName === "task") {
+      // 收到 Planner SubAgent 结果，解析并格式化 DAG
+      capturedPlan = extractPlanFromSubagentResult(
+        plannerSubagentResult,
+        input,
+      );
+      yield {
+        type: "reasoning",
+        agentType: "planner",
+        content: formatPlannerReasoningSummary(capturedPlan),
+      };
+      yield {
+        type: "agent-status",
+        agentType: "planner",
+        status: "completed",
+        phase: "planning",
+      };
+      yield {
+        type: "agent-output",
+        agentType: "planner",
+        content: formatTaskExecutionPlanBlock(capturedPlan),
+      };
+      // 不输出原始 task 工具结果（含完整 DAG JSON，会重复且体积大）
+    } else {
+      yield event;
+    }
+
+    next = await runner.next();
+  }
+
+  const decision = next.value;
+  const normalizedDecision = normalizeOrchestratorDecision(input, decision);
+
+  // 如果 Planner 没有被调用但路由到 product_workflow，生成 fallback DAG
+  const plan =
+    capturedPlan ??
+    (normalizedDecision.route === "product_workflow"
+      ? extractPlanFromSubagentResult(null, input)
+      : undefined);
+
+  return { decision: normalizedDecision, plan };
 }
 
 /**
- * 创建 Planner 子代理；该子代理仅做规划可行性说明，不读取文件、不调用工具。
- */
-function createPlannerReadinessSubagent(): SubAgent {
-  const subagentToolAllowlistMiddleware =
-    createDeepAgentToolAllowlistMiddleware({
-      agentName: "orchestrator-planner-subagent",
-      allowedToolNames: [],
-    });
-
-  return {
-    name: "planner-agent",
-    description:
-      "Checks whether a product request is ready for canonical planning and summarizes missing planning context.",
-    systemPrompt: ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
-    tools: [],
-    middleware: [subagentToolAllowlistMiddleware],
-  };
-}
-
-/**
- * 构造 Orchestrator 的紧凑载荷，避免把完整图谱重复塞入路由提示。
+ * 构造 Orchestrator 路由阶段的载荷。路由判定只需紧凑统计信息，
+ * 同时预计算 planner_context 供模型通过 task 工具完整传递给 Planner SubAgent。
  */
 function createOrchestratorPayload(input: OrchestratorAgentInput) {
   return {
@@ -106,6 +162,13 @@ function createOrchestratorPayload(input: OrchestratorAgentInput) {
       name: node.name,
       status: node.status,
     })),
+    planner_context: JSON.stringify({
+      product_context:
+        input.productContext || "No product context provided.",
+      product_knowledge_graph: input.knowledgeGraph,
+      request_analysis: input.requestAnalysis,
+      user_input: input.userInput,
+    }),
   };
 }
 

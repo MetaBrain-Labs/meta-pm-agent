@@ -30,12 +30,12 @@ import {
   streamExecutorAgent,
   streamOrchestratorAgent,
   streamCritiqueAgent,
-  streamPlannerAgent,
 } from "../../agents/product-workflow/agent";
 import type { WorkflowGraphStateValue } from "../state";
 
 /**
- * 执行 Planner Agent 节点，把 Request Agent 的分析结果转换为可执行 DAG。
+ * Planner 节点：显示 Orchestrator 的 Planner SubAgent 生成的 DAG，
+ * 或在 checkpoint 恢复时重放已有的 Executor 结果。
  */
 export async function plannerAgentNode(
   state: WorkflowGraphStateValue,
@@ -44,6 +44,18 @@ export async function plannerAgentNode(
   if (!state.requestAnalysis) return {};
   if (state.plan) {
     const writer = getWriter(config);
+    const isFreshPlan = state.executorResults.length === 0;
+
+    // 新鲜计划（由 Orchestrator 的 Planner SubAgent 刚生成）已有完整生命周期事件，
+    // 此处仅输出 Executor 回放结果；从 checkpoint 恢复的计划需完整状态事件。
+    if (!isFreshPlan) {
+      writer?.({
+        type: "agent-status",
+        agentType: "planner",
+        status: "started",
+        phase: "planning",
+      });
+    }
     writer?.({
       type: "agent-output",
       agentType: "planner",
@@ -56,6 +68,14 @@ export async function plannerAgentNode(
         content: formatExecutorResultBlock(result),
       });
     }
+    if (!isFreshPlan) {
+      writer?.({
+        type: "agent-status",
+        agentType: "planner",
+        status: "completed",
+        phase: "planning",
+      });
+    }
 
     return {
       knowledgeGraph:
@@ -64,45 +84,16 @@ export async function plannerAgentNode(
     };
   }
 
-  const writer = getWriter(config);
-  const knowledgeGraph =
-    state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
-  writer?.({
-    type: "agent-status",
-    agentType: "planner",
-    status: "started",
-    phase: "planning",
-  });
-  const plan = await consumeProductWorkflowStream(
-    streamPlannerAgent({
-      workspaceId: state.workspaceId,
-      productContext: state.productContext,
-      requestAnalysis: state.requestAnalysis,
-      userInput: state.userInput,
-      knowledgeGraph,
-      signal: config?.signal,
-    }),
-    writer,
-  );
-
-  // Planner 的结构化 DAG 继续沿用现有 tagged block，供 API 落库和前端展示。
-  writer?.({
-    type: "agent-output",
-    agentType: "planner",
-    content: formatTaskExecutionPlanBlock(plan),
-  });
-  writer?.({
-    type: "agent-status",
-    agentType: "planner",
-    status: "completed",
-    phase: "planning",
-  });
-
-  return { knowledgeGraph, plan };
+  // plan 缺失时不应发生（Orchestrator 始终生成 plan 或 fallback），直接透传现有图谱
+  return {
+    knowledgeGraph:
+      state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph(),
+  };
 }
 
 /**
- * 执行 Orchestrator Agent 节点，接管产品工作流路由、上下文来源判断和收尾审查调度。
+ * 执行 Orchestrator Agent 节点，接管产品工作流路由、上下文来源判断、Planner DAG
+ * 生成和收尾审查调度。
  */
 export async function orchestratorAgentNode(
   state: WorkflowGraphStateValue,
@@ -126,7 +117,7 @@ export async function orchestratorAgentNode(
     status: "started",
     phase: "planning",
   });
-  const decision = await consumeProductWorkflowStream(
+  const { decision, plan } = await consumeProductWorkflowStream(
     streamOrchestratorAgent({
       workspaceId: state.workspaceId,
       productContext: state.productContext,
@@ -150,7 +141,10 @@ export async function orchestratorAgentNode(
     phase: "planning",
   });
 
-  return { knowledgeGraph, orchestratorDecision: decision };
+  // Planner 生命周期事件（agent-status / agent-output）已由 streamOrchestratorAgent
+  // 在 task 工具结果到达时通过 agentType "planner" 内嵌输出，此处不再重复。
+
+  return { knowledgeGraph, orchestratorDecision: decision, plan };
 }
 
 /**

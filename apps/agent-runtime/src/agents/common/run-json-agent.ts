@@ -113,6 +113,8 @@ export interface RunJsonAgentOptions<T, AgentType extends string> {
   fallback: (reason: string) => T;
   suppressInvalidJsonReasoning?: boolean;
   signal?: AbortSignal;
+  /** 当 DeepAgents task 工具返回 SubAgent 结果时回调，用于提取子代理的结构化产出。 */
+  onTaskToolResult?: (content: unknown) => void;
 }
 
 /**
@@ -209,7 +211,13 @@ export async function* runJsonAgent<T, AgentType extends string>(
         };
         continue;
       }
-      if (ToolMessage.isInstance(message)) continue;
+      if (ToolMessage.isInstance(message)) {
+        // 透出 task 工具返回的 SubAgent 结果，供上层提取结构化产出
+        if (message.name === "task" && options.onTaskToolResult) {
+          options.onTaskToolResult(message.content);
+        }
+        continue;
+      }
 
       const reasoning = getReasoningContent(message);
       if (reasoning) {

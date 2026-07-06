@@ -1,36 +1,27 @@
 ﻿/**
- * 产品工作流编排与格式化
+ * 产品工作流格式化与聚合导出
  *
  * 作为 product-workflow 模块的聚合入口，负责：
- * - 编排 Planner -> Executor -> Critique 的完整产品工作流流式执行
- * - 格式化各环节的展示 block（任务计划、执行结果、确认表单等）
- * - 协调知识图谱的创建、追加与归档
+ * - 格式化各环节的展示 block（执行结果、确认表单等）
+ * - 导出子模块供外部使用
  *
  * Responsibilities:
- * - streamPlannerProductWorkflow()：主工作流编排器
- * - formatTaskExecutionPlanBlock()：格式化 DAG 展示块
  * - formatExecutorResultBlock()：格式化 Executor 结果块
  * - formatProductWorkflowBlock()：格式化完整产出块
  * - formatProductWorkflowConfirmationQuestionForm / ProposalQuestionForm：生成确认表单
- * - 聚合导出子模块（knowledge-graph、tasks、executor-agent、planner-agent、critique-agent）
+ * - 聚合导出子模块（knowledge-graph、tasks、executor-agent、critique-agent）
  *
  * Notes:
- * - 此文件仅做编排与格式化，不包含 Planner/Executor 的 prompt 或模型执行逻辑
+ * - 主工作流编排已迁移至 LangGraph，见 ../graph/workflow.ts
+ * - formatTaskExecutionPlanBlock 已抽取至 ../orchestrator-agent/planner-subagent/plan.ts
  */
 
 import type {
   ExecutorAgentResult,
   ProductWorkflowResult,
   ProductWorkflowProposalQuestion,
-  TaskExecutionPlan,
 } from "@repo/shared";
-import { createProductWorkflowKnowledgeGraph, appendKnowledgeGraphPatch } from "./common/knowledge-graph";
-import { orderTasksBySequence } from "./common/tasks";
-import { streamCritiqueAgent } from "./critique-agent/agent";
-import { streamExecutorAgent } from "./executor-agent/agent";
-import { streamPlannerAgent } from "./planner-agent/agent";
 import type {
-  ProductWorkflowInput,
   ProductWorkflowStreamEvent,
 } from "./types";
 
@@ -56,7 +47,7 @@ export { orderTasksBySequence } from "./common/tasks";
 export { streamCritiqueAgent } from "./critique-agent/agent";
 export { streamExecutorAgent } from "./executor-agent/agent";
 export { streamOrchestratorAgent } from "./orchestrator-agent/agent";
-export { streamPlannerAgent } from "./planner-agent/agent";
+export type { OrchestratorAgentOutput } from "./orchestrator-agent/agent";
 export type {
   ExecutorAgentInput,
   OrchestratorAgentInput,
@@ -67,114 +58,12 @@ export type {
   ProductWorkflowStreamEvent,
 } from "./types";
 
-/**
- * Planner 主工作流：负责编排 DAG、Executor、Critique 与最终确认阶段。
- */
-export async function* streamPlannerProductWorkflow(
-  input: ProductWorkflowInput,
-): AsyncGenerator<ProductWorkflowStreamEvent> {
-  let knowledgeGraph = createProductWorkflowKnowledgeGraph();
-
-  yield {
-    type: "reasoning",
-    agentType: "planner",
-    content:
-      "Planner Agent 已读取产品上下文、占位知识图谱和 Request Agent 分析，开始规划后续任务。\n",
-  };
-
-  const plan = yield* streamPlannerAgent({
-    ...input,
-    knowledgeGraph,
-  });
-  yield {
-    type: "agent-output",
-    agentType: "planner",
-    content: formatTaskExecutionPlanBlock(plan),
-  };
-
-  const executorResults: ExecutorAgentResult[] = [];
-  for (const task of orderTasksBySequence(plan.tasks)) {
-    const result = yield* streamExecutorAgent({
-      task,
-      plan,
-      knowledgeGraph,
-      workspaceId: input.workspaceId,
-      productContext: input.productContext,
-      requestAnalysis: input.requestAnalysis,
-      userInput: input.userInput,
-      previousResults: executorResults,
-      signal: input.signal,
-    });
-    // 工具调用已直接变更 knowledgeGraph 引用，同时显式合并新增结构化数据以确保状态完整。
-    knowledgeGraph = appendKnowledgeGraphPatch({
-      knowledgeGraph,
-      taskId: result.task_id,
-      agentType: result.agent_type,
-      entities: result.entities,
-      relations: result.relations,
-      decisions: result.decisions,
-      risks: result.risks,
-      openQuestions: result.open_questions,
-      summary: [result.summary],
-    });
-    executorResults.push(result);
-    // 每个 Executor 完成后立刻发出增量知识图谱更新事件。
-    yield {
-      type: "knowledge-graph-update",
-      knowledgeGraph,
-    };
-    yield {
-      type: "agent-output",
-      agentType: result.agent_type,
-      content: formatExecutorResultBlock(result),
-    };
-  }
-
-  const workflowResult = yield* streamCritiqueAgent({
-    workspaceId: input.workspaceId,
-    productContext: input.productContext,
-    requestAnalysis: input.requestAnalysis,
-    plan,
-    executorResults,
-    knowledgeGraph,
-    signal: input.signal,
-  });
-
-  yield {
-    type: "agent-output",
-    agentType: "planner",
-    content: formatProductWorkflowBlock(workflowResult),
-  };
-  yield { type: "complete", result: workflowResult };
-}
-
-/**
- * 运行完整产品工作流并返回结构化结果，供非 SSE 场景复用。
- */
-export async function runPlannerProductWorkflow(
-  input: ProductWorkflowInput,
-): Promise<ProductWorkflowResult> {
-  let result: ProductWorkflowResult | null = null;
-
-  for await (const event of streamPlannerProductWorkflow(input)) {
-    if (event.type === "complete") {
-      result = event.result;
-    }
-  }
-
-  if (!result) {
-    throw new Error("Product workflow completed without a planner result.");
-  }
-
-  return result;
-}
-
-/**
- * 生成 Planner 可解析的 task_execution block。
- */
-export function formatTaskExecutionPlanBlock(plan: TaskExecutionPlan): string {
-  return `<task-execution>\n${JSON.stringify(plan, null, 2)}\n</task-execution>`;
-}
+export {
+  normalizeTaskExecutionPlan,
+  createFallbackPlan,
+  formatTaskExecutionPlanBlock,
+  formatPlannerReasoningSummary,
+} from "./orchestrator-agent/planner-subagent";
 
 /**
  * 生成 Executor Agent 的可读摘要和结构化 block。

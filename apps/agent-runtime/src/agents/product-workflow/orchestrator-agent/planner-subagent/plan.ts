@@ -1,17 +1,13 @@
 /**
- * Planner Agent 实现
+ * Planner 规划引擎：DAG 归一化、Fallback 生成与格式化
  *
- * 负责将 Request Agent 的 business_model 分析结果转换为可执行的 DAG 任务计划，
- * 并在模型不可用时生成保守的 fallback DAG。
+ * 从 standalone Planner Agent 中提取的共享规划逻辑。normalizeTaskExecutionPlan 负责
+ * 收敛 LLM 生成的冗余依赖边，createFallbackPlan 在模型不可用时生成确定性图谱操作 DAG。
  *
  * Responsibilities:
- * - streamPlannerAgent()：生成 DAG 任务计划（基于 JSON DeepAgent）
- * - normalizeTaskExecutionPlan()：收敛模型生成的依赖边，保留真实图谱数据依赖
- * - createFallbackPlan()：在 Planner 模型异常时生成可恢复的执行计划
- *
- * Notes:
- * - Planner 使用 runJsonAgent 通用执行器，输出 TaskExecutionPlan
- * - 收尾审查已迁移到 critique-agent 模块
+ * - normalizeTaskExecutionPlan()：归一化 Planner DAG，只保留真实图谱数据依赖
+ * - createFallbackPlan()：模型不可用时的确定性 DAG 生成（关键词匹配 + 固定顺序）
+ * - formatTaskExecutionPlanBlock() / formatPlannerReasoningSummary()：前端展示格式化
  */
 
 import {
@@ -21,88 +17,23 @@ import {
   type TaskExecutionPlan,
 } from "@repo/shared";
 import {
-  JSON_AGENT_MODEL_OPTIONS,
-  runJsonAgent,
-} from "../../common/run-json-agent";
-import type {
-  PlannerAgentInput,
-  ProductWorkflowStreamEvent,
-} from "../types";
-import {
   EXECUTOR_DEFINITIONS,
   type ExecutorAgentDefinition,
   type ExecutorAgentType,
-} from "../executor-agent/definitions";
-import { PLANNER_AGENT_PROMPT } from "./prompt";
+} from "../../executor-agent/definitions";
+import type { PlannerAgentInput } from "../../types";
 
-/**
- * Planner Agent：把 Request Agent 的 business_model 转换为可执行 DAG。
- */
-export async function* streamPlannerAgent(
-  input: PlannerAgentInput,
-): AsyncGenerator<ProductWorkflowStreamEvent, TaskExecutionPlan, void> {
-  const plan = yield* runJsonAgent({
-    agentType: "planner",
-    agentLabel: "Planner Agent",
-    name: "planner-agent",
-    modelOptions: {
-      ...JSON_AGENT_MODEL_OPTIONS,
-      maxTokens: 16384,
-    },
-    systemPrompt: PLANNER_AGENT_PROMPT,
-    payload: {
-      product_context: input.productContext || "No product context provided.",
-      product_knowledge_graph: input.knowledgeGraph,
-      request_analysis: input.requestAnalysis,
-      user_input: input.userInput,
-    },
-    schema: TaskExecutionPlanSchema,
-    fallback: (reason) => createFallbackPlan(input, reason),
-    suppressInvalidJsonReasoning: true,
-    signal: input.signal,
-  });
-
-  return normalizeTaskExecutionPlan(plan);
-}
+// ---------------------------------------------------------------------------
+// DAG 归一化
+// ---------------------------------------------------------------------------
 
 const NORMALIZED_DAG_ASSUMPTION =
   "Planner DAG was normalized to keep only real graph-data dependencies and remove serial edges that only expressed presentation order.";
 
-const FALLBACK_PLAN_ASSUMPTION =
-  "Planner Agent used a deterministic graph-operation fallback DAG that preserves parallel executor layers and task-level quality checks.";
-
-const FALLBACK_EXECUTOR_ORDER: ExecutorAgentType[] = [
-  "executor-product-strategy",
-  "executor-toolkit",
-  "executor-market-research",
-  "executor-product-discovery",
-  "executor-gtm",
-  "executor-data-analytics",
-  "executor-product-execution",
-  "executor-marketing-growth",
-  "executor-ai-shipping",
-  "executor-interface-craft",
-];
-
-/**
- * fallback 任务角色，用于区分普通领域任务和下游策略收敛任务。
- */
-type FallbackTaskRole = "default" | "strategy-refinement";
-
-/**
- * fallback DAG 的内部任务规格，先保存角色再统一生成 TaskExecutionNode。
- */
-type FallbackTaskSpec = {
-  definition: ExecutorAgentDefinition;
-  sequence: number;
-  taskId: string;
-  role: FallbackTaskRole;
-};
-
 /**
  * 归一化 Planner 生成的 Executor DAG。
  *
- * Planner 模型容易把“产品工作顺序”写成完整瀑布依赖链。这里将任务依赖收敛为真实
+ * Planner 模型容易把"产品工作顺序"写成完整瀑布依赖链。这里将任务依赖收敛为真实
  * 图谱数据前置关系，并保留同一 Executor 的串行约束，确保 LangGraph 可以调度并行批次。
  */
 export function normalizeTaskExecutionPlan(
@@ -156,9 +87,6 @@ function groupTasksByAgent(
   return groups;
 }
 
-/**
- * 计算单个任务的真实依赖集合。
- */
 function normalizeTaskDependencies(
   task: TaskExecutionNode,
   taskById: Map<string, TaskExecutionNode>,
@@ -218,12 +146,6 @@ function normalizeTaskDependencies(
   return [...dependencies];
 }
 
-/**
- * 判断当前 Product Strategy 任务是否为下游证据收敛任务。
- *
- * 这类任务需要消费 AI Shipping、Execution、Analytics 等上游图谱输出形成 Decision，
- * 不能被普通并行归一化逻辑剥掉跨 Executor 依赖。
- */
 function isDownstreamStrategyRefinementTask(
   task: TaskExecutionNode,
   tasksByAgent: Map<ExecutorAgentType, TaskExecutionNode[]>,
@@ -234,9 +156,6 @@ function isDownstreamStrategyRefinementTask(
   return Boolean(getPreviousTaskForAgent(agentType, task, tasksByAgent));
 }
 
-/**
- * 定义 Executor 之间的硬数据依赖，而不是产品工作流展示顺序。
- */
 function getHardDependencyAgents(
   agentType: ExecutorAgentType,
   tasksByAgent: Map<ExecutorAgentType, TaskExecutionNode[]>,
@@ -278,9 +197,6 @@ function getHardDependencyAgents(
   }
 }
 
-/**
- * 获取同一 Executor 在当前任务之前的最近任务。
- */
 function getPreviousTaskForAgent(
   agentType: ExecutorAgentType,
   task: TaskExecutionNode,
@@ -294,9 +210,6 @@ function getPreviousTaskForAgent(
   return previousTasks.at(-1) ?? null;
 }
 
-/**
- * 获取当前任务之前某个 Executor 的最后一个任务，避免未来收敛任务形成反向依赖。
- */
 function getLastTaskForAgentBefore(
   agentType: ExecutorAgentType,
   task: TaskExecutionNode,
@@ -309,6 +222,34 @@ function getLastTaskForAgentBefore(
 
   return previousTasks.at(-1) ?? null;
 }
+
+// ---------------------------------------------------------------------------
+// Fallback DAG 生成
+// ---------------------------------------------------------------------------
+
+const FALLBACK_PLAN_ASSUMPTION =
+  "Planner Agent used a deterministic graph-operation fallback DAG that preserves parallel executor layers and task-level quality checks.";
+
+const FALLBACK_EXECUTOR_ORDER: ExecutorAgentType[] = [
+  "executor-product-strategy",
+  "executor-toolkit",
+  "executor-market-research",
+  "executor-product-discovery",
+  "executor-gtm",
+  "executor-data-analytics",
+  "executor-product-execution",
+  "executor-marketing-growth",
+  "executor-ai-shipping",
+  "executor-interface-craft",
+];
+
+type FallbackTaskRole = "default" | "strategy-refinement";
+type FallbackTaskSpec = {
+  definition: ExecutorAgentDefinition;
+  sequence: number;
+  taskId: string;
+  role: FallbackTaskRole;
+};
 
 /**
  * 在 Planner Agent 不可用时生成稳定的图谱操作 DAG。
@@ -371,9 +312,6 @@ export function createFallbackPlan(
   return normalizeTaskExecutionPlan(plan);
 }
 
-/**
- * 在 Planner 模型不可用时，根据请求关键词选择必要 Executor，避免默认跑满 10 个领域。
- */
 function selectFallbackExecutorDefinitions(
   analysis: PlannerAgentInput["requestAnalysis"],
 ): ExecutorAgentDefinition[] {
@@ -390,118 +328,37 @@ function selectFallbackExecutorDefinitions(
   }
 
   addExecutorWhenMatches(selected, requestText, "executor-market-research", [
-    "market",
-    "competitor",
-    "research",
-    "survey",
-    "竞品",
-    "市场",
-    "调研",
-    "用户研究",
-    "benchmark",
-    "competitive",
+    "market", "competitor", "research", "survey", "竞品", "市场", "调研",
+    "用户研究", "benchmark", "competitive",
   ]);
   addExecutorWhenMatches(selected, requestText, "executor-gtm", [
-    "gtm",
-    "launch",
-    "pricing",
-    "sales",
-    "channel",
-    "上市",
-    "定价",
-    "渠道",
-    "销售",
+    "gtm", "launch", "pricing", "sales", "channel", "上市", "定价", "渠道", "销售",
   ]);
   addExecutorWhenMatches(selected, requestText, "executor-marketing-growth", [
-    "growth",
-    "marketing",
-    "activation",
-    "retention",
-    "增长",
-    "营销",
-    "留存",
-    "转化",
+    "growth", "marketing", "activation", "retention", "增长", "营销", "留存", "转化",
   ]);
   addExecutorWhenMatches(selected, requestText, "executor-data-analytics", [
-    "metric",
-    "analytics",
-    "experiment",
-    "dashboard",
-    "指标",
-    "数据分析",
-    "埋点",
-    "度量",
-    "实验",
-    "看板",
+    "metric", "analytics", "experiment", "dashboard", "指标", "数据分析",
+    "埋点", "度量", "实验", "看板",
   ]);
   addExecutorWhenMatches(selected, requestText, "executor-ai-shipping", [
-    "ai",
-    "llm",
-    "agent",
-    "model",
-    "technical",
-    "architecture",
-    "real-time",
-    "realtime",
-    "sync",
-    "websocket",
-    "crdt",
-    "ot",
-    "multi-user editing",
-    "collaborative editing",
-    "技术",
-    "架构",
-    "模型",
-    "智能体",
-    "工程",
-    "实时",
-    "同步",
-    "多人",
-    "多人编辑",
+    "ai", "llm", "agent", "model", "technical", "architecture", "real-time",
+    "realtime", "sync", "websocket", "crdt", "ot", "multi-user editing",
+    "collaborative editing", "技术", "架构", "模型", "智能体", "工程", "实时",
+    "同步", "多人", "多人编辑",
   ]);
   addExecutorWhenMatches(selected, requestText, "executor-toolkit", [
-    "policy",
-    "compliance",
-    "legal",
-    "workflow",
-    "mvp",
-    "scope",
-    "assumption",
-    "security",
-    "privacy",
-    "permission",
-    "access control",
-    "合规",
-    "政策",
-    "法务",
-    "流程",
-    "范围",
-    "假设",
-    "安全",
-    "隐私",
-    "权限",
+    "policy", "compliance", "legal", "workflow", "mvp", "scope", "assumption",
+    "security", "privacy", "permission", "access control", "合规", "政策",
+    "法务", "流程", "范围", "假设", "安全", "隐私", "权限",
   ]);
   addExecutorWhenMatches(selected, requestText, "executor-interface-craft", [
-    "ui design",
-    "ux design",
-    "user interface",
-    "interface design",
-    "screen",
-    "prototype",
-    "wireframe",
-    "toolbar",
-    "界面",
-    "交互",
-    "原型",
-    "页面",
-    "线框",
-    "线框图",
-    "工具栏",
+    "ui design", "ux design", "user interface", "interface design", "screen",
+    "prototype", "wireframe", "toolbar", "界面", "交互", "原型", "页面", "线框",
+    "线框图", "工具栏",
   ]);
 
-  if (
-    matchesAny(requestText, ["full chain", "end-to-end", "全链路", "完整方案"])
-  ) {
+  if (matchesAny(requestText, ["full chain", "end-to-end", "全链路", "完整方案"])) {
     EXECUTOR_DEFINITIONS.forEach((definition) =>
       selected.add(definition.agentType),
     );
@@ -516,7 +373,6 @@ function selectFallbackExecutorDefinitions(
     selected.delete("executor-interface-craft");
   }
 
-  // 技术选型闭环优先于泛化市场扫描，除非用户明确要求市场研究。
   if (
     shouldPrioritizeTechnicalSelectionRefinement(requestText) &&
     selected.has("executor-ai-shipping") &&
@@ -533,9 +389,6 @@ function selectFallbackExecutorDefinitions(
   });
 }
 
-/**
- * 将 Request Agent 分析压缩为 fallback 关键词选择用文本。
- */
 function createRequestAnalysisText(
   analysis: PlannerAgentInput["requestAnalysis"],
 ): string {
@@ -551,51 +404,24 @@ function createRequestAnalysisText(
     .toLowerCase();
 }
 
-/**
- * 判断 fallback 是否需要保留市场研究 Executor。
- */
 function hasExplicitMarketResearchIntent(requestText: string): boolean {
   return matchesAny(requestText, [
-    "market research",
-    "competitor",
-    "competitive",
-    "benchmark",
-    "survey",
-    "市场调研",
-    "竞品",
-    "竞争分析",
-    "用户调研",
-    "基准",
+    "market research", "competitor", "competitive", "benchmark", "survey",
+    "市场调研", "竞品", "竞争分析", "用户调研", "基准",
   ]);
 }
 
-/**
- * 判断请求是否明确需要技术选型或架构建议闭环。
- */
 function shouldPrioritizeTechnicalSelectionRefinement(
   requestText: string,
 ): boolean {
   return matchesAny(requestText, [
-    "technology selection",
-    "technical selection",
-    "technical recommendation",
-    "architecture recommendation",
-    "architecture choice",
-    "architecture design",
-    "technical design",
-    "technical architecture",
-    "技术选型",
-    "技术建议",
-    "技术方案",
-    "技术架构",
-    "架构建议",
-    "架构方案",
+    "technology selection", "technical selection", "technical recommendation",
+    "architecture recommendation", "architecture choice", "architecture design",
+    "technical design", "technical architecture", "技术选型", "技术建议",
+    "技术方案", "技术架构", "架构建议", "架构方案",
   ]);
 }
 
-/**
- * 判断 fallback 计划是否需要追加 Product Strategy 技术决策收敛任务。
- */
 function shouldPlanFallbackStrategyRefinement(
   analysis: PlannerAgentInput["requestAnalysis"],
   selectedAgents: Set<ExecutorAgentType>,
@@ -609,9 +435,6 @@ function shouldPlanFallbackStrategyRefinement(
   );
 }
 
-/**
- * 生成 fallback 任务规格，必要时追加下游策略收敛任务。
- */
 function createFallbackTaskSpecs(
   selectedDefinitions: ExecutorAgentDefinition[],
   includeStrategyRefinement: boolean,
@@ -641,9 +464,6 @@ function createFallbackTaskSpecs(
   ];
 }
 
-/**
- * 记录每个 Executor 的首个 fallback 任务 ID，供依赖计算复用。
- */
 function createFallbackPrimaryTaskIdByAgent(
   taskSpecs: FallbackTaskSpec[],
 ): Map<ExecutorAgentType, string> {
@@ -658,82 +478,31 @@ function createFallbackPrimaryTaskIdByAgent(
   return taskIdByAgent;
 }
 
-/**
- * 识别需要更完整图谱启动链路的产品设计类请求。
- */
 function getProductDesignKeywords(): string[] {
   return [
-    "mvp",
-    "product design",
-    "design an",
-    "design a",
-    "roadmap",
-    "requirements",
-    "feature",
-    "collaboration",
-    "document",
-    "tool",
-    "workflow",
-    "solution",
-    "产品设计",
-    "设计",
-    "方案",
-    "需求",
-    "功能",
-    "文档",
-    "协同",
-    "工具",
+    "mvp", "product design", "design an", "design a", "roadmap", "requirements",
+    "feature", "collaboration", "document", "tool", "workflow", "solution",
+    "产品设计", "设计", "方案", "需求", "功能", "文档", "协同", "工具",
   ];
 }
 
-/**
- * 判断请求是否明确停留在方向、概念或功能设计阶段，避免 fallback 过早进入执行链路。
- */
 function isConceptOrFunctionalDesignRequest(requestText: string): boolean {
   return matchesAny(requestText, [
-    "concept",
-    "functional design",
-    "product direction",
-    "discuss direction",
-    "before deciding concrete outputs",
-    "概念",
-    "功能设计",
-    "产品方向",
-    "先讨论",
-    "后续再确定",
-    "不确定具体产出",
+    "concept", "functional design", "product direction", "discuss direction",
+    "before deciding concrete outputs", "概念", "功能设计", "产品方向", "先讨论",
+    "后续再确定", "不确定具体产出",
   ]);
 }
 
-/**
- * 判断用户是否明确要求执行、技术架构、原型或 UI 产出。
- */
 function hasExplicitExecutionIntent(requestText: string): boolean {
   return matchesAny(requestText, [
-    "implementation plan",
-    "architecture design",
-    "technical design",
-    "design technical architecture",
-    "component breakdown",
-    "prototype",
-    "ui design",
-    "interface design",
-    "build plan",
-    "执行计划",
-    "技术架构设计",
-    "架构设计",
-    "架构方案",
-    "组件拆解",
-    "原型",
-    "界面设计",
-    "ui设计",
-    "落地方案",
+    "implementation plan", "architecture design", "technical design",
+    "design technical architecture", "component breakdown", "prototype",
+    "ui design", "interface design", "build plan", "执行计划", "技术架构设计",
+    "架构设计", "架构方案", "组件拆解", "原型", "界面设计", "ui设计", "落地方案",
   ]);
 }
 
-/**
- * 为 fallback DAG 生成真实图谱数据依赖。
- */
 function getFallbackDependencyAgents(
   agentType: ExecutorAgentType,
   selectedAgents: Set<ExecutorAgentType>,
@@ -775,15 +544,8 @@ function getFallbackDependencyAgents(
   }
 }
 
-/**
- * 生成单个 fallback 任务的真实图谱数据依赖。
- */
 function getFallbackTaskDependencies(
-  spec: {
-    definition: ExecutorAgentDefinition;
-    taskId: string;
-    role: FallbackTaskRole;
-  },
+  spec: { definition: ExecutorAgentDefinition; taskId: string; role: FallbackTaskRole },
   selectedAgents: Set<ExecutorAgentType>,
   primaryTaskIdByAgent: Map<ExecutorAgentType, string>,
 ): string[] {
@@ -808,9 +570,6 @@ function getFallbackTaskDependencies(
   });
 }
 
-/**
- * 从候选上游中选择第一个已入选的 Executor。
- */
 function pickFirstSelectedAgent(
   selectedAgents: Set<ExecutorAgentType>,
   candidates: ExecutorAgentType[],
@@ -819,9 +578,6 @@ function pickFirstSelectedAgent(
   return match ? [match] : [];
 }
 
-/**
- * 为 fallback 任务生成图谱操作标题。
- */
 function createFallbackTaskTitle(
   agentType: ExecutorAgentType,
   role: FallbackTaskRole = "default",
@@ -856,9 +612,6 @@ function createFallbackTaskTitle(
   }
 }
 
-/**
- * 为 fallback 任务生成自包含描述，避免 Executor 只收到领域名称。
- */
 function createFallbackTaskDescription(
   definition: ExecutorAgentDefinition,
   analysis: PlannerAgentInput["requestAnalysis"],
@@ -896,34 +649,22 @@ function createFallbackTaskDescription(
   }
 }
 
-/**
- * 生成紧凑上下文，避免 fallback 在每个任务里重复完整请求分析。
- */
 function createFallbackRequestContext(
   analysis: PlannerAgentInput["requestAnalysis"],
 ): string {
-  const goal = truncateText(
-    summarizeBusinessModels(analysis.business_model),
-    180,
-  );
+  const goal = truncateText(summarizeBusinessModels(analysis.business_model), 180);
   const missing = summarizeMissingInformation(analysis.business_model);
   if (missing === "None provided.") return `Goal: ${goal}`;
 
   return `Goal: ${goal}; Uncertainty: ${truncateText(missing, 160)}`;
 }
 
-/**
- * 生成 fallback 请求摘要，避免模型失败时把长用户目标完整灌入 request_summary。
- */
 function createFallbackRequestSummary(
   analysis: PlannerAgentInput["requestAnalysis"],
 ): string {
   return truncateText(summarizeBusinessModels(analysis.business_model), 100);
 }
 
-/**
- * 将 Request Agent 缺失信息保留到根级 assumptions，避免只藏在任务描述里。
- */
 function createFallbackUncertaintyAssumptions(
   analysis: PlannerAgentInput["requestAnalysis"],
 ): string[] {
@@ -933,16 +674,10 @@ function createFallbackUncertaintyAssumptions(
   return [`Unresolved request gaps: ${truncateText(missing, 220)}`];
 }
 
-/**
- * 将 fallback 文本限制在较短长度内，避免兜底计划再次变成超长输出。
- */
 function truncateText(text: string, maxLength: number): string {
   return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
 }
 
-/**
- * 生成 fallback 任务的预期产出说明。
- */
 function createFallbackExpectedOutput(
   definition: ExecutorAgentDefinition,
   role: FallbackTaskRole = "default",
@@ -951,14 +686,9 @@ function createFallbackExpectedOutput(
     return "Technology Decision or decision candidate linked to upstream Evidence and Requirements.";
   }
 
-  return `Allowed entities only: ${definition.allowedEntityTypes.join(
-    ", ",
-  )}. Include traceable relation updates.`;
+  return `Allowed entities only: ${definition.allowedEntityTypes.join(", ")}. Include traceable relation updates.`;
 }
 
-/**
- * 生成 fallback 任务的验收标准。
- */
 function createFallbackQualityCriteria(
   definition: ExecutorAgentDefinition,
   role: FallbackTaskRole = "default",
@@ -980,9 +710,6 @@ function createFallbackQualityCriteria(
   ];
 }
 
-/**
- * 判断 fallback 计划是否来自用户确认/补充表单。
- */
 function isSupplementPlanInput(
   userInput: PlannerAgentInput["userInput"],
 ): boolean {
@@ -993,9 +720,6 @@ function isSupplementPlanInput(
   );
 }
 
-/**
- * 命中关键词时追加对应 Executor。
- */
 function addExecutorWhenMatches(
   selected: Set<ExecutorAgentType>,
   requestText: string,
@@ -1007,9 +731,6 @@ function addExecutorWhenMatches(
   }
 }
 
-/**
- * 判断请求文本是否包含任一相关性关键词。
- */
 function matchesAny(text: string, keywords: string[]): boolean {
   return keywords.some((keyword) => text.includes(keyword.toLowerCase()));
 }
@@ -1018,9 +739,6 @@ function createTaskId(sequence: number): string {
   return `task-${String(sequence).padStart(2, "0")}`;
 }
 
-/**
- * 生成简短的业务模型摘要，供 Planner 回退计划使用。
- */
 function summarizeBusinessModels(items: BusinessModelItem[]): string {
   if (items.length === 0) {
     return "No business model item was identified by Request Agent.";
@@ -1028,9 +746,6 @@ function summarizeBusinessModels(items: BusinessModelItem[]): string {
   return items.map((item) => item.user_goal).join("; ");
 }
 
-/**
- * 生成缺失信息摘要，提醒 fallback Executor 不要静默假设关键事实。
- */
 function summarizeMissingInformation(items: BusinessModelItem[]): string {
   const missingInformation = items.flatMap((item) =>
     item.missing_information.map(
@@ -1042,4 +757,42 @@ function summarizeMissingInformation(items: BusinessModelItem[]): string {
   return missingInformation.length > 0
     ? missingInformation.join("; ")
     : "None provided.";
+}
+
+// ---------------------------------------------------------------------------
+// 格式化工具
+// ---------------------------------------------------------------------------
+
+/**
+ * 格式化 TaskExecutionPlan 为 tagged block，供 SSE 传输和前端展示。
+ */
+export function formatTaskExecutionPlanBlock(plan: TaskExecutionPlan): string {
+  return `<task-execution>\n${JSON.stringify(plan, null, 2)}\n</task-execution>`;
+}
+
+/**
+ * 为 Planner SubAgent 生成简洁的推理摘要，填充前端 Planner 卡片内容。
+ */
+export function formatPlannerReasoningSummary(plan: TaskExecutionPlan): string {
+  const taskSummary = plan.tasks
+    .map((task) => `${task.task_id}: ${task.title}`)
+    .join("；");
+  const executorList = [
+    ...new Set(plan.tasks.map((task) => task.assigned_agent)),
+  ];
+  const warnings = plan.assumptions.slice(0, 2).map((assumption) => {
+    const text =
+      typeof assumption === "string"
+        ? assumption
+        : (assumption as { assumption?: string }).assumption ?? "";
+    return text.length > 60 ? `${text.slice(0, 60)}...` : text;
+  });
+
+  return [
+    `Planner SubAgent 已完成任务规划。`,
+    `计划状态：${plan.status}，共 ${plan.tasks.length} 个任务。`,
+    `执行者：${executorList.join("、")}。`,
+    `任务摘要：${taskSummary}。`,
+    ...(warnings.length > 0 ? [`关键假设：${warnings.join("；")}。`] : []),
+  ].join("\n");
 }

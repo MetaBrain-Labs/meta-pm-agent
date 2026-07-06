@@ -1,19 +1,21 @@
 /**
- * Planner Agent 提示词定义
+ * Planner SubAgent 提示词定义
  *
- * 定义 Planner Agent 的 DAG 任务规划系统指令和 Executor 路由表。
+ * 定义 Orchestrator 委托给 Planner SubAgent 时使用的 DAG 任务规划系统指令和 Executor 路由表。
+ * Planner SubAgent 作为 DeepAgents task 子代理运行，从 task 描述中接收完整产品上下文并返回
+ * TaskExecutionPlan JSON。
  *
  * Responsibilities:
- * - 定义 PLANNER_AGENT_PROMPT：任务规划规则
+ * - 定义 PLANNER_SUBAGENT_PROMPT：任务规划规则 + Executor 路由表 + 知识图谱元模型约束
  * - 动态注入 EXECUTOR_DEFINITIONS 生成路由表
  * - 保持所有模型可见提示词为英文
  */
 
-import { PRODUCT_KNOWLEDGE_GRAPH_METAMODEL_PROMPT } from "../common/knowledge-graph";
+import { PRODUCT_KNOWLEDGE_GRAPH_METAMODEL_PROMPT } from "../../common/knowledge-graph";
 import {
   EXECUTOR_DEFINITIONS,
   formatExecutorAgentTypeList,
-} from "../executor-agent/definitions";
+} from "../../executor-agent/definitions";
 
 const EXECUTOR_ROUTING_TABLE = EXECUTOR_DEFINITIONS.map(
   (item) =>
@@ -21,9 +23,10 @@ const EXECUTOR_ROUTING_TABLE = EXECUTOR_DEFINITIONS.map(
 ).join("\n");
 
 /**
- * Planner Agent 的职责提示词。
+ * Planner SubAgent 的系统提示词，定义 DAG 任务规划规则。
+ * 与 canonical Planner Agent 的 PLANNER_AGENT_PROMPT 语义一致。
  */
-export const PLANNER_AGENT_PROMPT = `You are the Planner Agent in a product-management multi-agent workflow.
+export const PLANNER_SUBAGENT_PROMPT = `You are the Planner Agent in a product-management multi-agent workflow.
 
 Your responsibility:
 - Plan or update a graph-operation DAG for downstream executor agents.
