@@ -156,3 +156,5 @@ _tmp*
 product-knowledge-graph.md
 .agent-summaries/
 docs/
+resources/product-contexts/*.json
+!resources/product-contexts/.gitkeep

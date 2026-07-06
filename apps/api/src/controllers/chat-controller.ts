@@ -305,6 +305,7 @@ export async function chatStreamHandler(c: Context) {
       ) {
         await clearWorkspaceKnowledgeGraph(runtimeContext.workspaceId);
         runtimeContext.knowledgeGraph = null;
+        runtimeContext.contextSource = "none";
       }
 
       // 启动 agent-runtime 流式对话
@@ -319,6 +320,7 @@ export async function chatStreamHandler(c: Context) {
             requestFormId: parsed.data.requestFormId,
           }),
           productContext: runtimeContext.productContext,
+          contextSource: runtimeContext.contextSource,
           knowledgeGraph: runtimeContext.knowledgeGraph,
           signal: runtimeController.signal,
         },

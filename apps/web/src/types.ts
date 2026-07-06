@@ -172,6 +172,7 @@ export interface RequestAnalysis {
 
 export type ProductWorkflowAgentType =
   | "product_director"
+  | "orchestrator"
   | "planner"
   | "critique"
   | "executor-product-strategy"

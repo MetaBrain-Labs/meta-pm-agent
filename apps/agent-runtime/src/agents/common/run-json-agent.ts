@@ -22,7 +22,7 @@ import {
   type BaseMessage,
   type StructuredTool,
 } from "langchain";
-import { createDeepAgent } from "deepagents";
+import { createDeepAgent, type SubAgent } from "deepagents";
 import { createChatModel, type ChatModelOptions } from "./model";
 import { createDefaultAgentMiddleware } from "./middleware";
 import { createDeepAgentToolAllowlistMiddleware } from "./deep-agent-tool-policy";
@@ -98,6 +98,12 @@ export interface RunJsonAgentOptions<T, AgentType extends string> {
   tools?: StructuredTool[];
   /** DeepAgents 技能目录 sources；不是单个技能名称。 */
   skills?: string[];
+  /** DeepAgents 同步子代理配置；仅 Orchestrator 等明确需要委派的 Agent 使用。 */
+  subagents?: SubAgent[];
+  /** DeepAgents 内置工具白名单，例如启用子代理时需要允许 task。默认不作为用户可见工具流输出。 */
+  allowedBuiltinToolNames?: string[];
+  /** 需要透传给 SSE 和持久化摘要的 DeepAgents 内置工具名称。 */
+  visibleBuiltinToolNames?: string[];
   payload: unknown;
   schema: {
     safeParse(
@@ -118,6 +124,16 @@ export async function* runJsonAgent<T, AgentType extends string>(
   const startTime = Date.now();
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
   const tools = options.tools ?? [];
+  const allowedToolNames = [
+    ...tools.map((tool) => tool.name),
+    ...(options.allowedBuiltinToolNames ?? []),
+    ...(options.visibleBuiltinToolNames ?? []),
+  ];
+  const visibleToolNames = [
+    ...tools.map((tool) => tool.name),
+    ...(options.visibleBuiltinToolNames ?? []),
+  ];
+  const visibleToolNameSet = new Set(visibleToolNames);
   const summaryRecorder = createAgentRunSummaryRecorder({
     agentLabel: options.agentLabel,
     agentName: options.name,
@@ -126,8 +142,11 @@ export async function* runJsonAgent<T, AgentType extends string>(
       modelOptions: options.modelOptions,
       payload: options.payload,
       skills: options.skills ?? [],
+      subagents: compactSubagentDefinitions(options.subagents ?? []),
       systemPrompt: options.systemPrompt,
       tools: compactToolDefinitions(tools),
+      allowedBuiltinToolNames: options.allowedBuiltinToolNames ?? [],
+      visibleBuiltinToolNames: options.visibleBuiltinToolNames ?? [],
     },
   });
 
@@ -139,10 +158,11 @@ export async function* runJsonAgent<T, AgentType extends string>(
       name: options.name,
       // 这里接收 DeepAgents 技能目录 sources；具体技能名由 source 内的 SKILL.md 声明。
       skills: options.skills ?? [],
+      subagents: options.subagents ?? [],
       middleware: [
         createDeepAgentToolAllowlistMiddleware({
           agentName: options.name,
-          allowedToolNames: tools.map((tool) => tool.name),
+          allowedToolNames,
         }),
         ...createDefaultAgentMiddleware(),
         ...createAgentRunSummaryMiddleware(summaryRecorder),
@@ -158,7 +178,7 @@ export async function* runJsonAgent<T, AgentType extends string>(
 
     let responseText = "";
     for await (const [message] of run) {
-      for (const toolCall of getToolCalls(message)) {
+      for (const toolCall of getToolCalls(message, visibleToolNameSet)) {
         summaryRecorder.recordToolCall({
           toolCallId: toolCall.id,
           toolName: toolCall.name,
@@ -173,7 +193,7 @@ export async function* runJsonAgent<T, AgentType extends string>(
         };
       }
 
-      const toolResult = getToolResult(message);
+      const toolResult = getToolResult(message, visibleToolNameSet);
       if (toolResult) {
         summaryRecorder.recordToolResult({
           toolCallId: toolResult.id,
@@ -189,6 +209,7 @@ export async function* runJsonAgent<T, AgentType extends string>(
         };
         continue;
       }
+      if (ToolMessage.isInstance(message)) continue;
 
       const reasoning = getReasoningContent(message);
       if (reasoning) {
@@ -456,15 +477,29 @@ function compactToolDefinitions(tools: StructuredTool[]): Array<{
 }
 
 /**
+ * 压缩子代理定义，避免本地运行摘要保存完整提示词。
+ */
+function compactSubagentDefinitions(subagents: SubAgent[]): Array<{
+  name: string;
+  description: string;
+}> {
+  return subagents.map((subagent) => ({
+    name: subagent.name,
+    description: subagent.description,
+  }));
+}
+
+/**
  * 从模型消息中提取工具调用。
  */
 function getToolCalls(
   message: BaseMessage,
+  visibleToolNames: ReadonlySet<string>,
 ): Array<{ id?: string; name: string; args?: Record<string, unknown> }> {
   if (!AIMessage.isInstance(message)) return [];
 
   return (message.tool_calls ?? [])
-    .filter((toolCall) => toolCall.name)
+    .filter((toolCall) => toolCall.name && visibleToolNames.has(toolCall.name))
     .map((toolCall) => ({
       id: toolCall.id,
       name: toolCall.name,
@@ -480,8 +515,10 @@ function getToolCalls(
  */
 function getToolResult(
   message: BaseMessage,
+  visibleToolNames: ReadonlySet<string>,
 ): { id?: string; name: string; content: unknown } | null {
   if (!ToolMessage.isInstance(message)) return null;
+  if (!visibleToolNames.has(message.name ?? "unknown")) return null;
 
   return {
     id: (message as { tool_call_id?: string }).tool_call_id,

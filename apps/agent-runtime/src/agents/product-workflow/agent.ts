@@ -55,9 +55,11 @@ export {
 export { orderTasksBySequence } from "./common/tasks";
 export { streamCritiqueAgent } from "./critique-agent/agent";
 export { streamExecutorAgent } from "./executor-agent/agent";
+export { streamOrchestratorAgent } from "./orchestrator-agent/agent";
 export { streamPlannerAgent } from "./planner-agent/agent";
 export type {
   ExecutorAgentInput,
+  OrchestratorAgentInput,
   PlannerAgentInput,
   CritiqueAgentInput,
   PlannerWorkflowReviewInput,

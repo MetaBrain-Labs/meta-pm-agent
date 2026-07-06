@@ -28,6 +28,7 @@ import {
   formatProductWorkflowBlock,
   formatTaskExecutionPlanBlock,
   streamExecutorAgent,
+  streamOrchestratorAgent,
   streamCritiqueAgent,
   streamPlannerAgent,
 } from "../../agents/product-workflow/agent";
@@ -41,9 +42,6 @@ export async function plannerAgentNode(
   config?: LangGraphRunnableConfig,
 ) {
   if (!state.requestAnalysis) return {};
-  if (state.plan && arePlanTasksFinished(state)) {
-    return executeCritiqueAgentReview(state, config);
-  }
   if (state.plan) {
     const writer = getWriter(config);
     writer?.({
@@ -101,6 +99,58 @@ export async function plannerAgentNode(
   });
 
   return { knowledgeGraph, plan };
+}
+
+/**
+ * 执行 Orchestrator Agent 节点，接管产品工作流路由、上下文来源判断和收尾审查调度。
+ */
+export async function orchestratorAgentNode(
+  state: WorkflowGraphStateValue,
+  config?: LangGraphRunnableConfig,
+) {
+  if (!state.requestAnalysis || state.productWorkflow) return {};
+  if (state.plan && arePlanTasksFinished(state)) {
+    return executeCritiqueAgentReview(state, config);
+  }
+  if (state.orchestratorDecision) {
+    return { orchestratorDecision: state.orchestratorDecision };
+  }
+
+  const writer = getWriter(config);
+  const knowledgeGraph =
+    state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
+
+  writer?.({
+    type: "agent-status",
+    agentType: "orchestrator",
+    status: "started",
+    phase: "planning",
+  });
+  const decision = await consumeProductWorkflowStream(
+    streamOrchestratorAgent({
+      workspaceId: state.workspaceId,
+      productContext: state.productContext,
+      contextSource: state.contextSource,
+      requestAnalysis: state.requestAnalysis,
+      userInput: state.userInput,
+      knowledgeGraph,
+      signal: config?.signal,
+    }),
+    writer,
+  );
+  writer?.({
+    type: "reasoning",
+    agentType: "orchestrator",
+    content: `${decision.reason_summary}\n`,
+  });
+  writer?.({
+    type: "agent-status",
+    agentType: "orchestrator",
+    status: "completed",
+    phase: "planning",
+  });
+
+  return { knowledgeGraph, orchestratorDecision: decision };
 }
 
 /**
@@ -434,13 +484,13 @@ export function selectNextExecutorRouterTargets(
     .filter((task) => !completedTaskIds.has(task.task_id))
     .sort((left, right) => left.sequence - right.sequence);
 
-  if (incompleteTasks.length === 0) return "planner_agent";
+  if (incompleteTasks.length === 0) return "orchestrator_agent";
 
   const readyTasks = incompleteTasks.filter((task) =>
     task.depends_on.every((taskId) => completedTaskIds.has(taskId)),
   );
   const parallelTasks = packParallelExecutorTasks(readyTasks);
-  if (parallelTasks.length === 0) return "planner_agent";
+  if (parallelTasks.length === 0) return "orchestrator_agent";
 
   return parallelTasks.map((task) => task.assigned_agent);
 }

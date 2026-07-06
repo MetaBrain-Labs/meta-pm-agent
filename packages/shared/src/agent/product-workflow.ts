@@ -19,6 +19,7 @@ import { z } from "zod";
  * 产品工作流中可持久化、可展示的稳定 Agent 类型。
  */
 export const ProductWorkflowAgentTypeSchema = z.enum([
+  "orchestrator",
   "planner",
   "critique",
   "executor-product-strategy",
@@ -326,6 +327,7 @@ export const TaskExecutionNodeSchema = z.object({
   title: z.string().min(1),
   description: z.string().min(1),
   assigned_agent: ProductWorkflowAgentTypeSchema.exclude([
+    "orchestrator",
     "planner",
     "critique",
   ]),
@@ -381,6 +383,7 @@ function pickStringField(
 export const ExecutorAgentResultSchema = z.object({
   task_id: z.string().min(1),
   agent_type: ProductWorkflowAgentTypeSchema.exclude([
+    "orchestrator",
     "planner",
     "critique",
   ]),
@@ -524,8 +527,67 @@ export const ProductWorkflowResultSchema = z.object({
   confirmation_message: z.string().min(1),
 });
 
+/**
+ * Orchestrator Agent 的项目意图分类。
+ */
+export const OrchestratorIntentSchema = z.enum([
+  "casual_chat",
+  "new_project",
+  "project_evolution",
+]);
+
+/**
+ * Orchestrator Agent 使用的产品上下文来源标识。
+ */
+export const OrchestratorContextSourceSchema = z.enum([
+  "resources",
+  "database",
+  "product_knowledge_graph",
+  "none",
+]);
+
+/**
+ * Orchestrator Agent 的路由决策。
+ *
+ * 该结构只表达顶层编排意图，不承载 Planner DAG。真正的 DAG 仍由 Planner Agent
+ * 通过现有 TaskExecutionPlanSchema 生成并归一化。
+ */
+export const OrchestratorAgentResultSchema = z.object({
+  intent: OrchestratorIntentSchema.describe(
+    "Top-level user intent for this turn.",
+  ),
+  route: z.enum(["conversation", "product_workflow"]).describe(
+    "Next runtime route selected by Orchestrator.",
+  ),
+  plan_type: z.enum(["initial", "supplement"]).optional().describe(
+    "Planner mode when route is product_workflow.",
+  ),
+  context_source: OrchestratorContextSourceSchema.describe(
+    "Where the current project context was loaded from.",
+  ),
+  has_project_context: z.boolean().describe(
+    "Whether any meaningful project graph context is available.",
+  ),
+  reason_summary: z.string().min(1).max(800).describe(
+    "Compact explanation of the routing decision for runtime logs.",
+  ),
+  planner_delegation_summary: z.string().max(1200).optional().describe(
+    "Optional summary returned after delegating planning readiness to the Planner subagent.",
+  ),
+  warnings: z.array(z.string().min(1)).default([]).describe(
+    "Operational warnings that should be logged but not shown as stack traces.",
+  ),
+});
+
 export type ProductWorkflowAgentType = z.infer<
   typeof ProductWorkflowAgentTypeSchema
+>;
+export type OrchestratorIntent = z.infer<typeof OrchestratorIntentSchema>;
+export type OrchestratorContextSource = z.infer<
+  typeof OrchestratorContextSourceSchema
+>;
+export type OrchestratorAgentResult = z.infer<
+  typeof OrchestratorAgentResultSchema
 >;
 export type ProductKnowledgeGraph = z.infer<typeof ProductKnowledgeGraphSchema>;
 export type TaskExecutionNode = z.infer<typeof TaskExecutionNodeSchema>;

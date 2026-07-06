@@ -19,6 +19,7 @@ import { END, MemorySaver, START, StateGraph } from "@langchain/langgraph";
 import type { BaseCheckpointSaver } from "@langchain/langgraph";
 import type {
   ExecutorAgentResult,
+  OrchestratorContextSource,
   ProductKnowledgeGraph,
   ProductWorkflowResult,
   RequestAnalysis,
@@ -36,6 +37,7 @@ import {
   interfaceCraftExecutorNode,
   marketResearchExecutorNode,
   marketingGrowthExecutorNode,
+  orchestratorAgentNode,
   productDiscoveryExecutorNode,
   plannerAgentNode,
   productExecutionExecutorNode,
@@ -50,6 +52,7 @@ import { getWorkflowCheckpointer } from "./workflow-checkpointer";
 export interface WorkflowGraphInput {
   workspaceId?: string;
   productContext?: string;
+  contextSource?: OrchestratorContextSource;
   knowledgeGraph?: ProductKnowledgeGraph | null;
   userInputBlock: string;
   workflowThreadId?: string;
@@ -92,6 +95,7 @@ const PRODUCT_WORKFLOW_ROUTE_TARGETS = {
   "executor-ai-shipping": "executor-ai-shipping",
   "executor-toolkit": "executor-toolkit",
   "executor-interface-craft": "executor-interface-craft",
+  orchestrator_agent: "orchestrator_agent",
   planner_agent: "planner_agent",
   end: END,
 } as const;
@@ -112,6 +116,8 @@ function createWorkflowGraph(checkpointer: BaseCheckpointSaver) {
   .addNode("parse_user_input", parseUserInputNode)
   // Request Agent 负责对用户输入进行业务建模分类。
   .addNode("request_agent", requestAgentNode)
+  // Orchestrator Agent 负责产品意图路由、上下文来源判断和生命周期调度。
+  .addNode("orchestrator_agent", orchestratorAgentNode)
   // Planner Agent 负责把业务建模项规划为可执行 DAG。
   .addNode("planner_agent", plannerAgentNode)
   // Router 在固定图内根据 Planner DAG 动态选择下一批 Executor 分支。
@@ -132,7 +138,8 @@ function createWorkflowGraph(checkpointer: BaseCheckpointSaver) {
 
   .addEdge(START, "parse_user_input")
   .addEdge("parse_user_input", "request_agent")
-  .addConditionalEdges("request_agent", selectNextNodeAfterRequestAgent, {
+  .addEdge("request_agent", "orchestrator_agent")
+  .addConditionalEdges("orchestrator_agent", selectNextNodeAfterOrchestrator, {
     planner_agent: "planner_agent",
     end: END,
   })
@@ -210,10 +217,14 @@ export async function* streamWorkflowGraph(
 }
 
 /**
- * 根据 Request Agent 是否识别到业务建模项，决定是否进入产品工作流。
+ * 根据 Orchestrator Agent 的路由决策，决定是否进入 Planner Agent。
  */
-function selectNextNodeAfterRequestAgent(state: WorkflowGraphStateValue) {
-  return state.requestAnalysis?.business_model.length ? "planner_agent" : "end";
+function selectNextNodeAfterOrchestrator(state: WorkflowGraphStateValue) {
+  if (state.productWorkflow) return "end";
+
+  return state.orchestratorDecision?.route === "product_workflow"
+    ? "planner_agent"
+    : "end";
 }
 
 /**
@@ -233,9 +244,11 @@ function createWorkflowInitialState(input: WorkflowGraphInput) {
 
   return {
     productContext: input.productContext ?? "",
+    contextSource: input.contextSource ?? "none",
     workspaceId: input.workspaceId,
     userInputBlock: input.userInputBlock,
     requestAnalysis: resume?.requestAnalysis ?? null,
+    orchestratorDecision: resume?.orchestratorDecision ?? null,
     plan,
     executorResults,
     knowledgeGraph: resume?.knowledgeGraph ?? input.knowledgeGraph ?? null,

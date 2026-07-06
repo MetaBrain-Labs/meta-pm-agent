@@ -16,6 +16,8 @@
 import { Annotation } from "@langchain/langgraph";
 import type {
   ExecutorAgentResult,
+  OrchestratorAgentResult,
+  OrchestratorContextSource,
   ProductKnowledgeGraph,
   ProductWorkflowResult,
   RequestAnalysis,
@@ -41,6 +43,12 @@ export const WorkflowGraphState = Annotation.Root({
     default: () => undefined,
   }),
 
+  // 当前产品上下文的加载来源，供 Orchestrator 区分 resources、数据库或空上下文。
+  contextSource: Annotation<OrchestratorContextSource>({
+    reducer: (_current, update) => update,
+    default: () => "none",
+  }),
+
   // Conversation Agent 输出的原始 <user-input> 内容。
   userInputBlock: Annotation<string>(),
 
@@ -60,6 +68,12 @@ export const WorkflowGraphState = Annotation.Root({
   requestAnalysisBlock: Annotation<string>({
     reducer: (_current, update) => update,
     default: () => "",
+  }),
+
+  // Orchestrator Agent 的顶层路由决策，后续节点只消费该结构化结果。
+  orchestratorDecision: Annotation<OrchestratorAgentResult | null>({
+    reducer: (_current, update) => update,
+    default: () => null,
   }),
 
   // 当前产品知识图谱快照，供 Planner 和 Executor 共享上下文。

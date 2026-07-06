@@ -15,7 +15,12 @@
  */
 
 import type { RequestAnalysis } from "@repo/shared";
-import type { AgentRuntimeTool, ProductWorkflowResult, ProductKnowledgeGraph } from "@repo/shared";
+import type {
+  AgentRuntimeTool,
+  OrchestratorContextSource,
+  ProductWorkflowResult,
+  ProductKnowledgeGraph,
+} from "@repo/shared";
 import type { HumanInTheLoopInterrupt } from "./graph/human-in-the-loop";
 
 /**
@@ -112,6 +117,7 @@ export interface ConversationStreamOptions {
   requestFormId?: string;
   workflowThreadId?: string;
   productContext?: string;
+  contextSource?: OrchestratorContextSource;
   knowledgeGraph?: ProductKnowledgeGraph | null;
   signal?: AbortSignal;
 }

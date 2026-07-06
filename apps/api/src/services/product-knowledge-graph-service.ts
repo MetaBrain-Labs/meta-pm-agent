@@ -27,6 +27,14 @@ import {
   upsertProductKnowledgeGraph,
   type ProductKnowledgeGraphRow,
 } from "../repositories/product-knowledge-graph-repository";
+import {
+  clearProductContextSnapshotByWorkspaceId,
+  upsertProductContextSnapshot,
+} from "../repositories/product-context-snapshot-repository";
+import {
+  clearProductContextResourceSnapshot,
+  writeProductContextResourceSnapshot,
+} from "./product-context-resource-service";
 
 /**
  * 归档输入，携带结构化知识图谱数据与关联本轮会话/请求表单的溯源信息。
@@ -52,10 +60,18 @@ export async function finalizeWorkspaceKnowledgeGraph({
   advanceVersion = true,
 }: FinalizeProductKnowledgeGraphInput): Promise<void> {
   if (!workspaceId || !knowledgeGraph) return;
+  if (!hasRuntimeContextData(knowledgeGraph)) return;
 
   const normalizedGraph = normalizeKnowledgeGraphForPersistence(knowledgeGraph);
   const hasGraphData =
     normalizedGraph.nodes.length > 0 || normalizedGraph.relations.length > 0;
+  await persistProductContextSnapshots({
+    workspaceId,
+    conversationId,
+    requestFormId,
+    knowledgeGraph,
+    advanceVersion,
+  });
   if (!hasGraphData) return;
 
   await upsertProductKnowledgeGraph({
@@ -75,6 +91,8 @@ export async function clearWorkspaceKnowledgeGraph(
   workspaceId: string | undefined,
 ): Promise<void> {
   if (!workspaceId) return;
+  await clearProductContextResourceSnapshot(workspaceId);
+  await clearOptionalProductContextSnapshot(workspaceId);
   await clearProductKnowledgeGraphByWorkspaceId(workspaceId);
 }
 
@@ -219,6 +237,93 @@ function normalizeKnowledgeGraphForPersistence(
         `${item.type}:${item.source}:${item.target}:${item.source_task_id ?? ""}`,
     ),
   };
+}
+
+/**
+ * 判断运行时图谱是否包含任何可恢复上下文。
+ */
+function hasRuntimeContextData(knowledgeGraph: ProductKnowledgeGraph): boolean {
+  return (
+    knowledgeGraph.entities.length > 0 ||
+    knowledgeGraph.relations.length > 0 ||
+    knowledgeGraph.decisions.length > 0 ||
+    knowledgeGraph.risks.length > 0 ||
+    knowledgeGraph.open_questions.length > 0 ||
+    knowledgeGraph.summary.length > 0 ||
+    knowledgeGraph.notes.length > 0 ||
+    Boolean(knowledgeGraph.markdown.trim())
+  );
+}
+
+/**
+ * 同步写入 resources 快照和可选 DB 快照，作为下次 Orchestrator 加载上下文的来源。
+ */
+async function persistProductContextSnapshots({
+  workspaceId,
+  conversationId,
+  requestFormId,
+  knowledgeGraph,
+  advanceVersion,
+}: Required<Pick<FinalizeProductKnowledgeGraphInput, "workspaceId" | "knowledgeGraph">> &
+  Pick<
+    FinalizeProductKnowledgeGraphInput,
+    "conversationId" | "requestFormId" | "advanceVersion"
+  >): Promise<void> {
+  try {
+    await writeProductContextResourceSnapshot({
+      workspaceId,
+      conversationId,
+      requestFormId,
+      knowledgeGraph,
+    });
+  } catch (error) {
+    console.warn("[knowledge-graph] Failed to write resources snapshot:", error);
+  }
+
+  try {
+    await upsertProductContextSnapshot({
+      workspaceId,
+      conversationId,
+      requestFormId,
+      advanceVersion,
+      context: {
+        kind: "product_context_snapshot",
+        knowledgeGraph,
+      },
+    });
+  } catch (error) {
+    if (!isMissingOptionalSnapshotTableError(error)) {
+      throw error;
+    }
+  }
+}
+
+/**
+ * 清理可选 DB 快照；表未创建时安静降级。
+ */
+async function clearOptionalProductContextSnapshot(
+  workspaceId: string,
+): Promise<void> {
+  try {
+    await clearProductContextSnapshotByWorkspaceId(workspaceId);
+  } catch (error) {
+    if (!isMissingOptionalSnapshotTableError(error)) {
+      throw error;
+    }
+  }
+}
+
+/**
+ * 判断可选 product_context_snapshot 表是否尚未创建。
+ */
+function isMissingOptionalSnapshotTableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("product_context_snapshot") &&
+    (message.includes("42P01") ||
+      message.includes("does not exist") ||
+      message.includes("不存在"))
+  );
 }
 
 /**

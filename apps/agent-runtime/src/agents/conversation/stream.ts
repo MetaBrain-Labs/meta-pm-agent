@@ -391,6 +391,7 @@ async function* streamPlanningAfterUserInput(
     for await (const event of streamWorkflowGraph({
       workspaceId: options.workspaceId,
       productContext: options.productContext,
+      contextSource: options.contextSource,
       knowledgeGraph: options.knowledgeGraph,
       userInputBlock,
       workflowThreadId: options.workflowThreadId,

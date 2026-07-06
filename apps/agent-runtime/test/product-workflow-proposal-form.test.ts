@@ -14,7 +14,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type {
   ExecutorAgentResult,
-  ProductWorkflowAgentType,
   ProductWorkflowResult,
 } from "@repo/shared";
 import {
@@ -172,7 +171,7 @@ function createWorkflowResult({
  */
 function createExecutorResult(
   taskId: string,
-  agentType: Exclude<ProductWorkflowAgentType, "planner">,
+  agentType: ExecutorAgentResult["agent_type"],
   openQuestions: string[],
 ): ExecutorAgentResult {
   return {

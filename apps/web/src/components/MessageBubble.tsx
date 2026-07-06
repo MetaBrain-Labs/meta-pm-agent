@@ -106,6 +106,7 @@ export function MessageBubble({
   );
   const conversationToolCalls = getToolCallsForAgent(message, "conversation");
   const requestToolCalls = getToolCallsForAgent(message, "request");
+  const orchestratorToolCalls = getToolCallsForAgent(message, "orchestrator");
   const plannerToolCalls = getToolCallsForAgent(message, "planner");
   const critiqueToolCalls = getToolCallsForAgent(message, "critique");
   const productDirectorToolCalls = getToolCallsForAgent(
@@ -114,6 +115,9 @@ export function MessageBubble({
   );
   const plannerReasoningBlocks = message.reasoningBlocks?.filter(
     (block) => block.agentType === "planner",
+  );
+  const orchestratorReasoningBlocks = message.reasoningBlocks?.filter(
+    (block) => block.agentType === "orchestrator",
   );
   const critiqueReasoningBlocks = message.reasoningBlocks?.filter(
     (block) => block.agentType === "critique",
@@ -134,6 +138,7 @@ export function MessageBubble({
     (block) =>
       ![
         "request",
+        "orchestrator",
         "planner",
         "critique",
         "product_director",
@@ -231,6 +236,21 @@ export function MessageBubble({
               streamActive && message.requestAnalysis?.state !== "complete"
             }
             toolCalls={requestToolCalls}
+            active={streamActive && isAgentActive(message, block.agentType)}
+            tokenUsage={findTokenUsageForAgent(message, block.agentType)}
+          />
+        ))}
+
+      {showProcessContent &&
+        orchestratorReasoningBlocks?.map((block) => (
+          <AgentProcessGroup
+            key={block.agentType}
+            agentType={block.agentType}
+            thinkingContent={block.content}
+            thinkingActive={
+              streamActive && isAgentActive(message, block.agentType)
+            }
+            toolCalls={orchestratorToolCalls}
             active={streamActive && isAgentActive(message, block.agentType)}
             tokenUsage={findTokenUsageForAgent(message, block.agentType)}
           />
@@ -875,6 +895,7 @@ function getAgentColor(agentType: string): string {
     return "#1677ff";
   }
   if (agentType === "request") return "#722ed1";
+  if (agentType === "orchestrator") return "#0f766e";
   if (agentType === "planner" || agentType === "product_director") {
     return "#fa8c16";
   }
@@ -1184,6 +1205,7 @@ function getReasoningLabel(agentType: string): string {
   if (agentType === "conversation_confirmation") {
     return "思考过程（Conversation Agent）";
   }
+  if (agentType === "orchestrator") return "思考过程（Orchestrator Agent）";
   if (agentType === "planner") return "思考过程（Planner Agent）";
   if (agentType === "critique") return "思考过程（Critique Agent）";
   if (agentType === "product_director") {
@@ -1207,6 +1229,7 @@ const EXECUTOR_AGENT_TYPES = [
 
 const AGENT_LABELS: Record<string, string> = {
   request: "Request Agent",
+  orchestrator: "Orchestrator Agent",
   planner: "Planner Agent",
   critique: "Critique Agent",
   product_director: "Critique Agent",
