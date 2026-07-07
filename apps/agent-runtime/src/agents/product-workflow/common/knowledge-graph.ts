@@ -41,6 +41,8 @@ ${PRODUCT_KNOWLEDGE_GRAPH_METAMODEL_PROMPT.trim()}
  */
 export function createProductWorkflowKnowledgeGraph(): ProductKnowledgeGraph {
   return {
+    current_state: undefined,
+    description: "",
     entities: [],
     relations: [],
     decisions: [],

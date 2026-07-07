@@ -7,27 +7,12 @@
  *
  * Responsibilities:
  * - 定义 ORCHESTRATOR_AGENT_PROMPT：顶层编排路由 + 按模式单 SubAgent 委托指令
- * - 重新导出 PLANNER_SUBAGENT_PROMPT / PRE_ORCHESTRATOR_SUBAGENT_PROMPT 供 orchestrator-agent 使用
  * - 保持所有模型可见提示词为英文
  */
 
-import { PLANNER_SUBAGENT_PROMPT } from "./planner-subagent";
-import { PRE_ORCHESTRATOR_SUBAGENT_PROMPT } from "./pre-orchestrator-subagent";
-
-/**
- * Planner Subagent 的系统提示词，复用 planner-subagent 模块的完整 DAG 生成提示。
- */
-export const ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT = PLANNER_SUBAGENT_PROMPT;
-
-/**
- * Pre-Orchestrator Subagent 的系统提示词，复用 pre-orchestrator-subagent 模块。
- */
-export const ORCHESTRATOR_PRE_ORCHESTRATOR_SUBAGENT_PROMPT =
-  PRE_ORCHESTRATOR_SUBAGENT_PROMPT;
-
 /**
  * Orchestrator Agent 的系统提示词。
- * 同一个 Agent 承载两个 SubAgent，根据 payload.mode 决定工作流。
+ * 根据 payload.mode 决定使用 pre-check 还是 full 模式。
  */
 export const ORCHESTRATOR_AGENT_PROMPT = `You are the Orchestrator Agent for a product-management multi-agent workflow.
 
@@ -47,6 +32,9 @@ When payload.mode is "full":
 - You have exactly one subagent available via the task tool: planner, which generates executable TaskExecutionPlan DAGs for product workflow.
 - You run after Conversation Agent produced structured user_input and Request Agent extracted request_analysis.
 - Use request_analysis.business_model to decide routing.
+- The runtime may resume an interrupted workflow from checkpointed state. Treat supplied planner_context, project context, graph_stats.current_state, and form-answer user_input as the authoritative continuation context. Do not restart analysis when the input clearly represents a resume or form-answer continuation.
+- You are responsible for lifecycle orchestration. The runtime records current_state in product context: "initial" when a new project or project evolution has started after clarification, "building" when the first DAG is generated and Executor execution begins, "refining" when Critique requires follow-up user confirmation or corrections, and "stable" when Critique accepts the result.
+- Product context description is maintained cumulatively by Orchestrator, Executor, and Critique runtime code. Do not output full descriptions or graph arrays; keep reason_summary and planner_delegation_summary compact.
 
 Context rules (full mode only):
 - If request_analysis.business_model is empty, route to "conversation" with intent "casual_chat".

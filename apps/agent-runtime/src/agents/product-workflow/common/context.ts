@@ -36,6 +36,8 @@ export function createGraphContextSummary(
   knowledgeGraph: ProductKnowledgeGraph,
 ) {
   return {
+    current_state: knowledgeGraph.current_state,
+    description: truncateText(knowledgeGraph.description ?? "", 800),
     counts: {
       entities: knowledgeGraph.entities.length,
       relations: knowledgeGraph.relations.length,

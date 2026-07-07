@@ -244,6 +244,8 @@ function normalizeKnowledgeGraphForPersistence(
  */
 function hasRuntimeContextData(knowledgeGraph: ProductKnowledgeGraph): boolean {
   return (
+    Boolean(knowledgeGraph.current_state) ||
+    Boolean(knowledgeGraph.description?.trim()) ||
     knowledgeGraph.entities.length > 0 ||
     knowledgeGraph.relations.length > 0 ||
     knowledgeGraph.decisions.length > 0 ||
@@ -270,17 +272,21 @@ async function persistProductContextSnapshots({
     "conversationId" | "requestFormId" | "advanceVersion"
   >): Promise<void> {
   try {
+    const contextKnowledgeGraph =
+      createProductContextSnapshotKnowledgeGraph(knowledgeGraph);
     await writeProductContextResourceSnapshot({
       workspaceId,
       conversationId,
       requestFormId,
-      knowledgeGraph,
+      knowledgeGraph: contextKnowledgeGraph,
     });
   } catch (error) {
     console.warn("[knowledge-graph] Failed to write resources snapshot:", error);
   }
 
   try {
+    const contextKnowledgeGraph =
+      createProductContextSnapshotKnowledgeGraph(knowledgeGraph);
     await upsertProductContextSnapshot({
       workspaceId,
       conversationId,
@@ -288,7 +294,7 @@ async function persistProductContextSnapshots({
       advanceVersion,
       context: {
         kind: "product_context_snapshot",
-        knowledgeGraph,
+        knowledgeGraph: contextKnowledgeGraph,
       },
     });
   } catch (error) {
@@ -296,6 +302,20 @@ async function persistProductContextSnapshots({
       throw error;
     }
   }
+}
+
+/**
+ * 生成产品上下文快照图谱，剥离可从 product_knowledge_graph 读取的 nodes/relations。
+ */
+export function createProductContextSnapshotKnowledgeGraph(
+  knowledgeGraph: ProductKnowledgeGraph,
+): ProductKnowledgeGraph {
+  return {
+    ...knowledgeGraph,
+    entities: [],
+    relations: [],
+    markdown: "",
+  };
 }
 
 /**

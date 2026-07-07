@@ -228,6 +228,14 @@ export const ProductWorkflowProposalQuestionSchema = z.object({
  * markdown 字段可由结构化数据按需生成，不再作为主存储。
  */
 export const ProductKnowledgeGraphSchema = z.object({
+  current_state: z
+    .enum(["initial", "building", "refining", "stable"])
+    .optional()
+    .describe("Current product context lifecycle state managed by the Orchestrator runtime"),
+  description: z
+    .string()
+    .optional()
+    .describe("Cumulative product context activity summary written by Orchestrator, Executor, and Critique agents"),
   entities: z.array(KnowledgeGraphEntitySchema),
   relations: z.array(KnowledgeGraphRelationSchema),
   decisions: z.array(KnowledgeGraphDecisionInputSchema).default([]),
@@ -579,6 +587,21 @@ export const OrchestratorAgentResultSchema = z.object({
   ),
 });
 
+/**
+ * Orchestrator Agent 的 checkpoint 恢复判断结果。
+ */
+export const OrchestratorResumeCheckResultSchema = z.object({
+  decision: z.enum(["RESUME_CHECKPOINT", "CONTINUE_NORMAL_ROUTING"]).describe(
+    "Whether the latest user turn should resume the interrupted workflow checkpoint or continue normal routing.",
+  ),
+  confidence: z.enum(["low", "medium", "high"]).describe(
+    "Confidence level for the resume routing decision.",
+  ),
+  reason_summary: z.string().min(1).max(500).describe(
+    "Compact English explanation of the resume-check decision.",
+  ),
+});
+
 export type ProductWorkflowAgentType = z.infer<
   typeof ProductWorkflowAgentTypeSchema
 >;
@@ -588,6 +611,9 @@ export type OrchestratorContextSource = z.infer<
 >;
 export type OrchestratorAgentResult = z.infer<
   typeof OrchestratorAgentResultSchema
+>;
+export type OrchestratorResumeCheckResult = z.infer<
+  typeof OrchestratorResumeCheckResultSchema
 >;
 export type ProductKnowledgeGraph = z.infer<typeof ProductKnowledgeGraphSchema>;
 export type TaskExecutionNode = z.infer<typeof TaskExecutionNodeSchema>;

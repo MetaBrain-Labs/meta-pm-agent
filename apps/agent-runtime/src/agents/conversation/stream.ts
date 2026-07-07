@@ -2,6 +2,7 @@
  * Conversation Agent 流式主通道
  *
  * 实现从用户消息到完整响应的 SSE 流式管道，包括：
+ * - Orchestrator checkpoint 恢复判断（中断恢复优先于普通意图预检）
  * - Pre-Orchestrator 意图分类（闲聊 / 新项目 / 项目演化）
  * - Conversation Agent 深度对话阶段（闲聊模式 / 项目模式）
  * - 标记块检测与分段（question-form、user-input）
@@ -13,11 +14,15 @@
  * - streamAgentEvents()：驱动 Conversation Agent 并过滤仅用户授权的工具事件
  * - 在 user-input-complete 后驱动 streamWorkflowGraph
  * - 在工作流完成后格式化并输出最终结果 block
- * - Pre-Orchestrator 在 Conversation Agent 之前执行意图分类和路由
+ * - 对新消息先由 Orchestrator 判断 checkpoint 恢复，再进入 Pre-Orchestrator 意图分类
  */
 
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "langchain";
-import type { ChatMessage, ProductKnowledgeGraph, ProductWorkflowResult } from "@repo/shared";
+import type {
+  ChatMessage,
+  ProductKnowledgeGraph,
+  ProductWorkflowResult,
+} from "@repo/shared";
 import { calculateCost } from "../../config";
 import { createAgentRunSummaryRecorder } from "../common/agent-run-summary";
 import {
@@ -57,7 +62,11 @@ import {
   isPreOrchClarificationFormId,
   type PreOrchResult,
 } from "../product-workflow/orchestrator-agent/pre-orchestrator-subagent";
-import { streamOrchestratorPreCheck } from "../product-workflow/orchestrator-agent/agent";
+import type { ProductWorkflowStreamEvent } from "../product-workflow/types";
+import {
+  streamOrchestratorPreCheck,
+  streamOrchestratorResumeCheck,
+} from "../product-workflow/orchestrator-agent/agent";
 
 const PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID = "product-workflow-confirmation";
 const EXECUTOR_BLOCKER_FORM_PREFIX = "executor-blocker-";
@@ -225,7 +234,7 @@ function hasExistingProject(
 }
 
 /**
- * 处理完整会话流。Pre-Orchestrator 先进行意图分类，然后根据决策路由到闲聊、
+ * 处理完整会话流。先判断 checkpoint 恢复，再根据普通意图分类结果路由到闲聊、
  * 澄清问题表单或产品工作流。
  */
 export async function* streamConversation(
@@ -268,8 +277,66 @@ export async function* streamConversation(
     return;
   }
 
-  // 新消息：先通过 Pre-Orchestrator 进行意图分类
+  // 新消息先交给 Orchestrator 判断是否属于 checkpoint 恢复。
+  yield* streamWithResumeCheckOrPreOrchestrator(messages, options, lastMessage);
+}
+
+/**
+ * 先由 Orchestrator 判断是否恢复 checkpoint，再决定是否进入普通意图分类。
+ */
+async function* streamWithResumeCheckOrPreOrchestrator(
+  messages: ChatMessage[],
+  options: ConversationStreamOptions,
+  lastMessage: ChatMessage,
+): AsyncGenerator<ConversationStreamEvent> {
+  const resumeCheckStream = streamOrchestratorResumeCheck({
+    userMessage: lastMessage.content ?? "",
+    recentMessages: messages.slice(-8).map((message) => ({
+      role: message.role,
+      content: message.content ?? "",
+    })),
+    productContext: options.productContext,
+    knowledgeGraph: options.knowledgeGraph,
+    workspaceId: options.workspaceId,
+    workflowThreadId: options.workflowThreadId,
+    signal: options.signal,
+  });
+
+  let next = await resumeCheckStream.next();
+  while (!next.done) {
+    const event = toConversationEvent(next.value);
+    if (event) yield event;
+    next = await resumeCheckStream.next();
+  }
+
+  if (next.value.decision === "RESUME_CHECKPOINT") {
+    let emitted = false;
+    for await (const event of streamWorkflowCheckpointResume(options, messages)) {
+      emitted = true;
+      yield event;
+    }
+
+    if (emitted) return;
+  }
+
   yield* streamWithPreOrchestrator(messages, options, lastMessage);
+}
+
+/**
+ * 将 Orchestrator resume-check 的运行事件收窄为会话流可透传事件。
+ */
+function toConversationEvent(
+  event: ProductWorkflowStreamEvent,
+): ConversationStreamEvent | null {
+  if (
+    event.type === "agent-output" ||
+    event.type === "complete" ||
+    event.type === "knowledge-graph-update"
+  ) {
+    return null;
+  }
+
+  return event;
 }
 
 /**
