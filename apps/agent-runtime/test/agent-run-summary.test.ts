@@ -192,9 +192,9 @@ test("records subagent invocations when AGENT_SUMMARY_SUBAGENTS_ENABLED is on", 
 
         recorder.recordSubagentCall({
           toolCallId: "call-task-1",
-          subagentType: "planner-agent",
+          subagentType: "planner",
           description: "Generate DAG from product request",
-          input: { subagent_type: "planner-agent", description: "generate DAG" },
+          input: { subagent_type: "planner", description: "generate DAG" },
         });
         recorder.recordSubagentThinking({
           toolCallId: "call-task-1",
@@ -202,7 +202,7 @@ test("records subagent invocations when AGENT_SUMMARY_SUBAGENTS_ENABLED is on", 
         });
         recorder.recordSubagentResult({
           toolCallId: "call-task-1",
-          subagentType: "planner-agent",
+          subagentType: "planner",
           output: { tasks: [{ id: "t1", title: "research" }], plan_type: "initial" },
         });
 
@@ -215,10 +215,10 @@ test("records subagent invocations when AGENT_SUMMARY_SUBAGENTS_ENABLED is on", 
           "utf8",
         );
         assert.match(markdown, /## 5\. SubAgent 执行汇总/);
-        assert.match(markdown, /### 1\. SubAgent: `planner-agent`/);
+        assert.match(markdown, /### 1\. SubAgent: \`planner\`/);
         assert.match(markdown, /- 描述: Generate DAG from product request/);
         assert.match(markdown, /#### 输入/);
-        assert.match(markdown, /planner-agent/);
+        assert.match(markdown, /planner/);
         assert.match(markdown, /#### 思考过程/);
         assert.match(markdown, /Planner subagent reasoned about task ordering/);
         assert.match(markdown, /#### 返回给主 Agent 的结果/);

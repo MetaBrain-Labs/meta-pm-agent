@@ -13,12 +13,7 @@
  * - 本组件只负责展示和本地交互，不直接请求 API。
  */
 
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Collapse, Modal, Spin, Tag, Tooltip } from "antd";
 import {
   CaretRightOutlined,
@@ -157,9 +152,9 @@ export function MessageBubble({
     !message.plannerExecution;
   const hasVisibleProcessContent = Boolean(
     message.thinking ||
-      message.reasoningBlocks?.length ||
-      message.toolCalls?.length ||
-      message.subagentTraces?.length,
+    message.reasoningBlocks?.length ||
+    message.toolCalls?.length ||
+    message.subagentTraces?.length,
   );
   // 当前消息上正在运行的 Agent 列表，供左栏执行态卡片展示。
   const runningAgents = message.activeAgents?.length
@@ -212,7 +207,6 @@ export function MessageBubble({
 
   return (
     <div className="flex w-full flex-col self-stretch">
-
       {showProcessContent && (
         <AgentProcessGroup
           agentType="conversation"
@@ -258,7 +252,9 @@ export function MessageBubble({
             key="orchestrator"
             agentType="orchestrator"
             thinkingContent={orchestratorReasoningBlock?.content}
-            thinkingActive={streamActive && isAgentActive(message, "orchestrator")}
+            thinkingActive={
+              streamActive && isAgentActive(message, "orchestrator")
+            }
             toolCalls={orchestratorToolCalls}
             subagents={orchestratorSubagentTraces}
             active={streamActive && isAgentActive(message, "orchestrator")}
@@ -294,9 +290,7 @@ export function MessageBubble({
               key={agentType}
               agentType={agentType}
               thinkingContent={block?.content}
-              thinkingActive={
-                streamActive && isAgentActive(message, agentType)
-              }
+              thinkingActive={streamActive && isAgentActive(message, agentType)}
               toolCalls={toolCalls}
               active={streamActive && isAgentActive(message, agentType)}
               tokenUsage={findTokenUsageForAgent(message, agentType)}
@@ -394,7 +388,9 @@ export function MessageBubble({
         />
       )}
 
-      {showMainContent && plannerDagGenerating && <PlannerExecutionLoadingCard />}
+      {showMainContent && plannerDagGenerating && (
+        <PlannerExecutionLoadingCard />
+      )}
 
       {showMainContent && message.plannerExecution && (
         <PlannerExecutionCard
@@ -452,37 +448,37 @@ export function MessageBubble({
         />
       )}
 
-      {showMainContent && showLoadingPlaceholder &&
+      {showMainContent &&
+        showLoadingPlaceholder &&
         !(showProcessContent && hasVisibleProcessContent) && (
-        <>
-          {viewMode !== "main" && (
-            <div className="assistant-bubble is-loading">
-              <Spin
-                indicator={
-                  <LoadingOutlined style={{ color: "var(--primary)" }} />
-                }
-                size="small"
-              />{" "}
-              思考中
-            </div>
-          )}
-          {viewMode === "main" && runningAgents.length > 0 && (
-            <div className="assistant-bubble is-loading">
-              <Spin
-                indicator={
-                  <LoadingOutlined
-                    style={{ color: getAgentColor(runningAgents[0]!) }}
-                  />
-                }
-                size="small"
-              />{" "}
-              {runningAgents.map((a) => getAgentLabel(a)).join("、")}
-              {runningAgents.length > 1 ? " 并行执行中" : " 执行中"}
-            </div>
-          )}
-        </>
-      )}
-
+          <>
+            {viewMode !== "main" && (
+              <div className="assistant-bubble is-loading">
+                <Spin
+                  indicator={
+                    <LoadingOutlined style={{ color: "var(--primary)" }} />
+                  }
+                  size="small"
+                />{" "}
+                思考中
+              </div>
+            )}
+            {viewMode === "main" && runningAgents.length > 0 && (
+              <div className="assistant-bubble is-loading">
+                <Spin
+                  indicator={
+                    <LoadingOutlined
+                      style={{ color: getAgentColor(runningAgents[0]!) }}
+                    />
+                  }
+                  size="small"
+                />{" "}
+                {runningAgents.map((a) => getAgentLabel(a)).join("、")}
+                {runningAgents.length > 1 ? " 并行执行中" : " 执行中"}
+              </div>
+            )}
+          </>
+        )}
     </div>
   );
 }
@@ -518,9 +514,7 @@ function parseFormAnswersMessage(content: string): FormAnswersViewModel | null {
     ];
   });
 
-  return rows.length > 0
-    ? { formId: headerMatch[1].trim(), rows }
-    : null;
+  return rows.length > 0 ? { formId: headerMatch[1].trim(), rows } : null;
 }
 
 /**
@@ -594,9 +588,7 @@ function TokenUsageFloatingBox({
           }}
         />
         <span>Token 用量</span>
-        <span className="text-[var(--ink)]">
-          {formatCost(totalCost)} yuan
-        </span>
+        <span className="text-[var(--ink)]">{formatCost(totalCost)} yuan</span>
         <span className="text-[var(--ink-faint)]">
           {formatTokens(totalTokens)}
         </span>
@@ -610,7 +602,9 @@ function TokenUsageFloatingBox({
             <span className="text-right">费用</span>
             {rows.map((usage, index) => (
               <TokenUsageRow
-                key={usage.id ?? `${usage.agentType}-${usage.createdAt ?? index}`}
+                key={
+                  usage.id ?? `${usage.agentType}-${usage.createdAt ?? index}`
+                }
                 usage={usage}
               />
             ))}
@@ -901,7 +895,10 @@ function QFGenerating({ label }: { label: string }) {
  * 根据 Agent 类型返回对应的视觉主题色，用于过程栏卡片左边框和标题强调。
  */
 function getAgentColor(agentType: string): string {
-  if (agentType === "conversation" || agentType === "conversation_confirmation") {
+  if (
+    agentType === "conversation" ||
+    agentType === "conversation_confirmation"
+  ) {
     return "#1677ff";
   }
   if (agentType === "request") return "#722ed1";
@@ -965,9 +962,7 @@ function AgentProcessGroup({
         </span>
         {active && (
           <Spin
-            indicator={
-              <LoadingOutlined style={{ fontSize: 12, color }} />
-            }
+            indicator={<LoadingOutlined style={{ fontSize: 12, color }} />}
             size="small"
             className="ml-auto"
           />
@@ -1015,10 +1010,7 @@ function AgentProcessGroup({
 
       {/* 工具调用折叠区 */}
       {hasSubagents && (
-        <SubagentTraceSection
-          parentColor={color}
-          subagents={subagents ?? []}
-        />
+        <SubagentTraceSection parentColor={color} subagents={subagents ?? []} />
       )}
 
       {hasTools && <ToolCallsSection toolCalls={toolCalls} />}
@@ -1056,7 +1048,9 @@ function SubagentTraceSection({
             {subagent.status === "running" && (
               <Spin
                 indicator={
-                  <LoadingOutlined style={{ fontSize: 11, color: parentColor }} />
+                  <LoadingOutlined
+                    style={{ fontSize: 11, color: parentColor }}
+                  />
                 }
                 size="small"
                 className="ml-auto"
@@ -1134,7 +1128,9 @@ function NestedCollapseBlock({
         activeKey={open ? ["content"] : []}
         onChange={(keys) => {
           setUserToggled(true);
-          setOpen(Array.isArray(keys) ? keys.includes("content") : keys === "content");
+          setOpen(
+            Array.isArray(keys) ? keys.includes("content") : keys === "content",
+          );
         }}
         expandIcon={({ isActive: isOpen }) => (
           <CaretRightOutlined
@@ -1215,7 +1211,9 @@ function ThinkingSection({
 
   const handleChange = (keys: string | string[]) => {
     setUserToggled(true);
-    setOpen(Array.isArray(keys) ? keys.includes("thinking") : keys === "thinking");
+    setOpen(
+      Array.isArray(keys) ? keys.includes("thinking") : keys === "thinking",
+    );
   };
 
   return (
@@ -1409,7 +1407,7 @@ const AGENT_LABELS: Record<string, string> = {
 
 const SUBAGENT_LABELS: Record<string, string> = {
   "pre-orchestrator": "Pre-Orchestrator SubAgent",
-  "planner-agent": "Planner SubAgent",
+  planner: "Planner SubAgent",
 };
 
 /**

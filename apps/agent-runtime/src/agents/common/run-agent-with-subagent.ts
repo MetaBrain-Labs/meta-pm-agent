@@ -148,7 +148,6 @@ async function* handleSubagentTaskCalls<AgentType extends string>(
     summaryRecorder.recordSubagentCall({
       toolCallId: taskCall.toolCallId,
       subagentType: taskCall.subagentType,
-      description: taskCall.description,
       input: taskCall.input,
     });
     yield {
@@ -156,7 +155,7 @@ async function* handleSubagentTaskCalls<AgentType extends string>(
       agentType: options.agentType,
       subagentType: taskCall.subagentType,
       toolCallId: taskCall.toolCallId,
-      description: taskCall.description,
+      // description: taskCall.description,
     };
   }
 }

@@ -58,7 +58,6 @@ export interface AgentRunSummaryFinishOptions {
 interface SubagentInvocationRecord {
   toolCallId?: string;
   subagentType: string;
-  description: string;
   input: unknown;
   output: unknown;
   thinkingChunks: string[];
@@ -69,7 +68,6 @@ interface SubagentInvocationRecord {
 export interface SubagentTaskCallRecord {
   toolCallId?: string;
   subagentType: string;
-  description: string;
   input: Record<string, unknown>;
 }
 
@@ -113,7 +111,6 @@ export interface AgentRunSummaryRecorder {
   recordSubagentCall(event: {
     toolCallId?: string;
     subagentType: string;
-    description: string;
     input: unknown;
   }): void;
   recordSubagentThinking(event: {
@@ -269,7 +266,6 @@ export function createAgentRunSummaryRecorder(
       subagentInvocations.push({
         toolCallId: event.toolCallId,
         subagentType: event.subagentType,
-        description: event.description,
         input: event.input,
         output: undefined,
         thinkingChunks: [],
@@ -834,7 +830,6 @@ function renderSubagentSection(
         "",
         `- 调用时间: ${invocation.startedAt}`,
         `- 完成时间: ${invocation.completedAt ?? "未完成"}`,
-        `- 描述: ${invocation.description}`,
       ];
 
       if (invocation.input !== undefined) {
@@ -997,12 +992,10 @@ function createSubagentTaskCallRecord(
     readString(input, "subagentName") ??
     readString(input, "agent") ??
     "unknown";
-  const description = readString(input, "description") ?? "";
 
   return {
     toolCallId,
     subagentType,
-    description,
     input,
   };
 }
@@ -1027,7 +1020,7 @@ function normalizeToolCallArgs(args: unknown): Record<string, unknown> {
  */
 function isReadySubagentTaskInput(input: Record<string, unknown>): boolean {
   const record = createSubagentTaskCallRecord(undefined, input);
-  return record.subagentType !== "unknown" || record.description.length > 0;
+  return record.subagentType !== "unknown";
 }
 
 /**

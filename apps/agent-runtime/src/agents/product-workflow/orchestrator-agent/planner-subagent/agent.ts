@@ -36,7 +36,7 @@ export function createPlannerSubagent(): SubAgent {
     });
 
   return {
-    name: "planner-agent",
+    name: "planner",
     description:
       "Generates executable TaskExecutionPlan DAG from product request analysis and knowledge graph context. Returns JSON matching TaskExecutionPlanSchema.",
     systemPrompt: PLANNER_SUBAGENT_PROMPT,

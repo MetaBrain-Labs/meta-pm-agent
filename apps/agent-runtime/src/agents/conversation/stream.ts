@@ -588,6 +588,9 @@ async function* streamPlanningAfterUserInput(
         event.type === "reasoning" ||
         event.type === "request-analysis-start" ||
         event.type === "request-analysis-complete" ||
+        event.type === "subagent-start" ||
+        event.type === "subagent-thinking" ||
+        event.type === "subagent-result" ||
         event.type === "tool-call" ||
         event.type === "tool-result" ||
         event.type === "token-usage" ||

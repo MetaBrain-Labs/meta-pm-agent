@@ -1,15 +1,15 @@
 /**
  * Orchestrator Agent 实现
  *
- * 负责顶层意图路由和 DAG 生成委托。同一个 Orchestrator Agent 承载两个 SubAgent：
- * pre-orchestrator（意图分类）和 planner-agent（DAG 生成），通过 payload.mode 选择。
+ * 负责顶层意图路由和 DAG 生成委托。根据 payload.mode 选择性注册 SubAgent：
+ * pre-check 模式仅注册 pre-orchestrator（意图分类），full 模式仅注册 planner（DAG 生成）。
  *
  * Responsibilities:
  * - streamOrchestratorAgent()：统一入口，根据输入自动选择 pre-check / full 模式
  * - streamOrchestratorPreCheck()：便捷包装，对 streamOrchestratorAgent 的 pre-check 模式封装
  *
  * Notes:
- * - 始终携带 pre-orchestrator 和 planner-agent 两个 SubAgent。
+ * - pre-orchestrator 和 planner 不会同时注册，避免 Orchestrator 在单一轮次中调用多余 SubAgent。
  */
 
 import {
@@ -17,7 +17,7 @@ import {
   type OrchestratorAgentResult,
   type TaskExecutionPlan,
 } from "@repo/shared";
-import { JSON_AGENT_MODEL_OPTIONS } from "../../common/run-json-agent";
+
 import { runAgentWithSubagent } from "../../common/run-agent-with-subagent";
 import type {
   OrchestratorAgentInput,
@@ -48,12 +48,15 @@ export interface OrchestratorAgentOutput {
 
 /**
  * Orchestrator Agent 统一入口。
- * 同一个 Orchestrator Agent，两个 SubAgent（pre-orchestrator + planner-agent）。
- * 通过 payload.mode 区分 pre-check / full。
+ * 根据 payload.mode 选择性注册对应 SubAgent，pre-check 和 full 两种模式互斥。
  */
 export async function* streamOrchestratorAgent(
   input: OrchestratorAgentInput | PreOrchestratorInput,
-): AsyncGenerator<ProductWorkflowStreamEvent, OrchestratorAgentOutput | OrchestratorPreCheckOutput, void> {
+): AsyncGenerator<
+  ProductWorkflowStreamEvent,
+  OrchestratorAgentOutput | OrchestratorPreCheckOutput,
+  void
+> {
   const isPreCheck = isPreOrchestratorInput(input);
 
   let preOrchSubagentResult: unknown = undefined;
@@ -71,13 +74,15 @@ export async function* streamOrchestratorAgent(
     agentType: "orchestrator" as any,
     agentLabel: "Orchestrator Agent",
     name: "orchestrator-agent",
-    // pre-check 模式不使用 responseFormat: "json_object"，否则模型会跳过
-    // task 工具调用直接生成 JSON 输出，导致 SubAgent 从未被调用
-    modelOptions: isPreCheck
-      ? { enableThinking: false, temperature: 0, maxTokens: 4096 }
-      : { ...JSON_AGENT_MODEL_OPTIONS, maxTokens: 4096 },
+    // json_object 会导致模型跳过 task 工具调用直接生成 JSON 输出，
+    // 因此两种模式都不能使用 responseFormat: "json_object"。
+    modelOptions: { enableThinking: false, temperature: 0, maxTokens: 4096 },
     systemPrompt: ORCHESTRATOR_AGENT_PROMPT,
-    subagents: [createPreOrchestratorSubagent(), createPlannerSubagent()],
+    // pre-check 模式只需 Pre-Orchestrator SubAgent；full 模式只需 Planner SubAgent。
+    // 不混用可避免 LLM 在同一轮次中调用不该出现的 SubAgent。
+    subagents: isPreCheck
+      ? [createPreOrchestratorSubagent()]
+      : [createPlannerSubagent()],
     payload,
     schema: outputSchema as any,
     fallback: (reason: string) =>
@@ -100,7 +105,7 @@ export async function* streamOrchestratorAgent(
           status: "started",
           phase: "planning",
         };
-      } else if (!isPreCheck && event.subagentType === "planner-agent") {
+      } else if (!isPreCheck && event.subagentType === "planner") {
         yield {
           type: "agent-status",
           agentType: "planner",
@@ -115,16 +120,10 @@ export async function* streamOrchestratorAgent(
       }
       if (!isPreCheck) {
         if (
-          event.subagentType === "planner-agent" &&
+          event.subagentType === "planner" &&
           plannerSubagentResult === undefined
         ) {
           plannerSubagentResult = event.result;
-        }
-        if (
-          event.subagentType === "pre-orchestrator" &&
-          preOrchSubagentResult === undefined
-        ) {
-          preOrchSubagentResult = event.result;
         }
       }
       if (isPreCheck) {
@@ -133,8 +132,11 @@ export async function* streamOrchestratorAgent(
           agentType: "orchestrator",
           content: extractPreOrchReasoning(preOrchSubagentResult),
         };
-      } else if (event.subagentType === "planner-agent") {
-        capturedPlan = extractPlanFromSubagentResult(plannerSubagentResult, input);
+      } else if (event.subagentType === "planner") {
+        capturedPlan = extractPlanFromSubagentResult(
+          plannerSubagentResult,
+          input,
+        );
         yield {
           type: "reasoning",
           agentType: "planner",
@@ -176,7 +178,10 @@ export async function* streamOrchestratorAgent(
     );
     const decision: OrchestratorAgentResult = {
       intent: preOrchResult.intent,
-      route: preOrchResult.decision === "HANDOFF_CHAT" ? "conversation" : "product_workflow",
+      route:
+        preOrchResult.decision === "HANDOFF_CHAT"
+          ? "conversation"
+          : "product_workflow",
       context_source: "none",
       has_project_context: input.hasExistingProject,
       reason_summary: preOrchResult.reason,
@@ -234,7 +239,8 @@ function createOrchestratorPayload(input: OrchestratorAgentInput) {
     mode: "full",
     workspace_id: input.workspaceId ?? null,
     context_source: input.contextSource ?? "none",
-    product_context: input.productContext?.trim() || "No product context provided.",
+    product_context:
+      input.productContext?.trim() || "No product context provided.",
     request_analysis: input.requestAnalysis,
     user_input: input.userInput,
     graph_stats: {
@@ -277,7 +283,11 @@ export function createFallbackOrchestratorDecision(
     intent,
     route,
     ...(route === "product_workflow"
-      ? { plan_type: isWorkflowSupplementInput(input) ? "supplement" : "initial" }
+      ? {
+          plan_type: isWorkflowSupplementInput(input)
+            ? "supplement"
+            : "initial",
+        }
       : {}),
     context_source: input.contextSource ?? "none",
     has_project_context: hasProjectContext,
@@ -295,13 +305,14 @@ function normalizeOrchestratorDecision(
   const hasBusinessRequest = input.requestAnalysis.business_model.length > 0;
   const hasProjectContext = hasMeaningfulProjectContext(input);
   const route = hasBusinessRequest ? "product_workflow" : "conversation";
-  const intent = route === "conversation"
-    ? "casual_chat"
-    : decision.intent === "project_evolution" && hasProjectContext
-      ? "project_evolution"
-      : decision.intent === "new_project" || !hasProjectContext
-        ? "new_project"
-        : "project_evolution";
+  const intent =
+    route === "conversation"
+      ? "casual_chat"
+      : decision.intent === "project_evolution" && hasProjectContext
+        ? "project_evolution"
+        : decision.intent === "new_project" || !hasProjectContext
+          ? "new_project"
+          : "project_evolution";
 
   return {
     ...decision,
@@ -310,7 +321,11 @@ function normalizeOrchestratorDecision(
     context_source: input.contextSource ?? decision.context_source,
     has_project_context: hasProjectContext,
     ...(route === "product_workflow"
-      ? { plan_type: decision.plan_type ?? (isWorkflowSupplementInput(input) ? "supplement" : "initial") }
+      ? {
+          plan_type:
+            decision.plan_type ??
+            (isWorkflowSupplementInput(input) ? "supplement" : "initial"),
+        }
       : { plan_type: undefined }),
   };
 }
