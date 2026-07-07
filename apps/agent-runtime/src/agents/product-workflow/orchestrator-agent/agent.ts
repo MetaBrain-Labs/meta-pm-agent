@@ -17,10 +17,8 @@ import {
   type OrchestratorAgentResult,
   type TaskExecutionPlan,
 } from "@repo/shared";
-import {
-  JSON_AGENT_MODEL_OPTIONS,
-  runJsonAgent,
-} from "../../common/run-json-agent";
+import { JSON_AGENT_MODEL_OPTIONS } from "../../common/run-json-agent";
+import { runAgentWithSubagent } from "../../common/run-agent-with-subagent";
 import type {
   OrchestratorAgentInput,
   ProductWorkflowStreamEvent,
@@ -69,7 +67,7 @@ export async function* streamOrchestratorAgent(
     ? PreOrchResultSchema
     : OrchestratorAgentResultSchema;
 
-  const runner = runJsonAgent({
+  const runner = runAgentWithSubagent({
     agentType: "orchestrator" as any,
     agentLabel: "Orchestrator Agent",
     name: "orchestrator-agent",
@@ -80,24 +78,12 @@ export async function* streamOrchestratorAgent(
       : { ...JSON_AGENT_MODEL_OPTIONS, maxTokens: 4096 },
     systemPrompt: ORCHESTRATOR_AGENT_PROMPT,
     subagents: [createPreOrchestratorSubagent(), createPlannerSubagent()],
-    allowedBuiltinToolNames: ["task"],
-    // 不将 task 标记为 visible，避免 getToolResult 提前捕获 ToolMessage
-    // 导致 onTaskToolResult 回调无法触发。task 事件由本函数拦截后以
-    // agent-status / reasoning 形式重新发射，无需透传原始事件。
-    visibleBuiltinToolNames: [],
     payload,
     schema: outputSchema as any,
     fallback: (reason: string) =>
       isPreCheck
         ? createFallbackPreOrchResult(input)
         : createFallbackOrchestratorDecision(input, reason),
-    onTaskToolResult: (content) => {
-      if (isPreCheck) {
-        preOrchSubagentResult = content;
-      } else {
-        plannerSubagentResult = content;
-      }
-    },
     signal: input.signal,
   });
 
@@ -107,7 +93,14 @@ export async function* streamOrchestratorAgent(
 
     if (event.type === "subagent-start") {
       yield event;
-      if (!isPreCheck && event.subagentType === "planner-agent") {
+      if (isPreCheck && event.subagentType === "pre-orchestrator") {
+        yield {
+          type: "agent-status",
+          agentType: "orchestrator",
+          status: "started",
+          phase: "planning",
+        };
+      } else if (!isPreCheck && event.subagentType === "planner-agent") {
         yield {
           type: "agent-status",
           agentType: "planner",
@@ -141,62 +134,6 @@ export async function* streamOrchestratorAgent(
           content: extractPreOrchReasoning(preOrchSubagentResult),
         };
       } else if (event.subagentType === "planner-agent") {
-        capturedPlan = extractPlanFromSubagentResult(plannerSubagentResult, input);
-        yield {
-          type: "reasoning",
-          agentType: "planner",
-          content: formatPlannerReasoningSummary(capturedPlan),
-        };
-        yield {
-          type: "agent-status",
-          agentType: "planner",
-          status: "completed",
-          phase: "planning",
-        };
-        yield {
-          type: "agent-output",
-          agentType: "planner",
-          content: formatTaskExecutionPlanBlock(capturedPlan),
-        };
-      }
-    } else if (event.type === "tool-call" && event.toolName === "task") {
-      // 对 SubAgent task 调用只发出一次 agent-status
-      if (isPreCheck) {
-        yield {
-          type: "agent-status",
-          agentType: "orchestrator",
-          status: "started",
-          phase: "planning",
-        };
-      } else {
-        yield {
-          type: "agent-status",
-          agentType: "planner",
-          status: "started",
-          phase: "planning",
-        };
-      }
-    } else if (event.type === "tool-result" && event.toolName === "task") {
-      // 从 tool-result 事件中捕获 SubAgent 输出，作为 onTaskToolResult 的兜底
-      if (isPreCheck && preOrchSubagentResult === undefined) {
-        preOrchSubagentResult = (event as { toolResult: unknown }).toolResult;
-      }
-      // 同样对 full 模式做兜底捕获，优先给 planner，但也可能是 pre-orch
-      if (!isPreCheck) {
-        if (plannerSubagentResult === undefined) {
-          plannerSubagentResult = (event as { toolResult: unknown }).toolResult;
-        }
-        if (preOrchSubagentResult === undefined) {
-          preOrchSubagentResult = (event as { toolResult: unknown }).toolResult;
-        }
-      }
-      if (isPreCheck) {
-        yield {
-          type: "reasoning",
-          agentType: "orchestrator",
-          content: extractPreOrchReasoning(preOrchSubagentResult),
-        };
-      } else {
         capturedPlan = extractPlanFromSubagentResult(plannerSubagentResult, input);
         yield {
           type: "reasoning",

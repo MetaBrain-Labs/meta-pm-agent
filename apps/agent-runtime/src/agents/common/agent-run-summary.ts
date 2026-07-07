@@ -26,7 +26,12 @@ import {
   type BaseMessage,
 } from "langchain";
 
-type AgentRunSummarySection = "thinking" | "tools" | "context" | "output" | "subagents";
+type AgentRunSummarySection =
+  | "thinking"
+  | "tools"
+  | "context"
+  | "output"
+  | "subagents";
 
 interface AgentRunSummaryConfig {
   enabledSections: Set<AgentRunSummarySection>;
@@ -72,6 +77,17 @@ export interface SubagentTaskResultRecord {
   toolCallId?: string;
   subagentType: string;
   output: unknown;
+}
+
+export interface SubagentTaskCallExtractor {
+  extract(message: BaseMessage): SubagentTaskCallRecord[];
+}
+
+interface PendingRawSubagentTaskCall {
+  argumentsText: string;
+  input?: Record<string, unknown>;
+  name?: string;
+  toolCallId?: string;
 }
 
 export interface AgentRunSummaryRecorder {
@@ -323,51 +339,88 @@ export function createAgentRunSummaryMiddleware(
 }
 
 /**
- * 判断当前进程是否开启了任一 Agent 汇总开关。
- */
-/**
  * 从 AIMessage 中提取 DeepAgents task 工具调用，兼容 LangChain 规范化字段和 provider 原始字段。
  */
 export function extractSubagentTaskCalls(
   message: BaseMessage,
 ): SubagentTaskCallRecord[] {
-  if (!AIMessage.isInstance(message)) return [];
+  return createSubagentTaskCallExtractor().extract(message);
+}
 
-  const calls = new Map<string, SubagentTaskCallRecord>();
+/**
+ * 创建带状态的 task 工具调用提取器，用于拼接 provider 原始流式参数。
+ */
+export function createSubagentTaskCallExtractor(): SubagentTaskCallExtractor {
+  const pendingRawCalls = new Map<string, PendingRawSubagentTaskCall>();
+  const emittedKeys = new Set<string>();
 
-  for (const toolCall of message.tool_calls ?? []) {
-    if (toolCall.name !== "task") continue;
-    const input = normalizeToolCallArgs(toolCall.args);
-    const call = createSubagentTaskCallRecord(toolCall.id, input);
-    calls.set(toolCall.id ?? `normalized-${calls.size}`, call);
-  }
+  return {
+    extract(message) {
+      if (!AIMessage.isInstance(message)) return [];
 
-  for (const rawToolCall of extractRawToolCalls(message)) {
-    const rawRecord = isPlainRecord(rawToolCall) ? rawToolCall : {};
-    const functionRecord = isPlainRecord(rawRecord.function)
-      ? rawRecord.function
-      : {};
-    const name =
-      readString(functionRecord, "name") ??
-      readString(rawRecord, "name") ??
-      "";
-    if (name !== "task") continue;
+      const calls: SubagentTaskCallRecord[] = [];
+      const pushCall = (key: string, call: SubagentTaskCallRecord) => {
+        const emitKey = call.toolCallId ? `id:${call.toolCallId}` : key;
+        if (emittedKeys.has(emitKey)) return;
+        emittedKeys.add(emitKey);
+        calls.push(call);
+      };
 
-    const toolCallId = readString(rawRecord, "id");
-    const input = normalizeToolCallArgs(
-      functionRecord.arguments ?? rawRecord.args ?? rawRecord.arguments,
-    );
-    const key = toolCallId ?? `raw-${calls.size}`;
-    const existing = calls.get(key);
-    const mergedInput =
-      existing && Object.keys(existing.input).length > 0
-        ? { ...input, ...existing.input }
-        : input;
+      for (const toolCall of message.tool_calls ?? []) {
+        if (toolCall.name !== "task") continue;
+        const input = normalizeToolCallArgs(toolCall.args);
+        if (!isReadySubagentTaskInput(input)) continue;
 
-    calls.set(key, createSubagentTaskCallRecord(toolCallId, mergedInput));
-  }
+        pushCall(
+          toolCall.id
+            ? `normalized:${toolCall.id}`
+            : `normalized:${calls.length}`,
+          createSubagentTaskCallRecord(toolCall.id, input),
+        );
+      }
 
-  return Array.from(calls.values());
+      for (const rawToolCall of extractRawToolCalls(message)) {
+        const rawRecord = isPlainRecord(rawToolCall) ? rawToolCall : {};
+        const functionRecord = isPlainRecord(rawRecord.function)
+          ? rawRecord.function
+          : {};
+        const key = getRawToolCallStateKey(rawRecord, pendingRawCalls.size);
+        const pending = pendingRawCalls.get(key) ?? {
+          argumentsText: "",
+        };
+        pendingRawCalls.set(key, pending);
+
+        const toolCallId = readString(rawRecord, "id");
+        if (toolCallId) pending.toolCallId = toolCallId;
+
+        const nameChunk =
+          readString(functionRecord, "name") ?? readString(rawRecord, "name");
+        if (nameChunk) {
+          pending.name = mergeStreamedString(pending.name, nameChunk);
+        }
+        if (pending.name !== "task") continue;
+
+        const argumentsChunk =
+          functionRecord.arguments ?? rawRecord.args ?? rawRecord.arguments;
+        if (typeof argumentsChunk === "string") {
+          pending.argumentsText += argumentsChunk;
+        } else if (isPlainRecord(argumentsChunk)) {
+          pending.input = {
+            ...(pending.input ?? {}),
+            ...argumentsChunk,
+          };
+        }
+
+        const input =
+          pending.input ?? normalizeToolCallArgs(pending.argumentsText);
+        if (!isReadySubagentTaskInput(input)) continue;
+
+        pushCall(key, createSubagentTaskCallRecord(pending.toolCallId, input));
+      }
+
+      return calls;
+    },
+  };
 }
 
 /**
@@ -392,6 +445,9 @@ export function extractSubagentTaskResult(
   };
 }
 
+/**
+ * 判断当前进程是否开启了任一 Agent 汇总开关。
+ */
 function getAgentRunSummaryConfig(): AgentRunSummaryConfig {
   const enabledSections = new Set<AgentRunSummarySection>();
 
@@ -558,7 +614,9 @@ function renderAgentRunMarkdown({
   }
   if (config.enabledSections.has("context")) {
     lines.push("", "## 3. Agent 接收上下文汇总", "");
-    lines.push(renderContextSection(context, actualSystemPrompt, runtimeContexts));
+    lines.push(
+      renderContextSection(context, actualSystemPrompt, runtimeContexts),
+    );
   }
   if (config.enabledSections.has("output")) {
     lines.push("", "## 4. Agent 输出汇总", "");
@@ -596,7 +654,10 @@ function renderContextSection(
     typeof record.systemPrompt === "string" ? record.systemPrompt : null;
   const systemPrompt = actualSystemPrompt || providedSystemPrompt;
   const hasPayload = Object.prototype.hasOwnProperty.call(record, "payload");
-  const runtimeContext = collectRuntimeContexts(record.runtimeContext, runtimeContexts);
+  const runtimeContext = collectRuntimeContexts(
+    record.runtimeContext,
+    runtimeContexts,
+  );
   const metadata = omitContextSpecialFields(record);
   const sections: string[] = [];
 
@@ -777,12 +838,7 @@ function renderSubagentSection(
       ];
 
       if (invocation.input !== undefined) {
-        parts.push(
-          "",
-          "#### 输入",
-          "",
-          formatUnknownBlock(invocation.input),
-        );
+        parts.push("", "#### 输入", "", formatUnknownBlock(invocation.input));
       }
 
       if (invocation.thinkingChunks.length > 0) {
@@ -967,6 +1023,43 @@ function normalizeToolCallArgs(args: unknown): Record<string, unknown> {
 }
 
 /**
+ * 判断 task 工具参数是否已经足够识别 SubAgent 调用，避免空增量提前产出 unknown 记录。
+ */
+function isReadySubagentTaskInput(input: Record<string, unknown>): boolean {
+  const record = createSubagentTaskCallRecord(undefined, input);
+  return record.subagentType !== "unknown" || record.description.length > 0;
+}
+
+/**
+ * 为 provider 原始 tool_call 增量生成稳定 key，优先使用 index 拼接分片。
+ */
+function getRawToolCallStateKey(
+  rawRecord: Record<string, unknown>,
+  fallbackIndex: number,
+): string {
+  const index = readNumber(rawRecord, "index");
+  if (index !== undefined) return `index:${index}`;
+
+  const id = readString(rawRecord, "id");
+  if (id) return `id:${id}`;
+
+  return `raw:${fallbackIndex}`;
+}
+
+/**
+ * 合并可能被 provider 按 token 拆开的字符串字段。
+ */
+function mergeStreamedString(
+  current: string | undefined,
+  chunk: string,
+): string {
+  if (!current) return chunk;
+  if (current === chunk || current.endsWith(chunk)) return current;
+
+  return `${current}${chunk}`;
+}
+
+/**
  * 读取 provider 原始 tool_calls，补足 LangChain 规范化字段丢失的 task 参数。
  */
 function extractRawToolCalls(message: BaseMessage): unknown[] {
@@ -1029,6 +1122,17 @@ function readString(
 ): string | undefined {
   const item = value[key];
   return typeof item === "string" && item.length > 0 ? item : undefined;
+}
+
+/**
+ * 读取数字字段，兼容 provider 原始 tool_call 的 index。
+ */
+function readNumber(
+  value: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const item = value[key];
+  return typeof item === "number" && Number.isFinite(item) ? item : undefined;
 }
 
 function getErrorMessage(error: unknown): string {

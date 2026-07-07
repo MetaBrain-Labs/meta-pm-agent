@@ -16,7 +16,11 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createAgentRunSummaryRecorder } from "../src/agents/common/agent-run-summary";
+import { AIMessage } from "langchain";
+import {
+  createAgentRunSummaryRecorder,
+  createSubagentTaskCallExtractor,
+} from "../src/agents/common/agent-run-summary";
 
 const SUMMARY_ENV_KEYS = [
   "AGENT_SUMMARY_THINKING_ENABLED",
@@ -280,6 +284,48 @@ test("keeps repeated non-cyclic references in summary output", async () => {
 });
 
 /**
+ * 验证 provider 原始流式 tool_calls 可以拼回完整 task 参数。
+ */
+test("extracts streamed raw task tool call arguments from additional kwargs", () => {
+  const extractor = createSubagentTaskCallExtractor();
+  const argumentChunks = [
+    '{"description": ',
+    '"{\\"user_message\\":\\"设计一个文档协同工具\\",',
+    '\\"has_existing_project\\":false,',
+    '\\"project_context\\":\\"Workspace: 本地工作区 25\\",',
+    '\\"knowledge_graph_summary\\":null}", ',
+    '"subagent_type": ',
+    '"pre-orchestrator"',
+    "}",
+  ];
+  const messages = [
+    createRawToolCallMessage([
+      {
+        index: 0,
+        id: "call_00_streamed_task",
+        type: "function",
+        function: { name: "task", arguments: "" },
+      },
+    ]),
+    ...argumentChunks.map((chunk) =>
+      createRawToolCallMessage([
+        {
+          index: 0,
+          function: { arguments: chunk },
+        },
+      ]),
+    ),
+  ];
+
+  const calls = messages.flatMap((message) => extractor.extract(message));
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].toolCallId, "call_00_streamed_task");
+  assert.equal(calls[0].subagentType, "pre-orchestrator");
+  assert.match(calls[0].description, /设计一个文档协同工具/);
+});
+
+/**
  * 临时覆盖汇总环境变量，避免测试之间互相污染。
  */
 async function withSummaryEnv(
@@ -304,4 +350,16 @@ async function withSummaryEnv(
       }
     }
   }
+}
+
+/**
+ * 构造带 provider 原始 tool_calls 的 AIMessage，用于覆盖 LangChain 未规范化参数的流式场景。
+ */
+function createRawToolCallMessage(toolCalls: unknown[]): AIMessage {
+  return new AIMessage({
+    content: "",
+    additional_kwargs: {
+      tool_calls: toolCalls,
+    },
+  });
 }
