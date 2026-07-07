@@ -13,12 +13,7 @@
  * - 本组件只负责展示和本地交互，不直接请求 API。
  */
 
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Collapse, Modal, Spin, Tag, Tooltip } from "antd";
 import {
   CaretRightOutlined,
@@ -31,6 +26,7 @@ import type {
   HumanInTheLoopInterrupt,
   HumanInTheLoopResume,
   Message,
+  SubagentTrace,
   TokenUsageInfo,
 } from "../types";
 import { ProseBlock } from "./ProseBlock";
@@ -106,6 +102,7 @@ export function MessageBubble({
   );
   const conversationToolCalls = getToolCallsForAgent(message, "conversation");
   const requestToolCalls = getToolCallsForAgent(message, "request");
+  const orchestratorToolCalls = getToolCallsForAgent(message, "orchestrator");
   const plannerToolCalls = getToolCallsForAgent(message, "planner");
   const critiqueToolCalls = getToolCallsForAgent(message, "critique");
   const productDirectorToolCalls = getToolCallsForAgent(
@@ -114,6 +111,14 @@ export function MessageBubble({
   );
   const plannerReasoningBlocks = message.reasoningBlocks?.filter(
     (block) => block.agentType === "planner",
+  );
+  const orchestratorReasoningBlocks = message.reasoningBlocks?.filter(
+    (block) => block.agentType === "orchestrator",
+  );
+  const orchestratorReasoningBlock = orchestratorReasoningBlocks?.[0];
+  const orchestratorSubagentTraces = getSubagentTracesForParent(
+    message,
+    "orchestrator",
   );
   const critiqueReasoningBlocks = message.reasoningBlocks?.filter(
     (block) => block.agentType === "critique",
@@ -134,6 +139,7 @@ export function MessageBubble({
     (block) =>
       ![
         "request",
+        "orchestrator",
         "planner",
         "critique",
         "product_director",
@@ -145,7 +151,10 @@ export function MessageBubble({
     isAgentActive(message, "planner") &&
     !message.plannerExecution;
   const hasVisibleProcessContent = Boolean(
-    message.thinking || message.reasoningBlocks?.length || message.toolCalls?.length,
+    message.thinking ||
+    message.reasoningBlocks?.length ||
+    message.toolCalls?.length ||
+    message.subagentTraces?.length,
   );
   // 当前消息上正在运行的 Agent 列表，供左栏执行态卡片展示。
   const runningAgents = message.activeAgents?.length
@@ -198,7 +207,6 @@ export function MessageBubble({
 
   return (
     <div className="flex w-full flex-col self-stretch">
-
       {showProcessContent && (
         <AgentProcessGroup
           agentType="conversation"
@@ -237,6 +245,24 @@ export function MessageBubble({
         ))}
 
       {showProcessContent &&
+        (orchestratorReasoningBlock ||
+          orchestratorToolCalls.length > 0 ||
+          orchestratorSubagentTraces.length > 0) && (
+          <AgentProcessGroup
+            key="orchestrator"
+            agentType="orchestrator"
+            thinkingContent={orchestratorReasoningBlock?.content}
+            thinkingActive={
+              streamActive && isAgentActive(message, "orchestrator")
+            }
+            toolCalls={orchestratorToolCalls}
+            subagents={orchestratorSubagentTraces}
+            active={streamActive && isAgentActive(message, "orchestrator")}
+            tokenUsage={findTokenUsageForAgent(message, "orchestrator")}
+          />
+        )}
+
+      {showProcessContent &&
         plannerReasoningBlocks?.map((block) => (
           <AgentProcessGroup
             key={block.agentType}
@@ -264,9 +290,7 @@ export function MessageBubble({
               key={agentType}
               agentType={agentType}
               thinkingContent={block?.content}
-              thinkingActive={
-                streamActive && isAgentActive(message, agentType)
-              }
+              thinkingActive={streamActive && isAgentActive(message, agentType)}
               toolCalls={toolCalls}
               active={streamActive && isAgentActive(message, agentType)}
               tokenUsage={findTokenUsageForAgent(message, agentType)}
@@ -364,7 +388,9 @@ export function MessageBubble({
         />
       )}
 
-      {showMainContent && plannerDagGenerating && <PlannerExecutionLoadingCard />}
+      {showMainContent && plannerDagGenerating && (
+        <PlannerExecutionLoadingCard />
+      )}
 
       {showMainContent && message.plannerExecution && (
         <PlannerExecutionCard
@@ -422,37 +448,37 @@ export function MessageBubble({
         />
       )}
 
-      {showMainContent && showLoadingPlaceholder &&
+      {showMainContent &&
+        showLoadingPlaceholder &&
         !(showProcessContent && hasVisibleProcessContent) && (
-        <>
-          {viewMode !== "main" && (
-            <div className="assistant-bubble is-loading">
-              <Spin
-                indicator={
-                  <LoadingOutlined style={{ color: "var(--primary)" }} />
-                }
-                size="small"
-              />{" "}
-              思考中
-            </div>
-          )}
-          {viewMode === "main" && runningAgents.length > 0 && (
-            <div className="assistant-bubble is-loading">
-              <Spin
-                indicator={
-                  <LoadingOutlined
-                    style={{ color: getAgentColor(runningAgents[0]!) }}
-                  />
-                }
-                size="small"
-              />{" "}
-              {runningAgents.map((a) => getAgentLabel(a)).join("、")}
-              {runningAgents.length > 1 ? " 并行执行中" : " 执行中"}
-            </div>
-          )}
-        </>
-      )}
-
+          <>
+            {viewMode !== "main" && (
+              <div className="assistant-bubble is-loading">
+                <Spin
+                  indicator={
+                    <LoadingOutlined style={{ color: "var(--primary)" }} />
+                  }
+                  size="small"
+                />{" "}
+                思考中
+              </div>
+            )}
+            {viewMode === "main" && runningAgents.length > 0 && (
+              <div className="assistant-bubble is-loading">
+                <Spin
+                  indicator={
+                    <LoadingOutlined
+                      style={{ color: getAgentColor(runningAgents[0]!) }}
+                    />
+                  }
+                  size="small"
+                />{" "}
+                {runningAgents.map((a) => getAgentLabel(a)).join("、")}
+                {runningAgents.length > 1 ? " 并行执行中" : " 执行中"}
+              </div>
+            )}
+          </>
+        )}
     </div>
   );
 }
@@ -488,9 +514,7 @@ function parseFormAnswersMessage(content: string): FormAnswersViewModel | null {
     ];
   });
 
-  return rows.length > 0
-    ? { formId: headerMatch[1].trim(), rows }
-    : null;
+  return rows.length > 0 ? { formId: headerMatch[1].trim(), rows } : null;
 }
 
 /**
@@ -564,9 +588,7 @@ function TokenUsageFloatingBox({
           }}
         />
         <span>Token 用量</span>
-        <span className="text-[var(--ink)]">
-          {formatCost(totalCost)} yuan
-        </span>
+        <span className="text-[var(--ink)]">{formatCost(totalCost)} yuan</span>
         <span className="text-[var(--ink-faint)]">
           {formatTokens(totalTokens)}
         </span>
@@ -580,7 +602,9 @@ function TokenUsageFloatingBox({
             <span className="text-right">费用</span>
             {rows.map((usage, index) => (
               <TokenUsageRow
-                key={usage.id ?? `${usage.agentType}-${usage.createdAt ?? index}`}
+                key={
+                  usage.id ?? `${usage.agentType}-${usage.createdAt ?? index}`
+                }
                 usage={usage}
               />
             ))}
@@ -871,10 +895,14 @@ function QFGenerating({ label }: { label: string }) {
  * 根据 Agent 类型返回对应的视觉主题色，用于过程栏卡片左边框和标题强调。
  */
 function getAgentColor(agentType: string): string {
-  if (agentType === "conversation" || agentType === "conversation_confirmation") {
+  if (
+    agentType === "conversation" ||
+    agentType === "conversation_confirmation"
+  ) {
     return "#1677ff";
   }
   if (agentType === "request") return "#722ed1";
+  if (agentType === "orchestrator") return "#0f766e";
   if (agentType === "planner" || agentType === "product_director") {
     return "#fa8c16";
   }
@@ -894,6 +922,7 @@ function AgentProcessGroup({
   thinkingContent,
   thinkingActive,
   toolCalls,
+  subagents,
   active,
   hideWhenEmpty,
   tokenUsage,
@@ -902,6 +931,7 @@ function AgentProcessGroup({
   thinkingContent?: string;
   thinkingActive: boolean;
   toolCalls: NonNullable<Message["toolCalls"]>;
+  subagents?: SubagentTrace[];
   active: boolean;
   hideWhenEmpty?: boolean;
   tokenUsage?: TokenUsageInfo;
@@ -910,9 +940,10 @@ function AgentProcessGroup({
   const label = getAgentLabel(agentType);
   const hasThinking = Boolean(thinkingContent);
   const hasTools = toolCalls.length > 0;
+  const hasSubagents = Boolean(subagents?.length);
 
-  if (hideWhenEmpty && !hasThinking && !hasTools) return null;
-  if (!hasThinking && !hasTools) return null;
+  if (hideWhenEmpty && !hasThinking && !hasTools && !hasSubagents) return null;
+  if (!hasThinking && !hasTools && !hasSubagents) return null;
 
   return (
     <div
@@ -931,9 +962,7 @@ function AgentProcessGroup({
         </span>
         {active && (
           <Spin
-            indicator={
-              <LoadingOutlined style={{ fontSize: 12, color }} />
-            }
+            indicator={<LoadingOutlined style={{ fontSize: 12, color }} />}
             size="small"
             className="ml-auto"
           />
@@ -980,7 +1009,157 @@ function AgentProcessGroup({
       )}
 
       {/* 工具调用折叠区 */}
+      {hasSubagents && (
+        <SubagentTraceSection parentColor={color} subagents={subagents ?? []} />
+      )}
+
       {hasTools && <ToolCallsSection toolCalls={toolCalls} />}
+    </div>
+  );
+}
+
+/**
+ * 渲染 Orchestrator 内部调用的 SubAgent 轨迹列表。
+ */
+function SubagentTraceSection({
+  parentColor,
+  subagents,
+}: {
+  parentColor: string;
+  subagents: SubagentTrace[];
+}) {
+  if (subagents.length === 0) return null;
+
+  return (
+    <div className="space-y-2 border-t border-[var(--line-soft)] bg-[var(--surface-muted)] px-3 py-3">
+      {subagents.map((subagent, index) => (
+        <div
+          key={subagent.id ?? `${subagent.subagentType}-${index}`}
+          className="overflow-hidden rounded-md border border-[var(--line-soft)] bg-white"
+        >
+          <div className="flex items-center gap-2 border-b border-[var(--line-soft)] px-3 py-2">
+            <span
+              className="h-1.5 w-1.5 shrink-0 rounded-full"
+              style={{ background: parentColor }}
+            />
+            <span className="text-[13px] font-extrabold text-[var(--ink)]">
+              {getSubagentLabel(subagent.subagentType)}
+            </span>
+            {subagent.status === "running" && (
+              <Spin
+                indicator={
+                  <LoadingOutlined
+                    style={{ fontSize: 11, color: parentColor }}
+                  />
+                }
+                size="small"
+                className="ml-auto"
+              />
+            )}
+          </div>
+
+          {subagent.description && (
+            <div className="border-b border-[var(--line-soft)] px-3 py-2 text-[12px] leading-relaxed text-[var(--ink-faint)]">
+              {subagent.description}
+            </div>
+          )}
+
+          {subagent.thinking && (
+            <NestedCollapseBlock
+              color={parentColor}
+              label="SubAgent 思考过程"
+              content={subagent.thinking}
+              active={subagent.status === "running"}
+            />
+          )}
+
+          {Object.prototype.hasOwnProperty.call(subagent, "result") && (
+            <NestedCollapseBlock
+              color={parentColor}
+              label="返回给 Orchestrator 的结果"
+              content={formatSubagentResult(subagent.result)}
+              active={false}
+            />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * 内嵌卡片中的折叠文本块，避免 SubAgent 长输出撑开右侧过程栏。
+ */
+function NestedCollapseBlock({
+  color,
+  label,
+  content,
+  active,
+}: {
+  color: string;
+  label: string;
+  content: string;
+  active: boolean;
+}) {
+  const [open, setOpen] = useState(active);
+  const [userToggled, setUserToggled] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (active) {
+      setOpen(true);
+      setUserToggled(false);
+      return;
+    }
+    if (!userToggled) {
+      setOpen(false);
+    }
+  }, [active, userToggled]);
+
+  useEffect(() => {
+    if (contentRef.current && open) {
+      contentRef.current.scrollTop = contentRef.current.scrollHeight;
+    }
+  }, [content, open]);
+
+  return (
+    <div className="[&>.ant-collapse]:mb-0 [&>.ant-collapse]:rounded-none [&>.ant-collapse]:border-0">
+      <Collapse
+        activeKey={open ? ["content"] : []}
+        onChange={(keys) => {
+          setUserToggled(true);
+          setOpen(
+            Array.isArray(keys) ? keys.includes("content") : keys === "content",
+          );
+        }}
+        expandIcon={({ isActive: isOpen }) => (
+          <CaretRightOutlined
+            rotate={isOpen ? 90 : 0}
+            style={{ fontSize: 11, color }}
+          />
+        )}
+        items={[
+          {
+            key: "content",
+            label: (
+              <div className="flex items-center gap-2">
+                <span className="text-[13px] font-bold text-[var(--ink)]">
+                  {label}
+                </span>
+                {active && <span className="loading-dots" />}
+              </div>
+            ),
+            children: (
+              <div
+                ref={contentRef}
+                className="max-h-[180px] overflow-y-auto whitespace-pre-wrap themed-scrollbar text-[12px] leading-relaxed text-[var(--ink-mute)]"
+              >
+                {content}
+              </div>
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }
@@ -1032,7 +1211,9 @@ function ThinkingSection({
 
   const handleChange = (keys: string | string[]) => {
     setUserToggled(true);
-    setOpen(Array.isArray(keys) ? keys.includes("thinking") : keys === "thinking");
+    setOpen(
+      Array.isArray(keys) ? keys.includes("thinking") : keys === "thinking",
+    );
   };
 
   return (
@@ -1184,6 +1365,7 @@ function getReasoningLabel(agentType: string): string {
   if (agentType === "conversation_confirmation") {
     return "思考过程（Conversation Agent）";
   }
+  if (agentType === "orchestrator") return "思考过程（Orchestrator Agent）";
   if (agentType === "planner") return "思考过程（Planner Agent）";
   if (agentType === "critique") return "思考过程（Critique Agent）";
   if (agentType === "product_director") {
@@ -1207,6 +1389,7 @@ const EXECUTOR_AGENT_TYPES = [
 
 const AGENT_LABELS: Record<string, string> = {
   request: "Request Agent",
+  orchestrator: "Orchestrator Agent",
   planner: "Planner Agent",
   critique: "Critique Agent",
   product_director: "Critique Agent",
@@ -1220,6 +1403,11 @@ const AGENT_LABELS: Record<string, string> = {
   "executor-ai-shipping": "AI Shipping Executor",
   "executor-toolkit": "Toolkit Executor",
   "executor-interface-craft": "Interface Craft Executor",
+};
+
+const SUBAGENT_LABELS: Record<string, string> = {
+  "pre-orchestrator": "Pre-Orchestrator SubAgent",
+  planner: "Planner SubAgent",
 };
 
 /**
@@ -1250,6 +1438,49 @@ function getToolCallsForAgent(
     const owner = toolCall.agentType ?? message.type;
     return owner === agentType;
   });
+}
+
+/**
+ * 读取指定父 Agent 下的 SubAgent 轨迹；历史数据缺父级时按 Orchestrator 兜底。
+ */
+function getSubagentTracesForParent(
+  message: Message,
+  parentAgentType: string,
+): SubagentTrace[] {
+  return (message.subagentTraces ?? []).filter((trace) => {
+    const parent = trace.parentAgentType ?? "orchestrator";
+    return parent === parentAgentType;
+  });
+}
+
+/**
+ * 将 SubAgent 返回结果格式化为可折叠文本。
+ */
+function formatSubagentResult(result: unknown): string {
+  if (typeof result === "string") {
+    const trimmed = result.trim();
+    const parsed = tryParseJson(trimmed);
+    return parsed === null ? trimmed : JSON.stringify(parsed, null, 2);
+  }
+
+  try {
+    return JSON.stringify(result, null, 2);
+  } catch {
+    return String(result);
+  }
+}
+
+/**
+ * 尝试解析 JSON 字符串，失败时返回 null。
+ */
+function tryParseJson(value: string): unknown | null {
+  if (!value) return null;
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -1325,4 +1556,11 @@ function formatDuration(durationMs: number): string {
 function getAgentLabel(agentType: string): string {
   if (agentType === "total") return "总计";
   return AGENT_LABELS[agentType] ?? `${agentType} Agent`;
+}
+
+/**
+ * 将 SubAgent 类型转换为展示名称。
+ */
+function getSubagentLabel(subagentType: string): string {
+  return SUBAGENT_LABELS[subagentType] ?? `${subagentType} SubAgent`;
 }

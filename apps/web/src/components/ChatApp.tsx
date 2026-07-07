@@ -1003,6 +1003,7 @@ const AGENT_LABELS: Record<string, string> = {
   conversation: "Conversation Agent",
   conversation_confirmation: "Conversation Agent",
   request: "Request Agent",
+  orchestrator: "Orchestrator Agent",
   planner: "Planner Agent",
   critique: "Critique Agent",
   product_director: "Critique Agent",
@@ -1078,6 +1079,7 @@ const LANGGRAPH_NODE_IDS = [
   "START",
   "parse_user_input",
   "request_agent",
+  "orchestrator_agent",
   "planner_agent",
   "executor_router",
   "executor-product-strategy",
@@ -1100,9 +1102,10 @@ const LANGGRAPH_EXECUTOR_NODE_IDS = LANGGRAPH_NODE_IDS.filter((nodeId) =>
 
 const AGENT_TO_LANGGRAPH_NODE: Record<string, string> = {
   request: "request_agent",
+  orchestrator: "orchestrator_agent",
   planner: "planner_agent",
-  critique: "planner_agent",
-  product_director: "planner_agent",
+  critique: "orchestrator_agent",
+  product_director: "orchestrator_agent",
   "executor-product-strategy": "executor-product-strategy",
   "executor-market-research": "executor-market-research",
   "executor-gtm": "executor-gtm",
@@ -1139,6 +1142,18 @@ function buildLangGraphRuntimeState(
 
   if (workflowMessage.requestAnalysis?.state === "complete") {
     nodeStatuses.request_agent = "completed";
+  }
+
+  if (
+    workflowMessage.reasoningBlocks?.some(
+      (block) => block.agentType === "orchestrator",
+    ) ||
+    workflowMessage.plannerExecution ||
+    workflowMessage.executorResults?.length ||
+    workflowMessage.plannerReview ||
+    workflowMessage.workflowCompletion
+  ) {
+    nodeStatuses.orchestrator_agent = "completed";
   }
 
   const plannedExecutors = new Set(

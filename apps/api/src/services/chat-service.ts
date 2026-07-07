@@ -23,6 +23,7 @@ import {
   listConversationMessages,
   persistAssistantMessage,
   persistConversationMessages,
+  type SubagentTraceDto,
 } from "../repositories/message-repository";
 import {
   finishAnsweredDecisionItems,
@@ -70,6 +71,7 @@ export interface AgentConversationOutput {
     agentType?: string;
     status?: "running" | "complete";
   }>;
+  subagentTraces?: SubagentTraceDto[];
   /** 该 Agent 本次模型调用的 token 用量 */
   tokenUsage?: {
     inputTokens: number;
@@ -229,7 +231,8 @@ export async function persistConversationResult({
   for (const output of agentOutputs) {
     if (
       output.content.trim().length === 0 &&
-      !output.reasoningContent?.trim()
+      !output.reasoningContent?.trim() &&
+      !output.subagentTraces?.length
     ) {
       continue;
     }
@@ -244,6 +247,7 @@ export async function persistConversationResult({
       userInput: output.type === "conversation" ? items : null,
       reasoningContent: output.reasoningContent,
       toolCalls: sanitizeToolCallsForPersistence(output.toolCalls),
+      subagentTraces: output.subagentTraces,
       type: output.type,
     });
 

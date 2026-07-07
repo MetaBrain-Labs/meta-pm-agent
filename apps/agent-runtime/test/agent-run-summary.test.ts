@@ -16,13 +16,18 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { createAgentRunSummaryRecorder } from "../src/agents/common/agent-run-summary";
+import { AIMessage } from "langchain";
+import {
+  createAgentRunSummaryRecorder,
+  createSubagentTaskCallExtractor,
+} from "../src/agents/common/agent-run-summary";
 
 const SUMMARY_ENV_KEYS = [
   "AGENT_SUMMARY_THINKING_ENABLED",
   "AGENT_SUMMARY_TOOL_CALLS_ENABLED",
   "AGENT_SUMMARY_CONTEXT_ENABLED",
   "AGENT_SUMMARY_OUTPUT_ENABLED",
+  "AGENT_SUMMARY_SUBAGENTS_ENABLED",
   "AGENT_SUMMARY_OUTPUT_DIR",
 ] as const;
 
@@ -36,6 +41,7 @@ test("does not create summary files when all switches are disabled", async () =>
         AGENT_SUMMARY_CONTEXT_ENABLED: "false",
         AGENT_SUMMARY_OUTPUT_DIR: outputDir,
         AGENT_SUMMARY_OUTPUT_ENABLED: "false",
+        AGENT_SUMMARY_SUBAGENTS_ENABLED: "false",
         AGENT_SUMMARY_THINKING_ENABLED: "false",
         AGENT_SUMMARY_TOOL_CALLS_ENABLED: "false",
       },
@@ -163,6 +169,69 @@ test("writes enabled summary sections as markdown after finish", async () => {
 /**
  * 验证重复引用不会被误写成循环引用，便于排查 Critique Agent fallback 输出。
  */
+test("records subagent invocations when AGENT_SUMMARY_SUBAGENTS_ENABLED is on", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "agent-summary-sub-"));
+  const outputDir = path.join(tempRoot, "summaries");
+
+  try {
+    await withSummaryEnv(
+      {
+        AGENT_SUMMARY_CONTEXT_ENABLED: "false",
+        AGENT_SUMMARY_OUTPUT_DIR: outputDir,
+        AGENT_SUMMARY_OUTPUT_ENABLED: "false",
+        AGENT_SUMMARY_THINKING_ENABLED: "false",
+        AGENT_SUMMARY_TOOL_CALLS_ENABLED: "false",
+        AGENT_SUMMARY_SUBAGENTS_ENABLED: "true",
+      },
+      async () => {
+        const recorder = createAgentRunSummaryRecorder({
+          agentLabel: "Test Agent",
+          agentName: "test-agent",
+          agentType: "test",
+        });
+
+        recorder.recordSubagentCall({
+          toolCallId: "call-task-1",
+          subagentType: "planner",
+          input: { subagent_type: "planner", description: "generate DAG" },
+        });
+        recorder.recordSubagentThinking({
+          toolCallId: "call-task-1",
+          content: "Planner subagent reasoned about task ordering.",
+        });
+        recorder.recordSubagentResult({
+          toolCallId: "call-task-1",
+          subagentType: "planner",
+          output: { tasks: [{ id: "t1", title: "research" }], plan_type: "initial" },
+        });
+
+        await recorder.finish({ status: "completed" });
+
+        const dateDirs = await readdir(outputDir);
+        const files = await readdir(path.join(outputDir, dateDirs[0]));
+        const markdown = await readFile(
+          path.join(outputDir, dateDirs[0], files[0]),
+          "utf8",
+        );
+        assert.match(markdown, /## 5\. SubAgent 执行汇总/);
+        assert.match(markdown, /### 1\. SubAgent: \`planner\`/);
+        assert.match(markdown, /#### 输入/);
+        assert.match(markdown, /planner/);
+        assert.match(markdown, /#### 思考过程/);
+        assert.match(markdown, /Planner subagent reasoned about task ordering/);
+        assert.match(markdown, /#### 返回给主 Agent 的结果/);
+        assert.match(markdown, /t1/);
+        assert.ok(
+          !markdown.includes("## 1. Agent 思考过程汇总"),
+          "non-enabled thinking section should not appear",
+        );
+      },
+    );
+  } finally {
+    await rm(tempRoot, { force: true, recursive: true });
+  }
+});
+
 test("keeps repeated non-cyclic references in summary output", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "agent-summary-ref-"));
   const outputDir = path.join(tempRoot, "summaries");
@@ -212,6 +281,89 @@ test("keeps repeated non-cyclic references in summary output", async () => {
   }
 });
 
+test("does not nest model supplied fenced output inside summary text block", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "agent-summary-fence-"));
+  const outputDir = path.join(tempRoot, "summaries");
+
+  try {
+    await withSummaryEnv(
+      {
+        AGENT_SUMMARY_CONTEXT_ENABLED: "false",
+        AGENT_SUMMARY_OUTPUT_DIR: outputDir,
+        AGENT_SUMMARY_OUTPUT_ENABLED: "true",
+        AGENT_SUMMARY_THINKING_ENABLED: "false",
+        AGENT_SUMMARY_TOOL_CALLS_ENABLED: "false",
+        AGENT_SUMMARY_SUBAGENTS_ENABLED: "false",
+      },
+      async () => {
+        const recorder = createAgentRunSummaryRecorder({
+          agentLabel: "Test Agent",
+          agentName: "test-agent",
+          agentType: "test",
+        });
+
+        recorder.recordOutput('```json\n{"ok":true}\n```');
+        await recorder.finish({ status: "completed" });
+
+        const dateDirs = await readdir(outputDir);
+        const files = await readdir(path.join(outputDir, dateDirs[0]));
+        const markdown = await readFile(
+          path.join(outputDir, dateDirs[0], files[0]),
+          "utf8",
+        );
+
+        assert.match(markdown, /### Streamed Output/);
+        assert.match(markdown, /\{"ok":true\}/);
+        assert.doesNotMatch(markdown, /````text\r?\n```json/);
+      },
+    );
+  } finally {
+    await rm(tempRoot, { force: true, recursive: true });
+  }
+});
+
+/**
+ * 验证 provider 原始流式 tool_calls 可以拼回完整 task 参数。
+ */
+test("extracts streamed raw task tool call arguments from additional kwargs", () => {
+  const extractor = createSubagentTaskCallExtractor();
+  const argumentChunks = [
+    '{"description": ',
+    '"{\\"user_message\\":\\"设计一个文档协同工具\\",',
+    '\\"has_existing_project\\":false,',
+    '\\"project_context\\":\\"Workspace: 本地工作区 25\\",',
+    '\\"knowledge_graph_summary\\":null}", ',
+    '"subagent_type": ',
+    '"pre-orchestrator"',
+    "}",
+  ];
+  const messages = [
+    createRawToolCallMessage([
+      {
+        index: 0,
+        id: "call_00_streamed_task",
+        type: "function",
+        function: { name: "task", arguments: "" },
+      },
+    ]),
+    ...argumentChunks.map((chunk) =>
+      createRawToolCallMessage([
+        {
+          index: 0,
+          function: { arguments: chunk },
+        },
+      ]),
+    ),
+  ];
+
+  const calls = messages.flatMap((message) => extractor.extract(message));
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].toolCallId, "call_00_streamed_task");
+  assert.equal(calls[0].subagentType, "pre-orchestrator");
+  assert.match(calls[0].description, /设计一个文档协同工具/);
+});
+
 /**
  * 临时覆盖汇总环境变量，避免测试之间互相污染。
  */
@@ -237,4 +389,16 @@ async function withSummaryEnv(
       }
     }
   }
+}
+
+/**
+ * 构造带 provider 原始 tool_calls 的 AIMessage，用于覆盖 LangChain 未规范化参数的流式场景。
+ */
+function createRawToolCallMessage(toolCalls: unknown[]): AIMessage {
+  return new AIMessage({
+    content: "",
+    additional_kwargs: {
+      tool_calls: toolCalls,
+    },
+  });
 }

@@ -61,6 +61,7 @@ export interface MessageDto {
   timestamp: string;
   reasoningContent?: string;
   toolCalls?: ToolCallDto[];
+  subagentTraces?: SubagentTraceDto[];
   userInput?: UserInputRecord[] | null;
   requestAnalysis?: RequestAnalysis | null;
   taskExecutionPlan?: TaskExecutionPlan | null;
@@ -80,6 +81,19 @@ export interface ToolCallDto {
   result?: unknown;
   agentType?: string;
   status?: "running" | "complete";
+}
+
+/**
+ * Orchestrator 内嵌 SubAgent 展示所需的最小执行轨迹。
+ */
+export interface SubagentTraceDto {
+  id?: string;
+  parentAgentType?: string;
+  subagentType: string;
+  description?: string;
+  thinking?: string;
+  result?: unknown;
+  status: "running" | "complete";
 }
 
 /**
@@ -218,6 +232,9 @@ function mapMessageRow(row: MessageRow): MessageDto {
   const metaToolCalls = Array.isArray(meta?.toolCalls)
     ? normalizeToolCalls(meta.toolCalls)
     : [];
+  const subagentTraces = Array.isArray(meta?.subagentTraces)
+    ? normalizeSubagentTraces(meta.subagentTraces)
+    : [];
   const timestamp =
     typeof meta?.timestamp === "string"
       ? meta.timestamp
@@ -235,6 +252,7 @@ function mapMessageRow(row: MessageRow): MessageDto {
     ...(metaToolCalls.length > 0 || extractedSearch.toolCalls.length > 0
       ? { toolCalls: [...metaToolCalls, ...extractedSearch.toolCalls] }
       : {}),
+    ...(subagentTraces.length > 0 ? { subagentTraces } : {}),
     userInput: Array.isArray(userInput?.user_input)
       ? (userInput.user_input as UserInputRecord[])
       : inlineUserInput,
@@ -360,6 +378,7 @@ export async function persistAssistantMessage({
   userInput,
   reasoningContent,
   toolCalls,
+  subagentTraces,
   type,
 }: {
   conversationId: string;
@@ -367,6 +386,7 @@ export async function persistAssistantMessage({
   userInput: UserInputRecord[] | null;
   reasoningContent?: string;
   toolCalls?: ToolCallDto[];
+  subagentTraces?: SubagentTraceDto[];
   type: string;
 }): Promise<string> {
   const messageId = randomUUID();
@@ -376,6 +396,9 @@ export async function persistAssistantMessage({
       source: `${type}-agent`,
       ...(reasoningContent ? { reasoningContent } : {}),
       ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
+      ...(subagentTraces && subagentTraces.length > 0
+        ? { subagentTraces }
+        : {}),
     });
 
     // 按 Agent 类型写入 message.type，前端据此恢复对应阶段的展示顺序。
@@ -454,6 +477,40 @@ function normalizeToolCalls(value: unknown[]): ToolCallDto[] {
         ...(record.status === "complete" || record.status === "running"
           ? { status: record.status }
           : {}),
+      },
+    ];
+  });
+}
+
+/**
+ * 只恢复 Orchestrator 过程栏需要的 SubAgent 轨迹字段。
+ */
+function normalizeSubagentTraces(value: unknown[]): SubagentTraceDto[] {
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return [];
+    }
+
+    const record = item as Record<string, unknown>;
+    if (typeof record.subagentType !== "string") return [];
+
+    return [
+      {
+        ...(typeof record.id === "string" ? { id: record.id } : {}),
+        ...(typeof record.parentAgentType === "string"
+          ? { parentAgentType: record.parentAgentType }
+          : {}),
+        subagentType: record.subagentType,
+        ...(typeof record.description === "string"
+          ? { description: record.description }
+          : {}),
+        ...(typeof record.thinking === "string"
+          ? { thinking: record.thinking }
+          : {}),
+        ...(Object.prototype.hasOwnProperty.call(record, "result")
+          ? { result: record.result }
+          : {}),
+        status: record.status === "running" ? "running" : "complete",
       },
     ];
   });

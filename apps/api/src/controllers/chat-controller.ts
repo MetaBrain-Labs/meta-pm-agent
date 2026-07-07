@@ -305,6 +305,7 @@ export async function chatStreamHandler(c: Context) {
       ) {
         await clearWorkspaceKnowledgeGraph(runtimeContext.workspaceId);
         runtimeContext.knowledgeGraph = null;
+        runtimeContext.contextSource = "none";
       }
 
       // 启动 agent-runtime 流式对话
@@ -319,6 +320,7 @@ export async function chatStreamHandler(c: Context) {
             requestFormId: parsed.data.requestFormId,
           }),
           productContext: runtimeContext.productContext,
+          contextSource: runtimeContext.contextSource,
           knowledgeGraph: runtimeContext.knowledgeGraph,
           signal: runtimeController.signal,
         },
@@ -382,6 +384,37 @@ export async function chatStreamHandler(c: Context) {
             getEventAgentType(event),
           );
         }
+        if (event.type === "subagent-start") {
+          const output = getAgentOutput(agentOutputs, getEventAgentType(event));
+          const traces = ensureSubagentTraces(output);
+          upsertSubagentTrace(traces, {
+            id: event.toolCallId,
+            parentAgentType: getEventAgentType(event),
+            subagentType: event.subagentType,
+            description: event.description,
+            status: "running",
+          });
+        }
+        if (event.type === "subagent-thinking") {
+          const output = getAgentOutput(agentOutputs, getEventAgentType(event));
+          const traces = ensureSubagentTraces(output);
+          appendSubagentThinking(traces, {
+            id: event.toolCallId,
+            parentAgentType: getEventAgentType(event),
+            subagentType: event.subagentType,
+            content: event.content,
+          });
+        }
+        if (event.type === "subagent-result") {
+          const output = getAgentOutput(agentOutputs, getEventAgentType(event));
+          const traces = ensureSubagentTraces(output);
+          attachSubagentResult(traces, {
+            id: event.toolCallId,
+            parentAgentType: getEventAgentType(event),
+            subagentType: event.subagentType,
+            result: event.result,
+          });
+        }
         if (event.type === "agent-status" && event.status === "completed") {
           markPendingToolCallsComplete(
             getAgentOutput(agentOutputs, getEventAgentType(event)).toolCalls,
@@ -433,7 +466,8 @@ export async function chatStreamHandler(c: Context) {
         }
         if (
           "content" in event &&
-          event.type !== "reasoning"
+          event.type !== "reasoning" &&
+          event.type !== "subagent-thinking"
         ) {
           responseLength += event.content.length;
           getAgentOutput(agentOutputs, getEventAgentType(event)).content +=
@@ -554,7 +588,9 @@ function getRequestFormStatusForEvent(event: {
   if (event.type === "request-analysis-start") return "request_agent_running";
   if (event.type === "request-analysis-complete") return "request_analyzed";
   if (
-    (event.type === "reasoning" || event.type === "agent-status") &&
+    (event.type === "reasoning" ||
+      event.type === "agent-status" ||
+      event.type.startsWith("subagent-")) &&
     event.agentType &&
     event.agentType !== "conversation" &&
     event.agentType !== "request"
@@ -597,6 +633,7 @@ function getAgentOutput(
     content: "",
     reasoningContent: "",
     toolCalls: [],
+    subagentTraces: [],
     tokenUsage: {
       inputTokens: 0,
       cacheHitInputTokens: 0,
@@ -721,6 +758,124 @@ function markPendingToolCallsComplete(
       };
     }
   }
+}
+
+/**
+ * 确保 Agent 输出持有可写的 SubAgent 轨迹数组。
+ */
+function ensureSubagentTraces(
+  output: AgentConversationOutput,
+): NonNullable<AgentConversationOutput["subagentTraces"]> {
+  if (!output.subagentTraces) {
+    output.subagentTraces = [];
+  }
+
+  return output.subagentTraces;
+}
+
+/**
+ * 记录 SubAgent 调用开始，供 Orchestrator 过程卡片内嵌展示。
+ */
+function upsertSubagentTrace(
+  traces: NonNullable<AgentConversationOutput["subagentTraces"]>,
+  nextTrace: NonNullable<AgentConversationOutput["subagentTraces"]>[number],
+): void {
+  const existingIndex = findSubagentTraceIndex(
+    traces,
+    nextTrace.id,
+    nextTrace.subagentType,
+  );
+
+  if (existingIndex === -1) {
+    traces.push(nextTrace);
+    return;
+  }
+
+  traces[existingIndex] = {
+    ...traces[existingIndex],
+    ...nextTrace,
+  };
+}
+
+/**
+ * 追加 SubAgent reasoning，保留流式输出的原始顺序。
+ */
+function appendSubagentThinking(
+  traces: NonNullable<AgentConversationOutput["subagentTraces"]>,
+  event: {
+    id?: string;
+    parentAgentType?: string;
+    subagentType: string;
+    content: string;
+  },
+): void {
+  const index = findSubagentTraceIndex(traces, event.id, event.subagentType);
+  if (index === -1) {
+    traces.push({
+      id: event.id,
+      parentAgentType: event.parentAgentType,
+      subagentType: event.subagentType,
+      thinking: event.content,
+      status: "running",
+    });
+    return;
+  }
+
+  traces[index] = {
+    ...traces[index],
+    thinking: `${traces[index]?.thinking ?? ""}${event.content}`,
+  };
+}
+
+/**
+ * 写入 SubAgent 返回给主 Agent 的结果，并关闭该内嵌卡片的运行态。
+ */
+function attachSubagentResult(
+  traces: NonNullable<AgentConversationOutput["subagentTraces"]>,
+  event: {
+    id?: string;
+    parentAgentType?: string;
+    subagentType: string;
+    result: unknown;
+  },
+): void {
+  const index = findSubagentTraceIndex(traces, event.id, event.subagentType);
+  if (index === -1) {
+    traces.push({
+      id: event.id,
+      parentAgentType: event.parentAgentType,
+      subagentType: event.subagentType,
+      result: event.result,
+      status: "complete",
+    });
+    return;
+  }
+
+  traces[index] = {
+    ...traces[index],
+    result: event.result,
+    status: "complete",
+  };
+}
+
+/**
+ * 优先按 task 调用 ID 匹配；无 ID 时匹配最近一个同类型 SubAgent。
+ */
+function findSubagentTraceIndex(
+  traces: NonNullable<AgentConversationOutput["subagentTraces"]>,
+  id: string | undefined,
+  subagentType: string,
+): number {
+  if (id) {
+    const byId = traces.findIndex((trace) => trace.id === id);
+    if (byId !== -1) return byId;
+  }
+
+  for (let index = traces.length - 1; index >= 0; index -= 1) {
+    if (traces[index]?.subagentType === subagentType) return index;
+  }
+
+  return -1;
 }
 
 /**

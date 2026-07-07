@@ -21,10 +21,14 @@ import type {
   KnowledgeGraphOpenQuestionInput,
   KnowledgeGraphRelation,
   KnowledgeGraphRiskInput,
+  OrchestratorContextSource,
   ProductKnowledgeGraph,
 } from "@repo/shared";
+import { ProductKnowledgeGraphSchema } from "@repo/shared";
 import { getConversationWorkspace } from "../repositories/chat-repository";
+import { getProductContextSnapshotByWorkspaceId } from "../repositories/product-context-snapshot-repository";
 import { getProductKnowledgeGraphByWorkspaceId } from "../repositories/product-knowledge-graph-repository";
+import { readProductContextResourceSnapshot } from "./product-context-resource-service";
 
 const MAX_CONTEXT_CHARS = 24_000;
 
@@ -49,6 +53,7 @@ const OVERVIEW_FILES = [
 export interface ProductRuntimeContext {
   workspaceId?: string;
   productContext: string;
+  contextSource: OrchestratorContextSource;
   knowledgeGraph?: ProductKnowledgeGraph | null;
 }
 
@@ -59,20 +64,22 @@ export async function loadProductRuntimeContextForConversation(
   conversationId: string | undefined,
 ): Promise<ProductRuntimeContext> {
   if (!conversationId) {
-    return { productContext: "" };
+    return { productContext: "", contextSource: "none" };
   }
 
   const workspace = await getConversationWorkspace(conversationId);
   if (!workspace) {
-    return { productContext: "" };
+    return { productContext: "", contextSource: "none" };
   }
+  const graphContext = await loadProductKnowledgeGraphForWorkspace(
+    workspace.workspaceId,
+  );
 
   return {
     workspaceId: workspace.workspaceId,
     productContext: await loadProductContextForWorkspace(workspace),
-    knowledgeGraph: await loadProductKnowledgeGraphForWorkspace(
-      workspace.workspaceId,
-    ),
+    contextSource: graphContext.contextSource,
+    knowledgeGraph: graphContext.knowledgeGraph,
   };
 }
 
@@ -81,22 +88,74 @@ export async function loadProductRuntimeContextForConversation(
  */
 async function loadProductKnowledgeGraphForWorkspace(
   workspaceId: string,
-): Promise<ProductKnowledgeGraph | null> {
+): Promise<{
+  knowledgeGraph: ProductKnowledgeGraph | null;
+  contextSource: OrchestratorContextSource;
+}> {
+  const resourceSnapshot = await readProductContextResourceSnapshot(workspaceId);
+  if (resourceSnapshot) {
+    return {
+      knowledgeGraph: resourceSnapshot.knowledgeGraph,
+      contextSource: "resources",
+    };
+  }
+
+  const dbSnapshot = await loadProductContextSnapshotFromDatabase(workspaceId);
+  if (dbSnapshot) {
+    return {
+      knowledgeGraph: dbSnapshot,
+      contextSource: "database",
+    };
+  }
+
   const row = await getProductKnowledgeGraphByWorkspaceId(workspaceId);
-  if (!row) return null;
+  if (!row) return { knowledgeGraph: null, contextSource: "none" };
 
   const nodes = asArray<KnowledgeGraphEntity>(row.nodes);
 
   return {
-    entities: nodes,
-    relations: asArray<KnowledgeGraphRelation>(row.relations),
-    decisions: restoreDecisionInputs(nodes),
-    risks: restoreRiskInputs(nodes),
-    open_questions: restoreOpenQuestionInputs(nodes),
-    summary: [],
-    markdown: "",
-    notes: [],
+    knowledgeGraph: {
+      entities: nodes,
+      relations: asArray<KnowledgeGraphRelation>(row.relations),
+      decisions: restoreDecisionInputs(nodes),
+      risks: restoreRiskInputs(nodes),
+      open_questions: restoreOpenQuestionInputs(nodes),
+      summary: [],
+      markdown: "",
+      notes: [],
+    },
+    contextSource: "product_knowledge_graph",
   };
+}
+
+/**
+ * 从可选快照表恢复完整运行时上下文；表未创建时安静降级。
+ */
+async function loadProductContextSnapshotFromDatabase(
+  workspaceId: string,
+): Promise<ProductKnowledgeGraph | null> {
+  try {
+    const row = await getProductContextSnapshotByWorkspaceId(workspaceId);
+    if (!row) return null;
+    return parseProductContextSnapshotGraph(row.context);
+  } catch (error) {
+    if (isMissingOptionalSnapshotTableError(error)) return null;
+    throw error;
+  }
+}
+
+/**
+ * 从 DB context_json 中提取 ProductKnowledgeGraph。
+ */
+function parseProductContextSnapshotGraph(
+  context: unknown,
+): ProductKnowledgeGraph | null {
+  const graphCandidate =
+    context && typeof context === "object" && "knowledgeGraph" in context
+      ? (context as { knowledgeGraph?: unknown }).knowledgeGraph
+      : context;
+  const result = ProductKnowledgeGraphSchema.safeParse(graphCandidate);
+  return result.success ? result.data : null;
 }
 
 /**
@@ -156,6 +215,19 @@ function asStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
+}
+
+/**
+ * 判断可选 product_context_snapshot 表是否尚未创建。
+ */
+function isMissingOptionalSnapshotTableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("product_context_snapshot") &&
+    (message.includes("42P01") ||
+      message.includes("does not exist") ||
+      message.includes("不存在"))
+  );
 }
 
 /**

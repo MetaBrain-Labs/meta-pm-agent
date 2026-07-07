@@ -19,6 +19,7 @@ import { PLANNER_AGENT_PROMPT } from "../src/agents/product-workflow/planner-age
 import { CRITIQUE_AGENT_PROMPT } from "../src/agents/product-workflow/critique-agent/prompt";
 import { createExecutorAgentPrompt } from "../src/agents/product-workflow/executor-agent/prompt";
 import { productStrategyExecutorProfile } from "../src/agents/product-workflow/executor-agent/product-strategy-executor/profile";
+import { ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT } from "../src/agents/product-workflow/orchestrator-agent/prompt";
 
 test("planner prompt preserves graph-semantics guardrails", () => {
   assert.match(
@@ -137,6 +138,18 @@ test("planner prompt preserves graph-semantics guardrails", () => {
   assert.match(
     PLANNER_AGENT_PROMPT,
     /Never describe Requirement --Produces--> Decision/,
+  );
+});
+
+test("orchestrator planner subagent prompt satisfies json response format", () => {
+  assert.match(ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT, /json/i);
+  assert.match(
+    ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
+    /ready_for_planning/,
+  );
+  assert.match(
+    ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
+    /recommended_plan_type/,
   );
 });
 

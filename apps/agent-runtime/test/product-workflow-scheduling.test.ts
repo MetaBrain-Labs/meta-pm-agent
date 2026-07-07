@@ -537,7 +537,7 @@ test("selects normalized planner roots and downstream parallel batches", () => {
   );
 });
 
-test("routes completed executor DAG back to planner review", () => {
+test("routes completed executor DAG back to orchestrator review", () => {
   const tasks = [
     createTask("task-01", 1, "executor-product-strategy", []),
     createTask("task-02", 2, "executor-toolkit", ["task-01"]),
@@ -550,7 +550,7 @@ test("routes completed executor DAG back to planner review", () => {
     ],
   });
 
-  assert.equal(selectNextExecutorRouterTargets(state), "planner_agent");
+  assert.equal(selectNextExecutorRouterTargets(state), "orchestrator_agent");
 });
 
 test("routes to end after planner review has produced the workflow result", () => {

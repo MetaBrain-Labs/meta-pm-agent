@@ -12,6 +12,8 @@
 
 import type {
   ExecutorAgentResult,
+  OrchestratorAgentResult,
+  OrchestratorContextSource,
   ProductWorkflowResult,
   ProductKnowledgeGraph,
   ProductWorkflowAgentType,
@@ -27,6 +29,7 @@ import type { UserInputRecord } from "../request/user-input";
 export interface ProductWorkflowInput {
   workspaceId?: string;
   productContext?: string;
+  contextSource?: OrchestratorContextSource;
   requestAnalysis: RequestAnalysis;
   userInput: UserInputRecord[];
   signal?: AbortSignal;
@@ -34,6 +37,7 @@ export interface ProductWorkflowInput {
 
 export interface WorkflowResumeContext {
   requestAnalysis?: RequestAnalysis | null;
+  orchestratorDecision?: OrchestratorAgentResult | null;
   plan?: TaskExecutionPlan | null;
   executorResults?: ExecutorAgentResult[];
   knowledgeGraph?: ProductKnowledgeGraph | null;
@@ -45,6 +49,13 @@ export interface WorkflowResumeContext {
  * Planner Agent 节点输入，包含 Request Agent 结果和当前产品知识图谱快照。
  */
 export interface PlannerAgentInput extends ProductWorkflowInput {
+  knowledgeGraph: ProductKnowledgeGraph;
+}
+
+/**
+ * Orchestrator Agent 节点输入，包含 Request Agent 结果和上下文来源。
+ */
+export interface OrchestratorAgentInput extends ProductWorkflowInput {
   knowledgeGraph: ProductKnowledgeGraph;
 }
 
@@ -91,6 +102,27 @@ export type ProductWorkflowStreamEvent =
       type: "reasoning";
       agentType: ProductWorkflowAgentType;
       content: string;
+    }
+  | {
+      type: "subagent-start";
+      agentType: ProductWorkflowAgentType;
+      subagentType: string;
+      toolCallId?: string;
+      description?: string;
+    }
+  | {
+      type: "subagent-thinking";
+      agentType: ProductWorkflowAgentType;
+      subagentType: string;
+      toolCallId?: string;
+      content: string;
+    }
+  | {
+      type: "subagent-result";
+      agentType: ProductWorkflowAgentType;
+      subagentType: string;
+      toolCallId?: string;
+      result: unknown;
     }
   | {
       type: "agent-output";

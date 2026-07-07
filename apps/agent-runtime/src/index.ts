@@ -25,9 +25,13 @@ export {
   formatProductWorkflowConfirmationQuestionForm,
   formatProductWorkflowProposalQuestionForm,
   getProposalDecisionId,
-  formatTaskExecutionPlanBlock,
-  streamPlannerProductWorkflow,
 } from "./agents/product-workflow/agent";
+export {
+  normalizeTaskExecutionPlan,
+  createFallbackPlan,
+  formatTaskExecutionPlanBlock,
+  formatPlannerReasoningSummary,
+} from "./agents/product-workflow/orchestrator-agent/planner-subagent";
 export type {
   ProductWorkflowInput,
   ProductWorkflowStreamEvent,

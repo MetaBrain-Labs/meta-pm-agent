@@ -28,24 +28,35 @@ import {
   formatProductWorkflowBlock,
   formatTaskExecutionPlanBlock,
   streamExecutorAgent,
+  streamOrchestratorAgent,
   streamCritiqueAgent,
-  streamPlannerAgent,
+  type OrchestratorAgentOutput,
 } from "../../agents/product-workflow/agent";
 import type { WorkflowGraphStateValue } from "../state";
 
 /**
- * 执行 Planner Agent 节点，把 Request Agent 的分析结果转换为可执行 DAG。
+ * Planner 节点：显示 Orchestrator 的 Planner SubAgent 生成的 DAG，
+ * 或在 checkpoint 恢复时重放已有的 Executor 结果。
  */
 export async function plannerAgentNode(
   state: WorkflowGraphStateValue,
   config?: LangGraphRunnableConfig,
 ) {
   if (!state.requestAnalysis) return {};
-  if (state.plan && arePlanTasksFinished(state)) {
-    return executeCritiqueAgentReview(state, config);
-  }
   if (state.plan) {
     const writer = getWriter(config);
+    const isFreshPlan = state.executorResults.length === 0;
+
+    // 新鲜计划（由 Orchestrator 的 Planner SubAgent 刚生成）已有完整生命周期事件，
+    // 此处仅输出 Executor 回放结果；从 checkpoint 恢复的计划需完整状态事件。
+    if (!isFreshPlan) {
+      writer?.({
+        type: "agent-status",
+        agentType: "planner",
+        status: "started",
+        phase: "planning",
+      });
+    }
     writer?.({
       type: "agent-output",
       agentType: "planner",
@@ -58,6 +69,14 @@ export async function plannerAgentNode(
         content: formatExecutorResultBlock(result),
       });
     }
+    if (!isFreshPlan) {
+      writer?.({
+        type: "agent-status",
+        agentType: "planner",
+        status: "completed",
+        phase: "planning",
+      });
+    }
 
     return {
       knowledgeGraph:
@@ -66,41 +85,67 @@ export async function plannerAgentNode(
     };
   }
 
+  // plan 缺失时不应发生（Orchestrator 始终生成 plan 或 fallback），直接透传现有图谱
+  return {
+    knowledgeGraph:
+      state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph(),
+  };
+}
+
+/**
+ * 执行 Orchestrator Agent 节点，接管产品工作流路由、上下文来源判断、Planner DAG
+ * 生成和收尾审查调度。
+ */
+export async function orchestratorAgentNode(
+  state: WorkflowGraphStateValue,
+  config?: LangGraphRunnableConfig,
+) {
+  if (!state.requestAnalysis || state.productWorkflow) return {};
+  if (state.plan && arePlanTasksFinished(state)) {
+    return executeCritiqueAgentReview(state, config);
+  }
+  if (state.orchestratorDecision) {
+    return { orchestratorDecision: state.orchestratorDecision };
+  }
+
   const writer = getWriter(config);
   const knowledgeGraph =
     state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
+
   writer?.({
     type: "agent-status",
-    agentType: "planner",
+    agentType: "orchestrator",
     status: "started",
     phase: "planning",
   });
-  const plan = await consumeProductWorkflowStream(
-    streamPlannerAgent({
+  const { decision, plan } = (await consumeProductWorkflowStream(
+    streamOrchestratorAgent({
       workspaceId: state.workspaceId,
       productContext: state.productContext,
+      contextSource: state.contextSource,
       requestAnalysis: state.requestAnalysis,
       userInput: state.userInput,
       knowledgeGraph,
       signal: config?.signal,
     }),
     writer,
-  );
-
-  // Planner 的结构化 DAG 继续沿用现有 tagged block，供 API 落库和前端展示。
+  )) as OrchestratorAgentOutput;
   writer?.({
-    type: "agent-output",
-    agentType: "planner",
-    content: formatTaskExecutionPlanBlock(plan),
+    type: "reasoning",
+    agentType: "orchestrator",
+    content: `${decision.reason_summary}\n`,
   });
   writer?.({
     type: "agent-status",
-    agentType: "planner",
+    agentType: "orchestrator",
     status: "completed",
     phase: "planning",
   });
 
-  return { knowledgeGraph, plan };
+  // Planner 生命周期事件（agent-status / agent-output）已由 streamOrchestratorAgent
+  // 在 task 工具结果到达时通过 agentType "planner" 内嵌输出，此处不再重复。
+
+  return { knowledgeGraph, orchestratorDecision: decision, plan };
 }
 
 /**
@@ -434,13 +479,13 @@ export function selectNextExecutorRouterTargets(
     .filter((task) => !completedTaskIds.has(task.task_id))
     .sort((left, right) => left.sequence - right.sequence);
 
-  if (incompleteTasks.length === 0) return "planner_agent";
+  if (incompleteTasks.length === 0) return "orchestrator_agent";
 
   const readyTasks = incompleteTasks.filter((task) =>
     task.depends_on.every((taskId) => completedTaskIds.has(taskId)),
   );
   const parallelTasks = packParallelExecutorTasks(readyTasks);
-  if (parallelTasks.length === 0) return "planner_agent";
+  if (parallelTasks.length === 0) return "orchestrator_agent";
 
   return parallelTasks.map((task) => task.assigned_agent);
 }
