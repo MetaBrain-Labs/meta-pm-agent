@@ -665,10 +665,12 @@ function renderContextSection(
     );
   }
 
+  // 仅当自定义提示词不是完整提示词的子串时才单独展示，避免重复渲染
   if (
     providedSystemPrompt &&
     systemPrompt &&
-    providedSystemPrompt.trim() !== systemPrompt.trim()
+    providedSystemPrompt.trim() !== systemPrompt.trim() &&
+    !systemPrompt.trim().includes(providedSystemPrompt.trim())
   ) {
     sections.push(
       "### Custom System Prompt Provided To DeepAgents",
@@ -898,7 +900,19 @@ function formatJsonBlock(value: unknown): string {
  * 渲染普通文本代码块，避免内容中的 Markdown 破坏结构。
  */
 function formatTextBlock(value: string): string {
-  return ["````text", limitSectionText(value), "````"].join("\n");
+  return [
+    "````text",
+    limitSectionText(stripWrappingMarkdownFence(value)),
+    "````",
+  ].join("\n");
+}
+
+/**
+ * 剥离模型整段输出自带的单层 Markdown 代码围栏，避免诊断汇总再包一层后形成嵌套围栏。
+ */
+function stripWrappingMarkdownFence(value: string): string {
+  const match = /^\s*```[^\r\n]*\r?\n([\s\S]*?)\r?\n```\s*$/.exec(value);
+  return match ? match[1] : value;
 }
 
 /**

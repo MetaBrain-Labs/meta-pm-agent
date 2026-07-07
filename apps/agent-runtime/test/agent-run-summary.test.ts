@@ -193,7 +193,6 @@ test("records subagent invocations when AGENT_SUMMARY_SUBAGENTS_ENABLED is on", 
         recorder.recordSubagentCall({
           toolCallId: "call-task-1",
           subagentType: "planner",
-          description: "Generate DAG from product request",
           input: { subagent_type: "planner", description: "generate DAG" },
         });
         recorder.recordSubagentThinking({
@@ -216,7 +215,6 @@ test("records subagent invocations when AGENT_SUMMARY_SUBAGENTS_ENABLED is on", 
         );
         assert.match(markdown, /## 5\. SubAgent 执行汇总/);
         assert.match(markdown, /### 1\. SubAgent: \`planner\`/);
-        assert.match(markdown, /- 描述: Generate DAG from product request/);
         assert.match(markdown, /#### 输入/);
         assert.match(markdown, /planner/);
         assert.match(markdown, /#### 思考过程/);
@@ -276,6 +274,47 @@ test("keeps repeated non-cyclic references in summary output", async () => {
 
         assert.doesNotMatch(markdown, /\[Circular\]/);
         assert.match(markdown, /"task-01"/);
+      },
+    );
+  } finally {
+    await rm(tempRoot, { force: true, recursive: true });
+  }
+});
+
+test("does not nest model supplied fenced output inside summary text block", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "agent-summary-fence-"));
+  const outputDir = path.join(tempRoot, "summaries");
+
+  try {
+    await withSummaryEnv(
+      {
+        AGENT_SUMMARY_CONTEXT_ENABLED: "false",
+        AGENT_SUMMARY_OUTPUT_DIR: outputDir,
+        AGENT_SUMMARY_OUTPUT_ENABLED: "true",
+        AGENT_SUMMARY_THINKING_ENABLED: "false",
+        AGENT_SUMMARY_TOOL_CALLS_ENABLED: "false",
+        AGENT_SUMMARY_SUBAGENTS_ENABLED: "false",
+      },
+      async () => {
+        const recorder = createAgentRunSummaryRecorder({
+          agentLabel: "Test Agent",
+          agentName: "test-agent",
+          agentType: "test",
+        });
+
+        recorder.recordOutput('```json\n{"ok":true}\n```');
+        await recorder.finish({ status: "completed" });
+
+        const dateDirs = await readdir(outputDir);
+        const files = await readdir(path.join(outputDir, dateDirs[0]));
+        const markdown = await readFile(
+          path.join(outputDir, dateDirs[0], files[0]),
+          "utf8",
+        );
+
+        assert.match(markdown, /### Streamed Output/);
+        assert.match(markdown, /\{"ok":true\}/);
+        assert.doesNotMatch(markdown, /````text\r?\n```json/);
       },
     );
   } finally {

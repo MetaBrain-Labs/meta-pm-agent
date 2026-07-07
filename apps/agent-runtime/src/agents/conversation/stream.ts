@@ -399,6 +399,8 @@ async function* streamOrchClarificationForm(
     type: "question-form-start",
     agentType: "orchestrator",
   };
+  // 给前端留出渲染加载卡片的时间，避免与 complete 事件在同一 SSE chunk 中被 React 批处理合并。
+  await new Promise((resolve) => setTimeout(resolve, 80));
   yield {
     type: "question-form-complete",
     content: formContent,
@@ -644,6 +646,8 @@ async function* streamPlanningAfterUserInput(
           type: "question-form-start",
           agentType: "conversation_confirmation",
         };
+        // 给前端留出渲染加载卡片的时间，避免与 complete 事件在同一 SSE chunk 中被 React 批处理合并。
+        await new Promise((resolve) => setTimeout(resolve, 80));
         yield {
           type: "question-form-complete",
           content: proposalForm,
@@ -671,6 +675,8 @@ async function* streamPlanningAfterUserInput(
         type: "question-form-start",
         agentType: "conversation_confirmation",
       };
+      // 给前端留出渲染加载卡片的时间，避免与 complete 事件在同一 SSE chunk 中被 React 批处理合并。
+      await new Promise((resolve) => setTimeout(resolve, 80));
       yield {
         type: "question-form-complete",
         content: questionForm,

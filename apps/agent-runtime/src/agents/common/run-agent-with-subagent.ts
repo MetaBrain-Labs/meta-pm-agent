@@ -57,7 +57,6 @@ export type AgentWithSubagentEvent<AgentType extends string> =
       agentType: AgentType;
       subagentType: string;
       toolCallId?: string;
-      description?: string;
     }
   | {
       type: "subagent-thinking";
@@ -155,7 +154,6 @@ async function* handleSubagentTaskCalls<AgentType extends string>(
       agentType: options.agentType,
       subagentType: taskCall.subagentType,
       toolCallId: taskCall.toolCallId,
-      // description: taskCall.description,
     };
   }
 }
@@ -408,7 +406,20 @@ export async function* runAgentWithSubagent<T, AgentType extends string>(
       const [message, metadata] = chunk;
       const isSubagentMessage = isSubagentNamespace(namespace);
 
-      // SubAgent 内部消息：仅处理推理和文本，不产出工具事件或新的 task 委派。
+      // task 工具结果可能带有 tools:task 命名空间，必须先关闭 SubAgent 调用，
+      // 避免把子代理返回值误记为主 Agent 的流式输出。
+      const subagentResultHandled = yield* handleSubagentTaskResult(
+        message,
+        options,
+        summaryRecorder,
+        taskCallToSubagent,
+        openSubagentCalls,
+      );
+      if (subagentResultHandled) {
+        continue;
+      }
+
+      // SubAgent 内部消息只归档推理和 token 用量，不参与主 Agent 最终 JSON 拼接。
       if (isSubagentMessage) {
         yield* handleSubagentReasoning(
           message,
@@ -416,9 +427,6 @@ export async function* runAgentWithSubagent<T, AgentType extends string>(
           options,
           summaryRecorder,
         );
-        const text = getTextContent(message);
-        responseText += text;
-        summaryRecorder.recordOutput(text);
         const usage = getTokenUsage(message);
         if (usage) tokenUsage = usage;
         continue;
@@ -442,17 +450,6 @@ export async function* runAgentWithSubagent<T, AgentType extends string>(
         summaryRecorder,
       );
       if (shouldSkipTextAfterToolResult(message, visibleToolNameSet)) {
-        continue;
-      }
-
-      const subagentResultHandled = yield* handleSubagentTaskResult(
-        message,
-        options,
-        summaryRecorder,
-        taskCallToSubagent,
-        openSubagentCalls,
-      );
-      if (subagentResultHandled) {
         continue;
       }
 

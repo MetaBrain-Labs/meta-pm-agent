@@ -163,7 +163,6 @@ export async function* runDocumentAgent(
         summaryRecorder.recordSubagentCall({
           toolCallId: taskCall.toolCallId,
           subagentType: taskCall.subagentType,
-          description: taskCall.description,
           input: taskCall.input,
         });
       }
