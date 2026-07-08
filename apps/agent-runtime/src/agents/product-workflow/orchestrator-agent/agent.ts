@@ -1,23 +1,21 @@
 /**
  * Orchestrator Agent 实现
  *
- * 负责顶层意图路由、checkpoint 恢复判断和 DAG 生成委托。根据 payload.mode
- * 选择性注册 SubAgent：pre-check 模式仅注册 pre-orchestrator（意图分类），
- * resume-check 模式仅注册 resume-checker（恢复判断），full 模式仅注册 planner（DAG 生成）。
+ * 负责顶层意图路由和 DAG 生成委托。根据 payload.mode
+ * 选择性注册 SubAgent：pre-check 模式注册 pre-orchestrator（意图分类 + 恢复判断），
+ * full 模式注册 planner（DAG 生成）。
  *
  * Responsibilities:
  * - streamOrchestratorAgent()：统一入口，根据输入自动选择 pre-check / full 模式
  * - streamOrchestratorPreCheck()：便捷包装，对 streamOrchestratorAgent 的 pre-check 模式封装
- * - streamOrchestratorResumeCheck()：委派 Resume SubAgent 判断是否需要 checkpoint 恢复
  *
  * Notes:
- * - pre-orchestrator、resume-check 和 planner 不会混用，避免 Orchestrator 在单一轮次中承担多余职责。
+ * - pre-orchestrator 和 planner 不会混用，避免 Orchestrator 在单一轮次中承担多余职责。
  */
 
 import {
   OrchestratorAgentResultSchema,
   type OrchestratorAgentResult,
-  type OrchestratorResumeCheckResult,
   type TaskExecutionPlan,
 } from "@repo/shared";
 
@@ -43,73 +41,10 @@ import {
   extractPreOrchFromSubagentResult,
   extractPreOrchReasoning,
 } from "./pre-orchestrator-subagent";
-import {
-  runResumeCheckDirectly,
-  type ResumeSubagentInput,
-} from "./resume-subagent";
 
 export interface OrchestratorAgentOutput {
   decision: OrchestratorAgentResult;
   plan?: TaskExecutionPlan;
-}
-
-export type OrchestratorResumeCheckInput = ResumeSubagentInput;
-
-/**
- * Orchestrator Agent 的 checkpoint 恢复判断入口。
- *
- * 直接运行 resume-checker 作为独立 DeepAgent，绕过 Orchestrator + task 工具
- * 的间接委托路径。DeepAgents 内置的 TASK_SYSTEM_PROMPT 会导致模型将恢复判断
- * 视为 trivial task 而跳过委托，因此必须绕过该机制。
- */
-export async function* streamOrchestratorResumeCheck(
-  input: OrchestratorResumeCheckInput,
-): AsyncGenerator<
-  ProductWorkflowStreamEvent,
-  OrchestratorResumeCheckResult,
-  void
-> {
-  yield {
-    type: "agent-status",
-    agentType: "orchestrator",
-    status: "started",
-    phase: "planning",
-  };
-
-  // 直接以独立 Agent 运行 resume-checker，不经过 Orchestrator 模型 + task 工具。
-  let result: OrchestratorResumeCheckResult;
-  let hasReasoning = false;
-  const runner = runResumeCheckDirectly(input);
-
-  let next = await runner.next();
-  while (!next.done) {
-    const event = next.value;
-    yield event;
-    if (event.type === "reasoning" && !hasReasoning) {
-      hasReasoning = true;
-    }
-    next = await runner.next();
-  }
-  result = next.value;
-
-  yield {
-    type: "agent-status",
-    agentType: "orchestrator",
-    status: "completed",
-    phase: "planning",
-  };
-
-  // 将 resume-checker 的判断结论作为 Orchestrator 的推理产出。
-  yield {
-    type: "reasoning",
-    agentType: "orchestrator",
-    content:
-      result.decision === "RESUME_CHECKPOINT"
-        ? `恢复判断：${result.reason_summary}`
-        : `恢复判断：${result.reason_summary}`,
-  };
-
-  return result;
 }
 
 /**

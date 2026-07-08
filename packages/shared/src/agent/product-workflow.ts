@@ -587,21 +587,6 @@ export const OrchestratorAgentResultSchema = z.object({
   ),
 });
 
-/**
- * Orchestrator Agent 的 checkpoint 恢复判断结果。
- */
-export const OrchestratorResumeCheckResultSchema = z.object({
-  decision: z.enum(["RESUME_CHECKPOINT", "CONTINUE_NORMAL_ROUTING"]).describe(
-    "Whether the latest user turn should resume the interrupted workflow checkpoint or continue normal routing.",
-  ),
-  confidence: z.enum(["low", "medium", "high"]).describe(
-    "Confidence level for the resume routing decision.",
-  ),
-  reason_summary: z.string().min(1).max(500).describe(
-    "Compact English explanation of the resume-check decision.",
-  ),
-});
-
 export type ProductWorkflowAgentType = z.infer<
   typeof ProductWorkflowAgentTypeSchema
 >;
@@ -611,9 +596,6 @@ export type OrchestratorContextSource = z.infer<
 >;
 export type OrchestratorAgentResult = z.infer<
   typeof OrchestratorAgentResultSchema
->;
-export type OrchestratorResumeCheckResult = z.infer<
-  typeof OrchestratorResumeCheckResultSchema
 >;
 export type ProductKnowledgeGraph = z.infer<typeof ProductKnowledgeGraphSchema>;
 export type TaskExecutionNode = z.infer<typeof TaskExecutionNodeSchema>;

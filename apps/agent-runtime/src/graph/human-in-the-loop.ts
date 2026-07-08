@@ -188,9 +188,7 @@ export function extractQuestionFormId(questionForm: string): string {
 /**
  * Graph 节点：调用 LangGraph interrupt()，由框架写入 __interrupt__。
  */
-function releaseInterruptNode(
-  state: typeof HumanInTheLoopGraphState.State,
-) {
+function releaseInterruptNode(state: typeof HumanInTheLoopGraphState.State) {
   if (!state.request) return {};
 
   const response = interrupt<HumanInTheLoopRequest, HumanInTheLoopResponse>(
