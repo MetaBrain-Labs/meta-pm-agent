@@ -96,6 +96,38 @@ test("deduplicates similar duplicate IDs without inserting a second item", () =>
   assert.equal(merged.entities[0].source_task_id, "task-03");
 });
 
+test("merges product context metadata without losing graph items", () => {
+  const current = createGraph({
+    entities: [createGoal("G-001")],
+  });
+  const update = createGraph({
+    relations: [
+      createRelation(
+        "REL-001",
+        "G-001",
+        "G-001",
+        "task-02",
+        "Self-reference for metadata merge coverage.",
+      ),
+    ],
+  });
+  current.current_state = "initial";
+  current.description = "Orchestrator Agent started the workflow.";
+  update.current_state = "building";
+  update.description = "Executor Agent updated the product context.";
+
+  const merged = mergeKnowledgeGraphSnapshots(current, update);
+
+  assert.ok(merged);
+  assert.equal(merged.current_state, "building");
+  assert.deepEqual(merged.description?.split("\n"), [
+    "Orchestrator Agent started the workflow.",
+    "Executor Agent updated the product context.",
+  ]);
+  assert.equal(merged.entities.length, 1);
+  assert.equal(merged.relations.length, 1);
+});
+
 test("critique validation accepts graph items normalized by merge reducer", () => {
   const task03Result = createExecutorResult({
     taskId: "task-03",

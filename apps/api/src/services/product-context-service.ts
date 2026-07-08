@@ -92,10 +92,15 @@ async function loadProductKnowledgeGraphForWorkspace(
   knowledgeGraph: ProductKnowledgeGraph | null;
   contextSource: OrchestratorContextSource;
 }> {
+  const persistedGraph =
+    await loadPersistedKnowledgeGraphFromDatabase(workspaceId);
   const resourceSnapshot = await readProductContextResourceSnapshot(workspaceId);
   if (resourceSnapshot) {
     return {
-      knowledgeGraph: resourceSnapshot.knowledgeGraph,
+      knowledgeGraph: mergeProductContextSnapshotWithPersistedGraph(
+        resourceSnapshot.knowledgeGraph,
+        persistedGraph,
+      ),
       contextSource: "resources",
     };
   }
@@ -103,29 +108,80 @@ async function loadProductKnowledgeGraphForWorkspace(
   const dbSnapshot = await loadProductContextSnapshotFromDatabase(workspaceId);
   if (dbSnapshot) {
     return {
-      knowledgeGraph: dbSnapshot,
+      knowledgeGraph: mergeProductContextSnapshotWithPersistedGraph(
+        dbSnapshot,
+        persistedGraph,
+      ),
       contextSource: "database",
     };
   }
 
+  if (!persistedGraph) return { knowledgeGraph: null, contextSource: "none" };
+
+  return {
+    knowledgeGraph: persistedGraph,
+    contextSource: "product_knowledge_graph",
+  };
+}
+
+/**
+ * 从长期知识图谱表恢复 nodes/relations，供产品上下文快照按需合并。
+ */
+async function loadPersistedKnowledgeGraphFromDatabase(
+  workspaceId: string,
+): Promise<ProductKnowledgeGraph | null> {
   const row = await getProductKnowledgeGraphByWorkspaceId(workspaceId);
-  if (!row) return { knowledgeGraph: null, contextSource: "none" };
+  if (!row) return null;
 
   const nodes = asArray<KnowledgeGraphEntity>(row.nodes);
 
   return {
-    knowledgeGraph: {
-      entities: nodes,
-      relations: asArray<KnowledgeGraphRelation>(row.relations),
-      decisions: restoreDecisionInputs(nodes),
-      risks: restoreRiskInputs(nodes),
-      open_questions: restoreOpenQuestionInputs(nodes),
-      summary: [],
-      markdown: "",
-      notes: [],
-    },
-    contextSource: "product_knowledge_graph",
+    entities: nodes,
+    relations: asArray<KnowledgeGraphRelation>(row.relations),
+    decisions: restoreDecisionInputs(nodes),
+    risks: restoreRiskInputs(nodes),
+    open_questions: restoreOpenQuestionInputs(nodes),
+    summary: [],
+    markdown: "",
+    notes: [],
   };
+}
+
+/**
+ * 将不含 nodes/relations 的产品上下文快照与长期知识图谱合并成运行时图谱。
+ */
+function mergeProductContextSnapshotWithPersistedGraph(
+  snapshot: ProductKnowledgeGraph,
+  persistedGraph: ProductKnowledgeGraph | null,
+): ProductKnowledgeGraph {
+  if (!persistedGraph) return snapshot;
+
+  return {
+    ...snapshot,
+    entities: persistedGraph.entities,
+    relations: persistedGraph.relations,
+    decisions: mergeAuxiliaryItems(snapshot.decisions, persistedGraph.decisions),
+    risks: mergeAuxiliaryItems(snapshot.risks, persistedGraph.risks),
+    open_questions: mergeAuxiliaryItems(
+      snapshot.open_questions,
+      persistedGraph.open_questions,
+    ),
+  };
+}
+
+/**
+ * 按 ID 合并运行时辅助上下文，优先保留 snapshot 中更新的内容。
+ */
+function mergeAuxiliaryItems<T extends { id: string }>(
+  snapshotItems: T[],
+  persistedItems: T[],
+): T[] {
+  const merged = new Map(persistedItems.map((item) => [item.id, item]));
+  for (const item of snapshotItems) {
+    merged.set(item.id, item);
+  }
+
+  return [...merged.values()];
 }
 
 /**

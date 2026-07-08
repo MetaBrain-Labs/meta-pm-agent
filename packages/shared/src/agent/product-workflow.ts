@@ -228,6 +228,14 @@ export const ProductWorkflowProposalQuestionSchema = z.object({
  * markdown 字段可由结构化数据按需生成，不再作为主存储。
  */
 export const ProductKnowledgeGraphSchema = z.object({
+  current_state: z
+    .enum(["initial", "building", "refining", "stable"])
+    .optional()
+    .describe("Current product context lifecycle state managed by the Orchestrator runtime"),
+  description: z
+    .string()
+    .optional()
+    .describe("Cumulative product context activity summary written by Orchestrator, Executor, and Critique agents"),
   entities: z.array(KnowledgeGraphEntitySchema),
   relations: z.array(KnowledgeGraphRelationSchema),
   decisions: z.array(KnowledgeGraphDecisionInputSchema).default([]),

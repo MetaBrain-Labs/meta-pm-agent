@@ -13,7 +13,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ProductKnowledgeGraph } from "@repo/shared";
-import { buildPersistentNodes } from "../src/services/product-knowledge-graph-service";
+import {
+  buildPersistentNodes,
+  createProductContextSnapshotKnowledgeGraph,
+} from "../src/services/product-knowledge-graph-service";
 
 test("normalizes runtime graph facts into persisted nodes", () => {
   const nodes = buildPersistentNodes(createKnowledgeGraph());
@@ -39,6 +42,22 @@ test("normalizes runtime graph facts into persisted nodes", () => {
     nodes.find((node) => node.id === "OQ-001")?.description,
     "首批目标用户是否包含外部协作者？",
   );
+});
+
+test("strips nodes and relations from product context snapshots", () => {
+  const snapshot = createProductContextSnapshotKnowledgeGraph({
+    ...createKnowledgeGraph(),
+    current_state: "building",
+    description: "Executor Agent updated the product context.",
+  });
+
+  assert.equal(snapshot.current_state, "building");
+  assert.equal(snapshot.description, "Executor Agent updated the product context.");
+  assert.deepEqual(snapshot.entities, []);
+  assert.deepEqual(snapshot.relations, []);
+  assert.equal(snapshot.decisions.length, 1);
+  assert.equal(snapshot.risks.length, 1);
+  assert.equal(snapshot.open_questions.length, 1);
 });
 
 /**

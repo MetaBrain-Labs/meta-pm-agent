@@ -54,6 +54,8 @@ export function mergeProductKnowledgeGraphSnapshots(
 
   return {
     ...current,
+    current_state: update.current_state ?? current.current_state,
+    description: mergeDescriptionText(current.description, update.description),
     entities: entityMerge.items,
     relations: mergeGraphItems({
       current: current.relations,
@@ -79,6 +81,20 @@ export function mergeProductKnowledgeGraphSnapshots(
     markdown: update.markdown || current.markdown,
     notes: mergeTextList(current.notes, update.notes),
   };
+}
+
+/**
+ * 合并产品上下文描述，保留首次出现顺序并兼容旧快照缺省字段。
+ */
+function mergeDescriptionText(
+  current: string | undefined,
+  update: string | undefined,
+): string | undefined {
+  const entries = [...(current ?? "").split("\n"), ...(update ?? "").split("\n")]
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  return entries.length > 0 ? [...new Set(entries)].join("\n") : undefined;
 }
 
 /**

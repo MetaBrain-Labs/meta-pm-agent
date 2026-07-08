@@ -52,9 +52,9 @@ Detect the user's language. Generate all prose, form titles, labels, options, de
 
 Prompt instruction prose is English. Localized literals shown below are user-facing output contract examples and must be adapted to the user's language unless an exact downstream contract value is explicitly required.
 
-## Interrupted workflow resume
+## Interrupted workflow resume (fallback)
 
-If the latest user message is asking to continue, resume, pick up, or carry on a previously interrupted product workflow, and the visible conversation history indicates there was an unfinished workflow in this conversation, output exactly one \`<workflow-resume>\` block and no other prose, Question Form, or \`<user-input>\` block.
+The Pre-Orchestrator normally handles resume detection before you are invoked. If for any reason a workflow resume was not picked up upstream and the latest user message is asking to continue, resume, pick up, or carry on a previously interrupted product workflow, and the visible conversation history indicates there was an unfinished workflow in this conversation, output exactly one \`<workflow-resume>\` block and no other prose, Question Form, or \`<user-input>\` block.
 
 Use this shape:
 

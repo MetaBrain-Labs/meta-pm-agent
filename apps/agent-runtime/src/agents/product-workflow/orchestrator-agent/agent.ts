@@ -1,15 +1,16 @@
 /**
  * Orchestrator Agent 实现
  *
- * 负责顶层意图路由和 DAG 生成委托。根据 payload.mode 选择性注册 SubAgent：
- * pre-check 模式仅注册 pre-orchestrator（意图分类），full 模式仅注册 planner（DAG 生成）。
+ * 负责顶层意图路由和 DAG 生成委托。根据 payload.mode
+ * 选择性注册 SubAgent：pre-check 模式注册 pre-orchestrator（意图分类 + 恢复判断），
+ * full 模式注册 planner（DAG 生成）。
  *
  * Responsibilities:
  * - streamOrchestratorAgent()：统一入口，根据输入自动选择 pre-check / full 模式
  * - streamOrchestratorPreCheck()：便捷包装，对 streamOrchestratorAgent 的 pre-check 模式封装
  *
  * Notes:
- * - pre-orchestrator 和 planner 不会同时注册，避免 Orchestrator 在单一轮次中调用多余 SubAgent。
+ * - pre-orchestrator 和 planner 不会混用，避免 Orchestrator 在单一轮次中承担多余职责。
  */
 
 import {
@@ -244,6 +245,8 @@ function createOrchestratorPayload(input: OrchestratorAgentInput) {
     request_analysis: input.requestAnalysis,
     user_input: input.userInput,
     graph_stats: {
+      current_state: input.knowledgeGraph.current_state ?? null,
+      description: input.knowledgeGraph.description ?? "",
       entities: input.knowledgeGraph.entities.length,
       relations: input.knowledgeGraph.relations.length,
       decisions: input.knowledgeGraph.decisions.length,

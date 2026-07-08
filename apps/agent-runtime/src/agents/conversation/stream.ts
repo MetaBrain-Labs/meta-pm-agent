@@ -2,7 +2,7 @@
  * Conversation Agent 流式主通道
  *
  * 实现从用户消息到完整响应的 SSE 流式管道，包括：
- * - Pre-Orchestrator 意图分类（闲聊 / 新项目 / 项目演化）
+ * - Pre-Orchestrator 统一入口（恢复判断 + 意图分类 + 路由决策）
  * - Conversation Agent 深度对话阶段（闲聊模式 / 项目模式）
  * - 标记块检测与分段（question-form、user-input）
  * - user-input 完成后自动触发产品工作流图
@@ -13,11 +13,15 @@
  * - streamAgentEvents()：驱动 Conversation Agent 并过滤仅用户授权的工具事件
  * - 在 user-input-complete 后驱动 streamWorkflowGraph
  * - 在工作流完成后格式化并输出最终结果 block
- * - Pre-Orchestrator 在 Conversation Agent 之前执行意图分类和路由
+ * - Pre-Orchestrator 统一完成 checkpoint 恢复判断和意图分类
  */
 
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "langchain";
-import type { ChatMessage, ProductKnowledgeGraph, ProductWorkflowResult } from "@repo/shared";
+import type {
+  ChatMessage,
+  ProductKnowledgeGraph,
+  ProductWorkflowResult,
+} from "@repo/shared";
 import { calculateCost } from "../../config";
 import { createAgentRunSummaryRecorder } from "../common/agent-run-summary";
 import {
@@ -57,7 +61,9 @@ import {
   isPreOrchClarificationFormId,
   type PreOrchResult,
 } from "../product-workflow/orchestrator-agent/pre-orchestrator-subagent";
-import { streamOrchestratorPreCheck } from "../product-workflow/orchestrator-agent/agent";
+import {
+  streamOrchestratorPreCheck,
+} from "../product-workflow/orchestrator-agent/agent";
 
 const PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID = "product-workflow-confirmation";
 const EXECUTOR_BLOCKER_FORM_PREFIX = "executor-blocker-";
@@ -225,7 +231,7 @@ function hasExistingProject(
 }
 
 /**
- * 处理完整会话流。Pre-Orchestrator 先进行意图分类，然后根据决策路由到闲聊、
+ * 处理完整会话流。先判断 checkpoint 恢复，再根据普通意图分类结果路由到闲聊、
  * 澄清问题表单或产品工作流。
  */
 export async function* streamConversation(
@@ -268,12 +274,24 @@ export async function* streamConversation(
     return;
   }
 
-  // 新消息：先通过 Pre-Orchestrator 进行意图分类
+  // 新消息先交给 Orchestrator 判断是否属于 checkpoint 恢复。
+  yield* streamWithResumeCheckOrPreOrchestrator(messages, options, lastMessage);
+}
+
+/**
+ * 新消息统一通过 Pre-Orchestrator 完成恢复判断和意图分类。
+ * Pre-Orchestrator 会优先检测 checkpoint 恢复需求，再按意图分类路由。
+ */
+async function* streamWithResumeCheckOrPreOrchestrator(
+  messages: ChatMessage[],
+  options: ConversationStreamOptions,
+  lastMessage: ChatMessage,
+): AsyncGenerator<ConversationStreamEvent> {
   yield* streamWithPreOrchestrator(messages, options, lastMessage);
 }
 
 /**
- * 通过 Orchestrator Agent 的 Pre-Orchestrator SubAgent 完成意图分类并根据结果路由。
+ * 通过 Orchestrator Agent 的 Pre-Orchestrator SubAgent 完成意图分类或恢复判断，并根据结果路由。
  */
 async function* streamWithPreOrchestrator(
   messages: ChatMessage[],
@@ -286,6 +304,11 @@ async function* streamWithPreOrchestrator(
     knowledgeGraph: options.knowledgeGraph,
     workspaceId: options.workspaceId,
     hasExistingProject: hasExistingProject(options.knowledgeGraph),
+    workflowThreadId: options.workflowThreadId,
+    recentMessages: messages.slice(-8).map((message) => ({
+      role: message.role,
+      content: message.content ?? "",
+    })),
     signal: options.signal,
   });
 
@@ -311,6 +334,17 @@ async function* streamWithPreOrchestrator(
     };
     yield* streamNormalProjectFlow(messages, options);
     return;
+  }
+
+  // 恢复判断优先于意图分类：Pre-Orchestrator 判定需要从 checkpoint 恢复中断的工作流。
+  if (preOrchResult.decision === "RESUME_WORKFLOW") {
+    let emitted = false;
+    for await (const event of streamWorkflowCheckpointResume(options, messages)) {
+      emitted = true;
+      yield event;
+    }
+    // 如果 checkpoint 恢复没有产出任何事件，回退到普通路由。
+    if (emitted) return;
   }
 
   if (preOrchResult.decision === "HANDOFF_CHAT") {

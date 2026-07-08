@@ -49,8 +49,8 @@ export const PreOrchResultSchema = z.object({
     .enum(["casual_chat", "new_project", "project_evolution"])
     .describe("Classified user intent for this turn"),
   decision: z
-    .enum(["HANDOFF_CHAT", "ASK_CLARIFICATION", "PROCEED_TO_WORKFLOW"])
-    .describe("Routing decision: chat back to Conversation, ask questions, or go to product workflow"),
+    .enum(["HANDOFF_CHAT", "ASK_CLARIFICATION", "PROCEED_TO_WORKFLOW", "RESUME_WORKFLOW"])
+    .describe("Routing decision: chat back to Conversation, ask questions, go to product workflow, or resume interrupted workflow from checkpoint"),
   reason: z
     .string()
     .min(1)
@@ -78,6 +78,8 @@ export interface PreOrchestratorInput {
   knowledgeGraph?: ProductKnowledgeGraph | null;
   workspaceId?: string;
   hasExistingProject: boolean;
+  workflowThreadId?: string;
+  recentMessages?: Array<{ role: string; content: string }>;
   signal?: AbortSignal;
 }
 
@@ -86,17 +88,32 @@ export interface PreOrchestratorInput {
  * 供 Orchestrator Agent 通过 task 工具的描述字段传递给 SubAgent。
  */
 export function buildPreOrchPayload(input: PreOrchestratorInput) {
+  const graph = input.knowledgeGraph;
   return {
     user_message: input.userMessage,
     has_existing_project: input.hasExistingProject,
     project_context: input.productContext?.trim() || "No product context provided.",
-    knowledge_graph_summary: input.knowledgeGraph
+    workflow_thread_id: input.workflowThreadId ?? null,
+    recent_messages: input.recentMessages?.slice(-8) ?? [],
+    knowledge_graph_summary: graph
       ? {
-          entities_count: input.knowledgeGraph.entities.length,
-          relations_count: input.knowledgeGraph.relations.length,
-          recent_entities: input.knowledgeGraph.entities
+          entities_count: graph.entities.length,
+          relations_count: graph.relations.length,
+          recent_entities: graph.entities
             .slice(-5)
             .map((e) => `${e.type}:${e.name}`),
+        }
+      : null,
+    graph_stats: graph
+      ? {
+          current_state: graph.current_state ?? null,
+          description: graph.description ?? "",
+          entities: graph.entities.length,
+          relations: graph.relations.length,
+          decisions: graph.decisions.length,
+          risks: graph.risks.length,
+          open_questions: graph.open_questions.length,
+          summary_items: graph.summary.length,
         }
       : null,
   };

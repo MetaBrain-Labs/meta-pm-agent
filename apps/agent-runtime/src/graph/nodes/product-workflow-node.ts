@@ -14,7 +14,7 @@
  */
 
 import { getWriter, type LangGraphRunnableConfig } from "@langchain/langgraph";
-import type { TaskExecutionNode } from "@repo/shared";
+import type { ProductWorkflowResult, TaskExecutionNode } from "@repo/shared";
 import type { ProductWorkflowStreamEvent } from "../../agents/product-workflow/agent";
 import {
   EXECUTOR_DEFINITIONS,
@@ -32,6 +32,7 @@ import {
   streamCritiqueAgent,
   type OrchestratorAgentOutput,
 } from "../../agents/product-workflow/agent";
+import { updateProductContextMetadata } from "../../agents/product-workflow/common/context-metadata";
 import type { WorkflowGraphStateValue } from "../state";
 
 /**
@@ -109,8 +110,21 @@ export async function orchestratorAgentNode(
   }
 
   const writer = getWriter(config);
-  const knowledgeGraph =
+  let knowledgeGraph =
     state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
+
+  if (state.requestAnalysis.business_model.length > 0) {
+    knowledgeGraph = updateProductContextMetadata({
+      knowledgeGraph,
+      currentState: "initial",
+      descriptionEntry:
+        "Orchestrator Agent started a product workflow after user clarification or structured input was available.",
+    });
+    writer?.({
+      type: "knowledge-graph-update",
+      knowledgeGraph,
+    });
+  }
 
   writer?.({
     type: "agent-status",
@@ -140,6 +154,15 @@ export async function orchestratorAgentNode(
     agentType: "orchestrator",
     status: "completed",
     phase: "planning",
+  });
+  knowledgeGraph = updateProductContextMetadata({
+    knowledgeGraph,
+    currentState: plan ? "building" : "initial",
+    descriptionEntry: createOrchestratorDescriptionEntry(decision, plan),
+  });
+  writer?.({
+    type: "knowledge-graph-update",
+    knowledgeGraph,
   });
 
   // Planner 生命周期事件（agent-status / agent-output）已由 streamOrchestratorAgent
@@ -306,7 +329,7 @@ async function executeExecutorAgentTask(
     writer,
     { parallelAgents },
   );
-  const nextKnowledgeGraph = appendKnowledgeGraphPatch({
+  const patchedKnowledgeGraph = appendKnowledgeGraphPatch({
     knowledgeGraph,
     taskId: result.task_id,
     agentType: result.agent_type,
@@ -316,6 +339,11 @@ async function executeExecutorAgentTask(
     risks: result.risks,
     openQuestions: result.open_questions,
     summary: [result.summary],
+  });
+  const nextKnowledgeGraph = updateProductContextMetadata({
+    knowledgeGraph: patchedKnowledgeGraph,
+    currentState: "building",
+    descriptionEntry: createExecutorDescriptionEntry(task, result),
   });
   // Executor 只输出本任务结果，知识图谱归档交给批次 barrier 处理。
   writer?.({
@@ -364,12 +392,22 @@ async function executeCritiqueAgentReview(
     }),
     writer,
   );
+  const reviewedKnowledgeGraph = updateProductContextMetadata({
+    knowledgeGraph: workflowResult.knowledge_graph_update,
+    currentState:
+      workflowResult.status === "completed" ? "stable" : "refining",
+    descriptionEntry: createCritiqueDescriptionEntry(workflowResult),
+  });
+  const nextWorkflowResult: ProductWorkflowResult = {
+    ...workflowResult,
+    knowledge_graph_update: reviewedKnowledgeGraph,
+  };
 
   // Critique Agent 的完整审查结果用于持久化 request_form 和生成确认表单。
   writer?.({
     type: "agent-output",
     agentType: "critique",
-    content: formatProductWorkflowBlock(workflowResult),
+    content: formatProductWorkflowBlock(nextWorkflowResult),
   });
   writer?.({
     type: "agent-status",
@@ -377,9 +415,54 @@ async function executeCritiqueAgentReview(
     status: "completed",
     phase: "review",
   });
-  writer?.({ type: "complete", result: workflowResult });
+  writer?.({
+    type: "knowledge-graph-update",
+    knowledgeGraph: reviewedKnowledgeGraph,
+  });
+  writer?.({ type: "complete", result: nextWorkflowResult });
 
-  return { productWorkflow: workflowResult };
+  return {
+    productWorkflow: nextWorkflowResult,
+    knowledgeGraph: reviewedKnowledgeGraph,
+  };
+}
+
+/**
+ * 生成 Orchestrator 写入产品上下文 description 的业务摘要。
+ */
+function createOrchestratorDescriptionEntry(
+  decision: OrchestratorAgentOutput["decision"],
+  plan: OrchestratorAgentOutput["plan"],
+): string {
+  if (!plan) {
+    return `Orchestrator Agent routed this turn as ${decision.intent} and did not create an execution DAG.`;
+  }
+
+  return `Orchestrator Agent routed this turn as ${decision.intent}, generated a ${plan.status} DAG with ${plan.tasks.length} executor tasks, and moved the product context into building.`;
+}
+
+/**
+ * 生成 Executor 写入产品上下文 description 的业务摘要。
+ */
+function createExecutorDescriptionEntry(
+  task: TaskExecutionNode,
+  result: ProductWorkflowResult["executor_results"][number],
+): string {
+  return `${result.agent_type} completed ${task.task_id} (${task.title}) and updated product context with: ${result.summary}`;
+}
+
+/**
+ * 生成 Critique 写入产品上下文 description 的业务摘要。
+ */
+function createCritiqueDescriptionEntry(
+  workflowResult: ProductWorkflowResult,
+): string {
+  const retryTaskIds = workflowResult.review.retry_task_ids ?? [];
+  if (workflowResult.status === "completed") {
+    return `Critique Agent accepted the DAG result and marked the product context stable: ${workflowResult.review.notes}`;
+  }
+
+  return `Critique Agent found follow-up work or user confirmation needs, marked the product context refining, and identified retry tasks: ${retryTaskIds.join(", ") || "none"}.`;
 }
 
 /**
