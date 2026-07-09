@@ -483,8 +483,10 @@ export async function chatStreamHandler(c: Context) {
         requestFormId: parsed.data.requestFormId,
         agentOutputs: [...agentOutputs.values()],
         messages: parsed.data.messages,
-        skipPendingDecisionItems:
-          shouldFinalizeWorkflowRound || autoFinalizedWorkflowRound,
+        // 是否跳过待确认条目应完全由流内事件决定，
+        // autoFinalizedWorkflowRound 会在 Conversation Agent
+        // 产出新一轮 question-form 时被重置为 false。
+        skipPendingDecisionItems: autoFinalizedWorkflowRound,
       });
 
       await finalizeWorkspaceKnowledgeGraph({

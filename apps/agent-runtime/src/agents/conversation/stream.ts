@@ -608,9 +608,6 @@ async function* streamWorkflowResumeAfterFormAnswer(
   yield* streamPlanningAfterUserInput(userInputBlock, options, messages, {
     resumeContext,
     suppressRestoredRequestAnalysis: true,
-    finalizeOnComplete:
-      formId === PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID ||
-      formId.endsWith("-proposal-decision"),
   });
 }
 
@@ -624,7 +621,6 @@ async function* streamPlanningAfterUserInput(
   resumeOptions: {
     resumeContext?: ReturnType<typeof createWorkflowResumeContextFromMessages>;
     suppressRestoredRequestAnalysis?: boolean;
-    finalizeOnComplete?: boolean;
     resumeFromCheckpoint?: boolean;
   } = {},
 ): AsyncGenerator<ConversationStreamEvent> {
@@ -684,10 +680,9 @@ async function* streamPlanningAfterUserInput(
 
       if (event.type === "complete") {
         // 将结构化工作流结果转发给 API 持久化层，供知识图谱归档
-        const proposalForm = resumeOptions.finalizeOnComplete
-          ? null
-          : formatProductWorkflowProposalQuestionForm(event.result);
-        const shouldFinalize = resumeOptions.finalizeOnComplete || !proposalForm;
+        // 始终基于 Critique Agent 实际输出决定是否完成，不因表单答复轮次强制终止。
+        const proposalForm = formatProductWorkflowProposalQuestionForm(event.result);
+        const shouldFinalize = !proposalForm;
         const workflowResult = shouldFinalize
           ? markWorkflowResultCompleted(event.result)
           : event.result;
