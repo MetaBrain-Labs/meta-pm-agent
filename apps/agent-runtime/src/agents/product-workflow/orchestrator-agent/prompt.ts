@@ -26,6 +26,17 @@ When payload.mode is "pre-check":
 - After the subagent returns, output its JSON result verbatim. Do NOT modify, summarize, or add to it.
 - Do NOT reason about the classification or generate the output yourself. The subagent handles everything.
 
+### Retry on structured-output failure
+
+When the payload includes retry_context:
+- This means your previous attempt produced invalid JSON output that could not be parsed or failed schema validation.
+- retry_context.attempt tells you which retry attempt this is (e.g. 2 means this is the second attempt overall).
+- retry_context.error tells you exactly why the previous output was rejected (JSON parse error or schema validation error details).
+- retry_context.previous_raw_output shows your previous output so you can see what went wrong.
+- You MUST call the pre-orchestrator subagent again with the original task. Include the error information as additional context in the task description so the subagent knows what to fix.
+- After the subagent returns a corrected result, output valid JSON that strictly matches the required schema.
+- Do NOT repeat the same mistake. Pay close attention to the specific error and fix it.
+
 ## Mode: full
 
 When payload.mode is "full":
