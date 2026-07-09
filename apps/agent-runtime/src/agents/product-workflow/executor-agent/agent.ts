@@ -39,9 +39,7 @@ import {
 } from "../../common/tool-access";
 import {
   compactPreviousExecutorResults,
-  compactRequestAnalysisForTask,
   compactTaskExecutionPlan,
-  compactUserInputForTask,
   createGraphContextSummary,
   createTaskRelevantGraphContext,
 } from "../common/context";
@@ -127,10 +125,15 @@ export async function* streamExecutorAgent(
   );
   // Executor 默认只接收摘要和任务相关子图，完整图谱保留在工具状态中按需查询。
   const graphContextSummary = createGraphContextSummary(input.knowledgeGraph);
+  // recent_nodes 已在 graph_context_summary 中提供，task_relevant_context 不再重复传输。
+  const recentNodeIds = new Set(
+    graphContextSummary.recent_nodes.map((node) => node.id),
+  );
   const taskRelevantContext = createTaskRelevantGraphContext({
     knowledgeGraph: input.knowledgeGraph,
     task: input.task,
     previousResults: input.previousResults,
+    excludeNodeIds: recentNodeIds,
   });
 
   const textGen = runTextAgent({
@@ -158,15 +161,6 @@ export async function* streamExecutorAgent(
       task_relevant_context: taskRelevantContext,
       task: input.task,
       plan_context: compactTaskExecutionPlan(input.plan),
-      request_analysis: compactRequestAnalysisForTask(
-        input.requestAnalysis,
-        input.task,
-      ),
-      user_input: compactUserInputForTask({
-        analysis: input.requestAnalysis,
-        task: input.task,
-        userInput: input.userInput,
-      }),
       previous_results: compactPreviousExecutorResults(input.previousResults),
     },
     fallback: () => createFallbackKnowledgeGraphPatch(input.task),
