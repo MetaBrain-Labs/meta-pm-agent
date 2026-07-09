@@ -97,7 +97,6 @@ export function createTaskRelevantGraphContext({
       id: node.id,
       type: node.type,
       name: truncateText(node.name),
-      description: truncateText(node.description ?? ""),
       source_task_id: node.source_task_id,
       status: node.status,
     })),
@@ -106,7 +105,6 @@ export function createTaskRelevantGraphContext({
       type: relation.type,
       source: relation.source,
       target: relation.target,
-      description: truncateText(relation.description ?? ""),
       source_task_id: relation.source_task_id,
     })),
   };

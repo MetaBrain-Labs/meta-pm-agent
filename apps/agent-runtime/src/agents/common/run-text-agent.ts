@@ -231,6 +231,30 @@ export async function* runTextAgent<AgentType extends string>(
     }
 
     const patch = responseText.trim();
+
+    // 检测模型输出是否被 maxTokens 截断，防止静默丢失结构化写入产物。
+    if (
+      isModelOutputTruncated(tokenUsage, options.modelOptions?.maxTokens) &&
+      !patch
+    ) {
+      const reason = `output-truncated: model reached maxTokens (${options.modelOptions?.maxTokens}) before completing`;
+      const fallbackResult = options.fallback(reason);
+      const truncateMsg = `${options.agentLabel} 输出疑似在模型 maxTokens 前被截断，已使用回退结果。\n`;
+      summaryRecorder.recordThinking(truncateMsg);
+      yield {
+        type: "reasoning",
+        agentType: options.agentType,
+        content: truncateMsg,
+      };
+      await summaryRecorder.finish({
+        error: reason,
+        output: fallbackResult,
+        status: "fallback",
+        tokenUsage: tokenUsageSummary,
+      });
+      return fallbackResult;
+    }
+
     const output = patch || options.fallback("empty-output");
     await summaryRecorder.finish({
       output,
@@ -315,4 +339,18 @@ function getToolResult(
     name: message.name ?? "unknown",
     content: message.content,
   };
+}
+
+/**
+ * 判断模型输出是否已被 maxTokens 截断；此时未完成的文本和未调用的写入工具都会丢失。
+ */
+function isModelOutputTruncated(
+  tokenUsage: ReturnType<typeof getTokenUsage>,
+  maxTokens: number | undefined,
+): boolean {
+  return (
+    typeof maxTokens === "number" &&
+    tokenUsage !== null &&
+    tokenUsage.outputTokens >= maxTokens
+  );
 }
