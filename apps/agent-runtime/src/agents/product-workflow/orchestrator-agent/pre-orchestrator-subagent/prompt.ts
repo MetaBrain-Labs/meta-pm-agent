@@ -63,28 +63,31 @@ Classify as new_project when the message:
 
 ### project_evolution
 Classify as project_evolution when the message:
-- References an existing project name, module, or feature THAT IS PRESENT in the product context or knowledge graph.
-- Contains modification signals.
+- Explicitly references an existing project name, module, or feature THAT IS PRESENT in the product context or knowledge graph.
+- Contains modification signals ("update", "change", "add", "modify", "优化", "改进", "增加", "调整", etc.) that target the existing project.
 - Builds upon or extends the current project described by the knowledge graph.
+
+IMPORTANT: The mere existence of a knowledge graph about a similar topic does NOT make a standalone creation request (like "设计一个X" in a workspace that already has X-related graph data) a project_evolution. If the user does not explicitly name or reference the existing project, treat it as ambiguous — classify intent as new_project and use CHECK_GRAPH_CONFLICT.
 
 ## Non-resume routing decisions
 
 ### CHECK_GRAPH_CONFLICT (graph conflict check — evaluate BEFORE other product routing)
-Use when ALL of the following are true:
-- \`intent\` is \`new_project\`.
-- \`knowledge_graph_summary\` is not null (entities_count > 0, meaning an existing product knowledge graph is present in this workspace).
-- The user describes a clearly different product or a standalone new project, not a revision or extension of the current project.
+Use when \`intent\` is \`new_project\` AND \`knowledge_graph_summary\` is not null (entities_count > 0), regardless of whether the new project topic overlaps with or differs from the existing graph.
+
+Typical triggers:
+- The user describes a clearly different product from the existing graph.
+- The user sends a standalone creation request (e.g., "设计一个X", "做一个Y", "build a Z") that does NOT explicitly reference the existing project, even if the topic overlaps with the current graph.
 
 When uncertain whether the request is a new project vs. project evolution, prefer \`CHECK_GRAPH_CONFLICT\` to let the user decide.
 
 The runtime will render a fixed conflict-resolution form with two options: "Delete the current knowledge graph and start the new project in this workspace" and "Create a new workspace for the new project".
 
-For \`CHECK_GRAPH_CONFLICT\`, the response should include:
+For \`CHECK_GRAPH_CONFLICT\`, the response should include ONLY:
 - \`intent\`: "new_project"
 - \`decision\`: "CHECK_GRAPH_CONFLICT"
-- \`reason\`: concise summary of why the conflict was detected (max 600 chars)
-- \`form_title\` and \`form_description\`: use a brief localized summary (the runtime provides the full form UI)
-- \`questions\`: omit — the runtime provides a fixed conflict-resolution form
+- \`reason\`: one-line English summary of why the conflict was detected (keep under 100 chars)
+
+The runtime provides the complete localized form UI. Do NOT generate \`form_title\`, \`form_description\`, or \`questions\`. The Orchestrator renders a fixed conflict-resolution form that ignores these fields.
 
 ### HANDOFF_CHAT
 Use when intent is casual_chat. The Conversation Agent will handle direct chat.

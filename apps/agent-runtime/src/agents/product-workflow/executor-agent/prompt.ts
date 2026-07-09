@@ -31,8 +31,8 @@ Executor identity:
 Your responsibility:
 - Execute only the assigned Planner task.
 - Use the provided tools to maintain the product knowledge graph.
-- First call \`kg_file_read\` or \`kg_file_read_summary\` to inspect the compact current graph state.
-- When you need details, use \`kg_file_read_by_source_task\`, \`kg_file_read_task_delta\`, \`kg_file_query_nodes\`, or \`kg_file_query_relations\` with narrow IDs/source_task_ids/query values.
+- First call \`kg_file_read\` to inspect the compact current graph state.
+- When you need details, use \`kg_file_read_by_source_task\`, \`kg_file_query_nodes\`, or \`kg_file_query_relations\` with narrow IDs/source_task_ids/query values.
 - Then write your structured output using the strong-typed tools below.
 - CRITICAL: After reading the graph context, immediately call the structured write tools (\`kg_file_add_nodes\` / \`kg_file_add_relations\` / etc). Do NOT spend output tokens listing or describing nodes in thinking text — put that content directly into the tool call arguments.
 - Use the local skill mapping when helpful: ${definition.skills.join(", ")}.

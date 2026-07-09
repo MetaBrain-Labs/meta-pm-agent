@@ -6,7 +6,7 @@
  * 工具直接变更传入的状态对象引用，工具返回 JSON 结构化结果供上层收集与持久化。
  *
  * Responsibilities:
- * - createKnowledgeGraphTools()：构建 1 个读取 + 6 个结构化写入工具
+ * - createKnowledgeGraphTools()：构建 6 个读取 + 6 个结构化写入工具
  * - 工具强制 Zod 校验输入参数
  * - 工具返回 StructuredToolCallResult JSON 字符串
  * - 工具将已验证的结构化数据追加到传入的 state 对象中
@@ -177,7 +177,7 @@ export interface StructuredToolCallResult<T = unknown> {
  */
 export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
   return [
-    // ── 读取 ──
+    // 从当前上下文中读取 product context
     tool(
       async () => {
         return stringifyToolResult({
@@ -192,20 +192,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
         schema: z.object({}),
       },
     ),
-    tool(
-      async () => {
-        return stringifyToolResult({
-          action: "read_summary",
-          ...createGraphContextSummary(state),
-        });
-      },
-      {
-        name: "kg_file_read_summary",
-        description:
-          "Read counts and recent nodes from the product knowledge graph.",
-        schema: z.object({}),
-      },
-    ),
+    // 从当前上下文中读取 nodes
     tool(
       async ({ ids = [], source_task_ids = [], query = "", limit = 12 }) => {
         const items = queryNodes(state, {
@@ -227,6 +214,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
         schema: graphQuerySchema,
       },
     ),
+    // 从当前上下文中读取 relations
     tool(
       async ({ ids = [], source_task_ids = [], query = "", limit = 12 }) => {
         const items = queryRelations(state, {
@@ -248,33 +236,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
         schema: graphQuerySchema,
       },
     ),
-    tool(
-      async ({ task_id, limit = 12 }) => {
-        const effectiveLimit = normalizeLimit(limit);
-        return stringifyToolResult({
-          action: "read_task_delta",
-          requested_limit: limit,
-          effective_limit: effectiveLimit,
-          ...readGraphBySourceTasks(state, [task_id], effectiveLimit),
-        });
-      },
-      {
-        name: "kg_file_read_task_delta",
-        description:
-          "Read the compact graph delta produced by a single source task ID.",
-        schema: z.object({
-          task_id: z.string().min(1),
-          limit: z
-            .number()
-            .int()
-            .positive()
-            .default(12)
-            .describe(
-              "Requested result limit. The tool clamps large values internally.",
-            ),
-        }),
-      },
-    ),
+    // 从当前上下文中读取 依赖任务产生的 nodes 和 relations
     tool(
       async ({ source_task_ids, limit = 12 }) => {
         const effectiveLimit = normalizeLimit(limit);
@@ -302,7 +264,8 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
         }),
       },
     ),
-    // ── 摘要 ──
+
+    // 将 summary 写入当前上下文中
     tool(
       async ({ summary }) => {
         const normalizedSummary = summary.trim();
@@ -329,7 +292,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
         }),
       },
     ),
-    // ── 节点 ──
+    // 将 nodes 写入当前上下文中
     tool(
       async ({ nodes }) => {
         const validated = nodes.map((n) => nodeInputSchema.parse(n));
@@ -361,7 +324,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
         }),
       },
     ),
-    // ── 关系 ──
+    // 将 relations 写入当前上下文中
     tool(
       async ({ relations }) => {
         const validated = relations.map((r) => relationInputSchema.parse(r));
@@ -392,7 +355,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
         }),
       },
     ),
-    // ── 决策 ──
+    // 将 decisions 写入当前上下文中
     tool(
       async ({ decisions }) => {
         const validated = decisions.map((d) => decisionInputSchema.parse(d));
@@ -424,7 +387,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
         }),
       },
     ),
-    // ── 风险 ──
+    // 将 risks 写入当前上下文中
     tool(
       async ({ risks }) => {
         const validated = risks.map((r) => riskInputSchema.parse(r));
@@ -456,7 +419,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
         }),
       },
     ),
-    // ── 待确认问题 ──
+    // 将 open questions 写入当前上下文中
     tool(
       async ({ questions }) => {
         const validated = questions.map((q) =>

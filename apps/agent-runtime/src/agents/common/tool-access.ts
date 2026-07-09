@@ -13,7 +13,7 @@
  * Notes:
  * - conversation 的 web_search 由前端 enabledTools 控制
  * - 需要外部事实的 Executor 可由 runtime 默认注入 web_search，不依赖前端开关
- * - 知识图谱工具（1 读取 + 6 结构化写入）授权给 planner 和全部 10 个 executor Agent
+ * - 知识图谱工具（6 读取 + 6 结构化写入）授权给全部 10 个 executor Agent
  * - 工具基于内存 ProductKnowledgeGraph 状态对象，不再依赖文件系统
  */
 
@@ -30,10 +30,8 @@ type ToolOwningAgent = AgentMessageType;
 
 const KNOWLEDGE_GRAPH_FILE_TOOLS: AgentRuntimeTool[] = [
   "kg_file_read",
-  "kg_file_read_summary",
   "kg_file_query_nodes",
   "kg_file_query_relations",
-  "kg_file_read_task_delta",
   "kg_file_read_by_source_task",
   "kg_file_add_summary",
   "kg_file_add_nodes",
@@ -73,7 +71,6 @@ const EXECUTOR_WEB_SEARCH_AGENT_TYPES = new Set([
 const AGENT_TOOL_ACCESS: Record<string, ReadonlySet<AgentRuntimeTool>> = {
   conversation: new Set(["web_search"]),
   request: new Set(),
-  planner: new Set(KNOWLEDGE_GRAPH_FILE_TOOLS),
   ...Object.fromEntries(
     EXECUTOR_AGENT_TYPES.map((agentType) => [
       agentType,

@@ -239,64 +239,6 @@ export async function* streamExecutorAgent(
 }
 
 /**
- * 将 Executor profile 中的技能名映射到 references 下的 DeepAgents skill source 目录。
- */
-function getExecutorSkillSources(definition: {
-  referencePath: string;
-  skills: readonly string[];
-}): string[] {
-  return definition.skills.map(
-    (skillName) => `${definition.referencePath}/skills/${skillName}`,
-  );
-}
-
-/**
- * 生成稳定的 Executor 执行结果，供 DAG 状态和持久化层使用。
- */
-function createExecutorResult({
-  task,
-  agentType,
-  focusLayer,
-  displayName,
-  patch,
-  summary,
-  entities,
-  relations,
-  decisions,
-  risks,
-  openQuestions,
-}: {
-  task: TaskExecutionNode;
-  agentType: ExecutorAgentType;
-  focusLayer: ExecutorAgentResult["focus_layer"];
-  displayName: string;
-  patch: string;
-  summary?: string;
-  entities: KnowledgeGraphEntity[];
-  relations: KnowledgeGraphRelation[];
-  decisions: KnowledgeGraphDecisionInput[];
-  risks: KnowledgeGraphRiskInput[];
-  openQuestions: KnowledgeGraphOpenQuestionInput[];
-}): ExecutorAgentResult {
-  return {
-    task_id: task.task_id,
-    agent_type: agentType,
-    focus_layer: focusLayer,
-    summary: summary?.trim() || `${displayName} 已更新至知识图谱。`,
-    entities,
-    relations,
-    decisions: decisions.length > 0 ? decisions : [],
-    risks: risks.length > 0 ? risks : [],
-    open_questions: openQuestions.length > 0 ? openQuestions : [],
-    quality_result: {
-      passed: true,
-      notes: "Executor 产出已作为结构化补丁写入当前知识图谱状态。",
-    },
-    knowledge_graph_patch: patch,
-  };
-}
-
-/**
  * 从硬阻塞工具结果构造 workflow 可捕获的人审异常。
  */
 function createHumanInputRequiredError({
@@ -412,6 +354,64 @@ function getErrorMessage(error: unknown): string {
  */
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+/**
+ * 将 Executor profile 中的技能名映射到 references 下的 DeepAgents skill source 目录。
+ */
+function getExecutorSkillSources(definition: {
+  referencePath: string;
+  skills: readonly string[];
+}): string[] {
+  return definition.skills.map(
+    (skillName) => `${definition.referencePath}/skills/${skillName}`,
+  );
+}
+
+/**
+ * 生成稳定的 Executor 执行结果，供 DAG 状态和持久化层使用。
+ */
+function createExecutorResult({
+  task,
+  agentType,
+  focusLayer,
+  displayName,
+  patch,
+  summary,
+  entities,
+  relations,
+  decisions,
+  risks,
+  openQuestions,
+}: {
+  task: TaskExecutionNode;
+  agentType: ExecutorAgentType;
+  focusLayer: ExecutorAgentResult["focus_layer"];
+  displayName: string;
+  patch: string;
+  summary?: string;
+  entities: KnowledgeGraphEntity[];
+  relations: KnowledgeGraphRelation[];
+  decisions: KnowledgeGraphDecisionInput[];
+  risks: KnowledgeGraphRiskInput[];
+  openQuestions: KnowledgeGraphOpenQuestionInput[];
+}): ExecutorAgentResult {
+  return {
+    task_id: task.task_id,
+    agent_type: agentType,
+    focus_layer: focusLayer,
+    summary: summary?.trim() || `${displayName} 已更新至知识图谱。`,
+    entities,
+    relations,
+    decisions: decisions.length > 0 ? decisions : [],
+    risks: risks.length > 0 ? risks : [],
+    open_questions: openQuestions.length > 0 ? openQuestions : [],
+    quality_result: {
+      passed: true,
+      notes: "Executor 产出已作为结构化补丁写入当前知识图谱状态。",
+    },
+    knowledge_graph_patch: patch,
+  };
 }
 
 /**

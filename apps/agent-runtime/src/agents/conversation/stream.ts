@@ -444,18 +444,10 @@ async function* streamOrchClarificationForm(
  * Pre-Orchestrator 知识图谱冲突表单：当 Pre-Orchestrator 检测到新项目与已有图谱冲突时输出。
  */
 async function* streamOrchGraphConflictForm(
-  result: PreOrchResult,
+  _result: PreOrchResult,
   options: ConversationStreamOptions,
 ): AsyncGenerator<ConversationStreamEvent> {
   const formContent = formatPreOrchGraphConflictForm();
-
-  if (result.form_description) {
-    yield {
-      type: "text",
-      content: result.form_description,
-      agentType: "orchestrator",
-    };
-  }
 
   yield {
     type: "question-form-start",

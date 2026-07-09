@@ -125,8 +125,9 @@ export function buildPreOrchPayload(input: PreOrchestratorInput) {
  *
  * 安全策略：
  * - 问候类 → 闲聊
- * - 含常见产品关键词且有项目上下文 → 项目演化澄清
- * - 含常见产品关键词但无项目上下文 → 新项目澄清
+ * - 含产品信号 + 已有项目 + 已有知识图谱 → 图谱冲突确认
+ * - 含产品信号 + 已有项目无图谱 → 项目演化澄清
+ * - 含产品信号 + 新项目 → 新项目澄清
  * - 其他非产品消息 → 闲聊（保守路由，避免误生成问题表单）
  */
 export function createFallbackPreOrchResult(
@@ -159,6 +160,20 @@ export function createFallbackPreOrchResult(
       decision: "HANDOFF_CHAT",
       reason:
         "Fallback: message contains no product-related signals, routing to casual chat for safety.",
+    };
+  }
+
+  // 已有项目且知识图谱存在实体 → 无法判断是新项目还是项目演化，
+  // 保守路由到图谱冲突确认，让用户决定处理方式。
+  const hasKnowledgeGraphEntities =
+    input.knowledgeGraph && (input.knowledgeGraph.entities?.length ?? 0) > 0;
+
+  if (input.hasExistingProject && hasKnowledgeGraphEntities) {
+    return {
+      intent: "new_project",
+      decision: "CHECK_GRAPH_CONFLICT",
+      reason:
+        "Fallback: existing project with knowledge graph detected, routing to conflict resolution.",
     };
   }
 
