@@ -1,19 +1,17 @@
 /**
  * Conversation Agent 流式主通道
  *
- * 实现从用户消息到完整响应的 SSE 流式管道，包括：
- * - Pre-Orchestrator 统一入口（恢复判断 + 意图分类 + 路由决策）
- * - Conversation Agent 深度对话阶段（闲聊模式 / 项目模式）
- * - 标记块检测与分段（question-form、user-input）
- * - user-input 完成后自动触发产品工作流图
- * - 工作流确认表单的流式转发
+ * 实现从用户消息到完整响应的 SSE 流式管道，Conversation Agent 职责已收窄为用户输入分解、
+ * 表单问答管理和知识图谱冲突检测。意图路由、工作流恢复、澄清表单均由 Pre-Orchestrator 负责，
+ * 产品工作流调度与执行由 LangGraph workflow.ts 全权拥有。
  *
  * Responsibilities:
  * - streamConversation()：主入口，接收历史消息和选项，产出 SSE 事件流
  * - streamAgentEvents()：驱动 Conversation Agent 并过滤仅用户授权的工具事件
- * - 在 user-input-complete 后驱动 streamWorkflowGraph
- * - 在工作流完成后格式化并输出最终结果 block
- * - Pre-Orchestrator 统一完成 checkpoint 恢复判断和意图分类
+ * - streamNormalProjectFlow()：运行 Conversation Agent 完成 user_input 分解和 question-form 输出
+ * - streamPlanningAfterUserInput()：在 user-input-complete 后驱动 LangGraph 工作流
+ * - streamChatOnlyFlow()：闲聊模式纯文本回复
+ * - 在工作流完成后格式化并输出最终结果 block 和确认表单
  */
 
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "langchain";
@@ -59,6 +57,9 @@ import type {
 import {
   formatPreOrchQuestionForm,
   isPreOrchClarificationFormId,
+  isPreOrchGraphConflictFormId,
+  parseGraphConflictAction,
+  formatPreOrchGraphConflictForm,
   type PreOrchResult,
 } from "../product-workflow/orchestrator-agent/pre-orchestrator-subagent";
 import {
@@ -67,7 +68,6 @@ import {
 
 const PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID = "product-workflow-confirmation";
 const EXECUTOR_BLOCKER_FORM_PREFIX = "executor-blocker-";
-const EXISTING_GRAPH_NEW_PROJECT_FORM_ID = "existing-graph-new-project-check";
 
 /**
  * 流式获取 Conversation Agent 的原始消息事件。
@@ -86,7 +86,6 @@ async function* streamAgentEvents(
   let failedError: unknown = null;
   const baseAgentOptions = {
     enabledTools: options.enabledTools,
-    knowledgeGraph: options.knowledgeGraph,
     mode: options.mode,
   };
   const summaryRecorder = createAgentRunSummaryRecorder({
@@ -253,18 +252,12 @@ export async function* streamConversation(
       return;
     }
 
-    if (formId === EXISTING_GRAPH_NEW_PROJECT_FORM_ID) {
-      const action = parseExistingGraphNewProjectAction(lastMessage.content);
-      if (action === "create_new_workspace") {
-        yield {
-          type: "text",
-          content:
-            "当前工作区的知识图谱已保留。请在工作区列表中新建一个工作区，然后在新工作区中开始这个新项目。",
-          agentType: "conversation",
-        };
-        return;
-      }
+    // Pre-Orchestrator 知识图谱冲突表单答案 → 根据用户选择路由
+    if (formId && isPreOrchGraphConflictFormId(formId)) {
+      yield* streamPreOrchGraphConflictAnswer(messages, options);
+      return;
     }
+
     if (formId && isProductWorkflowResumeFormId(formId)) {
       yield* streamWorkflowResumeAfterFormAnswer(messages, options, formId);
       return;
@@ -357,6 +350,11 @@ async function* streamWithPreOrchestrator(
     return;
   }
 
+  if (preOrchResult.decision === "CHECK_GRAPH_CONFLICT") {
+    yield* streamOrchGraphConflictForm(preOrchResult, options);
+    return;
+  }
+
   yield* streamNormalProjectFlow(messages, options);
 }
 
@@ -443,6 +441,60 @@ async function* streamOrchClarificationForm(
 }
 
 /**
+ * Pre-Orchestrator 知识图谱冲突表单：当 Pre-Orchestrator 检测到新项目与已有图谱冲突时输出。
+ */
+async function* streamOrchGraphConflictForm(
+  result: PreOrchResult,
+  options: ConversationStreamOptions,
+): AsyncGenerator<ConversationStreamEvent> {
+  const formContent = formatPreOrchGraphConflictForm();
+
+  if (result.form_description) {
+    yield {
+      type: "text",
+      content: result.form_description,
+      agentType: "orchestrator",
+    };
+  }
+
+  yield {
+    type: "question-form-start",
+    agentType: "orchestrator",
+  };
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  yield {
+    type: "question-form-complete",
+    content: formContent,
+    agentType: "orchestrator",
+  };
+}
+
+/**
+ * 处理 Pre-Orchestrator 知识图谱冲突表单答案。
+ * "创建新工作区" → 提示用户新建工作区并停止。
+ * "替换当前图谱" → 直接进入产品工作流。
+ */
+async function* streamPreOrchGraphConflictAnswer(
+  messages: ChatMessage[],
+  options: ConversationStreamOptions,
+): AsyncGenerator<ConversationStreamEvent> {
+  const lastMessage = messages.at(-1);
+  const action = parseGraphConflictAction(lastMessage?.content ?? "");
+
+  if (action === "create_new_workspace") {
+    yield {
+      type: "text",
+      content:
+        "当前工作区的知识图谱已保留。请在工作区列表中新建一个工作区，然后在新工作区中开始这个新项目。",
+      agentType: "orchestrator",
+    };
+    return;
+  }
+
+  yield* streamUserInputIntegration(messages, options);
+}
+
+/**
  * 正常项目模式：运行 Conversation Agent 完成 user_input 分解并进入产品工作流。
  */
 async function* streamNormalProjectFlow(
@@ -464,23 +516,8 @@ async function* streamNormalProjectFlow(
         startEvent: "user-input-start",
         completeEvent: "user-input-complete",
       },
-      {
-        startMarker: "<workflow-resume",
-        endMarker: "</workflow-resume>",
-        startEvent: "workflow-resume-start",
-        completeEvent: "workflow-resume-complete",
-      },
     ],
   )) {
-    if (event.type === "workflow-resume-start") {
-      continue;
-    }
-
-    if (event.type === "workflow-resume-complete") {
-      yield* streamWorkflowCheckpointResume(options, messages);
-      return;
-    }
-
     yield event;
 
     if (event.type === "question-form-complete") {
@@ -988,22 +1025,6 @@ function isProductWorkflowResumeFormId(formId: string): boolean {
 }
 
 /**
- * 从图谱处理表单答案中识别用户选择。
- */
-export function parseExistingGraphNewProjectAction(
-  content: string,
-): "replace_current_graph" | "create_new_workspace" | null {
-  const normalized = content.toLowerCase();
-  if (/创建新的工作区|新建工作区|create (a )?new workspace/.test(normalized)) {
-    return "create_new_workspace";
-  }
-  if (/删除当前知识图谱|替换当前|delete .*graph|replace .*graph/.test(normalized)) {
-    return "replace_current_graph";
-  }
-  return null;
-}
-
-/**
  * 将原始表单答案包装成合法 user_input，供恢复后的 Executor Agent 读取用户补充信息。
  */
 function createFormAnswerUserInputBlock(content: string): string {
@@ -1035,18 +1056,3 @@ function createEmptyUserInputBlock(): string {
   )}\n</user-input>`;
 }
 
-function createLegacyContinueUserInputBlock(content: string): string {
-  return `<user-input>\n${JSON.stringify(
-    {
-      user_input: [
-        {
-          index: 1,
-          content: "",
-          type: "继续执行",
-        },
-      ],
-    },
-    null,
-    2,
-  )}\n</user-input>`;
-}

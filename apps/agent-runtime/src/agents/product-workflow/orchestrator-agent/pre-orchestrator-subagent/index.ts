@@ -20,4 +20,7 @@ export {
   createFallbackPreOrchResult,
   formatPreOrchQuestionForm,
   isPreOrchClarificationFormId,
+  formatPreOrchGraphConflictForm,
+  isPreOrchGraphConflictFormId,
+  parseGraphConflictAction,
 } from "./result";

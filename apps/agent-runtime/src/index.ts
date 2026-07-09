@@ -12,7 +12,6 @@
  */
 
 export {
-  parseExistingGraphNewProjectAction,
   streamConversation,
 } from "./agents/conversation/stream";
 export {
@@ -64,3 +63,4 @@ export type {
   StreamChunk,
 } from "./types";
 export { getFormAnswerId, isFormAnswer } from "./utils/form-parser";
+export { parseGraphConflictAction, isPreOrchGraphConflictFormId } from "./agents/product-workflow/orchestrator-agent/pre-orchestrator-subagent";

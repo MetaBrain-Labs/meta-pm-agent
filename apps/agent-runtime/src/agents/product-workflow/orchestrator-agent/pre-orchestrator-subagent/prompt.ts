@@ -69,6 +69,23 @@ Classify as project_evolution when the message:
 
 ## Non-resume routing decisions
 
+### CHECK_GRAPH_CONFLICT (graph conflict check — evaluate BEFORE other product routing)
+Use when ALL of the following are true:
+- \`intent\` is \`new_project\`.
+- \`knowledge_graph_summary\` is not null (entities_count > 0, meaning an existing product knowledge graph is present in this workspace).
+- The user describes a clearly different product or a standalone new project, not a revision or extension of the current project.
+
+When uncertain whether the request is a new project vs. project evolution, prefer \`CHECK_GRAPH_CONFLICT\` to let the user decide.
+
+The runtime will render a fixed conflict-resolution form with two options: "Delete the current knowledge graph and start the new project in this workspace" and "Create a new workspace for the new project".
+
+For \`CHECK_GRAPH_CONFLICT\`, the response should include:
+- \`intent\`: "new_project"
+- \`decision\`: "CHECK_GRAPH_CONFLICT"
+- \`reason\`: concise summary of why the conflict was detected (max 600 chars)
+- \`form_title\` and \`form_description\`: use a brief localized summary (the runtime provides the full form UI)
+- \`questions\`: omit — the runtime provides a fixed conflict-resolution form
+
 ### HANDOFF_CHAT
 Use when intent is casual_chat. The Conversation Agent will handle direct chat.
 
@@ -126,7 +143,7 @@ Target the information most likely to improve downstream agent quality:
 ## Output format
 Return exactly one JSON object with:
 - \`intent\`: "casual_chat" | "new_project" | "project_evolution"
-- \`decision\`: "HANDOFF_CHAT" | "ASK_CLARIFICATION" | "PROCEED_TO_WORKFLOW" | "RESUME_WORKFLOW"
+- \`decision\`: "HANDOFF_CHAT" | "ASK_CLARIFICATION" | "PROCEED_TO_WORKFLOW" | "RESUME_WORKFLOW" | "CHECK_GRAPH_CONFLICT"
 - \`reason\`: brief explanation (max 600 chars)
 - \`form_title\`: title for the clarification form (only for ASK_CLARIFICATION, concise, in user's language)
 - \`form_description\`: one or two sentences shown above the questions (only for ASK_CLARIFICATION, in user's language)

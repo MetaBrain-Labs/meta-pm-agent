@@ -20,6 +20,7 @@ import { z } from "zod";
 import type { ProductKnowledgeGraph } from "@repo/shared";
 
 const ORCHESTRATOR_CLARIFICATION_FORM_PREFIX = "orch-clarification";
+const ORCHESTRATOR_GRAPH_CONFLICT_FORM_PREFIX = "orch-graph-conflict";
 
 /**
  * Pre-Orch 澄清问题的字段定义。
@@ -49,8 +50,8 @@ export const PreOrchResultSchema = z.object({
     .enum(["casual_chat", "new_project", "project_evolution"])
     .describe("Classified user intent for this turn"),
   decision: z
-    .enum(["HANDOFF_CHAT", "ASK_CLARIFICATION", "PROCEED_TO_WORKFLOW", "RESUME_WORKFLOW"])
-    .describe("Routing decision: chat back to Conversation, ask questions, go to product workflow, or resume interrupted workflow from checkpoint"),
+    .enum(["HANDOFF_CHAT", "ASK_CLARIFICATION", "PROCEED_TO_WORKFLOW", "RESUME_WORKFLOW", "CHECK_GRAPH_CONFLICT"])
+    .describe("Routing decision: chat back to Conversation, ask questions, go to product workflow, resume interrupted workflow, or resolve existing-graph new-project conflict"),
   reason: z
     .string()
     .min(1)
@@ -282,6 +283,62 @@ export function formatPreOrchQuestionForm(result: PreOrchResult): string {
  */
 export function isPreOrchClarificationFormId(formId: string): boolean {
   return formId.startsWith(ORCHESTRATOR_CLARIFICATION_FORM_PREFIX);
+}
+
+/**
+ * 标识该 Form ID 是否来自 Pre-Orchestrator 的知识图谱冲突表单。
+ */
+export function isPreOrchGraphConflictFormId(formId: string): boolean {
+  return formId.startsWith(ORCHESTRATOR_GRAPH_CONFLICT_FORM_PREFIX);
+}
+
+/**
+ * 生成知识图谱冲突确认表单。
+ * 当用户在新工作区请求新项目但当前工作区已有知识图谱时，要求用户选择处理方式。
+ */
+export function formatPreOrchGraphConflictForm(): string {
+  const form = {
+    description:
+      "当前工作区已存在一个产品知识图谱。请选择如何处理新项目：",
+    questions: [
+      {
+        id: "action",
+        label: "如何处理当前知识图谱？",
+        type: "radio",
+        required: true,
+        options: [
+          "删除当前知识图谱，并在当前工作区开始新项目",
+          "创建新的工作区开始新项目",
+        ],
+      },
+    ],
+    submitLabel: "确认",
+  };
+
+  const formId = `${ORCHESTRATOR_GRAPH_CONFLICT_FORM_PREFIX}-${Date.now()}`;
+  const title = escapeAttribute("知识图谱冲突");
+
+  return `<question-form id="${formId}" title="${title}">\n${JSON.stringify(
+    form,
+    null,
+    2,
+  )}\n</question-form>`;
+}
+
+/**
+ * 解析知识图谱冲突表单答案，返回用户选择的操作。
+ */
+export function parseGraphConflictAction(
+  content: string,
+): "replace_current_graph" | "create_new_workspace" | null {
+  const normalized = content.toLowerCase();
+  if (/创建新的工作区|新建工作区|create (a )?new workspace/.test(normalized)) {
+    return "create_new_workspace";
+  }
+  if (/删除当前知识图谱|替换当前|delete .*graph|replace .*graph/.test(normalized)) {
+    return "replace_current_graph";
+  }
+  return null;
 }
 
 /**

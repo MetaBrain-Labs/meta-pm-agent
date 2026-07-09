@@ -20,7 +20,8 @@ import {
   createWorkflowThreadId,
   extractQuestionFormId,
   getFormAnswerId,
-  parseExistingGraphNewProjectAction,
+  isPreOrchGraphConflictFormId,
+  parseGraphConflictAction,
   releaseQuestionFormHumanInterrupt,
   resumeQuestionFormHumanInterrupt,
   streamConversation,
@@ -905,22 +906,20 @@ function isProductWorkflowFinalConfirmationAnswer(
 }
 
 /**
- * 识别用户是否在已有图谱的新项目确认表单中选择替换当前图谱。
+ * 识别用户是否在 Pre-Orchestrator 知识图谱冲突确认表单中选择替换当前图谱。
  */
 function parseLatestExistingGraphNewProjectAction(
   messages: { role: string; content: string }[],
-): ReturnType<typeof parseExistingGraphNewProjectAction> {
+): ReturnType<typeof parseGraphConflictAction> {
   const latestUserMessage = messages
     .filter((message) => message.role === "user")
     .at(-1);
   if (!latestUserMessage) return null;
-  if (
-    getFormAnswerId(latestUserMessage.content) !==
-    "existing-graph-new-project-check"
-  ) {
+  const formId = getFormAnswerId(latestUserMessage.content);
+  if (!formId || !isPreOrchGraphConflictFormId(formId)) {
     return null;
   }
-  return parseExistingGraphNewProjectAction(latestUserMessage.content);
+  return parseGraphConflictAction(latestUserMessage.content);
 }
 
 /**
