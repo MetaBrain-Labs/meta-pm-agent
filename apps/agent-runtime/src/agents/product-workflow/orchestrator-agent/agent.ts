@@ -86,7 +86,7 @@ export async function* streamOrchestratorAgent(
       : [createPlannerSubagent()],
     payload,
     schema: outputSchema as any,
-    maxRetries: isPreCheck ? 3 : 0,
+    maxRetries: 0,
     fallback: (reason: string) =>
       isPreCheck
         ? createFallbackPreOrchResult(input)
