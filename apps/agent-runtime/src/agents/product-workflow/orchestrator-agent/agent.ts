@@ -86,7 +86,7 @@ export async function* streamOrchestratorAgent(
       : [createPlannerSubagent()],
     payload,
     schema: outputSchema as any,
-    maxRetries: isPreCheck ? 3 : 0,
+    maxRetries: 0,
     fallback: (reason: string) =>
       isPreCheck
         ? createFallbackPreOrchResult(input)
@@ -234,6 +234,8 @@ function isPreOrchestratorInput(
 }
 
 function createOrchestratorPayload(input: OrchestratorAgentInput) {
+  const compactGraph = compactGraphForPlanner(input.knowledgeGraph);
+
   return {
     mode: "full",
     workspace_id: input.workspaceId ?? null,
@@ -260,10 +262,57 @@ function createOrchestratorPayload(input: OrchestratorAgentInput) {
     })),
     planner_context: JSON.stringify({
       product_context: input.productContext || "No product context provided.",
-      product_knowledge_graph: input.knowledgeGraph,
+      product_knowledge_graph: compactGraph,
       request_analysis: input.requestAnalysis,
       user_input: input.userInput,
     }),
+  };
+}
+
+/**
+ * 为 Planner SubAgent 生成精简知识图谱摘要，去除 entity description 和 relation description。
+ * Planner 仅需了解图谱结构（有哪些节点、什么类型、关系拓扑）即可生成 DAG，
+ * 无需完整节点描述（每个 entity description 约 200-600 字符，在 100+ 节点时浪费严重）。
+ */
+function compactGraphForPlanner(
+  knowledgeGraph: OrchestratorAgentInput["knowledgeGraph"],
+) {
+  const MAX_ENTITY_NAME = 120;
+  const MAX_SUMMARY_LEN = 600;
+
+  return {
+    current_state: knowledgeGraph.current_state,
+    description: (knowledgeGraph.description ?? "").slice(0, 800),
+    counts: {
+      entities: knowledgeGraph.entities.length,
+      relations: knowledgeGraph.relations.length,
+      decisions: knowledgeGraph.decisions.length,
+      risks: knowledgeGraph.risks.length,
+      open_questions: knowledgeGraph.open_questions.length,
+    },
+    latest_summaries: knowledgeGraph.summary
+      .slice(-4)
+      .map((s) =>
+        s.length > MAX_SUMMARY_LEN
+          ? `${s.slice(0, MAX_SUMMARY_LEN)}...`
+          : s,
+      ),
+    entities: knowledgeGraph.entities.map((node) => ({
+      id: node.id,
+      type: node.type,
+      name:
+        node.name.length > MAX_ENTITY_NAME
+          ? `${node.name.slice(0, MAX_ENTITY_NAME)}...`
+          : node.name,
+      source_task_id: node.source_task_id,
+      status: node.status,
+    })),
+    relations: knowledgeGraph.relations.map((rel) => ({
+      id: rel.id,
+      type: rel.type,
+      source: rel.source,
+      target: rel.target,
+    })),
   };
 }
 

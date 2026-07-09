@@ -39,9 +39,7 @@ import {
 } from "../../common/tool-access";
 import {
   compactPreviousExecutorResults,
-  compactRequestAnalysisForTask,
   compactTaskExecutionPlan,
-  compactUserInputForTask,
   createGraphContextSummary,
   createTaskRelevantGraphContext,
 } from "../common/context";
@@ -127,10 +125,15 @@ export async function* streamExecutorAgent(
   );
   // Executor 默认只接收摘要和任务相关子图，完整图谱保留在工具状态中按需查询。
   const graphContextSummary = createGraphContextSummary(input.knowledgeGraph);
+  // recent_nodes 已在 graph_context_summary 中提供，task_relevant_context 不再重复传输。
+  const recentNodeIds = new Set(
+    graphContextSummary.recent_nodes.map((node) => node.id),
+  );
   const taskRelevantContext = createTaskRelevantGraphContext({
     knowledgeGraph: input.knowledgeGraph,
     task: input.task,
     previousResults: input.previousResults,
+    excludeNodeIds: recentNodeIds,
   });
 
   const textGen = runTextAgent({
@@ -158,15 +161,6 @@ export async function* streamExecutorAgent(
       task_relevant_context: taskRelevantContext,
       task: input.task,
       plan_context: compactTaskExecutionPlan(input.plan),
-      request_analysis: compactRequestAnalysisForTask(
-        input.requestAnalysis,
-        input.task,
-      ),
-      user_input: compactUserInputForTask({
-        analysis: input.requestAnalysis,
-        task: input.task,
-        userInput: input.userInput,
-      }),
       previous_results: compactPreviousExecutorResults(input.previousResults),
     },
     fallback: () => createFallbackKnowledgeGraphPatch(input.task),
@@ -242,64 +236,6 @@ export async function* streamExecutorAgent(
     risks: graphDelta.risks,
     openQuestions: graphDelta.open_questions,
   });
-}
-
-/**
- * 将 Executor profile 中的技能名映射到 references 下的 DeepAgents skill source 目录。
- */
-function getExecutorSkillSources(definition: {
-  referencePath: string;
-  skills: readonly string[];
-}): string[] {
-  return definition.skills.map(
-    (skillName) => `${definition.referencePath}/skills/${skillName}`,
-  );
-}
-
-/**
- * 生成稳定的 Executor 执行结果，供 DAG 状态和持久化层使用。
- */
-function createExecutorResult({
-  task,
-  agentType,
-  focusLayer,
-  displayName,
-  patch,
-  summary,
-  entities,
-  relations,
-  decisions,
-  risks,
-  openQuestions,
-}: {
-  task: TaskExecutionNode;
-  agentType: ExecutorAgentType;
-  focusLayer: ExecutorAgentResult["focus_layer"];
-  displayName: string;
-  patch: string;
-  summary?: string;
-  entities: KnowledgeGraphEntity[];
-  relations: KnowledgeGraphRelation[];
-  decisions: KnowledgeGraphDecisionInput[];
-  risks: KnowledgeGraphRiskInput[];
-  openQuestions: KnowledgeGraphOpenQuestionInput[];
-}): ExecutorAgentResult {
-  return {
-    task_id: task.task_id,
-    agent_type: agentType,
-    focus_layer: focusLayer,
-    summary: summary?.trim() || `${displayName} 已更新至知识图谱。`,
-    entities,
-    relations,
-    decisions: decisions.length > 0 ? decisions : [],
-    risks: risks.length > 0 ? risks : [],
-    open_questions: openQuestions.length > 0 ? openQuestions : [],
-    quality_result: {
-      passed: true,
-      notes: "Executor 产出已作为结构化补丁写入当前知识图谱状态。",
-    },
-    knowledge_graph_patch: patch,
-  };
 }
 
 /**
@@ -418,6 +354,64 @@ function getErrorMessage(error: unknown): string {
  */
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+/**
+ * 将 Executor profile 中的技能名映射到 references 下的 DeepAgents skill source 目录。
+ */
+function getExecutorSkillSources(definition: {
+  referencePath: string;
+  skills: readonly string[];
+}): string[] {
+  return definition.skills.map(
+    (skillName) => `${definition.referencePath}/skills/${skillName}`,
+  );
+}
+
+/**
+ * 生成稳定的 Executor 执行结果，供 DAG 状态和持久化层使用。
+ */
+function createExecutorResult({
+  task,
+  agentType,
+  focusLayer,
+  displayName,
+  patch,
+  summary,
+  entities,
+  relations,
+  decisions,
+  risks,
+  openQuestions,
+}: {
+  task: TaskExecutionNode;
+  agentType: ExecutorAgentType;
+  focusLayer: ExecutorAgentResult["focus_layer"];
+  displayName: string;
+  patch: string;
+  summary?: string;
+  entities: KnowledgeGraphEntity[];
+  relations: KnowledgeGraphRelation[];
+  decisions: KnowledgeGraphDecisionInput[];
+  risks: KnowledgeGraphRiskInput[];
+  openQuestions: KnowledgeGraphOpenQuestionInput[];
+}): ExecutorAgentResult {
+  return {
+    task_id: task.task_id,
+    agent_type: agentType,
+    focus_layer: focusLayer,
+    summary: summary?.trim() || `${displayName} 已更新至知识图谱。`,
+    entities,
+    relations,
+    decisions: decisions.length > 0 ? decisions : [],
+    risks: risks.length > 0 ? risks : [],
+    open_questions: openQuestions.length > 0 ? openQuestions : [],
+    quality_result: {
+      passed: true,
+      notes: "Executor 产出已作为结构化补丁写入当前知识图谱状态。",
+    },
+    knowledge_graph_patch: patch,
+  };
 }
 
 /**

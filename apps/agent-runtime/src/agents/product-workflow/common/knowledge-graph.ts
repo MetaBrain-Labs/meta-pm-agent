@@ -31,8 +31,8 @@ Product knowledge graph metamodel:
  */
 export const PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT = `
 ${PRODUCT_KNOWLEDGE_GRAPH_METAMODEL_PROMPT.trim()}
-- The knowledge graph state is a structured JSON object maintained in memory. Read compact state via kg_file_read or kg_file_read_summary before making updates.
-- Query detailed graph context only when needed via kg_file_query_nodes, kg_file_query_relations, kg_file_read_task_delta, or kg_file_read_by_source_task.
+- The knowledge graph state is a structured JSON object maintained in memory. Read compact state via kg_file_read before making updates.
+- Query detailed graph context only when needed via kg_file_query_nodes, kg_file_query_relations, or kg_file_read_by_source_task.
 - Treat the current knowledge graph state as the source of truth for follow-up executor updates.
 `;
 

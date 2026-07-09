@@ -20,10 +20,8 @@ import { z } from "zod";
 export const AgentRuntimeToolSchema = z.enum([
   "web_search",
   "kg_file_read",
-  "kg_file_read_summary",
   "kg_file_query_nodes",
   "kg_file_query_relations",
-  "kg_file_read_task_delta",
   "kg_file_read_by_source_task",
   "kg_file_add_summary",
   "kg_file_add_nodes",

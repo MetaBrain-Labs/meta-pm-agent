@@ -65,10 +65,13 @@ export function createTaskRelevantGraphContext({
   knowledgeGraph,
   task,
   previousResults,
+  excludeNodeIds,
 }: {
   knowledgeGraph: ProductKnowledgeGraph;
   task: TaskExecutionNode;
   previousResults: ExecutorAgentResult[];
+  /** 已通过 graph_context_summary.recent_nodes 告知 Executor 的节点 ID，避免重复传输。 */
+  excludeNodeIds?: Set<string>;
 }) {
   const sourceTaskIds = new Set([task.task_id, ...task.depends_on]);
   const dependencyResultTaskIds = new Set(task.depends_on);
@@ -81,6 +84,12 @@ export function createTaskRelevantGraphContext({
     keywords,
   );
   const relevantNodeIds = new Set(relevantNodes.map((node) => node.id));
+
+  // 排除已在 graph_context_summary.recent_nodes 中告知 Executor 的节点，避免重复传输。
+  const deduplicatedNodes = excludeNodeIds
+    ? relevantNodes.filter((node) => !excludeNodeIds.has(node.id))
+    : relevantNodes;
+
   const relevantRelations = selectRelevantRelations(
     knowledgeGraph,
     sourceTaskIds,
@@ -93,11 +102,10 @@ export function createTaskRelevantGraphContext({
     dependency_results: previousResults
       .filter((result) => dependencyResultTaskIds.has(result.task_id))
       .map(compactExecutorResult),
-    nodes: relevantNodes.map((node) => ({
+    nodes: deduplicatedNodes.map((node) => ({
       id: node.id,
       type: node.type,
       name: truncateText(node.name),
-      description: truncateText(node.description ?? ""),
       source_task_id: node.source_task_id,
       status: node.status,
     })),
@@ -106,7 +114,6 @@ export function createTaskRelevantGraphContext({
       type: relation.type,
       source: relation.source,
       target: relation.target,
-      description: truncateText(relation.description ?? ""),
       source_task_id: relation.source_task_id,
     })),
   };
