@@ -1,20 +1,23 @@
 /**
  * Conversation Agent 创建
  *
- * 负责创建 Conversation Agent 实例，该 Agent 是用户交互的主入口。
- * Pre-Orchestrator 完成意图路由后，Conversation Agent 仅负责：
- * - 闲聊模式：自然语言回复
- * - 项目模式：用户输入分解、表单答案整合、知识图谱冲突检查
+ * 负责创建 Conversation Agent 实例。Conversation Agent 职责已收窄为三项核心能力：
+ * - 闲聊模式（chat）：自然语言回复，不产生标记块或表单
+ * - 项目模式（project）：用户输入分解（<user-input>）、表单答案整合、知识图谱冲突检查
+ *
+ * 意图路由（casual_chat/new_project/project_evolution）由 Pre-Orchestrator 负责。
+ * 工作流恢复检测由 Pre-Orchestrator 负责。
+ * 产品工作流调度与执行由 LangGraph workflow.ts 全权拥有。
  *
  * Responsibilities:
  * - createConversationAgent()：创建项目模式 DeepAgent 实例
  * - createConversationAgentSystemPrompt()：根据模式构造 system prompt
  * - createChatOnlyAgent()：创建纯闲聊模式 Agent 实例
- * - 注入运行时日期上下文，防止 Agent 使用过期年份
+ * - 注入运行时日期上下文和知识图谱冲突检测
  */
 
 import { createDeepAgent } from "deepagents";
-import type { AgentRuntimeTool, ProductKnowledgeGraph } from "@repo/shared";
+import type { AgentRuntimeTool } from "@repo/shared";
 import { canAgentUseTool, createToolsForAgent } from "../common/tool-access";
 import { createChatModel } from "../common/model";
 import { createDefaultAgentMiddleware } from "../common/middleware";
@@ -31,7 +34,6 @@ import { DISCOVERY_PROMPT, CHAT_ONLY_PROMPT } from "./prompt";
 
 export interface ConversationAgentOptions {
   enabledTools?: AgentRuntimeTool[];
-  knowledgeGraph?: ProductKnowledgeGraph | null;
   summaryRecorder?: AgentRunSummaryRecorder;
   /** 当设为 "chat" 时使用纯闲聊模式，不产生标记块或表单 */
   mode?: "project" | "chat";
@@ -78,7 +80,6 @@ export function createConversationAgentSystemPrompt(
   return buildConversationPrompt({
     runtimeContext: getRuntimeDateContext(),
     webSearchEnabled: options.mode === "chat" ? false : webSearchEnabled,
-    knowledgeGraph: options.mode === "chat" ? null : options.knowledgeGraph,
     mode: options.mode ?? "project",
   });
 }
@@ -86,7 +87,6 @@ export function createConversationAgentSystemPrompt(
 interface ConversationPromptOptions {
   runtimeContext: RuntimeDateContext;
   webSearchEnabled: boolean;
-  knowledgeGraph?: ProductKnowledgeGraph | null;
   mode?: "project" | "chat";
 }
 
@@ -96,33 +96,26 @@ interface ConversationPromptOptions {
 function buildConversationPrompt({
   runtimeContext,
   webSearchEnabled,
-  knowledgeGraph,
   mode,
 }: ConversationPromptOptions): string {
   const runtimePrompt = buildRuntimeContextPrompt(runtimeContext);
 
-  // 纯闲聊模式：只用简短提示，不加图谱保护和工具说明
+  // 纯闲聊模式：只用简短提示
   if (mode === "chat") {
     return `${CHAT_ONLY_PROMPT}
 
 ${runtimePrompt}`;
   }
 
-  const graphGuardPrompt = buildWorkspaceKnowledgeGraphPrompt(knowledgeGraph);
-
   if (!webSearchEnabled) {
     return `${DISCOVERY_PROMPT}
 
-${runtimePrompt}
-
-${graphGuardPrompt}`;
+${runtimePrompt}`;
   }
 
   return `${DISCOVERY_PROMPT}
 
 ${runtimePrompt}
-
-${graphGuardPrompt}
 
 ## Web search tool
 
@@ -146,38 +139,3 @@ function buildRuntimeContextPrompt(context: RuntimeDateContext): string {
 - Treat relative-time phrases as relative to this date, not to the model's training data.`;
 }
 
-/**
- * 注入当前工作区图谱状态，提醒 Conversation Agent 避免把新项目混入旧图谱。
- */
-function buildWorkspaceKnowledgeGraphPrompt(
-  knowledgeGraph: ProductKnowledgeGraph | null | undefined,
-): string {
-  const graph = knowledgeGraph ?? null;
-  const nodeCount = graph?.entities.length ?? 0;
-  const relationCount = graph?.relations.length ?? 0;
-  const hasExistingGraph = nodeCount > 0 && relationCount > 0;
-
-  if (!graph || !hasExistingGraph) {
-    return `## Current workspace knowledge graph
-
-- Existing complete graph: no.`;
-  }
-
-  const recentNodes = graph.entities
-    .slice(Math.max(0, graph.entities.length - 5))
-    .map((node) => `${node.id}:${node.name}`)
-    .join(", ");
-
-  return `## Current workspace knowledge graph
-
-- Existing complete graph: yes.
-- Node count: ${nodeCount}.
-- Relation count: ${relationCount}.
-- Recent nodes: ${recentNodes || "none"}.
-
-If the latest user request appears to start a different new project instead of revising or extending the current project, do not emit a <user-input> block. Ask exactly one Question Form with id "existing-graph-new-project-check" and one required radio question with id "action". The form must warn that the current workspace already has a product knowledge graph and must ask whether to delete the current graph and continue in this workspace, or create a new workspace for the new project.
-
-This graph guard has priority over ordinary request-discovery forms. A standalone broad project request such as "design/build/create a [product/tool/system]" must be treated as a possible new project unless the user explicitly says they are continuing, revising, extending, or summarizing the current project. Do not infer continuation only because the existing graph has related domain nodes. When uncertain, ask the "existing-graph-new-project-check" form first, before asking any scope, goal, audience, or feature clarification questions.
-
-Use the user's language for the title, description, question label, and submit label. For Chinese, use these exact option labels: "删除当前知识图谱，并在当前工作区开始新项目" and "创建新的工作区开始新项目". For English, use these exact option labels: "Delete the current knowledge graph and start the new project in this workspace" and "Create a new workspace for the new project".`;
-}

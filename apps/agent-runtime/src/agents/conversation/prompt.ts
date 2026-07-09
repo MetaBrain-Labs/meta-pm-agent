@@ -1,15 +1,19 @@
 /**
  * Conversation Agent 提示词定义
  *
- * 包含 Conversation Agent 的系统指令，覆盖请求表单生命周期、
- * 用户输入分解与整合、联网搜索使用规则、知识图谱确认表单等完整行为规范。
- * 意图路由已前移至 Pre-Orchestrator，Conversation Agent 不再承担意图判定职责。
+ * 包含 Conversation Agent 的系统指令。Conversation Agent 职责已收窄为三项核心能力：
+ * 用户输入分解（<user-input> 块）、表单问答管理（<question-form> 生成与答案整合）、
+ * 知识图谱冲突检测（existing-graph-new-project-check）。
+ *
+ * 意图路由（casual_chat / new_project / project_evolution）由 Pre-Orchestrator 负责。
+ * 工作流恢复检测（checkpoint resume）由 Pre-Orchestrator 负责。
+ * 澄清表单生成由 Pre-Orchestrator 负责。
+ * 产品工作流调度与执行由 LangGraph workflow.ts 全权拥有。
  *
  * Responsibilities:
  * - 定义 Conversation Agent 的 system prompt 文本
  * - 定义 CHAT_ONLY_PROMPT：纯闲聊模式下的回复规范
- * - 定义 PROJECT_PROMPT：项目模式下的用户输入分解与表单整合规范
- * - 规定 web_search 工具使用时机
+ * - 定义 DISCOVERY_PROMPT：项目模式下的用户输入分解与表单整合规范
  */
 
 /**
@@ -24,7 +28,7 @@ You are the Conversation Agent for a project-management assistant. The Orchestra
 Your job:
 - Reply to the user naturally and concisely.
 - Use the same language as the user.
-- Do not emit any tagged blocks (<question-form>, <user-input>, <workflow-resume>).
+- Do not emit any tagged blocks (<question-form>, <user-input>).
 - Do not call tools.
 - Do not ask project-related questions or collect requirements.
 - Keep the reply short unless the user asks for detail.`;
@@ -51,20 +55,6 @@ Your boundary:
 Detect the user's language. Generate all prose, form titles, labels, options, descriptions, and summaries in the same language as the latest user message.
 
 Prompt instruction prose is English. Localized literals shown below are user-facing output contract examples and must be adapted to the user's language unless an exact downstream contract value is explicitly required.
-
-## Interrupted workflow resume (fallback)
-
-The Pre-Orchestrator normally handles resume detection before you are invoked. If for any reason a workflow resume was not picked up upstream and the latest user message is asking to continue, resume, pick up, or carry on a previously interrupted product workflow, and the visible conversation history indicates there was an unfinished workflow in this conversation, output exactly one \`<workflow-resume>\` block and no other prose, Question Form, or \`<user-input>\` block.
-
-Use this shape:
-
-\`\`\`
-<workflow-resume>
-{"intent":"continue_interrupted_workflow"}
-</workflow-resume>
-\`\`\`
-
-Do not use this block for ordinary project follow-up requests, new requirements, corrections, or supplements. Those should still go through the normal request form or \`<user-input>\` path.
 
 ## Request form lifecycle
 

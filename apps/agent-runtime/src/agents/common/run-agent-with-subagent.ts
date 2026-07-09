@@ -115,8 +115,39 @@ export interface RunAgentWithSubagentOptions<T, AgentType extends string> {
     ): { success: true; data: T } | { success: false; error: unknown };
   };
   fallback: (reason: string) => T;
+  /** JSON 解析失败或 schema 校验失败时的最大重试次数，默认 0（不重试，直接 fallback）。 */
+  maxRetries?: number;
   suppressInvalidJsonReasoning?: boolean;
   signal?: AbortSignal;
+}
+
+/**
+ * 构造 JSON 结构化失败时的重试载荷，将原始任务、失败原因和上一次原始输出
+ * 打包为 retry_context，供 Agent 在下一轮尝试中定位并修复错误。
+ */
+function buildRetryPayload(
+  originalPayload: unknown,
+  attempt: number,
+  maxRetries: number,
+  error: string,
+  previousRawOutput: string,
+): string {
+  const basePayload =
+    originalPayload && typeof originalPayload === "object" && !Array.isArray(originalPayload)
+      ? (originalPayload as Record<string, unknown>)
+      : { original_task: originalPayload };
+
+  return JSON.stringify({
+    ...basePayload,
+    retry_context: {
+      attempt: attempt + 1,
+      max_attempts: maxRetries + 1,
+      error,
+      previous_raw_output: previousRawOutput.slice(0, 3000),
+      instruction:
+        "Your previous attempt produced invalid output. Review the error above, examine the previous raw output to understand what went wrong, fix the issues, and produce valid JSON that strictly matches the required schema. Do not repeat the same mistake.",
+    },
+  });
 }
 
 /**
@@ -346,12 +377,17 @@ async function* handleSubagentReasoning<AgentType extends string>(
 
 /**
  * 运行携带同步 SubAgent 的 DeepAgent，并把 task 工具轨迹转换为业务流事件。
+ *
+ * 当 options.maxRetries 大于 0 时，JSON 解析失败或 schema 校验失败不会立即回退，
+ * 而是将错误信息打包进 retry_context 重试 Agent，最多重试 maxRetries 次。
+ * 所有重试均失败后才使用 fallback。
  */
 export async function* runAgentWithSubagent<T, AgentType extends string>(
   options: RunAgentWithSubagentOptions<T, AgentType>,
 ): AsyncGenerator<AgentWithSubagentEvent<AgentType>, T, void> {
+  const maxRetries = options.maxRetries ?? 0;
+  const maxAttempts = maxRetries + 1;
   const startTime = Date.now();
-  let tokenUsage: ReturnType<typeof getTokenUsage> = null;
   const tools = options.tools ?? [];
   const visibleToolNameSet = new Set(tools.map((tool) => tool.name));
   const summaryRecorder = createAgentRunSummaryRecorder({
@@ -368,146 +404,226 @@ export async function* runAgentWithSubagent<T, AgentType extends string>(
     },
   });
 
-  try {
-    const agent = createDeepAgent({
-      model: createChatModel(options.modelOptions) as any,
-      systemPrompt: options.systemPrompt,
-      tools,
-      name: options.name,
-      subagents: options.subagents,
-      middleware: [
-        createDeepAgentToolAllowlistMiddleware({
-          agentName: options.name,
-          allowedToolNames: [...tools.map((tool) => tool.name), "task"],
-        }),
-        ...createDefaultAgentMiddleware(),
-        ...createAgentRunSummaryMiddleware(summaryRecorder),
-      ] as any,
-    });
+  /** 上一次尝试的失败原因，用于重试时反馈给 Agent。 */
+  let lastError = "";
+  /** 上一次尝试的原始输出文本，用于重试时反馈给 Agent。 */
+  let lastRawOutput = "";
+  /** 所有尝试中最后有效的 token 用量。 */
+  let finalTokenUsage: ReturnType<typeof getTokenUsage> = null;
 
-    const run = await agent.stream(
-      {
-        messages: [new HumanMessage(JSON.stringify(options.payload))],
-      },
-      { streamMode: "messages", signal: options.signal, subgraphs: true },
-    );
-
-    let responseText = "";
-    /** 跟踪 task 工具调用中 tool_call_id -> subagentType 的映射，用于结果匹配。 */
-    const taskCallToSubagent = new Map<string, string>();
-    /** 当前仍在执行的 SubAgent 调用，用于把模型 reasoning 归属到内嵌卡片。 */
-    const openSubagentCalls: Array<{
-      toolCallId?: string;
-      subagentType: string;
-    }> = [];
-    const subagentTaskCallExtractor = createSubagentTaskCallExtractor();
-
-    for await (const [namespace, chunk] of run) {
-      const [message, metadata] = chunk;
-      const isSubagentMessage = isSubagentNamespace(namespace);
-
-      // task 工具结果可能带有 tools:task 命名空间，必须先关闭 SubAgent 调用，
-      // 避免把子代理返回值误记为主 Agent 的流式输出。
-      const subagentResultHandled = yield* handleSubagentTaskResult(
-        message,
-        options,
-        summaryRecorder,
-        taskCallToSubagent,
-        openSubagentCalls,
-      );
-      if (subagentResultHandled) {
-        continue;
-      }
-
-      // SubAgent 内部消息只归档推理和 token 用量，不参与主 Agent 最终 JSON 拼接。
-      if (isSubagentMessage) {
-        yield* handleSubagentReasoning(
-          message,
-          openSubagentCalls,
-          options,
-          summaryRecorder,
-        );
-        const usage = getTokenUsage(message);
-        if (usage) tokenUsage = usage;
-        continue;
-      }
-
-      // 主 Agent 层面：完整处理 task 委派、工具事件、推理和文本。
-      const subagentTaskCalls = subagentTaskCallExtractor.extract(message);
-
-      yield* handleSubagentTaskCalls(
-        subagentTaskCalls,
-        options,
-        summaryRecorder,
-        taskCallToSubagent,
-        openSubagentCalls,
-      );
-
-      yield* handleVisibleToolEvents(
-        message,
-        visibleToolNameSet,
-        options,
-        summaryRecorder,
-      );
-      if (shouldSkipTextAfterToolResult(message, visibleToolNameSet)) {
-        continue;
-      }
-
-      yield* handleMainAgentReasoning(
-        message,
-        openSubagentCalls,
-        subagentTaskCalls.length > 0,
-        options,
-        summaryRecorder,
-      );
-
-      const text = getTextContent(message);
-      responseText += text;
-      summaryRecorder.recordOutput(text);
-
-      const usage = getTokenUsage(message);
-      if (usage) tokenUsage = usage;
-    }
-
-    const tokenUsageSummary = tokenUsage
-      ? {
-          ...tokenUsage,
-          durationMs: Date.now() - startTime,
-        }
-      : undefined;
-    if (tokenUsage) {
-      const cost = calculateCost(
-        tokenUsage.cacheMissInputTokens,
-        tokenUsage.cacheHitInputTokens,
-        tokenUsage.outputTokens,
-      );
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    // 非首次尝试时产出重试提示，让前端知晓 Agent 正在重试生成。
+    if (attempt > 0) {
+      const retryContent = `结构化输出失败（第 ${attempt} 次），正在重试…\n上次错误：${lastError}`;
+      summaryRecorder.recordThinking(retryContent);
       yield {
-        type: "token-usage",
+        type: "reasoning",
         agentType: options.agentType,
-        inputTokens: tokenUsage.inputTokens,
-        cacheHitInputTokens: tokenUsage.cacheHitInputTokens,
-        cacheMissInputTokens: tokenUsage.cacheMissInputTokens,
-        outputTokens: tokenUsage.outputTokens,
-        totalTokens: tokenUsage.totalTokens,
-        costInput: cost.costInput,
-        costOutput: cost.costOutput,
-        costTotal: cost.costTotal,
-        durationMs: Date.now() - startTime,
+        content: retryContent,
       };
     }
 
-    const parsed = parseJsonObject(responseText);
-    if (parsed === null) {
-      const invalidJsonReason = formatInvalidJsonReason(
-        responseText,
-        tokenUsage,
-        options.modelOptions?.maxTokens,
+    // 构造本轮载荷：首次使用原始 payload，重试时附带 retry_context。
+    const payloadStr =
+      attempt === 0
+        ? JSON.stringify(options.payload)
+        : buildRetryPayload(
+            options.payload,
+            attempt,
+            maxRetries,
+            lastError,
+            lastRawOutput,
+          );
+
+    let responseText = "";
+    let attemptTokenUsage: ReturnType<typeof getTokenUsage> = null;
+
+    try {
+      const agent = createDeepAgent({
+        model: createChatModel(options.modelOptions) as any,
+        systemPrompt: options.systemPrompt,
+        tools,
+        name: options.name,
+        subagents: options.subagents,
+        middleware: [
+          createDeepAgentToolAllowlistMiddleware({
+            agentName: options.name,
+            allowedToolNames: [...tools.map((tool) => tool.name), "task"],
+          }),
+          ...createDefaultAgentMiddleware(),
+          ...createAgentRunSummaryMiddleware(summaryRecorder),
+        ] as any,
+      });
+
+      const run = await agent.stream(
+        {
+          messages: [new HumanMessage(payloadStr)],
+        },
+        { streamMode: "messages", signal: options.signal, subgraphs: true },
       );
-      const fallbackResult = options.fallback(invalidJsonReason);
+
+      /** 跟踪 task 工具调用中 tool_call_id -> subagentType 的映射，用于结果匹配。 */
+      const taskCallToSubagent = new Map<string, string>();
+      /** 当前仍在执行的 SubAgent 调用，用于把模型 reasoning 归属到内嵌卡片。 */
+      const openSubagentCalls: Array<{
+        toolCallId?: string;
+        subagentType: string;
+      }> = [];
+      const subagentTaskCallExtractor = createSubagentTaskCallExtractor();
+
+      for await (const [namespace, chunk] of run) {
+        const [message, metadata] = chunk;
+        const isSubagentMessage = isSubagentNamespace(namespace);
+
+        // task 工具结果可能带有 tools:task 命名空间，必须先关闭 SubAgent 调用，
+        // 避免把子代理返回值误记为主 Agent 的流式输出。
+        const subagentResultHandled = yield* handleSubagentTaskResult(
+          message,
+          options,
+          summaryRecorder,
+          taskCallToSubagent,
+          openSubagentCalls,
+        );
+        if (subagentResultHandled) {
+          continue;
+        }
+
+        // SubAgent 内部消息只归档推理和 token 用量，不参与主 Agent 最终 JSON 拼接。
+        if (isSubagentMessage) {
+          yield* handleSubagentReasoning(
+            message,
+            openSubagentCalls,
+            options,
+            summaryRecorder,
+          );
+          const usage = getTokenUsage(message);
+          if (usage) attemptTokenUsage = usage;
+          continue;
+        }
+
+        // 主 Agent 层面：完整处理 task 委派、工具事件、推理和文本。
+        const subagentTaskCalls = subagentTaskCallExtractor.extract(message);
+
+        yield* handleSubagentTaskCalls(
+          subagentTaskCalls,
+          options,
+          summaryRecorder,
+          taskCallToSubagent,
+          openSubagentCalls,
+        );
+
+        yield* handleVisibleToolEvents(
+          message,
+          visibleToolNameSet,
+          options,
+          summaryRecorder,
+        );
+        if (shouldSkipTextAfterToolResult(message, visibleToolNameSet)) {
+          continue;
+        }
+
+        yield* handleMainAgentReasoning(
+          message,
+          openSubagentCalls,
+          subagentTaskCalls.length > 0,
+          options,
+          summaryRecorder,
+        );
+
+        const text = getTextContent(message);
+        responseText += text;
+        summaryRecorder.recordOutput(text);
+
+        const usage = getTokenUsage(message);
+        if (usage) attemptTokenUsage = usage;
+      }
+
+      // 更新最后一次有效的 token 用量。
+      if (attemptTokenUsage) finalTokenUsage = attemptTokenUsage;
+
+      const tokenUsageSummary = finalTokenUsage
+        ? {
+            ...finalTokenUsage,
+            durationMs: Date.now() - startTime,
+          }
+        : undefined;
+      if (finalTokenUsage) {
+        const cost = calculateCost(
+          finalTokenUsage.cacheMissInputTokens,
+          finalTokenUsage.cacheHitInputTokens,
+          finalTokenUsage.outputTokens,
+        );
+        yield {
+          type: "token-usage",
+          agentType: options.agentType,
+          inputTokens: finalTokenUsage.inputTokens,
+          cacheHitInputTokens: finalTokenUsage.cacheHitInputTokens,
+          cacheMissInputTokens: finalTokenUsage.cacheMissInputTokens,
+          outputTokens: finalTokenUsage.outputTokens,
+          totalTokens: finalTokenUsage.totalTokens,
+          costInput: cost.costInput,
+          costOutput: cost.costOutput,
+          costTotal: cost.costTotal,
+          durationMs: Date.now() - startTime,
+        };
+      }
+
+      // --- JSON 解析与 schema 校验，带重试 ---
+
+      const parsed = parseJsonObject(responseText);
+      if (parsed === null) {
+        const invalidJsonReason = formatInvalidJsonReason(
+          responseText,
+          finalTokenUsage,
+          options.modelOptions?.maxTokens,
+        );
+        lastError = invalidJsonReason;
+        lastRawOutput = responseText;
+
+        if (attempt < maxAttempts - 1) continue; // 还有重试机会
+
+        // 所有重试耗尽，使用 fallback。
+        const fallbackResult = options.fallback(invalidJsonReason);
+        if (!options.suppressInvalidJsonReasoning) {
+          const content = invalidJsonReason.startsWith("output-truncated")
+            ? `结构化输出疑似在模型 maxTokens 前被截断，已使用 ${options.agentLabel} 的 MVP 回退结果。\n`
+            : `结构化输出不是可解析的 JSON，已使用 ${options.agentLabel} 的 MVP 回退结果。\n`;
+          summaryRecorder.recordThinking(content);
+          yield {
+            type: "reasoning",
+            agentType: options.agentType,
+            content,
+          };
+        }
+        await summaryRecorder.finish({
+          error: invalidJsonReason,
+          output: fallbackResult,
+          status: "fallback",
+          tokenUsage: tokenUsageSummary,
+        });
+        return fallbackResult;
+      }
+
+      const schemaResult = options.schema.safeParse(parsed);
+      if (schemaResult.success) {
+        await summaryRecorder.finish({
+          output: schemaResult.data,
+          status: "completed",
+          tokenUsage: tokenUsageSummary,
+        });
+        return schemaResult.data;
+      }
+
+      const schemaError = `schema-validation: ${formatSchemaError(schemaResult.error)}`;
+      lastError = schemaError;
+      lastRawOutput = responseText;
+
+      if (attempt < maxAttempts - 1) continue; // 还有重试机会
+
+      // 所有重试耗尽，使用 fallback。
+      const fallbackResult = options.fallback(schemaError);
       if (!options.suppressInvalidJsonReasoning) {
-        const content = invalidJsonReason.startsWith("output-truncated")
-          ? `结构化输出疑似在模型 maxTokens 前被截断，已使用 ${options.agentLabel} 的 MVP 回退结果。\n`
-          : `结构化输出不是可解析的 JSON，已使用 ${options.agentLabel} 的 MVP 回退结果。\n`;
+        const content = `结构化输出未通过契约校验，已使用 ${options.agentLabel} 的 MVP 回退结果：${schemaError}\n`;
         summaryRecorder.recordThinking(content);
         yield {
           type: "reasoning",
@@ -516,59 +632,44 @@ export async function* runAgentWithSubagent<T, AgentType extends string>(
         };
       }
       await summaryRecorder.finish({
-        error: invalidJsonReason,
+        error: schemaError,
         output: fallbackResult,
         status: "fallback",
         tokenUsage: tokenUsageSummary,
       });
       return fallbackResult;
-    }
+    } catch (error) {
+      const message = getErrorMessage(error);
+      lastError = message;
 
-    const result = options.schema.safeParse(parsed);
-    if (result.success) {
-      await summaryRecorder.finish({
-        output: result.data,
-        status: "completed",
-        tokenUsage: tokenUsageSummary,
-      });
-      return result.data;
-    }
+      if (attempt < maxAttempts - 1) continue; // 还有重试机会
 
-    const schemaError = `schema-validation: ${formatSchemaError(result.error)}`;
-    const fallbackResult = options.fallback(schemaError);
-    if (!options.suppressInvalidJsonReasoning) {
-      const content = `结构化输出未通过契约校验，已使用 ${options.agentLabel} 的 MVP 回退结果：${schemaError}\n`;
+      // 所有重试耗尽，使用 fallback。
+      const fallbackResult = options.fallback(message);
+      const content = `${options.agentLabel} 执行失败，已使用 MVP 回退结果：${message}\n`;
       summaryRecorder.recordThinking(content);
       yield {
         type: "reasoning",
         agentType: options.agentType,
         content,
       };
+      await summaryRecorder.finish({
+        error: message,
+        output: fallbackResult,
+        status: "fallback",
+      });
+      return fallbackResult;
     }
-    await summaryRecorder.finish({
-      error: schemaError,
-      output: fallbackResult,
-      status: "fallback",
-      tokenUsage: tokenUsageSummary,
-    });
-    return fallbackResult;
-  } catch (error) {
-    const message = getErrorMessage(error);
-    const fallbackResult = options.fallback(message);
-    const content = `${options.agentLabel} 执行失败，已使用 MVP 回退结果：${message}\n`;
-    summaryRecorder.recordThinking(content);
-    yield {
-      type: "reasoning",
-      agentType: options.agentType,
-      content,
-    };
-    await summaryRecorder.finish({
-      error: message,
-      output: fallbackResult,
-      status: "fallback",
-    });
-    return fallbackResult;
   }
+
+  // 理论上不会走到这里；所有路径都已 return。
+  const unreachableFallback = options.fallback("max-retries-exhausted");
+  await summaryRecorder.finish({
+    error: "max-retries-exhausted",
+    output: unreachableFallback,
+    status: "fallback",
+  });
+  return unreachableFallback;
 }
 
 /**

@@ -86,6 +86,7 @@ export async function* streamOrchestratorAgent(
       : [createPlannerSubagent()],
     payload,
     schema: outputSchema as any,
+    maxRetries: isPreCheck ? 3 : 0,
     fallback: (reason: string) =>
       isPreCheck
         ? createFallbackPreOrchResult(input)
@@ -116,16 +117,13 @@ export async function* streamOrchestratorAgent(
       }
     } else if (event.type === "subagent-result") {
       yield event;
-      if (isPreCheck && preOrchSubagentResult === undefined) {
+      // 始终捕获最后一次 SubAgent 结果：当 Orchestrator 因首次结果为空
+      // 而自主重试时，使用重试后的有效结果而非第一次的空结果。
+      if (isPreCheck && event.subagentType === "pre-orchestrator") {
         preOrchSubagentResult = event.result;
       }
-      if (!isPreCheck) {
-        if (
-          event.subagentType === "planner" &&
-          plannerSubagentResult === undefined
-        ) {
-          plannerSubagentResult = event.result;
-        }
+      if (!isPreCheck && event.subagentType === "planner") {
+        plannerSubagentResult = event.result;
       }
       if (isPreCheck) {
         yield {

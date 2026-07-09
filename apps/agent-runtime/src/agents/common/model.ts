@@ -46,8 +46,6 @@ export function createChatModel(options: ChatModelOptions = {}) {
     maxTokens: options.maxTokens ?? config.maxTokens,
     timeout: config.timeout,
     configuration: { baseURL: config.baseURL },
-    modelKwargs: Object.keys(modelKwargs).length > 0
-      ? modelKwargs
-      : undefined,
+    modelKwargs: Object.keys(modelKwargs).length > 0 ? modelKwargs : undefined,
   });
 }
