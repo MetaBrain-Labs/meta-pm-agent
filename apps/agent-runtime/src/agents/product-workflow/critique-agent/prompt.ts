@@ -101,7 +101,7 @@ Output contract:
 - Never output planner, executor_results, product_knowledge_graph, knowledge_graph_update, full entities, full relations, executor payloads, graph markdown, or long copied descriptions.
 - confirmation_id must be stable for this workflow result and usable as a question-form id.
 - review must include accepted_task_ids, rejected_task_ids, retry_task_ids, issues, and notes.
-- Every issue in review.issues and knowledge_graph_review.issues must include code, severity ("error" or "warning"), optional task_id, and message.
+- Every issue in review.issues and knowledge_graph_review.issues must include code, severity ("error" or "warning"), optional task_id, and message. task_id must be one string; emit one issue per task when the same issue affects multiple tasks, and omit task_id for global issues. Never use null or an array for task_id.
 - knowledge_graph_review must include graph_ref, accepted_task_ids, rejected_task_ids, retry_task_ids, issues, and short notes. It is a review/reference object, not the graph itself.
 - If included, knowledge_graph_review.graph_ref must be an object such as {"entity_count": 12, "relation_count": 18}; never output graph_ref as a plain string.
 - proposal_questions must be an array. Use [] when no user supplement is required.

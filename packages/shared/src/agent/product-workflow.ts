@@ -429,9 +429,41 @@ export const ProductWorkflowReviewIssueSchema = z.object({
     .default("error")
     .catch("error")
     .describe("Issue severity"),
-  task_id: z.string().optional().describe("Related planner task ID when applicable"),
+  task_id: z.preprocess(
+    (value) => (value === null || value === "" ? undefined : value),
+    z.string().optional().describe("Related planner task ID when applicable"),
+  ),
   message: z.string().min(1).max(500).describe("Concise issue explanation"),
 });
+
+/**
+ * 归一化 Critique Agent 的问题列表，将跨任务问题拆成单任务问题。
+ */
+const ProductWorkflowReviewIssuesSchema = z.preprocess((value) => {
+  if (!Array.isArray(value)) return value;
+
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [item];
+
+    const record = item as Record<string, unknown>;
+    if (!Array.isArray(record.task_id)) return [item];
+
+    const taskIds = [
+      ...new Set(
+        record.task_id.filter(
+          (taskId): taskId is string =>
+            typeof taskId === "string" && taskId.trim().length > 0,
+        ),
+      ),
+    ];
+    if (taskIds.length === 0) {
+      const { task_id: _taskId, ...globalIssue } = record;
+      return [globalIssue];
+    }
+
+    return taskIds.map((taskId) => ({ ...record, task_id: taskId }));
+  });
+}, z.array(ProductWorkflowReviewIssueSchema).default([]));
 
 const ProductWorkflowReviewNotesSchema = z.preprocess((value) => {
   if (Array.isArray(value)) {
@@ -476,7 +508,7 @@ export const ProductWorkflowKnowledgeGraphReviewSchema = z.object({
   accepted_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs whose graph updates are accepted"),
   rejected_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs whose graph updates are rejected"),
   retry_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs that should be retried or corrected"),
-  issues: z.array(ProductWorkflowReviewIssueSchema).default([]).describe("Detected graph or execution issues"),
+  issues: ProductWorkflowReviewIssuesSchema.describe("Detected graph or execution issues"),
   notes: ProductWorkflowKnowledgeGraphReviewNotesSchema.describe("Short review notes; never repeat full graph data"),
 });
 
@@ -498,7 +530,7 @@ export const CritiqueAgentOutputSchema = z.object({
     accepted_task_ids: z.array(z.string().min(1)).describe("Accepted task IDs"),
     rejected_task_ids: z.array(z.string().min(1)).describe("Rejected task IDs"),
     retry_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs that require retry or correction"),
-    issues: z.array(ProductWorkflowReviewIssueSchema).default([]).describe("Detected issues"),
+    issues: ProductWorkflowReviewIssuesSchema.describe("Detected issues"),
     notes: ProductWorkflowReviewNotesSchema.describe("Compact review notes"),
   }).describe("Critique Agent decision"),
   product_context_update: z.string().min(1).max(1200).describe("Short product context update summary"),

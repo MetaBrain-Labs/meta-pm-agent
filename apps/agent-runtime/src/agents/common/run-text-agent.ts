@@ -42,7 +42,7 @@ import {
 export const TEXT_AGENT_MODEL_OPTIONS = {
   enableThinking: false,
   temperature: 0,
-} satisfies Omit<ChatModelOptions, "maxTokens">;
+} satisfies Omit<ChatModelOptions, "maxTokens" | "timeout">;
 
 /**
  * 文本 Agent 在最终文本前允许透传的推理事件。

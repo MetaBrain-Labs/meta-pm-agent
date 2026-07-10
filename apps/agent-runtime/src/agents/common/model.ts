@@ -21,6 +21,8 @@ export interface ChatModelOptions {
   maxTokens?: number;
   responseFormat?: "json_object";
   temperature?: number;
+  /** 单次 LLM HTTP 请求超时（毫秒），覆盖全局默认 30s。 */
+  timeout?: number;
 }
 
 /**
@@ -44,7 +46,7 @@ export function createChatModel(options: ChatModelOptions = {}) {
     apiKey: config.apiKey,
     temperature: options.temperature ?? config.temperature,
     maxTokens: options.maxTokens ?? config.maxTokens,
-    timeout: config.timeout,
+    timeout: options.timeout ?? config.timeout,
     configuration: { baseURL: config.baseURL },
     modelKwargs: Object.keys(modelKwargs).length > 0 ? modelKwargs : undefined,
   });

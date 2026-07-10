@@ -38,8 +38,6 @@ import {
   getExecutorDefaultToolNames,
 } from "../../common/tool-access";
 import {
-  compactPreviousExecutorResults,
-  compactTaskExecutionPlan,
   createGraphContextSummary,
   createTaskRelevantGraphContext,
 } from "../common/context";
@@ -142,26 +140,18 @@ export async function* streamExecutorAgent(
     name: `${definition.agentType}-agent`,
     modelOptions: {
       ...TEXT_AGENT_MODEL_OPTIONS,
-      maxTokens: 10240,
+      maxTokens: 16384,
+      timeout: 60_000,
     },
     systemPrompt: createExecutorAgentPrompt(definition),
     tools,
     skills: getExecutorSkillSources(definition),
     payload: {
-      executor_profile: {
-        agent_type: definition.agentType,
-        domain: definition.domain,
-        graph_role: definition.graphRole,
-        allowed_entity_types: definition.allowedEntityTypes,
-        allowed_relation_types: definition.allowedRelationTypes,
-        skills: definition.skills,
-      },
-      product_context: input.productContext || "No product context provided.",
+      product_context:
+        input.productContext?.slice(0, 800) || "No product context provided.",
       graph_context_summary: graphContextSummary,
       task_relevant_context: taskRelevantContext,
       task: input.task,
-      plan_context: compactTaskExecutionPlan(input.plan),
-      previous_results: compactPreviousExecutorResults(input.previousResults),
     },
     fallback: () => createFallbackKnowledgeGraphPatch(input.task),
     signal: input.signal,

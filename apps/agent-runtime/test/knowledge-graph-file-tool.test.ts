@@ -41,6 +41,7 @@ test("skips duplicate graph IDs and missing relation endpoints", async () => {
     nodeResult.skipped?.map((item) => item.id),
     ["G-001", "G-002"],
   );
+  assert.deepEqual(nodeResult.items, [{ id: "G-002" }]);
 
   const relationResult = JSON.parse(
     String(
@@ -63,10 +64,12 @@ test("skips duplicate graph IDs and missing relation endpoints", async () => {
     new Set(relationResult.skipped?.map((item) => item.reason)),
     new Set(["duplicate_id_append_only_graph", "missing_relation_endpoint"]),
   );
+  assert.deepEqual(relationResult.items, [{ id: "REL-002" }]);
 });
 
 interface ToolResult {
   count: number;
+  items: Array<{ id: string }>;
   skipped?: Array<{ id: string; reason: string }>;
 }
 

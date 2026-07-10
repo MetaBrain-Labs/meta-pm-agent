@@ -305,7 +305,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
           {
             action: "add_nodes",
             count: appendResult.items.length,
-            items: appendResult.items as unknown[],
+            items: compactWrittenItems(appendResult.items),
             skipped: appendResult.skipped,
           } satisfies StructuredToolCallResult,
           null,
@@ -334,7 +334,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
           {
             action: "add_relations",
             count: appendResult.items.length,
-            items: appendResult.items as unknown[],
+            items: compactWrittenItems(appendResult.items),
             skipped: appendResult.skipped,
           } satisfies StructuredToolCallResult,
           null,
@@ -368,7 +368,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
           {
             action: "add_decisions",
             count: appendResult.items.length,
-            items: appendResult.items as unknown[],
+            items: compactWrittenItems(appendResult.items),
             skipped: appendResult.skipped,
           } satisfies StructuredToolCallResult,
           null,
@@ -400,7 +400,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
           {
             action: "add_risks",
             count: appendResult.items.length,
-            items: appendResult.items as unknown[],
+            items: compactWrittenItems(appendResult.items),
             skipped: appendResult.skipped,
           } satisfies StructuredToolCallResult,
           null,
@@ -434,7 +434,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
           {
             action: "add_open_questions",
             count: appendResult.items.length,
-            items: appendResult.items as unknown[],
+            items: compactWrittenItems(appendResult.items),
             skipped: appendResult.skipped,
           } satisfies StructuredToolCallResult,
           null,
@@ -470,6 +470,15 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
       },
     ),
   ];
+}
+
+/**
+ * 仅回显写入记录 ID，避免后续模型轮次重复携带完整图谱对象。
+ */
+function compactWrittenItems<T extends { id: string }>(
+  items: T[],
+): Array<{ id: string }> {
+  return items.map(({ id }) => ({ id }));
 }
 
 /**
