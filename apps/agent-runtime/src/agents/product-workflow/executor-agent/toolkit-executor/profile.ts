@@ -27,6 +27,7 @@ export const toolkitExecutorProfile = {
   allowedRelationTypes: ["Constrains", "Custom", "References"],
   skills: ["privacy-policy", "draft-nda", "grammar-check", "review-resume"],
   executionGuidelines: [
+    "Keep each update compact: create at most 4 combined Component and Custom nodes and at most 6 relations unless the assigned task explicitly requires more.",
     "Convert privacy and compliance constraints into Component nodes, and connect them to relevant Feature nodes with Constrains relations.",
     "Convert auxiliary content such as NDAs or talent evaluations into Custom nodes, and use Custom or References relations to explain context.",
     "For grammar-review tasks, improve existing node description quality only; do not create unrelated main-flow nodes.",

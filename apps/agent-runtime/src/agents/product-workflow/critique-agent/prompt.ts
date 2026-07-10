@@ -54,7 +54,9 @@ Critique rules:
 - Verify DAG completeness: every planned task should have an executor result, or the review notes must explain the gap.
 - Verify coverage completeness: accepted task ids and notes should cover the planned business_model indexes or explicitly name uncovered dimensions.
 - Verify user-goal alignment: the final graph update should address the user's stated goal rather than only producing adjacent analysis.
-- Treat validation_report as authoritative for deterministic checks such as task coverage, agent mismatch, duplicate IDs, missing committed IDs, missing relation endpoints, and graph commit status.
+- Treat validation_report as authoritative for deterministic checks such as task coverage, agent mismatch, duplicate IDs, missing committed IDs, graph-wide relation endpoints and directions, orphan Requirement/Feature nodes, and graph commit status.
+- Use validation_report.graph_integrity for graph-wide endpoint, direction, and orphan checks. Do not claim these dimensions are unavailable when that object is present.
+- Do not infer duplicate IDs, commit corruption, or graph damage by independently counting created or committed ID arrays. Report those deterministic failures only when validation_report.issues contains the corresponding issue.
 - Never reconstruct entities or relations from executor summaries, reasoning text, natural-language patch messages, or quality_result.notes.
 - Never rename entity IDs, repair relation endpoints, merge executor outputs, or create missing graph nodes yourself. If a graph patch is missing, conflicting, or not committed, reject the task or mark it for retry.
 - Only machine-readable executor_update_records and deterministic validation_report fields may be treated as proof that a graph update was committed.
@@ -64,7 +66,7 @@ Critique rules:
 - Flag any graph update that converts missing information, unsupported assumptions, or unresolved user preferences into confirmed Decisions. Keep those items as assumptions, risks, open questions, or decision candidates unless evidence or explicit user confirmation supports them.
 - Verify evidence causality: major technology, authentication, scale, pricing, or launch Decisions should be supported by Evidence, user-stated facts, or prior graph context. If evidence is missing, move the item to proposal_questions or review notes instead of accepting it as final.
 - For technology-selection recommendations or architecture recommendations, verify that technical Evidence is consumed by a Decision or decision candidate instead of remaining as an isolated comparison.
-- Verify relation direction using the Planner convention: Goal --Drives--> Decision; Decision --Produces--> Requirement; Feature --Satisfies--> Requirement; Component --Implements--> Feature; Metric --Measures--> Feature or Requirement; Evidence --Validates--> Decision or Requirement; Custom/Component constraint --Constrains--> Requirement or Component; parent Goal/Requirement/Feature/Component --Composes--> same-type child node; Custom/OpenQuestion/Risk --References--> the affected graph item.
+- Verify relation direction using the runtime convention: Goal --Drives--> Decision; Decision --Produces--> Requirement; Feature --Satisfies--> Requirement; Component --Implements--> Feature; Metric --Measures--> Goal, Feature, or Requirement; Evidence --Validates--> Decision, Requirement, Feature, or Component; Custom/Component constraint --Constrains--> Requirement, Feature, or Component; parent Goal/Requirement/Feature/Component --Composes--> same-type child node. References, Promotes, and Custom are broader contextual relations and require clear descriptions.
 - Reject Goal --Drives--> Requirement. If a Requirement needs goal traceability before a supported Decision exists, require a decision candidate or References relation.
 - Reject Evidence --Validates--> Goal and Evidence --Constrains--> any node. Evidence may reference a Goal or validate a concrete Requirement/Decision candidate; constraint relations must start from an allowed Custom or Component constraint node.
 - Verify UI constraint structure: Interface Craft should represent interaction or visual constraints as Component constraint nodes that Constrain UI Components, with Evidence validating those constraints when available.
@@ -80,7 +82,9 @@ Critique rules:
   - Use "text" for short factual input such as a name, URL, number, date, segment, or owner.
   - Use "textarea" for open-ended explanation, constraints, rationale, or multiple facts.
 - For radio, select, and checkbox, include explicit options. Options must be mutually exclusive for radio/select and independently selectable for checkbox.
+- Ordered compliance levels, maturity levels, and mutually exclusive scopes must use radio/select, never checkbox. Do not create overlapping radio/select options.
 - Each proposal_questions item must include id, label, type, required, sources, priority, and any needed options, placeholder, help, source_task_id, and source_agent.
+- priority must be an integer from 1 to 100, where a larger value is more important. Never output labels such as "high", "medium", or "low"; use priority_hint as the numeric starting point.
 - label is the exact user-facing question. help should be a short source or clarification note, not hidden reasoning.
 - Prefer radio, select, checkbox, or text when the answer shape is constrained. Use textarea only when the user must provide open-ended explanation or multiple facts.
 - Treat documents, PRDs, reports, policies, and UI audits as graph-derived views. Do not ask to merge them as standalone artifacts.

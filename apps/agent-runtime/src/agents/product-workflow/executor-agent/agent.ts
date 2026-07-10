@@ -121,75 +121,94 @@ export async function* streamExecutorAgent(
     getExecutorDefaultToolNames(definition.agentType),
     { knowledgeGraph: toolKnowledgeGraph },
   );
-  // Executor 默认只接收摘要和任务相关子图，完整图谱保留在工具状态中按需查询。
-  const graphContextSummary = createGraphContextSummary(input.knowledgeGraph);
-  // recent_nodes 已在 graph_context_summary 中提供，task_relevant_context 不再重复传输。
-  const recentNodeIds = new Set(
-    graphContextSummary.recent_nodes.map((node) => node.id),
-  );
-  const taskRelevantContext = createTaskRelevantGraphContext({
-    knowledgeGraph: input.knowledgeGraph,
-    task: input.task,
-    previousResults: input.previousResults,
-    excludeNodeIds: recentNodeIds,
-  });
-
-  const textGen = runTextAgent({
-    agentType: definition.agentType,
-    agentLabel: definition.displayName,
-    name: `${definition.agentType}-agent`,
-    modelOptions: {
-      ...TEXT_AGENT_MODEL_OPTIONS,
-      maxTokens: 16384,
-      timeout: 60_000,
-    },
-    systemPrompt: createExecutorAgentPrompt(definition),
-    tools,
-    skills: getExecutorSkillSources(definition),
-    payload: {
-      product_context:
-        input.productContext?.slice(0, 800) || "No product context provided.",
-      graph_context_summary: graphContextSummary,
-      task_relevant_context: taskRelevantContext,
-      task: input.task,
-    },
-    fallback: () => createFallbackKnowledgeGraphPatch(input.task),
-    signal: input.signal,
-    throwOnError: true,
-  });
-
-  // 手动迭代生成器以在透传事件给上游的同时收集结构化数据
+  // 手动迭代生成器以在透传事件给上游的同时收集结构化数据。
   let patch = "";
   try {
-    let genResult = await textGen.next();
-    while (!genResult.done) {
-      const event = genResult.value as TextAgentEvent<string>;
-
-      yield event as ProductWorkflowStreamEvent;
-      if (
-        event.type === "tool-result" &&
-        event.toolName === BLOCKER_TOOL_NAME
-      ) {
-        throw createHumanInputRequiredError({
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      // 重试时基于同一工作副本继续执行，保留首次已完成的工具写入。
+      const graphContextSummary = createGraphContextSummary(toolKnowledgeGraph);
+      const recentNodeIds = new Set(
+        graphContextSummary.recent_nodes.map((node) => node.id),
+      );
+      const taskRelevantContext = createTaskRelevantGraphContext({
+        knowledgeGraph: toolKnowledgeGraph,
+        task: input.task,
+        previousResults: input.previousResults,
+        excludeNodeIds: recentNodeIds,
+      });
+      const textGen = runTextAgent({
+        agentType: definition.agentType,
+        agentLabel: definition.displayName,
+        name: `${definition.agentType}-agent${attempt > 1 ? "-retry" : ""}`,
+        modelOptions: {
+          ...TEXT_AGENT_MODEL_OPTIONS,
+          maxTokens: 16384,
+          timeout: 60_000,
+        },
+        systemPrompt: createExecutorAgentPrompt(definition),
+        tools,
+        skills: getExecutorSkillSources(definition),
+        payload: {
+          product_context:
+            input.productContext?.slice(0, 800) ||
+            "No product context provided.",
+          graph_context_summary: graphContextSummary,
+          task_relevant_context: taskRelevantContext,
           task: input.task,
-          agentType: definition.agentType,
-          displayName: definition.displayName,
-          toolResult: event.toolResult,
-        });
+          ...(attempt > 1
+            ? {
+                retry_instruction:
+                  "The previous attempt wrote no structured graph items. Do not repeat analysis or the summary. Call the required node and relation write tools immediately.",
+              }
+            : {}),
+        },
+        fallback: () => createFallbackKnowledgeGraphPatch(input.task),
+        signal: input.signal,
+        throwOnError: true,
+      });
+
+      let genResult = await textGen.next();
+      while (!genResult.done) {
+        const event = genResult.value as TextAgentEvent<string>;
+
+        yield event as ProductWorkflowStreamEvent;
+        if (
+          event.type === "tool-result" &&
+          event.toolName === BLOCKER_TOOL_NAME
+        ) {
+          throw createHumanInputRequiredError({
+            task: input.task,
+            agentType: definition.agentType,
+            displayName: definition.displayName,
+            toolResult: event.toolResult,
+          });
+        }
+        if (
+          event.type === "tool-result" &&
+          STRUCTURED_TOOL_NAMES.has(event.toolName)
+        ) {
+          // 结构化写入工具完成后立即发出累计图谱快照，避免后续中断丢失已完成工具产物。
+          yield {
+            type: "knowledge-graph-update",
+            knowledgeGraph: cloneKnowledgeGraph(toolKnowledgeGraph),
+          };
+        }
+        genResult = await textGen.next();
       }
-      if (
-        event.type === "tool-result" &&
-        STRUCTURED_TOOL_NAMES.has(event.toolName)
-      ) {
-        // 结构化写入工具完成后立即发出累计图谱快照，避免后续中断丢失已完成工具产物。
-        yield {
-          type: "knowledge-graph-update",
-          knowledgeGraph: cloneKnowledgeGraph(toolKnowledgeGraph),
-        };
-      }
-      genResult = await textGen.next();
+      patch = genResult.value;
+
+      const attemptDelta = getKnowledgeGraphDelta(
+        baseKnowledgeGraph,
+        toolKnowledgeGraph,
+      );
+      if (hasStructuredGraphItems(attemptDelta) || attempt === 2) break;
+
+      yield {
+        type: "reasoning",
+        agentType: definition.agentType,
+        content: `${definition.displayName} 未完成结构化图谱写入，正在自动重试一次。\n`,
+      };
     }
-    patch = genResult.value;
   } catch (error) {
     if (isExecutorHumanInputRequiredError(error)) {
       throw error;
@@ -445,6 +464,24 @@ function getKnowledgeGraphDelta(
     open_questions: current.open_questions.slice(base.open_questions.length),
     summary: current.summary.slice(base.summary.length),
   };
+}
+
+/**
+ * 判断 Executor 是否已经产生 Critique 可验证的结构化图谱增量。
+ */
+export function hasStructuredGraphItems(
+  delta: Pick<
+    ProductKnowledgeGraph,
+    "entities" | "relations" | "decisions" | "risks" | "open_questions"
+  >,
+): boolean {
+  return (
+    delta.entities.length > 0 ||
+    delta.relations.length > 0 ||
+    delta.decisions.length > 0 ||
+    delta.risks.length > 0 ||
+    delta.open_questions.length > 0
+  );
 }
 
 /**

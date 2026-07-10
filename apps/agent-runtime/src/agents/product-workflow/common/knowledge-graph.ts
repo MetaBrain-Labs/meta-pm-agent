@@ -34,6 +34,7 @@ ${PRODUCT_KNOWLEDGE_GRAPH_METAMODEL_PROMPT.trim()}
 - The knowledge graph state is a structured JSON object maintained in memory. Read compact state via kg_file_read before making updates.
 - Query detailed graph context only when needed via kg_file_query_nodes, kg_file_query_relations, or kg_file_read_by_source_task.
 - Treat the current knowledge graph state as the source of truth for follow-up executor updates.
+- Use canonical directions for typed relations: Goal --Drives--> Decision; Decision --Produces--> Requirement; Feature --Satisfies--> Requirement; Component --Implements--> Feature; Metric --Measures--> Goal, Feature, or Requirement; Evidence --Validates--> Decision, Requirement, Feature, or Component; Custom/Component --Constrains--> Requirement, Feature, or Component; Composes connects same-type Goal, Requirement, Feature, or Component nodes. Use References, Promotes, or Custom only when their broader contextual meaning is explicit.
 `;
 
 /**

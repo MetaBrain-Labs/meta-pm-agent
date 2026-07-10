@@ -11,7 +11,10 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CritiqueAgentOutputSchema } from "@repo/shared";
+import {
+  CritiqueAgentOutputSchema,
+  ProductWorkflowProposalQuestionSchema,
+} from "@repo/shared";
 
 test("normalizes critique issues with null and multiple task IDs", () => {
   const result = CritiqueAgentOutputSchema.safeParse({
@@ -47,7 +50,26 @@ test("normalizes critique issues with null and multiple task IDs", () => {
       ],
       notes: ["Compact graph review completed."],
     },
-    proposal_questions: [],
+    proposal_questions: [
+      {
+        id: "q-high",
+        label: "Highest priority question",
+        type: "text",
+        priority: "high",
+      },
+      {
+        id: "q-medium",
+        label: "Medium priority question",
+        type: "text",
+        priority: "medium",
+      },
+      {
+        id: "q-low",
+        label: "Low priority question",
+        type: "text",
+        priority: "1",
+      },
+    ],
     confirmation_message: "Please confirm the remaining decisions.",
   });
 
@@ -61,4 +83,20 @@ test("normalizes critique issues with null and multiple task IDs", () => {
     result.data.knowledge_graph_review.issues[0]?.task_id,
     undefined,
   );
+  assert.deepEqual(
+    result.data.proposal_questions.map((question) => question.priority),
+    [3, 2, 1],
+  );
+});
+
+test("rejects structurally invalid choice questions", () => {
+  const result = ProductWorkflowProposalQuestionSchema.safeParse({
+    id: "invalid-choice",
+    label: "Choose one",
+    type: "radio",
+    options: ["Same", " same "],
+    priority: 10,
+  });
+
+  assert.equal(result.success, false);
 });

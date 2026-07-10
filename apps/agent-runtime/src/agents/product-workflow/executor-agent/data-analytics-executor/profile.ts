@@ -29,7 +29,7 @@ export const dataAnalyticsExecutorProfile = {
   executionGuidelines: [
     "Convert A/B test, retention, segmentation, and adoption-trend findings into Evidence nodes.",
     "Convert newly discovered or monitored indicators into Metric nodes, and connect them to goals or requirements with Measures relations.",
-    "Convert reusable SQL query definitions into Component nodes, and connect them to Metric nodes with Implements relations.",
+    "Convert reusable SQL query definitions into Component nodes, and connect them to the measured Feature with Implements relations.",
     "When data is insufficient, write the gap to open_questions or risks instead of fabricating statistical conclusions.",
   ],
 } as const satisfies ExecutorAgentProfile;

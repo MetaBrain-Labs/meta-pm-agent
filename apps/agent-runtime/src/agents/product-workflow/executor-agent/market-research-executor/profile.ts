@@ -37,7 +37,7 @@ export const marketResearchExecutorProfile = {
   executionGuidelines: [
     "Split competitor, market sizing, sentiment, and user-segment findings into independent Evidence nodes.",
     "Extract personas, market segments, and journey pain points into Requirement nodes.",
-    "Connect Evidence to Requirement, Decision, or Goal nodes with Validates or References relations.",
+    "Use Evidence --Validates--> Requirement or Decision for concrete support, and Evidence --References--> Goal only for broader context.",
     "Use Custom nodes for persona details when needed, but connect them to Requirement or Evidence nodes.",
   ],
 } as const satisfies ExecutorAgentProfile;

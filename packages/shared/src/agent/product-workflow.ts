@@ -205,23 +205,72 @@ const ProductWorkflowProposalQuestionSourceSchema = z.object({
   source_agent: LooseProductWorkflowAgentTypeSchema.describe("Agent that raised this question"),
 });
 
+const ProductWorkflowProposalQuestionPrioritySchema = z.preprocess((value) => {
+  if (typeof value !== "string") return value;
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "high") return 3;
+  if (normalized === "medium") return 2;
+  if (normalized === "low") return 1;
+  if (/^-?\d+$/.test(normalized)) return Number(normalized);
+  return value;
+}, z.number().int().default(0));
+
 /**
  * Planner Agent 输出给 Conversation Agent 渲染的结构化 Question Form 问题。
  */
-export const ProductWorkflowProposalQuestionSchema = z.object({
-  id: z.string().min(1).describe("Stable field ID used in the submitted form answer"),
-  label: z.string().min(1).describe("User-facing question label"),
-  type: ProductWorkflowProposalQuestionTypeSchema.describe("Question Form control type chosen by Planner Agent"),
-  options: z.array(ProductWorkflowProposalQuestionOptionSchema).optional().catch(undefined).describe("Required for radio, checkbox, and select controls"),
-  placeholder: z.string().optional().describe("Optional placeholder for text or textarea controls"),
-  required: z.boolean().default(true).describe("Whether the user must answer this field"),
-  help: z.string().optional().describe("Optional user-facing help text or source summary"),
-  maxSelections: z.number().int().positive().optional().describe("Maximum selected options for checkbox controls"),
-  source_task_id: z.string().optional().describe("Primary executor task ID that raised this question"),
-  source_agent: LooseProductWorkflowAgentTypeSchema.optional().describe("Primary agent that raised this question"),
-  sources: z.array(ProductWorkflowProposalQuestionSourceSchema).default([]).catch([]).describe("All executor sources covered by the same merged question"),
-  priority: z.number().int().default(0).describe("Higher priority questions should be shown first"),
-});
+export const ProductWorkflowProposalQuestionSchema = z
+  .object({
+    id: z.string().min(1).describe("Stable field ID used in the submitted form answer"),
+    label: z.string().min(1).describe("User-facing question label"),
+    type: ProductWorkflowProposalQuestionTypeSchema.describe("Question Form control type chosen by Planner Agent"),
+    options: z.array(ProductWorkflowProposalQuestionOptionSchema).optional().catch(undefined).describe("Required for radio, checkbox, and select controls"),
+    placeholder: z.string().optional().describe("Optional placeholder for text or textarea controls"),
+    required: z.boolean().default(true).describe("Whether the user must answer this field"),
+    help: z.string().optional().describe("Optional user-facing help text or source summary"),
+    maxSelections: z.number().int().positive().optional().describe("Maximum selected options for checkbox controls"),
+    source_task_id: z.string().optional().describe("Primary executor task ID that raised this question"),
+    source_agent: LooseProductWorkflowAgentTypeSchema.optional().describe("Primary agent that raised this question"),
+    sources: z.array(ProductWorkflowProposalQuestionSourceSchema).default([]).catch([]).describe("All executor sources covered by the same merged question"),
+    priority: ProductWorkflowProposalQuestionPrioritySchema.describe("Integer priority; higher values are shown first"),
+  })
+  .superRefine((question, context) => {
+    const isChoice =
+      question.type === "radio" ||
+      question.type === "select" ||
+      question.type === "checkbox";
+    if (isChoice && (!question.options || question.options.length < 2)) {
+      context.addIssue({
+        code: "custom",
+        path: ["options"],
+        message: "Choice questions require at least two options",
+      });
+    }
+    if (
+      isChoice &&
+      question.options &&
+      new Set(question.options.map((option) => option.trim().toLowerCase())).size !==
+        question.options.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["options"],
+        message: "Question options must be unique",
+      });
+    }
+    if (
+      question.maxSelections !== undefined &&
+      (question.type !== "checkbox" ||
+        !question.options ||
+        question.maxSelections > question.options.length)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["maxSelections"],
+        message: "maxSelections is valid only for checkbox options and cannot exceed the option count",
+      });
+    }
+  });
 
 /**
  * 产品知识图谱结构化上下文，承载节点、关系、决策、风险、待确认问题及摘要等完整图谱快照。
