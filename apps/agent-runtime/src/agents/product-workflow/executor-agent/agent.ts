@@ -36,6 +36,7 @@ import {
 import {
   createToolsForAgent,
   getExecutorDefaultToolNames,
+  getExecutorRetryToolNames,
 } from "../../common/tool-access";
 import {
   createGraphContextSummary,
@@ -53,7 +54,6 @@ import { createExecutorAgentPrompt } from "./prompt";
  * 强类型结构化工具名称集合，用于识别需要从中收集数据的工具调用。
  */
 const STRUCTURED_TOOL_NAMES = new Set([
-  "kg_file_add_summary",
   "kg_file_add_nodes",
   "kg_file_add_relations",
   "kg_file_add_decisions",
@@ -116,11 +116,6 @@ export async function* streamExecutorAgent(
   // 工具在本轮工作副本上写入，外层节点统一用 appendKnowledgeGraphPatch 合并一次。
   const baseKnowledgeGraph = cloneKnowledgeGraph(input.knowledgeGraph);
   const toolKnowledgeGraph = cloneKnowledgeGraph(input.knowledgeGraph);
-  const tools = createToolsForAgent(
-    definition.agentType,
-    getExecutorDefaultToolNames(definition.agentType),
-    { knowledgeGraph: toolKnowledgeGraph },
-  );
   // 手动迭代生成器以在透传事件给上游的同时收集结构化数据。
   let patch = "";
   try {
@@ -136,6 +131,13 @@ export async function* streamExecutorAgent(
         previousResults: input.previousResults,
         excludeNodeIds: recentNodeIds,
       });
+      const tools = createToolsForAgent(
+        definition.agentType,
+        attempt > 1
+          ? getExecutorRetryToolNames()
+          : getExecutorDefaultToolNames(definition.agentType),
+        { knowledgeGraph: toolKnowledgeGraph },
+      );
       const textGen = runTextAgent({
         agentType: definition.agentType,
         agentLabel: definition.displayName,
@@ -158,7 +160,7 @@ export async function* streamExecutorAgent(
           ...(attempt > 1
             ? {
                 retry_instruction:
-                  "The previous attempt wrote no structured graph items. Do not repeat analysis or the summary. Call the required node and relation write tools immediately.",
+                  "The previous attempt wrote no structured graph items. This retry exposes write tools only: do not repeat research or analysis. Write the minimum required graph items immediately; record unavailable external evidence as a risk or open question.",
               }
             : {}),
         },
@@ -238,13 +240,28 @@ export async function* streamExecutorAgent(
     focusLayer: definition.focusLayer,
     displayName: definition.displayName,
     patch,
-    summary: graphDelta.summary[0],
+    summary: createExecutorSummary(
+      definition.displayName,
+      input.task,
+      graphDelta,
+    ),
     entities: graphDelta.entities,
     relations: graphDelta.relations,
     decisions: graphDelta.decisions,
     risks: graphDelta.risks,
     openQuestions: graphDelta.open_questions,
   });
+}
+
+/**
+ * 根据真实结构化增量生成可信摘要，避免模型摘要与最终落图数量不一致。
+ */
+function createExecutorSummary(
+  displayName: string,
+  task: TaskExecutionNode,
+  delta: ReturnType<typeof getKnowledgeGraphDelta>,
+): string {
+  return `${displayName} completed ${task.title}: ${delta.entities.length} entities, ${delta.relations.length} relations, ${delta.decisions.length} decisions, ${delta.risks.length} risks, and ${delta.open_questions.length} open questions committed.`;
 }
 
 /**

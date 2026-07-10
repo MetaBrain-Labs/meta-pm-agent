@@ -217,6 +217,54 @@ const ProductWorkflowProposalQuestionPrioritySchema = z.preprocess((value) => {
 }, z.number().int().default(0));
 
 /**
+ * 解析 Question Form 中常见的闭区间数字选项，用于阻止单选范围重叠。
+ */
+function parseProposalQuestionNumericInterval(
+  option: string,
+): { min: number; max: number } | null {
+  const normalized = option
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(/[–—~～]/g, "-");
+  const suffix = "(?:人|用户|个)?";
+  const range = normalized.match(
+    new RegExp(`^(\\d+(?:\\.\\d+)?)(?:-|至|到)(\\d+(?:\\.\\d+)?)${suffix}$`),
+  );
+  if (range) return { min: Number(range[1]), max: Number(range[2]) };
+
+  const atMost = normalized.match(
+    new RegExp(`^(?:≤|<=|不超过|最多)(\\d+(?:\\.\\d+)?)${suffix}$`),
+  ) ?? normalized.match(
+    new RegExp(`^(\\d+(?:\\.\\d+)?)(?:及)?以下${suffix}$`),
+  );
+  if (atMost) return { min: Number.NEGATIVE_INFINITY, max: Number(atMost[1]) };
+
+  const atLeast = normalized.match(
+    new RegExp(`^(?:≥|>=|不少于|至少)(\\d+(?:\\.\\d+)?)${suffix}$`),
+  ) ?? normalized.match(
+    new RegExp(`^(\\d+(?:\\.\\d+)?)(?:及)?以上${suffix}$`),
+  );
+  if (atLeast) return { min: Number(atLeast[1]), max: Number.POSITIVE_INFINITY };
+
+  return null;
+}
+
+/**
+ * 判断单选数字区间是否存在共同边界或范围交叉。
+ */
+function hasOverlappingProposalQuestionIntervals(options: string[]): boolean {
+  const intervals = options
+    .map(parseProposalQuestionNumericInterval)
+    .filter((interval): interval is { min: number; max: number } => Boolean(interval));
+
+  return intervals.some((left, index) =>
+    intervals.slice(index + 1).some(
+      (right) => left.min <= right.max && right.min <= left.max,
+    ),
+  );
+}
+
+/**
  * Planner Agent 输出给 Conversation Agent 渲染的结构化 Question Form 问题。
  */
 export const ProductWorkflowProposalQuestionSchema = z
@@ -256,6 +304,17 @@ export const ProductWorkflowProposalQuestionSchema = z
         code: "custom",
         path: ["options"],
         message: "Question options must be unique",
+      });
+    }
+    if (
+      (question.type === "radio" || question.type === "select") &&
+      question.options &&
+      hasOverlappingProposalQuestionIntervals(question.options)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["options"],
+        message: "Single-choice numeric ranges must not overlap",
       });
     }
     if (

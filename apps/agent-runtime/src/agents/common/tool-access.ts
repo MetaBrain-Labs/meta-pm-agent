@@ -8,6 +8,7 @@
  * - 维护 AGENT_TOOL_ACCESS：Agent → 授权工具集合的映射表
  * - createToolsForAgent()：根据 agentType 和启用的用户工具构建工具数组
  * - getExecutorDefaultToolNames()：返回 Executor 内部默认启用的工具名称列表
+ * - getExecutorRetryToolNames()：返回结构化重试阶段的最小写入工具列表
  * - getKnowledgeGraphFileToolNames()：返回知识图谱文件工具名称列表
  *
  * Notes:
@@ -134,11 +135,27 @@ export function getExecutorDefaultToolNames(
   agentType: ToolOwningAgent,
 ): AgentRuntimeTool[] {
   return [
-    ...KNOWLEDGE_GRAPH_FILE_TOOLS,
+    ...KNOWLEDGE_GRAPH_FILE_TOOLS.filter(
+      (toolName) => toolName !== "kg_file_add_summary",
+    ),
     ...EXECUTOR_BLOCKER_TOOLS,
     ...(EXECUTOR_WEB_SEARCH_AGENT_TYPES.has(agentType)
       ? (["web_search"] satisfies AgentRuntimeTool[])
       : []),
+  ];
+}
+
+/**
+ * 返回 Executor 结构化重试阶段的写入工具，避免重复读取和外部研究。
+ */
+export function getExecutorRetryToolNames(): AgentRuntimeTool[] {
+  return [
+    "kg_file_add_nodes",
+    "kg_file_add_relations",
+    "kg_file_add_decisions",
+    "kg_file_add_risks",
+    "kg_file_add_open_questions",
+    ...EXECUTOR_BLOCKER_TOOLS,
   ];
 }
 

@@ -100,3 +100,23 @@ test("rejects structurally invalid choice questions", () => {
 
   assert.equal(result.success, false);
 });
+
+test("rejects overlapping numeric ranges in single-choice questions", () => {
+  const overlapping = ProductWorkflowProposalQuestionSchema.safeParse({
+    id: "concurrency",
+    label: "Expected peak concurrent editors",
+    type: "radio",
+    options: ["≤5", "6-10", "11-30", "30以上"],
+    priority: 80,
+  });
+  const nonOverlapping = ProductWorkflowProposalQuestionSchema.safeParse({
+    id: "concurrency",
+    label: "Expected peak concurrent editors",
+    type: "radio",
+    options: ["≤5", "6-10", "11-30", "31以上"],
+    priority: 80,
+  });
+
+  assert.equal(overlapping.success, false);
+  assert.equal(nonOverlapping.success, true);
+});

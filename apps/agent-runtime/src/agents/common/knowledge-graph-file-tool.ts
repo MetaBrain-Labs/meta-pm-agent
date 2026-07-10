@@ -284,7 +284,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
       {
         name: "kg_file_add_summary",
         description:
-          "Write the execution summary for the current Executor task. Call this first before writing nodes and relations.",
+          "Write an optional execution summary after structured graph items have been committed. Runtime-managed Executors generate this summary automatically.",
         schema: z.object({
           summary: z
             .string()

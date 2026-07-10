@@ -33,6 +33,11 @@ import type {
 } from "../types";
 import { isKnowledgeGraphRelationDirectionValid } from "../common/knowledge-graph";
 import { areKnowledgeGraphItemsSimilar } from "../common/knowledge-graph-merge";
+import {
+  getExecutorDefinition,
+  isExecutorAgentType,
+  type ExecutorAgentType,
+} from "../executor-agent/definitions";
 import { CRITIQUE_AGENT_PROMPT } from "./prompt";
 
 /**
@@ -323,6 +328,12 @@ export function createCritiqueValidationReport(
       );
     }
 
+    if (isExecutorAgentType(task.assigned_agent)) {
+      taskIssues.push(
+        ...validateExecutorBoundaries(result, task.assigned_agent),
+      );
+    }
+
     const commit = validateExecutorCommit(result, graphIndexes);
     taskIssues.push(...commit.issues);
 
@@ -388,6 +399,60 @@ export function createCritiqueValidationReport(
     executor_update_records: records,
     graph_integrity: graphIntegrity,
   };
+}
+
+/**
+ * 确定性校验 Executor 是否越过其实体和关系类型边界。
+ */
+function validateExecutorBoundaries(
+  result: ExecutorAgentResult,
+  assignedAgent: ExecutorAgentType,
+): CritiqueValidationIssue[] {
+  const definition = getExecutorDefinition(assignedAgent);
+  const unauthorizedEntityTypes = [
+    ...new Set(
+      result.entities
+        .map((entity) => entity.type)
+        .filter(
+          (entityType) =>
+            !definition.allowedEntityTypes.some(
+              (allowedType) => allowedType === entityType,
+            ),
+        ),
+    ),
+  ];
+  const unauthorizedRelationTypes = [
+    ...new Set(
+      result.relations
+        .map((relation) => relation.type)
+        .filter(
+          (relationType) =>
+            relationType !== "Custom" &&
+            !definition.allowedRelationTypes.some(
+              (allowedType) => allowedType === relationType,
+            ),
+        ),
+    ),
+  ];
+
+  return [
+    ...unauthorizedEntityTypes.map((entityType) =>
+      createReviewIssue({
+        code: "UNAUTHORIZED_ENTITY_TYPE",
+        severity: "error",
+        taskId: result.task_id,
+        message: `${assignedAgent} is not allowed to create ${entityType} entities.`,
+      }),
+    ),
+    ...unauthorizedRelationTypes.map((relationType) =>
+      createReviewIssue({
+        code: "UNAUTHORIZED_RELATION_TYPE",
+        severity: "error",
+        taskId: result.task_id,
+        message: `${assignedAgent} is not allowed to create ${relationType} relations.`,
+      }),
+    ),
+  ];
 }
 
 /**

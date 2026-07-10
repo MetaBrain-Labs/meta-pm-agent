@@ -34,6 +34,83 @@ test("retries only when an executor wrote no structured graph items", () => {
   assert.equal(hasStructuredGraphItems(emptyGraph), true);
 });
 
+test("critique validation rejects executor boundary violations", () => {
+  const feature: ProductKnowledgeGraph["entities"][number] = {
+    id: "F-001",
+    type: "Feature",
+    name: "Shared editing",
+    description: "Allow users to edit one document together.",
+    source_task_id: "task-00",
+    status: "proposed",
+  };
+  const component: ProductKnowledgeGraph["entities"][number] = {
+    id: "C-001",
+    type: "Component",
+    name: "Collaboration gateway",
+    description: "Coordinates shared editing sessions.",
+    source_task_id: "task-01",
+    status: "proposed",
+  };
+  const requirement = createRequirement(
+    "R-001",
+    "task-01",
+    "Concurrent editing requirement",
+    "The product supports multiple active editors.",
+  );
+  const relations: ProductKnowledgeGraph["relations"] = [
+    {
+      id: "REL-001",
+      type: "Implements",
+      source: component.id,
+      target: feature.id,
+      source_task_id: "task-01",
+    },
+    createRelation(
+      "REL-002",
+      requirement.id,
+      feature.id,
+      "task-01",
+      "The requirement references the collaboration feature.",
+    ),
+  ];
+  const task = createTask("task-01", 1, "executor-toolkit");
+  const result: ExecutorAgentResult = {
+    task_id: task.task_id,
+    agent_type: "executor-toolkit",
+    focus_layer: "Component",
+    summary: "Created collaboration constraints.",
+    entities: [component, requirement],
+    relations,
+    decisions: [],
+    risks: [],
+    open_questions: [],
+    quality_result: { passed: true, notes: "ok" },
+  };
+  const report = createCritiqueValidationReport({
+    workspaceId: "workspace-test",
+    productContext: "",
+    requestAnalysis: createRequestAnalysis(),
+    plan: {
+      status: "initial",
+      request_summary: "Review executor boundaries.",
+      dag: { nodes: [task.task_id], edges: [] },
+      tasks: [task],
+      assumptions: [],
+    },
+    executorResults: [result],
+    knowledgeGraph: createGraph({
+      entities: [feature, component, requirement],
+      relations,
+    }),
+  });
+
+  assert.deepEqual(report.rejected_task_ids, ["task-01"]);
+  assert.deepEqual(
+    report.issues.map((issue) => issue.code),
+    ["UNAUTHORIZED_ENTITY_TYPE", "UNAUTHORIZED_RELATION_TYPE"],
+  );
+});
+
 test("renames non-similar duplicate IDs and remaps relation endpoints", () => {
   const current = createCurrentGraphWithTask03();
   const update = createGraph({
@@ -160,7 +237,7 @@ test("critique validation accepts graph items normalized by merge reducer", () =
   });
   const task02Result = createExecutorResult({
     taskId: "task-02",
-    agentType: "executor-toolkit",
+    agentType: "executor-market-research",
     entity: createRequirement(
       "R-003",
       "task-02",
@@ -596,7 +673,7 @@ function createExecutorResult({
  */
 function createPlan(): TaskExecutionPlan {
   const tasks = [
-    createTask("task-02", 2, "executor-toolkit"),
+    createTask("task-02", 2, "executor-market-research"),
     createTask("task-03", 3, "executor-product-discovery"),
   ];
 

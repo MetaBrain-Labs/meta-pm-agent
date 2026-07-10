@@ -65,6 +65,7 @@ Critique rules:
 - Be precise and specific. Do not write vague issues such as "has problems"; identify the task, graph item, relation, endpoint, or missing trace.
 - Distinguish hard constraints from soft recommendations. Meta-model violations, missing committed graph patches, source conflicts, broken relation endpoints, and unjustified orphan nodes are hard constraints. Description style, excessive granularity, and weak wording are recommendations unless they block task completion.
 - No silent truncation. If a critique dimension cannot be fully checked from the compact payload, explicitly state the uncovered dimension in review.notes or knowledge_graph_review.notes.
+- Passing deterministic structure checks proves only endpoint, direction, traceability, and commit integrity. It does not prove semantic uniqueness, evidence quality, or architecture proportionality from the compact payload; never describe the graph as globally consistent, complete, final, or stable while those dimensions remain unchecked or proposal_questions remain open.
 - Flag any graph update that converts missing information, unsupported assumptions, or unresolved user preferences into confirmed Decisions. Keep those items as assumptions, risks, open questions, or decision candidates unless evidence or explicit user confirmation supports them.
 - Verify evidence causality: major technology, authentication, scale, pricing, or launch Decisions should be supported by Evidence, user-stated facts, or prior graph context. If evidence is missing, move the item to proposal_questions or review notes instead of accepting it as final.
 - For technology-selection recommendations or architecture recommendations, verify that technical Evidence is consumed by a Decision or decision candidate instead of remaining as an isolated comparison.
@@ -77,6 +78,7 @@ Critique rules:
 - For every question that should be shown to the user, create a proposal_questions item. Do not rely on downstream code to infer the control type from natural language.
 - Ask only questions that block the current workflow from producing a useful global result. Defer low-level implementation, SLA, pricing, SDK-language, and measurement-detail questions unless validation_report marks them as blocking.
 - Include at most 3 proposal_questions. Prefer the highest-priority user decisions and merge near-duplicates.
+- Rank questions by downstream graph impact, number of independent task sources, and whether the answer changes architecture or scope. Do not copy request_analysis.missing_information order without reassessing downstream Executor findings.
 - Choose the Question Form control deliberately:
   - Use "radio" for one required single-choice decision with 2-4 clear options.
   - Use "select" for one required single-choice decision with more than 4 concise options.
@@ -84,6 +86,7 @@ Critique rules:
   - Use "text" for short factual input such as a name, URL, number, date, segment, or owner.
   - Use "textarea" for open-ended explanation, constraints, rationale, or multiple facts.
 - For radio, select, and checkbox, include explicit options. Options must be mutually exclusive for radio/select and independently selectable for checkbox.
+- Every radio/select option must answer the same decision dimension. Do not mix product form, deployment mode, integration mode, pricing, or scope in one option set; split different dimensions into separate questions.
 - Ordered compliance levels, maturity levels, and mutually exclusive scopes must use radio/select, never checkbox. Do not create overlapping radio/select options.
 - Each proposal_questions item must include id, label, type, required, sources, priority, and any needed options, placeholder, help, source_task_id, and source_agent.
 - priority must be an integer from 1 to 100, where a larger value is more important. Never output labels such as "high", "medium", or "low"; use priority_hint as the numeric starting point.

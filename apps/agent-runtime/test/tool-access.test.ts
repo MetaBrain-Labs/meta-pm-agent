@@ -19,6 +19,7 @@ import type { ProductKnowledgeGraph } from "@repo/shared";
 import {
   createToolsForAgent,
   getExecutorDefaultToolNames,
+  getExecutorRetryToolNames,
 } from "../src/agents/common/tool-access";
 import { filterToolsByAllowedNames } from "../src/agents/common/deep-agent-tool-policy";
 
@@ -59,6 +60,20 @@ test("strategy executor does not receive web search by default", () => {
 
   assert.equal(toolNames.includes("web_search"), false);
   assert.equal(toolNames.includes("kg_file_read"), true);
+});
+
+test("executor structured retry exposes write tools only", () => {
+  const toolNames = createToolsForAgent(
+    "executor-ai-shipping",
+    getExecutorRetryToolNames(),
+    { knowledgeGraph: createEmptyKnowledgeGraph() },
+  ).map((tool) => tool.name);
+
+  assert.equal(toolNames.includes("kg_file_add_nodes"), true);
+  assert.equal(toolNames.includes("kg_file_add_relations"), true);
+  assert.equal(toolNames.includes("web_search"), false);
+  assert.equal(toolNames.includes("kg_file_read"), false);
+  assert.equal(toolNames.includes("kg_file_add_summary"), false);
 });
 
 test("conversation allowlist removes DeepAgents built-in tools unless web search is enabled", () => {

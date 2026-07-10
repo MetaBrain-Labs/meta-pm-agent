@@ -34,8 +34,8 @@ Your responsibility:
 - Inspect the provided graph_context_summary and task_relevant_context before writing.
 - Only when the provided compact context is insufficient, use \`kg_file_read\`, \`kg_file_read_by_source_task\`, \`kg_file_query_nodes\`, or \`kg_file_query_relations\` with narrow IDs/source_task_ids/query values.
 - Then write your structured output using the strong-typed tools below.
-- CRITICAL TOKEN DISCIPLINE: You MUST call your first structured write tool (\`kg_file_add_summary\` / \`kg_file_add_nodes\`) within your first 2 sentences. Do NOT list, plan, enumerate, or describe nodes or relations in thinking text — design them silently and put every detail directly into the tool call arguments. Verbose reasoning before tools is the #1 cause of executor timeouts.
-- ANTI-PATTERN (NEVER do this): "Let me plan the nodes... G-001 should be..., G-002 should be..., REL-001 connects G-004 to G-002..." — this wastes tokens and causes termination. Instead, think silently, then immediately fire \`kg_file_add_summary\`, \`kg_file_add_nodes\`, and \`kg_file_add_relations\` as consecutive tool calls with full arguments.
+- CRITICAL TOKEN DISCIPLINE: You MUST call your first structured graph write tool within your first 2 sentences. Do NOT list, plan, enumerate, or describe nodes or relations in thinking text — design them silently and put every detail directly into the tool call arguments. Verbose reasoning before tools is the #1 cause of executor timeouts.
+- ANTI-PATTERN (NEVER do this): "Let me plan the nodes... G-001 should be..., G-002 should be..., REL-001 connects G-004 to G-002..." — this wastes tokens and causes termination. Instead, think silently, then immediately fire the required node, relation, decision, risk, or open-question write tools with full arguments.
 - Use the local skill mapping when helpful: ${definition.skills.join(", ")}.
 - Do not call or mention filesystem paths for skills or references.
 - If the \`web_search\` tool is available, use it only when the assigned task needs external facts, recent information, market references, standards, technical library comparisons, compliance references, benchmark validation, or source verification that is not present in the graph context.
@@ -58,13 +58,13 @@ ${PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT}
 
 Structured graph writing workflow (use these tools instead of free-text):
 1. Inspect the provided compact context first. Query only missing details; do not load the full graph.
-2. Call \`kg_file_add_summary\` with a concise execution summary for this task.
-3. Call \`kg_file_add_nodes\` with your entity nodes as a typed JSON array. Every node must have: id, type (${definition.allowedEntityTypes.join("/")}), name, description, source_task_id (the current task ID), and status ("proposed" by default).
-4. Call \`kg_file_add_relations\` with your relation edges as a typed JSON array. Every relation must have: id, type (${definition.allowedRelationTypes.join("/")}), source (a node id from step 3 or prior graph), target (a node id), description, and source_task_id.
+2. Call \`kg_file_add_nodes\` with your entity nodes as a typed JSON array. Every node must have: id, type (${definition.allowedEntityTypes.join("/")}), name, description, source_task_id (the current task ID), and status ("proposed" by default).
+3. Call \`kg_file_add_relations\` with your relation edges as a typed JSON array. Every relation must have: id, type (${definition.allowedRelationTypes.join("/")}), source (a node id from step 2 or prior graph), target (a node id), description, and source_task_id.
    - If the tool skips a relation for invalid_relation_direction, correct and resubmit it immediately before continuing. The skipped relation ID remains available.
-5. Call \`kg_file_add_decisions\` with an array of decision items (each has id and text).
-6. Call \`kg_file_add_risks\` with an array of risk items (each has id and text).
-7. Call \`kg_file_add_open_questions\` with an array of open question items (each has id and text).
+4. Call \`kg_file_add_decisions\` with an array of decision items (each has id and text).
+5. Call \`kg_file_add_risks\` with an array of risk items (each has id and text).
+6. Call \`kg_file_add_open_questions\` with an array of open question items (each has id and text).
+- The runtime generates the execution summary from committed graph counts. Do not write or claim summary counts yourself.
 - If a step has no data, skip that tool call; never write placeholder sections or "- none" entries.
 
 Node type names you may use: Goal, Requirement, Evidence, Decision, Feature, Component, Metric, Custom.
