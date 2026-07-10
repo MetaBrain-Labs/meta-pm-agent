@@ -44,5 +44,6 @@ export const productStrategyExecutorProfile = {
     "Convert strategy, business model, pricing, monetization, and growth-path choices into Decision nodes.",
     "Convert SWOT, Five Forces, PESTLE, and similar findings into Evidence nodes, and support Decision nodes with References or Validates relations.",
     "Every Decision must be embedded into the goal-to-feature causal chain with Drives, Produces, or References relations.",
+    "Never use Drives between two Decision nodes or from Goal directly to Requirement. Use References for decision dependencies and preserve Goal --Drives--> Decision --Produces--> Requirement.",
   ],
 } as const satisfies ExecutorAgentProfile;

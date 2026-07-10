@@ -24,6 +24,7 @@ import {
   createGraphContextSummary,
   readGraphBySourceTasks,
 } from "../product-workflow/common/context";
+import { isKnowledgeGraphRelationDirectionValid } from "../product-workflow/common/knowledge-graph";
 
 // ============================================================
 // 类型常量与 Zod Schemas
@@ -344,7 +345,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
       {
         name: "kg_file_add_relations",
         description:
-          "Append structured relations to the knowledge graph. Each relation must have a new unique id, type, source, target, description, and source_task_id. Duplicate relation IDs and relations whose source/target nodes are missing are skipped instead of updated. Allowed types: Drives/Satisfies/Promotes/Produces/Constrains/Implements/Measures/Validates/References/Composes/Custom.",
+          "Append structured relations to the knowledge graph. Each relation must have a new unique id, type, source, target, description, and source_task_id. Duplicate IDs, missing endpoints, and invalid typed-relation directions are skipped. A skipped ID is not reserved and may be resubmitted immediately with corrected endpoints or type. Allowed types: Drives/Satisfies/Promotes/Produces/Constrains/Implements/Measures/Validates/References/Composes/Custom.",
         schema: z.object({
           relations: z
             .array(relationInputSchema)
@@ -511,7 +512,7 @@ function filterAppendOnlyItems<T extends { id: string }>(
  * 过滤追加式关系写入，确保关系 ID 唯一且端点已存在于当前图谱。
  */
 function filterAppendOnlyRelations<
-  T extends { id: string; source: string; target: string },
+  T extends ProductKnowledgeGraph["relations"][number],
 >(
   relations: T[],
   state: ProductKnowledgeGraph,
@@ -520,15 +521,30 @@ function filterAppendOnlyRelations<
     relations,
     state.relations.map((item) => item.id),
   );
-  const entityIds = new Set(state.entities.map((item) => item.id));
+  const entityById = new Map(state.entities.map((item) => [item.id, item]));
   const accepted: T[] = [];
   const skipped = [...appendResult.skipped];
 
   for (const relation of appendResult.items) {
-    if (!entityIds.has(relation.source) || !entityIds.has(relation.target)) {
+    const source = entityById.get(relation.source);
+    const target = entityById.get(relation.target);
+    if (!source || !target) {
       skipped.push({
         id: relation.id,
         reason: "missing_relation_endpoint",
+      });
+      continue;
+    }
+    if (
+      !isKnowledgeGraphRelationDirectionValid(
+        relation.type,
+        source.type,
+        target.type,
+      )
+    ) {
+      skipped.push({
+        id: relation.id,
+        reason: `invalid_relation_direction:${source.type}--${relation.type}-->${target.type}`,
       });
       continue;
     }

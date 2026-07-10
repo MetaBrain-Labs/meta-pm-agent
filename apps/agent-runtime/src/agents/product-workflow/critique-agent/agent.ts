@@ -31,6 +31,7 @@ import type {
   CritiqueAgentInput,
   ProductWorkflowStreamEvent,
 } from "../types";
+import { isKnowledgeGraphRelationDirectionValid } from "../common/knowledge-graph";
 import { areKnowledgeGraphItemsSimilar } from "../common/knowledge-graph-merge";
 import { CRITIQUE_AGENT_PROMPT } from "./prompt";
 
@@ -279,20 +280,12 @@ export function createCritiqueValidationReport(
   );
   const graphIndexes = createGraphIndexes(input.knowledgeGraph);
   const graphIntegrity = inspectGraphIntegrity(input.knowledgeGraph);
-  const graphIssues = createGraphIntegrityIssues(
-    input.knowledgeGraph,
-    graphIntegrity,
-  );
   const issues: CritiqueValidationIssue[] = [];
   const records: ExecutorUpdateRecord[] = [];
-  const plannedTaskIds = new Set(input.plan.tasks.map((task) => task.task_id));
 
   for (const task of input.plan.tasks) {
     const result = resultByTaskId.get(task.task_id);
     const taskIssues: CritiqueValidationIssue[] = [];
-    taskIssues.push(
-      ...graphIssues.filter((issue) => issue.task_id === task.task_id),
-    );
 
     if (!result) {
       taskIssues.push(
@@ -355,11 +348,27 @@ export function createCritiqueValidationReport(
     issues.push(...taskIssues);
   }
 
-  issues.push(
-    ...graphIssues.filter(
-      (issue) => !issue.task_id || !plannedTaskIds.has(issue.task_id),
+  const currentRelationTaskById = new Map(
+    records.flatMap((record) =>
+      record.committed_relation_ids.map(
+        (relationId) => [relationId, record.task_id] as const,
+      ),
     ),
   );
+  const graphIssues = createGraphIntegrityIssues(
+    input.knowledgeGraph,
+    graphIntegrity,
+    currentRelationTaskById,
+  );
+  for (const issue of graphIssues) {
+    issues.push(issue);
+    if (!issue.task_id) continue;
+
+    const record = records.find((item) => item.task_id === issue.task_id);
+    if (!record) continue;
+    record.validation_errors.push(issue);
+    if (issue.severity === "error") record.commit_status = "rejected";
+  }
 
   const issueTaskIds = new Set(
     issues
@@ -404,7 +413,13 @@ function inspectGraphIntegrity(
 
     connectedEntityIds.add(source.id);
     connectedEntityIds.add(target.id);
-    if (!isRelationDirectionValid(relation.type, source.type, target.type)) {
+    if (
+      !isKnowledgeGraphRelationDirectionValid(
+        relation.type,
+        source.type,
+        target.type,
+      )
+    ) {
       invalidDirectionRelationIds.push(relation.id);
     }
   }
@@ -432,63 +447,12 @@ function inspectGraphIntegrity(
 }
 
 /**
- * 按产品图谱元模型校验具备固定语义的关系方向。
- */
-function isRelationDirectionValid(
-  relationType: KnowledgeGraphRelation["type"],
-  sourceType: KnowledgeGraphEntity["type"],
-  targetType: KnowledgeGraphEntity["type"],
-): boolean {
-  switch (relationType) {
-    case "Drives":
-      return sourceType === "Goal" && targetType === "Decision";
-    case "Produces":
-      return sourceType === "Decision" && targetType === "Requirement";
-    case "Satisfies":
-      return sourceType === "Feature" && targetType === "Requirement";
-    case "Implements":
-      return sourceType === "Component" && targetType === "Feature";
-    case "Measures":
-      return (
-        sourceType === "Metric" &&
-        (targetType === "Goal" ||
-          targetType === "Feature" ||
-          targetType === "Requirement")
-      );
-    case "Validates":
-      return (
-        sourceType === "Evidence" &&
-        (targetType === "Decision" ||
-          targetType === "Requirement" ||
-          targetType === "Feature" ||
-          targetType === "Component")
-      );
-    case "Constrains":
-      return (
-        (sourceType === "Custom" || sourceType === "Component") &&
-        (targetType === "Requirement" ||
-          targetType === "Feature" ||
-          targetType === "Component")
-      );
-    case "Composes":
-      return (
-        sourceType === targetType &&
-        (sourceType === "Goal" ||
-          sourceType === "Requirement" ||
-          sourceType === "Feature" ||
-          sourceType === "Component")
-      );
-    default:
-      return true;
-  }
-}
-
-/**
  * 将全图完整性结果转换为 Critique 和 fallback 共用的机器可读问题。
  */
 function createGraphIntegrityIssues(
   knowledgeGraph: ProductKnowledgeGraph,
   integrity: CritiqueValidationReport["graph_integrity"],
+  currentRelationTaskById: Map<string, string>,
 ): CritiqueValidationIssue[] {
   const relationById = new Map(
     knowledgeGraph.relations.map((relation) => [relation.id, relation]),
@@ -500,18 +464,22 @@ function createGraphIntegrityIssues(
 
   for (const relationId of integrity.dangling_relation_ids) {
     const relation = relationById.get(relationId);
+    const currentTaskId = currentRelationTaskById.get(relationId);
     issues.push(
       createReviewIssue({
-        code: "RELATION_ENDPOINT_MISSING",
-        severity: "error",
-        taskId: relation?.source_task_id,
-        message: `Relation ${relationId} references a missing source or target node.`,
+        code: currentTaskId
+          ? "RELATION_ENDPOINT_MISSING"
+          : "LEGACY_RELATION_ENDPOINT_MISSING",
+        severity: currentTaskId ? "error" : "warning",
+        taskId: currentTaskId,
+        message: `${currentTaskId ? "Relation" : "Existing graph relation"} ${relationId} references a missing source or target node.`,
       }),
     );
   }
 
   for (const relationId of integrity.invalid_direction_relation_ids) {
     const relation = relationById.get(relationId);
+    const currentTaskId = currentRelationTaskById.get(relationId);
     const sourceType = relation
       ? entityById.get(relation.source)?.type
       : undefined;
@@ -520,10 +488,12 @@ function createGraphIntegrityIssues(
       : undefined;
     issues.push(
       createReviewIssue({
-        code: "INVALID_RELATION_DIRECTION",
-        severity: "error",
-        taskId: relation?.source_task_id,
-        message: `Relation ${relationId} uses invalid direction ${sourceType ?? "missing"} --${relation?.type ?? "unknown"}--> ${targetType ?? "missing"}.`,
+        code: currentTaskId
+          ? "INVALID_RELATION_DIRECTION"
+          : "LEGACY_INVALID_RELATION_DIRECTION",
+        severity: currentTaskId ? "error" : "warning",
+        taskId: currentTaskId,
+        message: `${currentTaskId ? "Relation" : "Existing graph relation"} ${relationId} uses invalid direction ${sourceType ?? "missing"} --${relation?.type ?? "unknown"}--> ${targetType ?? "missing"}.`,
       }),
     );
   }

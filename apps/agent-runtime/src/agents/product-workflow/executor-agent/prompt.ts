@@ -61,6 +61,7 @@ Structured graph writing workflow (use these tools instead of free-text):
 2. Call \`kg_file_add_summary\` with a concise execution summary for this task.
 3. Call \`kg_file_add_nodes\` with your entity nodes as a typed JSON array. Every node must have: id, type (${definition.allowedEntityTypes.join("/")}), name, description, source_task_id (the current task ID), and status ("proposed" by default).
 4. Call \`kg_file_add_relations\` with your relation edges as a typed JSON array. Every relation must have: id, type (${definition.allowedRelationTypes.join("/")}), source (a node id from step 3 or prior graph), target (a node id), description, and source_task_id.
+   - If the tool skips a relation for invalid_relation_direction, correct and resubmit it immediately before continuing. The skipped relation ID remains available.
 5. Call \`kg_file_add_decisions\` with an array of decision items (each has id and text).
 6. Call \`kg_file_add_risks\` with an array of risk items (each has id and text).
 7. Call \`kg_file_add_open_questions\` with an array of open question items (each has id and text).

@@ -305,7 +305,7 @@ test("critique validation does not duplicate chained relation renames", () => {
   assert.deepEqual(report.rejected_task_ids, []);
 });
 
-test("critique validation reports graph-wide integrity failures", () => {
+test("critique validation reports pre-existing integrity failures as legacy warnings", () => {
   const graph = createGraph({
     entities: [
       createGoal("G-001"),
@@ -373,12 +373,71 @@ test("critique validation reports graph-wide integrity failures", () => {
   assert.deepEqual(
     report.issues.map((issue) => issue.code),
     [
-      "RELATION_ENDPOINT_MISSING",
-      "INVALID_RELATION_DIRECTION",
+      "LEGACY_RELATION_ENDPOINT_MISSING",
+      "LEGACY_INVALID_RELATION_DIRECTION",
       "ORPHAN_REQUIREMENT",
       "ORPHAN_FEATURE",
     ],
   );
+  assert.ok(report.issues.every((issue) => issue.severity === "warning"));
+  assert.deepEqual(report.retry_task_ids, []);
+});
+
+test("critique validation rejects invalid relations committed by the current task", () => {
+  const invalidRelation: ProductKnowledgeGraph["relations"][number] = {
+    id: "REL-INVALID",
+    type: "Drives",
+    source: "G-001",
+    target: "R-001",
+    source_task_id: "task-01",
+  };
+  const graph = createGraph({
+    entities: [
+      createGoal("G-001"),
+      createRequirement(
+        "R-001",
+        "task-01",
+        "Invalidly connected requirement",
+        "This requirement is connected through an invalid direction.",
+      ),
+    ],
+    relations: [invalidRelation],
+  });
+  const task = createTask("task-01", 1, "executor-product-strategy");
+  const report = createCritiqueValidationReport({
+    workspaceId: "workspace-test",
+    productContext: "",
+    requestAnalysis: createRequestAnalysis(),
+    plan: {
+      status: "initial",
+      request_summary: "Review current graph updates.",
+      dag: { nodes: [task.task_id], edges: [] },
+      tasks: [task],
+      assumptions: [],
+    },
+    executorResults: [
+      {
+        task_id: task.task_id,
+        agent_type: "executor-product-strategy",
+        focus_layer: "Goal",
+        summary: "Added an invalid relation.",
+        entities: [],
+        relations: [invalidRelation],
+        decisions: [],
+        risks: [],
+        open_questions: [],
+        quality_result: { passed: true, notes: "ok" },
+      },
+    ],
+    knowledgeGraph: graph,
+  });
+
+  assert.deepEqual(report.rejected_task_ids, ["task-01"]);
+  assert.equal(
+    report.executor_update_records[0]?.commit_status,
+    "rejected",
+  );
+  assert.equal(report.issues[0]?.code, "INVALID_RELATION_DIRECTION");
 });
 
 /**
