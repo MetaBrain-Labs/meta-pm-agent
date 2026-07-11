@@ -3,7 +3,7 @@ import { prisma } from "@repo/database";
 import type { TaskExecutionPlan } from "@repo/shared";
 
 /**
- * 将 Planner Agent 生成的 DAG 计划写入 task_execution 表。
+ * 将 Planner SubAgent 生成的 DAG 计划写入 task_execution 表。
  */
 export async function persistTaskExecutionPlan({
   conversationId,

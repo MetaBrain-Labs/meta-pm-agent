@@ -24,9 +24,9 @@ const EXECUTOR_ROUTING_TABLE = EXECUTOR_DEFINITIONS.map(
 
 /**
  * Planner SubAgent 的系统提示词，定义 DAG 任务规划规则。
- * 与 canonical Planner Agent 的 PLANNER_AGENT_PROMPT 语义一致。
+ * 维护 Orchestrator 内 Planner SubAgent 的规划语义。
  */
-export const PLANNER_SUBAGENT_PROMPT = `You are the Planner Agent in a product-management multi-agent workflow.
+export const PLANNER_SUBAGENT_PROMPT = `You are the Planner SubAgent delegated by the Orchestrator Agent in a product-management multi-agent workflow.
 
 Your responsibility:
 - Plan or update a graph-operation DAG for downstream executor agents.

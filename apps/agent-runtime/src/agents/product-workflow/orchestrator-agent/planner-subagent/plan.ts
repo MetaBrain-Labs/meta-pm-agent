@@ -1,13 +1,13 @@
 /**
  * Planner 规划引擎：DAG 归一化、Fallback 生成与格式化
  *
- * 从 standalone Planner Agent 中提取的共享规划逻辑。normalizeTaskExecutionPlan 负责
+ * Planner SubAgent 的共享规划逻辑。normalizeTaskExecutionPlan 负责
  * 收敛 LLM 生成的冗余依赖边，createFallbackPlan 在模型不可用时生成确定性图谱操作 DAG。
  *
  * Responsibilities:
  * - normalizeTaskExecutionPlan()：归一化 Planner DAG，只保留真实图谱数据依赖
  * - createFallbackPlan()：模型不可用时的确定性 DAG 生成（关键词匹配 + 固定顺序）
- * - formatTaskExecutionPlanBlock() / formatPlannerReasoningSummary()：前端展示格式化
+ * - formatTaskExecutionPlanBlock()：前端 DAG 展示格式化
  */
 
 import {
@@ -228,7 +228,7 @@ function getLastTaskForAgentBefore(
 // ---------------------------------------------------------------------------
 
 const FALLBACK_PLAN_ASSUMPTION =
-  "Planner Agent used a deterministic graph-operation fallback DAG that preserves parallel executor layers and task-level quality checks.";
+  "Planner SubAgent used a deterministic graph-operation fallback DAG that preserves parallel executor layers and task-level quality checks.";
 
 const FALLBACK_EXECUTOR_ORDER: ExecutorAgentType[] = [
   "executor-product-strategy",
@@ -252,7 +252,7 @@ type FallbackTaskSpec = {
 };
 
 /**
- * 在 Planner Agent 不可用时生成稳定的图谱操作 DAG。
+ * 在 Planner SubAgent 不可用时生成稳定的图谱操作 DAG。
  */
 export function createFallbackPlan(
   input: PlannerAgentInput,
@@ -812,31 +812,4 @@ function summarizeMissingInformation(items: BusinessModelItem[]): string {
  */
 export function formatTaskExecutionPlanBlock(plan: TaskExecutionPlan): string {
   return `<task-execution>\n${JSON.stringify(plan, null, 2)}\n</task-execution>`;
-}
-
-/**
- * 为 Planner SubAgent 生成简洁的推理摘要，填充前端 Planner 卡片内容。
- */
-export function formatPlannerReasoningSummary(plan: TaskExecutionPlan): string {
-  const taskSummary = plan.tasks
-    .map((task) => `${task.task_id}: ${task.title}`)
-    .join("；");
-  const executorList = [
-    ...new Set(plan.tasks.map((task) => task.assigned_agent)),
-  ];
-  const warnings = plan.assumptions.slice(0, 2).map((assumption) => {
-    const text =
-      typeof assumption === "string"
-        ? assumption
-        : (assumption as { assumption?: string }).assumption ?? "";
-    return text.length > 60 ? `${text.slice(0, 60)}...` : text;
-  });
-
-  return [
-    `Planner SubAgent 已完成任务规划。`,
-    `计划状态：${plan.status}，共 ${plan.tasks.length} 个任务。`,
-    `执行者：${executorList.join("、")}。`,
-    `任务摘要：${taskSummary}。`,
-    ...(warnings.length > 0 ? [`关键假设：${warnings.join("；")}。`] : []),
-  ].join("\n");
 }

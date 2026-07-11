@@ -29,7 +29,6 @@ import {
   createPlannerSubagent,
   extractPlanFromSubagentResult,
   formatTaskExecutionPlanBlock,
-  formatPlannerReasoningSummary,
 } from "./planner-subagent";
 import {
   createPreOrchestratorSubagent,
@@ -41,6 +40,11 @@ import {
   extractPreOrchFromSubagentResult,
   extractPreOrchReasoning,
 } from "./pre-orchestrator-subagent";
+
+/**
+ * Orchestrator 父级输出失败时直接使用确定性路由，避免重复调用已成功的 SubAgent。
+ */
+export const ORCHESTRATOR_AGENT_MAX_RETRIES = 0;
 
 export interface OrchestratorAgentOutput {
   decision: OrchestratorAgentResult;
@@ -87,7 +91,7 @@ export async function* streamOrchestratorAgent(
       : [createPlannerSubagent()],
     payload,
     schema: outputSchema as any,
-    maxRetries: isPreCheck ? 0 : 1,
+    maxRetries: ORCHESTRATOR_AGENT_MAX_RETRIES,
     requiredSubagentType:
       !isPreCheck && input.requestAnalysis.business_model.length > 0
         ? "planner"
@@ -142,11 +146,6 @@ export async function* streamOrchestratorAgent(
           plannerSubagentResult,
           input,
         );
-        yield {
-          type: "reasoning",
-          agentType: "planner",
-          content: formatPlannerReasoningSummary(capturedPlan),
-        };
         yield {
           type: "agent-status",
           agentType: "planner",

@@ -253,6 +253,7 @@ function restoreOpenQuestionInputs(
     .map((node) => ({
       id: node.id,
       text: node.description || node.name,
+      blocking: false,
       ...(node.source_task_id ? { source_task_id: node.source_task_id } : {}),
     }));
 }

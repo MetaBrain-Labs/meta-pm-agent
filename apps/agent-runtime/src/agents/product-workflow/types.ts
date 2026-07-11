@@ -1,7 +1,7 @@
 /**
  * 产品工作流类型定义
  *
- * 定义产品工作流中 Planner Agent、Executor Agent、Critique Agent 和各工作流阶段的
+ * 定义产品工作流中 Planner SubAgent、Executor Agent、Critique Agent 和各工作流阶段的
  * 公共输入输出类型及流事件类型。
  *
  * Responsibilities:
@@ -48,7 +48,7 @@ export interface WorkflowResumeContext {
 }
 
 /**
- * Planner Agent 节点输入，包含 Request Agent 结果和当前产品知识图谱快照。
+ * Planner SubAgent 计划输入，包含 Request Agent 结果和当前产品知识图谱快照。
  */
 export interface PlannerAgentInput extends ProductWorkflowInput {
   knowledgeGraph: ProductKnowledgeGraph;

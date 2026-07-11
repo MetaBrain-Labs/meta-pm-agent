@@ -275,13 +275,13 @@ function hasOverlappingProposalQuestionIntervals(options: string[]): boolean {
 }
 
 /**
- * Planner Agent 输出给 Conversation Agent 渲染的结构化 Question Form 问题。
+ * Planner SubAgent 输出给 Conversation Agent 渲染的结构化 Question Form 问题。
  */
 export const ProductWorkflowProposalQuestionSchema = z
   .object({
     id: z.string().min(1).describe("Stable field ID used in the submitted form answer"),
     label: z.string().min(1).describe("User-facing question label"),
-    type: ProductWorkflowProposalQuestionTypeSchema.describe("Question Form control type chosen by Planner Agent"),
+    type: ProductWorkflowProposalQuestionTypeSchema.describe("Question Form control type chosen by the Planner SubAgent"),
     options: z.array(ProductWorkflowProposalQuestionOptionSchema).optional().catch(undefined).describe("Required for radio, checkbox, and select controls"),
     placeholder: z.string().optional().describe("Optional placeholder for text or textarea controls"),
     required: z.boolean().default(true).describe("Whether the user must answer this field"),
@@ -445,7 +445,7 @@ const TaskExecutionAssumptionSchema = z.union([
 ]);
 
 /**
- * Planner Agent 生成的 DAG 节点，描述执行顺序、分配对象和验收标准。
+ * Planner SubAgent 生成的 DAG 节点，描述执行顺序、分配对象和验收标准。
  */
 export const TaskExecutionNodeSchema = z.object({
   task_id: z.string().min(1),
@@ -464,7 +464,7 @@ export const TaskExecutionNodeSchema = z.object({
 });
 
 /**
- * Planner Agent 写入 task_execution 的结构化计划。
+ * Planner SubAgent 写入 task_execution 的结构化计划。
  */
 export const TaskExecutionPlanSchema = z.object({
   status: z.enum(["initial", "supplement"]).default("initial"),
@@ -538,7 +538,7 @@ export const ExecutorAgentResultSchema = z.object({
 });
 
 /**
- * Planner Agent 对完整 MVP 工作流的汇总与确认结果。
+ * Critique Agent 对完整 MVP 工作流的汇总与确认结果。
  */
 export const ProductWorkflowReviewIssueSchema = z.object({
   code: z.string().min(1).describe("Stable machine-readable issue code"),
@@ -707,7 +707,7 @@ export const OrchestratorContextSourceSchema = z.enum([
 /**
  * Orchestrator Agent 的路由决策。
  *
- * 该结构只表达顶层编排意图，不承载 Planner DAG。真正的 DAG 仍由 Planner Agent
+ * 该结构只表达顶层编排意图，不承载 Planner DAG。真正的 DAG 由 Planner SubAgent
  * 通过现有 TaskExecutionPlanSchema 生成并归一化。
  */
 export const OrchestratorAgentResultSchema = z.object({

@@ -208,7 +208,7 @@ export async function persistProposalDecisionItem(
 }
 
 /**
- * 将 Planner Agent 的最终确认请求写入请求表单。
+ * 将 Planner SubAgent 的最终确认请求写入请求表单。
  */
 export async function persistProductWorkflowConfirmationDecision(
   requestFormId: string | undefined,
@@ -919,7 +919,7 @@ function buildDecisionQuestionForm(payload: Record<string, unknown>): string | n
 ${JSON.stringify(
   {
     description:
-      "Planner Agent 汇总了 Executor Agent 需要你补充确认的信息。",
+      "Planner SubAgent 汇总了 Executor Agent 需要你补充确认的信息。",
     questions,
     submitLabel: "提交补充信息",
   },

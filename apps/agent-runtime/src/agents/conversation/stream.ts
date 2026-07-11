@@ -696,8 +696,8 @@ async function* streamPlanningAfterUserInput(
         yield {
           type: "text",
           content: proposalForm
-            ? "Planner Agent 汇总了需要补充确认的信息，我需要你先回答这些问题。"
-            : "Planner Agent 已完成本轮汇总，我需要你确认下一步处理方式。",
+            ? "Planner SubAgent 汇总了需要补充确认的信息，我需要你先回答这些问题。"
+            : "Planner SubAgent 已完成本轮汇总，我需要你确认下一步处理方式。",
           agentType: "conversation_confirmation",
         };
         yield {
@@ -726,7 +726,7 @@ async function* streamPlanningAfterUserInput(
       yield {
         type: "text",
         content:
-          "Planner Agent 暂停了当前 Executor 批次，需要先由你补充阻塞信息后再继续运行。",
+          "Planner SubAgent 暂停了当前 Executor 批次，需要先由你补充阻塞信息后再继续运行。",
         agentType: "conversation_confirmation",
       };
       yield {

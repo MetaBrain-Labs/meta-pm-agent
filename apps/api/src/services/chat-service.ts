@@ -322,7 +322,7 @@ function replaceProductWorkflowPayload(
 
   const blockEnd = endIndex + endMarker.length;
   const summary = [
-    "Planner Agent 已完成产品工作流汇总，结构化结果已归档。",
+    "Planner SubAgent 已完成产品工作流汇总，结构化结果已归档。",
     `确认 ID：${productWorkflow.confirmation_id}`,
     `状态：${productWorkflow.status}`,
     `Executor 结果数：${productWorkflow.executor_results.length}`,

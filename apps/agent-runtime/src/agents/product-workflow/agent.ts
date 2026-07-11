@@ -63,7 +63,6 @@ export {
   normalizeTaskExecutionPlan,
   createFallbackPlan,
   formatTaskExecutionPlanBlock,
-  formatPlannerReasoningSummary,
 } from "./orchestrator-agent/planner-subagent";
 
 /**
@@ -125,7 +124,7 @@ export function formatProductWorkflowProposalQuestionForm(
 
   const form = {
     description:
-      "Planner Agent 汇总了 Executor Agent 需要你补充确认的信息，请先回答这些高优先级问题。",
+      "Planner SubAgent 汇总了 Executor Agent 需要你补充确认的信息，请先回答这些高优先级问题。",
     questions,
     submitLabel: "提交补充信息",
   };

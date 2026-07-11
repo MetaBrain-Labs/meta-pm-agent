@@ -11,7 +11,7 @@
  * - JSON 解析失败时执行确定性 fallback，确保流程不被阻塞
  *
  * Notes:
- * - Planner Agent 和 Critique Agent 使用此执行器
+ * - Planner SubAgent 和 Critique Agent 使用此执行器
  * - 支持 Zod schema 校验输出，校验失败时触发 fallback
  */
 
