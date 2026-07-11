@@ -13,6 +13,11 @@
  */
 
 import { PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT } from "../common/knowledge-graph";
+import {
+  WEB_SEARCH_USAGE_PROMPT,
+  buildRuntimeContextPrompt,
+} from "../../common/web-search-prompt";
+import { canExecutorUseWebSearch } from "../../common/tool-access";
 import type { ExecutorAgentDefinition } from "./definitions";
 
 /**
@@ -21,7 +26,9 @@ import type { ExecutorAgentDefinition } from "./definitions";
 export function createExecutorAgentPrompt(
   definition: ExecutorAgentDefinition,
 ): string {
-  return `You are the ${definition.name}.
+  const webSearchEnabled = canExecutorUseWebSearch(definition.agentType);
+
+  const basePrompt = `You are the ${definition.name}.
 
 Executor identity:
 - agent_type: ${definition.agentType}
@@ -102,4 +109,16 @@ Pre-final self-check:
 - Does the update cover the assigned Planner task without producing standalone deliverable prose?
 
 After all structured tools have been called, return exactly one short sentence: "Knowledge graph updated."`;
+
+  // 当 Executor 默认启用 web_search 时，注入 Runtime context 和统一的 Web Search 使用规范
+  if (webSearchEnabled) {
+    const runtimePrompt = buildRuntimeContextPrompt();
+    return `${basePrompt}
+
+${runtimePrompt}
+
+${WEB_SEARCH_USAGE_PROMPT}`;
+  }
+
+  return basePrompt;
 }

@@ -181,6 +181,16 @@ export function canAgentUseTool(
 }
 
 /**
+ * 判断 Executor Agent 是否默认启用 web_search 工具。
+ *
+ * Market Research、GTM、Marketing Growth、Data Analytics、AI Shipping、
+ * Toolkit、Interface Craft 需要外部事实验证，runtime 自动注入 web_search。
+ */
+export function canExecutorUseWebSearch(agentType: ToolOwningAgent): boolean {
+  return EXECUTOR_WEB_SEARCH_AGENT_TYPES.has(agentType);
+}
+
+/**
  * Planner/Executor 内部默认启用的知识图谱文件工具名称列表。
  */
 export function getKnowledgeGraphFileToolNames(): AgentRuntimeTool[] {

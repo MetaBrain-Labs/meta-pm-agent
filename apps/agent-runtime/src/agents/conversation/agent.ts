@@ -27,9 +27,9 @@ import {
   type AgentRunSummaryRecorder,
 } from "../common/agent-run-summary";
 import {
-  getRuntimeDateContext,
-  type RuntimeDateContext,
-} from "../common/runtime-context";
+  WEB_SEARCH_USAGE_PROMPT,
+  buildRuntimeContextPrompt,
+} from "../common/web-search-prompt";
 import { DISCOVERY_PROMPT, CHAT_ONLY_PROMPT } from "./prompt";
 
 export interface ConversationAgentOptions {
@@ -78,14 +78,12 @@ export function createConversationAgentSystemPrompt(
   ),
 ): string {
   return buildConversationPrompt({
-    runtimeContext: getRuntimeDateContext(),
     webSearchEnabled: options.mode === "chat" ? false : webSearchEnabled,
     mode: options.mode ?? "project",
   });
 }
 
 interface ConversationPromptOptions {
-  runtimeContext: RuntimeDateContext;
   webSearchEnabled: boolean;
   mode?: "project" | "chat";
 }
@@ -94,11 +92,10 @@ interface ConversationPromptOptions {
  * 根据本轮工具能力和模式生成 Conversation Agent 系统提示。
  */
 function buildConversationPrompt({
-  runtimeContext,
   webSearchEnabled,
   mode,
 }: ConversationPromptOptions): string {
-  const runtimePrompt = buildRuntimeContextPrompt(runtimeContext);
+  const runtimePrompt = buildRuntimeContextPrompt();
 
   // 纯闲聊模式：只用简短提示
   if (mode === "chat") {
@@ -117,25 +114,6 @@ ${runtimePrompt}`;
 
 ${runtimePrompt}
 
-## Web search tool
-
-- You may call \`web_search\` only when the current turn needs external facts, recent information, source verification, market references, or other information not present in the conversation.
-- Do not call \`web_search\` for routine routing, simple clarification, or form generation when the user-provided context is sufficient.
-- When the user asks for latest, recent, current, today, this month, this year, or similar relative-time information, interpret it using the runtime date above instead of model memory.
-- When building a \`web_search\` query for relative-time requests, include the current year/date or a concrete recent period from the runtime context when useful. For example, a request for recent GitHub hotspots should search for 2026 or June 2026 GitHub trending repositories instead of older years.
-- If search results look stale or conflict with the runtime date, refine the query once before answering, or explicitly say the latest information could not be verified.
-- When a bullet, headline, or factual claim is supported by a search result, append a compact citation marker using that result's \`sourceId\`, for example \`[[source:1]]\`. Do not invent source ids and do not show raw URLs in normal prose unless the user asks for them.
-- When search results influence your answer, summarize the useful findings in the user's language and keep the project-management workflow intact.`;
-}
-
-/**
- * 将服务器当前日期写入系统提示，作为所有相对时间判断的业务基准。
- */
-function buildRuntimeContextPrompt(context: RuntimeDateContext): string {
-  return `## Runtime context
-
-- Current server date: ${context.currentDate} (${context.timeZone}).
-- Current server year: ${context.currentYear}.
-- Treat relative-time phrases as relative to this date, not to the model's training data.`;
+${WEB_SEARCH_USAGE_PROMPT}`;
 }
 
