@@ -35,7 +35,7 @@ export const marketingGrowthExecutorProfile = {
   executionGuidelines: [
     "Convert north-star metrics, input metrics, and growth KPIs into Metric nodes, and connect them to Goal or Requirement nodes with Measures relations.",
     "Convert value propositions, positioning, and marketing ideas into Decision nodes.",
-    "Extract Requirement nodes behind value propositions, and connect them to growth Decision nodes with Drives relations.",
+    "Extract Requirement nodes behind value propositions; connect an existing Goal to each growth Decision with Drives, then connect the Decision to its Requirement with Produces.",
     "Do not output finished marketing copy; only record traceable Metric, Decision, and Requirement nodes.",
   ],
 } as const satisfies ExecutorAgentProfile;

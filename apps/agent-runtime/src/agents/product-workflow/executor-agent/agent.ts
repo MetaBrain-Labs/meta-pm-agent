@@ -36,10 +36,9 @@ import {
 import {
   createToolsForAgent,
   getExecutorDefaultToolNames,
+  getExecutorRetryToolNames,
 } from "../../common/tool-access";
 import {
-  compactPreviousExecutorResults,
-  compactTaskExecutionPlan,
   createGraphContextSummary,
   createTaskRelevantGraphContext,
 } from "../common/context";
@@ -55,7 +54,6 @@ import { createExecutorAgentPrompt } from "./prompt";
  * 强类型结构化工具名称集合，用于识别需要从中收集数据的工具调用。
  */
 const STRUCTURED_TOOL_NAMES = new Set([
-  "kg_file_add_summary",
   "kg_file_add_nodes",
   "kg_file_add_relations",
   "kg_file_add_decisions",
@@ -118,88 +116,105 @@ export async function* streamExecutorAgent(
   // 工具在本轮工作副本上写入，外层节点统一用 appendKnowledgeGraphPatch 合并一次。
   const baseKnowledgeGraph = cloneKnowledgeGraph(input.knowledgeGraph);
   const toolKnowledgeGraph = cloneKnowledgeGraph(input.knowledgeGraph);
-  const tools = createToolsForAgent(
-    definition.agentType,
-    getExecutorDefaultToolNames(definition.agentType),
-    { knowledgeGraph: toolKnowledgeGraph },
-  );
-  // Executor 默认只接收摘要和任务相关子图，完整图谱保留在工具状态中按需查询。
-  const graphContextSummary = createGraphContextSummary(input.knowledgeGraph);
-  // recent_nodes 已在 graph_context_summary 中提供，task_relevant_context 不再重复传输。
-  const recentNodeIds = new Set(
-    graphContextSummary.recent_nodes.map((node) => node.id),
-  );
-  const taskRelevantContext = createTaskRelevantGraphContext({
-    knowledgeGraph: input.knowledgeGraph,
-    task: input.task,
-    previousResults: input.previousResults,
-    excludeNodeIds: recentNodeIds,
-  });
-
-  const textGen = runTextAgent({
-    agentType: definition.agentType,
-    agentLabel: definition.displayName,
-    name: `${definition.agentType}-agent`,
-    modelOptions: {
-      ...TEXT_AGENT_MODEL_OPTIONS,
-      maxTokens: 10240,
-    },
-    systemPrompt: createExecutorAgentPrompt(definition),
-    tools,
-    skills: getExecutorSkillSources(definition),
-    payload: {
-      executor_profile: {
-        agent_type: definition.agentType,
-        domain: definition.domain,
-        graph_role: definition.graphRole,
-        allowed_entity_types: definition.allowedEntityTypes,
-        allowed_relation_types: definition.allowedRelationTypes,
-        skills: definition.skills,
-      },
-      product_context: input.productContext || "No product context provided.",
-      graph_context_summary: graphContextSummary,
-      task_relevant_context: taskRelevantContext,
-      task: input.task,
-      plan_context: compactTaskExecutionPlan(input.plan),
-      previous_results: compactPreviousExecutorResults(input.previousResults),
-    },
-    fallback: () => createFallbackKnowledgeGraphPatch(input.task),
-    signal: input.signal,
-    throwOnError: true,
-  });
-
-  // 手动迭代生成器以在透传事件给上游的同时收集结构化数据
+  // 手动迭代生成器以在透传事件给上游的同时收集结构化数据。
   let patch = "";
   try {
-    let genResult = await textGen.next();
-    while (!genResult.done) {
-      const event = genResult.value as TextAgentEvent<string>;
-
-      yield event as ProductWorkflowStreamEvent;
-      if (
-        event.type === "tool-result" &&
-        event.toolName === BLOCKER_TOOL_NAME
-      ) {
-        throw createHumanInputRequiredError({
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      // 重试时基于同一工作副本继续执行，保留首次已完成的工具写入。
+      const graphContextSummary = createGraphContextSummary(toolKnowledgeGraph);
+      const recentNodeIds = new Set(
+        graphContextSummary.recent_nodes.map((node) => node.id),
+      );
+      const taskRelevantContext = createTaskRelevantGraphContext({
+        knowledgeGraph: toolKnowledgeGraph,
+        task: input.task,
+        previousResults: input.previousResults,
+        excludeNodeIds: recentNodeIds,
+      });
+      const tools = createToolsForAgent(
+        definition.agentType,
+        attempt > 1
+          ? getExecutorRetryToolNames()
+          : getExecutorDefaultToolNames(definition.agentType),
+        {
+          knowledgeGraph: toolKnowledgeGraph,
+          allowedEntityTypes: definition.allowedEntityTypes,
+          allowedRelationTypes: definition.allowedRelationTypes,
+        },
+      );
+      const textGen = runTextAgent({
+        agentType: definition.agentType,
+        agentLabel: definition.displayName,
+        name: `${definition.agentType}-agent${attempt > 1 ? "-retry" : ""}`,
+        modelOptions: {
+          ...TEXT_AGENT_MODEL_OPTIONS,
+          maxTokens: 16384,
+          timeout: 60_000,
+        },
+        systemPrompt: createExecutorAgentPrompt(definition),
+        tools,
+        skills: getExecutorSkillSources(definition),
+        payload: {
+          product_context:
+            input.productContext?.slice(0, 800) ||
+            "No product context provided.",
+          graph_context_summary: graphContextSummary,
+          task_relevant_context: taskRelevantContext,
           task: input.task,
-          agentType: definition.agentType,
-          displayName: definition.displayName,
-          toolResult: event.toolResult,
-        });
+          ...(attempt > 1
+            ? {
+                retry_instruction:
+                  "The previous attempt wrote no structured graph items. This retry exposes write tools only: do not repeat research or analysis. Write the minimum required graph items immediately; record unavailable external evidence as a risk or open question.",
+              }
+            : {}),
+        },
+        fallback: () => createFallbackKnowledgeGraphPatch(input.task),
+        signal: input.signal,
+        throwOnError: true,
+      });
+
+      let genResult = await textGen.next();
+      while (!genResult.done) {
+        const event = genResult.value as TextAgentEvent<string>;
+
+        yield event as ProductWorkflowStreamEvent;
+        if (
+          event.type === "tool-result" &&
+          event.toolName === BLOCKER_TOOL_NAME
+        ) {
+          throw createHumanInputRequiredError({
+            task: input.task,
+            agentType: definition.agentType,
+            displayName: definition.displayName,
+            toolResult: event.toolResult,
+          });
+        }
+        if (
+          event.type === "tool-result" &&
+          STRUCTURED_TOOL_NAMES.has(event.toolName)
+        ) {
+          // 结构化写入工具完成后立即发出累计图谱快照，避免后续中断丢失已完成工具产物。
+          yield {
+            type: "knowledge-graph-update",
+            knowledgeGraph: cloneKnowledgeGraph(toolKnowledgeGraph),
+          };
+        }
+        genResult = await textGen.next();
       }
-      if (
-        event.type === "tool-result" &&
-        STRUCTURED_TOOL_NAMES.has(event.toolName)
-      ) {
-        // 结构化写入工具完成后立即发出累计图谱快照，避免后续中断丢失已完成工具产物。
-        yield {
-          type: "knowledge-graph-update",
-          knowledgeGraph: cloneKnowledgeGraph(toolKnowledgeGraph),
-        };
-      }
-      genResult = await textGen.next();
+      patch = genResult.value;
+
+      const attemptDelta = getKnowledgeGraphDelta(
+        baseKnowledgeGraph,
+        toolKnowledgeGraph,
+      );
+      if (hasStructuredGraphItems(attemptDelta) || attempt === 2) break;
+
+      yield {
+        type: "reasoning",
+        agentType: definition.agentType,
+        content: `${definition.displayName} 未完成结构化图谱写入，正在自动重试一次。\n`,
+      };
     }
-    patch = genResult.value;
   } catch (error) {
     if (isExecutorHumanInputRequiredError(error)) {
       throw error;
@@ -229,13 +244,28 @@ export async function* streamExecutorAgent(
     focusLayer: definition.focusLayer,
     displayName: definition.displayName,
     patch,
-    summary: graphDelta.summary[0],
+    summary: createExecutorSummary(
+      definition.displayName,
+      input.task,
+      graphDelta,
+    ),
     entities: graphDelta.entities,
     relations: graphDelta.relations,
     decisions: graphDelta.decisions,
     risks: graphDelta.risks,
     openQuestions: graphDelta.open_questions,
   });
+}
+
+/**
+ * 根据真实结构化增量生成可信摘要，避免模型摘要与最终落图数量不一致。
+ */
+function createExecutorSummary(
+  displayName: string,
+  task: TaskExecutionNode,
+  delta: ReturnType<typeof getKnowledgeGraphDelta>,
+): string {
+  return `${displayName} completed ${task.title}: ${delta.entities.length} entities, ${delta.relations.length} relations, ${delta.decisions.length} decisions, ${delta.risks.length} risks, and ${delta.open_questions.length} open questions committed.`;
 }
 
 /**
@@ -458,6 +488,24 @@ function getKnowledgeGraphDelta(
 }
 
 /**
+ * 判断 Executor 是否已经产生 Critique 可验证的结构化图谱增量。
+ */
+export function hasStructuredGraphItems(
+  delta: Pick<
+    ProductKnowledgeGraph,
+    "entities" | "relations" | "decisions" | "risks" | "open_questions"
+  >,
+): boolean {
+  return (
+    delta.entities.length > 0 ||
+    delta.relations.length > 0 ||
+    delta.decisions.length > 0 ||
+    delta.risks.length > 0 ||
+    delta.open_questions.length > 0
+  );
+}
+
+/**
  * 在模型不可用时生成最小可追踪的结构化图谱补丁。
  */
 function createFallbackKnowledgeGraphPatch(task: TaskExecutionNode): string {
@@ -486,6 +534,7 @@ function createFallbackKnowledgeGraphPatch(task: TaskExecutionNode): string {
         {
           id: `${task.task_id}-oq-01`,
           text: "是否接受该任务的图谱建模方向？",
+          blocking: true,
         },
       ],
     },

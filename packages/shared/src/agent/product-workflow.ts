@@ -169,6 +169,7 @@ export const KnowledgeGraphOpenQuestionInputSchema = z.object({
   id: z.string().min(1).describe("Question ID, e.g. OQ-001"),
   text: z.string().min(1).describe("Question text explaining what needs to be confirmed"),
   source_task_id: z.string().optional().describe("Optional executor task ID that raised this question"),
+  blocking: z.boolean().default(false).describe("Whether this question must be answered before the current workflow can complete"),
 });
 
 const ProductWorkflowProposalQuestionTypeSchema = z.preprocess((value) => {
@@ -203,25 +204,142 @@ const ProductWorkflowProposalQuestionSourceSchema = z.object({
     z.string().min(1).describe("Executor task ID that raised this question"),
   ),
   source_agent: LooseProductWorkflowAgentTypeSchema.describe("Agent that raised this question"),
+  open_question_id: z.string().min(1).optional().describe("Exact source OpenQuestion ID resolved by this form field"),
 });
+
+const ProductWorkflowProposalQuestionPrioritySchema = z.preprocess((value) => {
+  if (typeof value !== "string") return value;
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "high") return 3;
+  if (normalized === "medium") return 2;
+  if (normalized === "low") return 1;
+  if (/^-?\d+$/.test(normalized)) return Number(normalized);
+  return value;
+}, z.number().int().default(0));
+
+/**
+ * 解析 Question Form 中常见的闭区间数字选项，用于阻止单选范围重叠。
+ */
+function parseProposalQuestionNumericInterval(
+  option: string,
+): { min: number; max: number } | null {
+  const normalized = option
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(/[–—~～]/g, "-")
+    .toLowerCase();
+  const suffix = "(?:人|用户|个)?";
+  const range = normalized.match(
+    new RegExp(`^(\\d+(?:\\.\\d+)?)(?:-|至|到)(\\d+(?:\\.\\d+)?)${suffix}$`),
+  );
+  if (range) return { min: Number(range[1]), max: Number(range[2]) };
+
+  const atMost = normalized.match(
+    new RegExp(`^(?:≤|<=|不超过|最多|upto)(\\d+(?:\\.\\d+)?)${suffix}$`),
+  ) ?? normalized.match(
+    new RegExp(`^(\\d+(?:\\.\\d+)?)(?:及)?以下${suffix}$`),
+  );
+  if (atMost) return { min: Number.NEGATIVE_INFINITY, max: Number(atMost[1]) };
+
+  const atLeast = normalized.match(
+    new RegExp(`^(?:≥|>=|不少于|至少)(\\d+(?:\\.\\d+)?)${suffix}$`),
+  ) ?? normalized.match(
+    new RegExp(`^(\\d+(?:\\.\\d+)?)(?:及)?以上${suffix}$`),
+  );
+  if (atLeast) return { min: Number(atLeast[1]), max: Number.POSITIVE_INFINITY };
+
+  const moreThan = normalized.match(
+    new RegExp(`^(?:>|morethan)(\\d+)${suffix}$`),
+  );
+  if (moreThan) {
+    return { min: Number(moreThan[1]) + 1, max: Number.POSITIVE_INFINITY };
+  }
+
+  return null;
+}
+
+/**
+ * 判断单选数字区间是否存在共同边界或范围交叉。
+ */
+function hasOverlappingProposalQuestionIntervals(options: string[]): boolean {
+  const intervals = options
+    .map(parseProposalQuestionNumericInterval)
+    .filter((interval): interval is { min: number; max: number } => Boolean(interval));
+
+  return intervals.some((left, index) =>
+    intervals.slice(index + 1).some(
+      (right) => left.min <= right.max && right.min <= left.max,
+    ),
+  );
+}
 
 /**
  * Planner Agent 输出给 Conversation Agent 渲染的结构化 Question Form 问题。
  */
-export const ProductWorkflowProposalQuestionSchema = z.object({
-  id: z.string().min(1).describe("Stable field ID used in the submitted form answer"),
-  label: z.string().min(1).describe("User-facing question label"),
-  type: ProductWorkflowProposalQuestionTypeSchema.describe("Question Form control type chosen by Planner Agent"),
-  options: z.array(ProductWorkflowProposalQuestionOptionSchema).optional().catch(undefined).describe("Required for radio, checkbox, and select controls"),
-  placeholder: z.string().optional().describe("Optional placeholder for text or textarea controls"),
-  required: z.boolean().default(true).describe("Whether the user must answer this field"),
-  help: z.string().optional().describe("Optional user-facing help text or source summary"),
-  maxSelections: z.number().int().positive().optional().describe("Maximum selected options for checkbox controls"),
-  source_task_id: z.string().optional().describe("Primary executor task ID that raised this question"),
-  source_agent: LooseProductWorkflowAgentTypeSchema.optional().describe("Primary agent that raised this question"),
-  sources: z.array(ProductWorkflowProposalQuestionSourceSchema).default([]).catch([]).describe("All executor sources covered by the same merged question"),
-  priority: z.number().int().default(0).describe("Higher priority questions should be shown first"),
-});
+export const ProductWorkflowProposalQuestionSchema = z
+  .object({
+    id: z.string().min(1).describe("Stable field ID used in the submitted form answer"),
+    label: z.string().min(1).describe("User-facing question label"),
+    type: ProductWorkflowProposalQuestionTypeSchema.describe("Question Form control type chosen by Planner Agent"),
+    options: z.array(ProductWorkflowProposalQuestionOptionSchema).optional().catch(undefined).describe("Required for radio, checkbox, and select controls"),
+    placeholder: z.string().optional().describe("Optional placeholder for text or textarea controls"),
+    required: z.boolean().default(true).describe("Whether the user must answer this field"),
+    help: z.string().optional().describe("Optional user-facing help text or source summary"),
+    maxSelections: z.number().int().positive().optional().describe("Maximum selected options for checkbox controls"),
+    source_task_id: z.string().optional().describe("Primary executor task ID that raised this question"),
+    source_agent: LooseProductWorkflowAgentTypeSchema.optional().describe("Primary agent that raised this question"),
+    sources: z.array(ProductWorkflowProposalQuestionSourceSchema).default([]).catch([]).describe("All executor sources covered by the same merged question"),
+    priority: ProductWorkflowProposalQuestionPrioritySchema.describe("Integer priority; higher values are shown first"),
+  })
+  .superRefine((question, context) => {
+    const isChoice =
+      question.type === "radio" ||
+      question.type === "select" ||
+      question.type === "checkbox";
+    if (isChoice && (!question.options || question.options.length < 2)) {
+      context.addIssue({
+        code: "custom",
+        path: ["options"],
+        message: "Choice questions require at least two options",
+      });
+    }
+    if (
+      isChoice &&
+      question.options &&
+      new Set(question.options.map((option) => option.trim().toLowerCase())).size !==
+        question.options.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["options"],
+        message: "Question options must be unique",
+      });
+    }
+    if (
+      (question.type === "radio" || question.type === "select") &&
+      question.options &&
+      hasOverlappingProposalQuestionIntervals(question.options)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["options"],
+        message: "Single-choice numeric ranges must not overlap",
+      });
+    }
+    if (
+      question.maxSelections !== undefined &&
+      (question.type !== "checkbox" ||
+        !question.options ||
+        question.maxSelections > question.options.length)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["maxSelections"],
+        message: "maxSelections is valid only for checkbox options and cannot exceed the option count",
+      });
+    }
+  });
 
 /**
  * 产品知识图谱结构化上下文，承载节点、关系、决策、风险、待确认问题及摘要等完整图谱快照。
@@ -429,9 +547,41 @@ export const ProductWorkflowReviewIssueSchema = z.object({
     .default("error")
     .catch("error")
     .describe("Issue severity"),
-  task_id: z.string().optional().describe("Related planner task ID when applicable"),
+  task_id: z.preprocess(
+    (value) => (value === null || value === "" ? undefined : value),
+    z.string().optional().describe("Related planner task ID when applicable"),
+  ),
   message: z.string().min(1).max(500).describe("Concise issue explanation"),
 });
+
+/**
+ * 归一化 Critique Agent 的问题列表，将跨任务问题拆成单任务问题。
+ */
+const ProductWorkflowReviewIssuesSchema = z.preprocess((value) => {
+  if (!Array.isArray(value)) return value;
+
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [item];
+
+    const record = item as Record<string, unknown>;
+    if (!Array.isArray(record.task_id)) return [item];
+
+    const taskIds = [
+      ...new Set(
+        record.task_id.filter(
+          (taskId): taskId is string =>
+            typeof taskId === "string" && taskId.trim().length > 0,
+        ),
+      ),
+    ];
+    if (taskIds.length === 0) {
+      const { task_id: _taskId, ...globalIssue } = record;
+      return [globalIssue];
+    }
+
+    return taskIds.map((taskId) => ({ ...record, task_id: taskId }));
+  });
+}, z.array(ProductWorkflowReviewIssueSchema).default([]));
 
 const ProductWorkflowReviewNotesSchema = z.preprocess((value) => {
   if (Array.isArray(value)) {
@@ -476,7 +626,7 @@ export const ProductWorkflowKnowledgeGraphReviewSchema = z.object({
   accepted_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs whose graph updates are accepted"),
   rejected_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs whose graph updates are rejected"),
   retry_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs that should be retried or corrected"),
-  issues: z.array(ProductWorkflowReviewIssueSchema).default([]).describe("Detected graph or execution issues"),
+  issues: ProductWorkflowReviewIssuesSchema.describe("Detected graph or execution issues"),
   notes: ProductWorkflowKnowledgeGraphReviewNotesSchema.describe("Short review notes; never repeat full graph data"),
 });
 
@@ -498,12 +648,12 @@ export const CritiqueAgentOutputSchema = z.object({
     accepted_task_ids: z.array(z.string().min(1)).describe("Accepted task IDs"),
     rejected_task_ids: z.array(z.string().min(1)).describe("Rejected task IDs"),
     retry_task_ids: z.array(z.string().min(1)).default([]).describe("Task IDs that require retry or correction"),
-    issues: z.array(ProductWorkflowReviewIssueSchema).default([]).describe("Detected issues"),
+    issues: ProductWorkflowReviewIssuesSchema.describe("Detected issues"),
     notes: ProductWorkflowReviewNotesSchema.describe("Compact review notes"),
   }).describe("Critique Agent decision"),
   product_context_update: z.string().min(1).max(1200).describe("Short product context update summary"),
   knowledge_graph_review: ProductWorkflowKnowledgeGraphReviewSchema.describe("Lightweight graph review, not the full graph"),
-  proposal_questions: z.array(ProductWorkflowProposalQuestionSchema).max(3).default([]).describe("At most three high-priority user questions"),
+  proposal_questions: z.array(ProductWorkflowProposalQuestionSchema).default([]).describe("Unresolved blocking questions that require user confirmation"),
   confirmation_message: z.string().min(1).max(500).describe("Concise user-facing confirmation message"),
 });
 

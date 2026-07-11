@@ -15,11 +15,13 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PLANNER_AGENT_PROMPT } from "../src/agents/product-workflow/planner-agent/prompt";
+import { PLANNER_SUBAGENT_PROMPT } from "../src/agents/product-workflow/orchestrator-agent/planner-subagent/prompt";
 import { CRITIQUE_AGENT_PROMPT } from "../src/agents/product-workflow/critique-agent/prompt";
 import { createExecutorAgentPrompt } from "../src/agents/product-workflow/executor-agent/prompt";
 import { productStrategyExecutorProfile } from "../src/agents/product-workflow/executor-agent/product-strategy-executor/profile";
-import { ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT } from "../src/agents/product-workflow/orchestrator-agent/prompt";
+
+const PLANNER_AGENT_PROMPT = PLANNER_SUBAGENT_PROMPT;
+const ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT = PLANNER_SUBAGENT_PROMPT;
 
 test("planner prompt preserves graph-semantics guardrails", () => {
   assert.match(
@@ -67,6 +69,7 @@ test("planner prompt preserves graph-semantics guardrails", () => {
     PLANNER_AGENT_PROMPT,
     /whole JSON should stay under about 6000 tokens/,
   );
+  assert.match(PLANNER_AGENT_PROMPT, /Start the response with the JSON object immediately/);
   assert.match(
     PLANNER_AGENT_PROMPT,
     /Do not enumerate detailed components, libraries, frameworks, vendor lists/,
@@ -145,11 +148,15 @@ test("orchestrator planner subagent prompt satisfies json response format", () =
   assert.match(ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT, /json/i);
   assert.match(
     ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
-    /ready_for_planning/,
+    /The JSON object must include: status, request_summary, dag, tasks, assumptions/,
   );
   assert.match(
     ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
-    /recommended_plan_type/,
+    /status must be "initial" for the first DAG and "supplement"/,
+  );
+  assert.match(
+    ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
+    /Defer detailed architecture and exhaustive component decomposition to a supplement DAG/,
   );
 });
 
@@ -168,8 +175,9 @@ test("critique agent prompt stays compact and does not request full graph copies
   );
   assert.match(
     CRITIQUE_AGENT_PROMPT,
-    /Include at most 3 proposal_questions/,
+    /Include every unresolved blocking question after semantic deduplication/,
   );
+  assert.match(CRITIQUE_AGENT_PROMPT, /exact open_question_id/);
   assert.match(
     CRITIQUE_AGENT_PROMPT,
     /Status is a critique classification, not an execution command/,
@@ -194,6 +202,22 @@ test("critique agent prompt stays compact and does not request full graph copies
     CRITIQUE_AGENT_PROMPT,
     /No silent truncation/,
   );
+  assert.match(
+    CRITIQUE_AGENT_PROMPT,
+    /does not prove semantic uniqueness, evidence quality, or architecture proportionality/,
+  );
+  assert.match(
+    CRITIQUE_AGENT_PROMPT,
+    /Every radio\/select option must answer the same decision dimension/,
+  );
+  assert.match(
+    CRITIQUE_AGENT_PROMPT,
+    /Rank questions by downstream graph impact/,
+  );
+  assert.match(
+    CRITIQUE_AGENT_PROMPT,
+    /Never ask a proposal question that the current user_input already answered/,
+  );
   assert.doesNotMatch(
     CRITIQUE_AGENT_PROMPT,
     /knowledge_graph_update must contain the final knowledge graph state/,
@@ -208,4 +232,5 @@ test("executor prompt preserves append-only graph writing semantics", () => {
   assert.match(prompt, /The graph tools are append-only/);
   assert.match(prompt, /Never reuse an existing node, relation, decision, risk, or open-question ID/);
   assert.match(prompt, /all new IDs unique/);
+  assert.match(prompt, /runtime generates the execution summary/);
 });

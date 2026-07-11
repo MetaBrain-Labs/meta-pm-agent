@@ -24,6 +24,7 @@ import {
   createGraphContextSummary,
   readGraphBySourceTasks,
 } from "../product-workflow/common/context";
+import { isKnowledgeGraphRelationDirectionValid } from "../product-workflow/common/knowledge-graph";
 
 // ============================================================
 // 类型常量与 Zod Schemas
@@ -128,6 +129,11 @@ const openQuestionInputSchema = z.object({
         "Ask one clear and directly answerable question only.",
       ].join(" "),
     ),
+  blocking: z
+    .boolean()
+    .describe(
+      "Set true only when the current workflow cannot complete usefully without the answer; otherwise set false for backlog questions.",
+    ),
 });
 
 const blockerInputSchema = z.object({
@@ -173,9 +179,20 @@ export interface StructuredToolCallResult<T = unknown> {
 }
 
 /**
+ * 单个 Executor 的图谱写入权限，由其 Profile 在运行时注入。
+ */
+export interface KnowledgeGraphToolPolicy {
+  allowedEntityTypes?: readonly ProductKnowledgeGraph["entities"][number]["type"][];
+  allowedRelationTypes?: readonly ProductKnowledgeGraph["relations"][number]["type"][];
+}
+
+/**
  * 创建知识图谱操作工具集（基于内存状态对象，不写文件）。
  */
-export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
+export function createKnowledgeGraphTools(
+  state: ProductKnowledgeGraph,
+  policy: KnowledgeGraphToolPolicy = {},
+) {
   return [
     // 从当前上下文中读取 product context
     tool(
@@ -283,7 +300,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
       {
         name: "kg_file_add_summary",
         description:
-          "Write the execution summary for the current Executor task. Call this first before writing nodes and relations.",
+          "Write an optional execution summary after structured graph items have been committed. Runtime-managed Executors generate this summary automatically.",
         schema: z.object({
           summary: z
             .string()
@@ -296,8 +313,13 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
     tool(
       async ({ nodes }) => {
         const validated = nodes.map((n) => nodeInputSchema.parse(n));
-        const appendResult = filterAppendOnlyItems(
+        const authorized = filterAuthorizedItems(
           validated,
+          policy.allowedEntityTypes,
+          "unauthorized_entity_type",
+        );
+        const appendResult = filterAppendOnlyItems(
+          authorized.items,
           state.entities.map((item) => item.id),
         );
         state.entities.push(...appendResult.items);
@@ -305,8 +327,8 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
           {
             action: "add_nodes",
             count: appendResult.items.length,
-            items: appendResult.items as unknown[],
-            skipped: appendResult.skipped,
+            items: compactWrittenItems(appendResult.items),
+            skipped: [...authorized.skipped, ...appendResult.skipped],
           } satisfies StructuredToolCallResult,
           null,
           2,
@@ -315,7 +337,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
       {
         name: "kg_file_add_nodes",
         description:
-          "Append structured nodes to the knowledge graph. Each node must have a new unique id, type, name, description, source_task_id, and status. Duplicate IDs are skipped instead of updated. Allowed types: Goal/Requirement/Evidence/Decision/Feature/Component/Metric/Risk/OpenQuestion/Custom. Prefer kg_file_add_risks and kg_file_add_open_questions for uncertainty records.",
+          `Append structured nodes to the knowledge graph. Each node must have a new unique id, type, name, description, source_task_id, and status. Duplicate IDs and entity types outside this Agent's authorization are skipped. Allowed types for this Agent: ${(policy.allowedEntityTypes ?? ENTITY_TYPE_VALUES).join("/")}. Prefer kg_file_add_risks and kg_file_add_open_questions for uncertainty records.`,
         schema: z.object({
           nodes: z
             .array(nodeInputSchema)
@@ -328,13 +350,17 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
     tool(
       async ({ relations }) => {
         const validated = relations.map((r) => relationInputSchema.parse(r));
-        const appendResult = filterAppendOnlyRelations(validated, state);
+        const appendResult = filterAppendOnlyRelations(
+          validated,
+          state,
+          policy.allowedRelationTypes,
+        );
         state.relations.push(...appendResult.items);
         return JSON.stringify(
           {
             action: "add_relations",
             count: appendResult.items.length,
-            items: appendResult.items as unknown[],
+            items: compactWrittenItems(appendResult.items),
             skipped: appendResult.skipped,
           } satisfies StructuredToolCallResult,
           null,
@@ -344,7 +370,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
       {
         name: "kg_file_add_relations",
         description:
-          "Append structured relations to the knowledge graph. Each relation must have a new unique id, type, source, target, description, and source_task_id. Duplicate relation IDs and relations whose source/target nodes are missing are skipped instead of updated. Allowed types: Drives/Satisfies/Promotes/Produces/Constrains/Implements/Measures/Validates/References/Composes/Custom.",
+          `Append structured relations to the knowledge graph. Each relation must have a new unique id, type, source, target, description, and source_task_id. Duplicate IDs, unauthorized relation types, missing endpoints, and invalid typed-relation directions are skipped. A skipped ID is not reserved and may be resubmitted immediately with corrected endpoints or type. Allowed types for this Agent: ${(policy.allowedRelationTypes ?? RELATION_TYPE_VALUES).join("/")}; Custom remains available only for a clearly described non-canonical connection.`,
         schema: z.object({
           relations: z
             .array(relationInputSchema)
@@ -359,8 +385,17 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
     tool(
       async ({ decisions }) => {
         const validated = decisions.map((d) => decisionInputSchema.parse(d));
+        const authorized = policy.allowedEntityTypes?.includes("Decision") === false
+          ? {
+              items: [] as typeof validated,
+              skipped: validated.map((item) => ({
+                id: item.id,
+                reason: "unauthorized_entity_type:Decision",
+              })),
+            }
+          : { items: validated, skipped: [] };
         const appendResult = filterAppendOnlyItems(
-          validated,
+          authorized.items,
           state.decisions.map((item) => item.id),
         );
         state.decisions.push(...appendResult.items);
@@ -368,8 +403,8 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
           {
             action: "add_decisions",
             count: appendResult.items.length,
-            items: appendResult.items as unknown[],
-            skipped: appendResult.skipped,
+            items: compactWrittenItems(appendResult.items),
+            skipped: [...authorized.skipped, ...appendResult.skipped],
           } satisfies StructuredToolCallResult,
           null,
           2,
@@ -378,7 +413,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
       {
         name: "kg_file_add_decisions",
         description:
-          "Append structured decisions to the knowledge graph. Each decision must use a new unique id and has text plus optional source_task_id fields. Duplicate IDs are skipped instead of updated.",
+          `Append structured decisions to the knowledge graph. Each decision must use a new unique id and has text plus optional source_task_id fields. Duplicate IDs are skipped instead of updated. This Agent ${policy.allowedEntityTypes?.includes("Decision") === false ? "is not authorized" : "is authorized"} to write Decision records.`,
         schema: z.object({
           decisions: z
             .array(decisionInputSchema)
@@ -400,7 +435,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
           {
             action: "add_risks",
             count: appendResult.items.length,
-            items: appendResult.items as unknown[],
+            items: compactWrittenItems(appendResult.items),
             skipped: appendResult.skipped,
           } satisfies StructuredToolCallResult,
           null,
@@ -434,7 +469,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
           {
             action: "add_open_questions",
             count: appendResult.items.length,
-            items: appendResult.items as unknown[],
+            items: compactWrittenItems(appendResult.items),
             skipped: appendResult.skipped,
           } satisfies StructuredToolCallResult,
           null,
@@ -444,7 +479,7 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
       {
         name: "kg_file_add_open_questions",
         description:
-          "Append structured open questions to the knowledge graph. Each question must use a new unique id and has text plus optional source_task_id fields. Duplicate IDs are skipped instead of updated.",
+          "Append structured open questions to the knowledge graph. Each question must use a new unique id, include text, mark whether it blocks current workflow completion, and may include source_task_id. Duplicate IDs are skipped instead of updated.",
         schema: z.object({
           questions: z
             .array(openQuestionInputSchema)
@@ -470,6 +505,15 @@ export function createKnowledgeGraphTools(state: ProductKnowledgeGraph) {
       },
     ),
   ];
+}
+
+/**
+ * 仅回显写入记录 ID，避免后续模型轮次重复携带完整图谱对象。
+ */
+function compactWrittenItems<T extends { id: string }>(
+  items: T[],
+): Array<{ id: string }> {
+  return items.map(({ id }) => ({ id }));
 }
 
 /**
@@ -499,27 +543,71 @@ function filterAppendOnlyItems<T extends { id: string }>(
 }
 
 /**
+ * 在追加和端点校验前过滤 Agent Profile 未授权的结构化类型。
+ */
+function filterAuthorizedItems<T extends { id: string; type: string }>(
+  items: T[],
+  allowedTypes: readonly string[] | undefined,
+  reasonPrefix: string,
+): { items: T[]; skipped: Array<{ id: string; reason: string }> } {
+  if (!allowedTypes) return { items, skipped: [] };
+
+  const allowed = new Set(allowedTypes);
+  const accepted: T[] = [];
+  const skipped: Array<{ id: string; reason: string }> = [];
+  for (const item of items) {
+    if (allowed.has(item.type) || (reasonPrefix === "unauthorized_relation_type" && item.type === "Custom")) {
+      accepted.push(item);
+    } else {
+      skipped.push({ id: item.id, reason: `${reasonPrefix}:${item.type}` });
+    }
+  }
+  return { items: accepted, skipped };
+}
+
+/**
  * 过滤追加式关系写入，确保关系 ID 唯一且端点已存在于当前图谱。
  */
 function filterAppendOnlyRelations<
-  T extends { id: string; source: string; target: string },
+  T extends ProductKnowledgeGraph["relations"][number],
 >(
   relations: T[],
   state: ProductKnowledgeGraph,
+  allowedTypes?: readonly ProductKnowledgeGraph["relations"][number]["type"][],
 ): { items: T[]; skipped: Array<{ id: string; reason: string }> } {
-  const appendResult = filterAppendOnlyItems(
+  const authorized = filterAuthorizedItems(
     relations,
+    allowedTypes,
+    "unauthorized_relation_type",
+  );
+  const appendResult = filterAppendOnlyItems(
+    authorized.items,
     state.relations.map((item) => item.id),
   );
-  const entityIds = new Set(state.entities.map((item) => item.id));
+  const entityById = new Map(state.entities.map((item) => [item.id, item]));
   const accepted: T[] = [];
-  const skipped = [...appendResult.skipped];
+  const skipped = [...authorized.skipped, ...appendResult.skipped];
 
   for (const relation of appendResult.items) {
-    if (!entityIds.has(relation.source) || !entityIds.has(relation.target)) {
+    const source = entityById.get(relation.source);
+    const target = entityById.get(relation.target);
+    if (!source || !target) {
       skipped.push({
         id: relation.id,
         reason: "missing_relation_endpoint",
+      });
+      continue;
+    }
+    if (
+      !isKnowledgeGraphRelationDirectionValid(
+        relation.type,
+        source.type,
+        target.type,
+      )
+    ) {
+      skipped.push({
+        id: relation.id,
+        reason: `invalid_relation_direction:${source.type}--${relation.type}-->${target.type}`,
       });
       continue;
     }

@@ -25,6 +25,7 @@ import type {
 } from "@repo/shared";
 import { mergeProductKnowledgeGraphSnapshots } from "../agents/product-workflow/common/knowledge-graph-merge";
 import type { UserInputRecord } from "../agents/request/user-input";
+import type { ExecutorAgentType } from "../agents/product-workflow/executor-agent/definitions";
 
 /**
  * 公共 LangGraph 状态。后续新增 Planner、QA 或模块 Agent 时，
@@ -86,6 +87,12 @@ export const WorkflowGraphState = Annotation.Root({
   plan: Annotation<TaskExecutionPlan | null>({
     reducer: (_current, update) => update,
     default: () => null,
+  }),
+
+  // Question Form 恢复时仅允许 Planner 为受影响的 Executor 生成补充任务。
+  supplementAgentTypes: Annotation<ExecutorAgentType[]>({
+    reducer: (_current, update) => update,
+    default: () => [],
   }),
 
   // Executor Agent 对 Planner DAG 中每个任务的结构化产出。

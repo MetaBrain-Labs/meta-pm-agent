@@ -250,6 +250,7 @@ function createWorkflowInitialState(input: WorkflowGraphInput) {
     requestAnalysis: resume?.requestAnalysis ?? null,
     orchestratorDecision: resume?.orchestratorDecision ?? null,
     plan,
+    supplementAgentTypes: resume?.supplementAgentTypes ?? [],
     executorResults,
     knowledgeGraph: resume?.knowledgeGraph ?? input.knowledgeGraph ?? null,
     productWorkflow: null,

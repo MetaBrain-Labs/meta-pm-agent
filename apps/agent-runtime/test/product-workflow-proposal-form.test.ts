@@ -98,6 +98,28 @@ test("merges legacy executor open questions by actual question text", () => {
   assert.match(form.questions[0]?.help ?? "", /executor-gtm \/ task-02/);
 });
 
+test("shows every blocking question and keeps non-blocking questions as backlog", () => {
+  const executorResult = createExecutorResult(
+    "task-01",
+    "executor-product-strategy",
+    Array.from({ length: 11 }, (_, index) => `Question ${index + 1}?`),
+  );
+  executorResult.open_questions = executorResult.open_questions.map(
+    (question, index) => ({ ...question, blocking: index < 4 }),
+  );
+
+  const form = parseQuestionForm(
+    formatProductWorkflowProposalQuestionForm(
+      createWorkflowResult({
+        proposalQuestions: [],
+        executorResults: [executorResult],
+      }),
+    ),
+  );
+
+  assert.equal(form.questions.length, 4);
+});
+
 interface ParsedQuestionForm {
   questions: Array<{
     label: string;
@@ -186,6 +208,7 @@ function createExecutorResult(
     open_questions: openQuestions.map((text, index) => ({
       id: `${taskId}-oq-${index + 1}`,
       text,
+      blocking: true,
     })),
     quality_result: {
       passed: true,

@@ -31,7 +31,13 @@ import type {
   CritiqueAgentInput,
   ProductWorkflowStreamEvent,
 } from "../types";
+import { isKnowledgeGraphRelationDirectionValid } from "../common/knowledge-graph";
 import { areKnowledgeGraphItemsSimilar } from "../common/knowledge-graph-merge";
+import {
+  getExecutorDefinition,
+  isExecutorAgentType,
+  type ExecutorAgentType,
+} from "../executor-agent/definitions";
 import { CRITIQUE_AGENT_PROMPT } from "./prompt";
 
 /**
@@ -76,7 +82,11 @@ type ExecutorUpdateRecord = {
   created_relation_ids: string[];
   committed_entity_ids: string[];
   committed_relation_ids: string[];
-  commit_status: "committed" | "rejected" | "conflict" | "not_attempted";
+  commit_status:
+    | "committed"
+    | "partial"
+    | "not_committed"
+    | "not_attempted";
   validation_errors: CritiqueValidationIssue[];
 };
 
@@ -89,6 +99,12 @@ type CritiqueValidationReport = {
   retry_task_ids: string[];
   issues: CritiqueValidationIssue[];
   executor_update_records: ExecutorUpdateRecord[];
+  graph_integrity: {
+    dangling_relation_ids: string[];
+    invalid_direction_relation_ids: string[];
+    orphan_requirement_ids: string[];
+    orphan_feature_ids: string[];
+  };
 };
 
 /**
@@ -103,6 +119,11 @@ function createCritiqueAgentPayload(input: CritiqueAgentInput) {
       800,
     ),
     request_analysis: compactRequestAnalysisForReview(input.requestAnalysis),
+    user_input: (input.userInput ?? []).map((item) => ({
+      index: item.index,
+      type: item.type,
+      content: truncateText(item.content, 300),
+    })),
     planner_summary: compactPlanForReview(input.plan),
     final_graph_summary: createFinalGraphSummary(input.knowledgeGraph),
     validation_report: validationReport,
@@ -212,17 +233,57 @@ function groupIdsBySourceTask<
  * 收集 Executor 提出的待确认问题候选，交给 Critique Agent 做语义合并和优先级判断。
  */
 function collectOpenQuestionCandidates(executorResults: ExecutorAgentResult[]) {
-  return executorResults
-    .flatMap((result) =>
-      result.open_questions.map((question, index) => ({
-        id: question.id,
-        text: truncateText(question.text, 240),
+  const candidates = new Map<
+    string,
+    {
+      id: string;
+      text: string;
+      source_task_id: string;
+      source_agent: ExecutorAgentResult["agent_type"];
+      sources: Array<{
+        source_task_id: string;
+        source_agent: ExecutorAgentResult["agent_type"];
+        open_question_id: string;
+      }>;
+      priority_hint: number;
+    }
+  >();
+
+  for (const result of executorResults) {
+    result.open_questions.forEach((question, index) => {
+      if (!question.blocking) return;
+      const key = normalizeFallbackQuestionText(question.text);
+      if (!key) return;
+
+      const source = {
         source_task_id: result.task_id,
         source_agent: result.agent_type,
-        priority_hint: result.open_questions.length - index,
-      })),
-    )
-    .slice(0, 12);
+        open_question_id: question.id,
+      };
+      const priority = result.open_questions.length - index;
+      const existing = candidates.get(key);
+      if (existing) {
+        existing.sources = mergeFallbackQuestionSources([
+          ...existing.sources,
+          source,
+        ]);
+        existing.priority_hint = Math.max(existing.priority_hint, priority);
+        return;
+      }
+
+      candidates.set(key, {
+        id: question.id,
+        text: truncateText(question.text, 240),
+        ...source,
+        sources: [source],
+        priority_hint: priority,
+      });
+    });
+  }
+
+  return [...candidates.values()].sort(
+    (left, right) => right.priority_hint - left.priority_hint,
+  );
 }
 
 /**
@@ -235,6 +296,7 @@ export function createCritiqueValidationReport(
     input.executorResults.map((result) => [result.task_id, result]),
   );
   const graphIndexes = createGraphIndexes(input.knowledgeGraph);
+  const graphIntegrity = inspectGraphIntegrity(input.knowledgeGraph);
   const issues: CritiqueValidationIssue[] = [];
   const records: ExecutorUpdateRecord[] = [];
 
@@ -278,12 +340,17 @@ export function createCritiqueValidationReport(
       );
     }
 
+    if (isExecutorAgentType(task.assigned_agent)) {
+      taskIssues.push(
+        ...validateExecutorBoundaries(result, task.assigned_agent),
+      );
+    }
+
     const commit = validateExecutorCommit(result, graphIndexes);
     taskIssues.push(...commit.issues);
 
     const commitStatus = getExecutorCommitStatus({
       result,
-      taskIssues,
       committedItemCount: commit.committedItemCount,
       totalItemCount: commit.totalItemCount,
     });
@@ -303,6 +370,27 @@ export function createCritiqueValidationReport(
     issues.push(...taskIssues);
   }
 
+  const currentRelationTaskById = new Map(
+    records.flatMap((record) =>
+      record.committed_relation_ids.map(
+        (relationId) => [relationId, record.task_id] as const,
+      ),
+    ),
+  );
+  const graphIssues = createGraphIntegrityIssues(
+    input.knowledgeGraph,
+    graphIntegrity,
+    currentRelationTaskById,
+  );
+  for (const issue of graphIssues) {
+    issues.push(issue);
+    if (!issue.task_id) continue;
+
+    const record = records.find((item) => item.task_id === issue.task_id);
+    if (!record) continue;
+    record.validation_errors.push(issue);
+  }
+
   const issueTaskIds = new Set(
     issues
       .filter((issue) => issue.severity === "error" && issue.task_id)
@@ -319,7 +407,199 @@ export function createCritiqueValidationReport(
     retry_task_ids: rejectedTaskIds,
     issues,
     executor_update_records: records,
+    graph_integrity: graphIntegrity,
   };
+}
+
+/**
+ * 确定性校验 Executor 是否越过其实体和关系类型边界。
+ */
+function validateExecutorBoundaries(
+  result: ExecutorAgentResult,
+  assignedAgent: ExecutorAgentType,
+): CritiqueValidationIssue[] {
+  const definition = getExecutorDefinition(assignedAgent);
+  const unauthorizedEntityTypes = [
+    ...new Set(
+      result.entities
+        .map((entity) => entity.type)
+        .filter(
+          (entityType) =>
+            !definition.allowedEntityTypes.some(
+              (allowedType) => allowedType === entityType,
+            ),
+        ),
+    ),
+  ];
+  const unauthorizedRelationTypes = [
+    ...new Set(
+      result.relations
+        .map((relation) => relation.type)
+        .filter(
+          (relationType) =>
+            relationType !== "Custom" &&
+            !definition.allowedRelationTypes.some(
+              (allowedType) => allowedType === relationType,
+            ),
+        ),
+    ),
+  ];
+
+  return [
+    ...unauthorizedEntityTypes.map((entityType) =>
+      createReviewIssue({
+        code: "UNAUTHORIZED_ENTITY_TYPE",
+        severity: "error",
+        taskId: result.task_id,
+        message: `${assignedAgent} is not allowed to create ${entityType} entities.`,
+      }),
+    ),
+    ...unauthorizedRelationTypes.map((relationType) =>
+      createReviewIssue({
+        code: "UNAUTHORIZED_RELATION_TYPE",
+        severity: "error",
+        taskId: result.task_id,
+        message: `${assignedAgent} is not allowed to create ${relationType} relations.`,
+      }),
+    ),
+  ];
+}
+
+/**
+ * 检查最终图谱中可确定判断的端点、关系方向和孤立节点。
+ */
+function inspectGraphIntegrity(
+  knowledgeGraph: ProductKnowledgeGraph,
+): CritiqueValidationReport["graph_integrity"] {
+  const entityById = new Map(
+    knowledgeGraph.entities.map((entity) => [entity.id, entity]),
+  );
+  const connectedEntityIds = new Set<string>();
+  const danglingRelationIds: string[] = [];
+  const invalidDirectionRelationIds: string[] = [];
+
+  for (const relation of knowledgeGraph.relations) {
+    const source = entityById.get(relation.source);
+    const target = entityById.get(relation.target);
+    if (!source || !target) {
+      danglingRelationIds.push(relation.id);
+      continue;
+    }
+
+    connectedEntityIds.add(source.id);
+    connectedEntityIds.add(target.id);
+    if (
+      !isKnowledgeGraphRelationDirectionValid(
+        relation.type,
+        source.type,
+        target.type,
+      )
+    ) {
+      invalidDirectionRelationIds.push(relation.id);
+    }
+  }
+
+  return {
+    dangling_relation_ids: danglingRelationIds,
+    invalid_direction_relation_ids: invalidDirectionRelationIds,
+    orphan_requirement_ids: knowledgeGraph.entities
+      .filter(
+        (entity) =>
+          entity.type === "Requirement" &&
+          entity.status !== "deprecated" &&
+          !connectedEntityIds.has(entity.id),
+      )
+      .map((entity) => entity.id),
+    orphan_feature_ids: knowledgeGraph.entities
+      .filter(
+        (entity) =>
+          entity.type === "Feature" &&
+          entity.status !== "deprecated" &&
+          !connectedEntityIds.has(entity.id),
+      )
+      .map((entity) => entity.id),
+  };
+}
+
+/**
+ * 将全图完整性结果转换为 Critique 和 fallback 共用的机器可读问题。
+ */
+function createGraphIntegrityIssues(
+  knowledgeGraph: ProductKnowledgeGraph,
+  integrity: CritiqueValidationReport["graph_integrity"],
+  currentRelationTaskById: Map<string, string>,
+): CritiqueValidationIssue[] {
+  const relationById = new Map(
+    knowledgeGraph.relations.map((relation) => [relation.id, relation]),
+  );
+  const entityById = new Map(
+    knowledgeGraph.entities.map((entity) => [entity.id, entity]),
+  );
+  const issues: CritiqueValidationIssue[] = [];
+
+  for (const relationId of integrity.dangling_relation_ids) {
+    const relation = relationById.get(relationId);
+    const currentTaskId = currentRelationTaskById.get(relationId);
+    issues.push(
+      createReviewIssue({
+        code: currentTaskId
+          ? "RELATION_ENDPOINT_MISSING"
+          : "LEGACY_RELATION_ENDPOINT_MISSING",
+        severity: currentTaskId ? "error" : "warning",
+        taskId: currentTaskId,
+        message: `${currentTaskId ? "Relation" : "Existing graph relation"} ${relationId} references a missing source or target node.`,
+      }),
+    );
+  }
+
+  for (const relationId of integrity.invalid_direction_relation_ids) {
+    const relation = relationById.get(relationId);
+    const currentTaskId = currentRelationTaskById.get(relationId);
+    const sourceType = relation
+      ? entityById.get(relation.source)?.type
+      : undefined;
+    const targetType = relation
+      ? entityById.get(relation.target)?.type
+      : undefined;
+    issues.push(
+      createReviewIssue({
+        code: currentTaskId
+          ? "INVALID_RELATION_DIRECTION"
+          : "LEGACY_INVALID_RELATION_DIRECTION",
+        severity: currentTaskId ? "error" : "warning",
+        taskId: currentTaskId,
+        message: `${currentTaskId ? "Relation" : "Existing graph relation"} ${relationId} uses invalid direction ${sourceType ?? "missing"} --${relation?.type ?? "unknown"}--> ${targetType ?? "missing"}.`,
+      }),
+    );
+  }
+
+  if (integrity.orphan_requirement_ids.length > 0) {
+    issues.push(
+      createReviewIssue({
+        code: "ORPHAN_REQUIREMENT",
+        severity: "warning",
+        message: `Requirement nodes have no relations: ${formatCompactIdList(integrity.orphan_requirement_ids)}.`,
+      }),
+    );
+  }
+  if (integrity.orphan_feature_ids.length > 0) {
+    issues.push(
+      createReviewIssue({
+        code: "ORPHAN_FEATURE",
+        severity: "warning",
+        message: `Feature nodes have no relations: ${formatCompactIdList(integrity.orphan_feature_ids)}.`,
+      }),
+    );
+  }
+
+  return issues;
+}
+
+/**
+ * 压缩问题中的 ID 列表，避免图谱异常时放大 Critique 输入。
+ */
+function formatCompactIdList(ids: string[]): string {
+  return `${ids.slice(0, 8).join(", ")}${ids.length > 8 ? ` and ${ids.length - 8} more` : ""}`;
 }
 
 /**
@@ -411,20 +691,6 @@ function validateExecutorCommit(
       );
       continue;
     }
-    if (
-      !graphIndexes.entityById.has(committed.source) ||
-      !graphIndexes.entityById.has(committed.target)
-    ) {
-      issues.push(
-        createReviewIssue({
-          code: "RELATION_ENDPOINT_MISSING",
-          severity: "error",
-          taskId: result.task_id,
-          message: `Relation ${relation.id} references a missing source or target node.`,
-        }),
-      );
-      continue;
-    }
     committedRelationIds.push(committed.id);
     committedItemCount += 1;
   }
@@ -460,12 +726,6 @@ function findCommittedEntity(
   graphIndexes: ReturnType<typeof createGraphIndexes>,
 ): KnowledgeGraphEntity | null {
   const exact = graphIndexes.entityById.get(entity.id);
-  if (
-    exact &&
-    !hasSourceConflict(entity.source_task_id, exact.source_task_id, taskId)
-  ) {
-    return exact;
-  }
   if (exact && areKnowledgeGraphItemsSimilar(entity, exact, "entity")) {
     return exact;
   }
@@ -492,12 +752,6 @@ function findCommittedRelation(
 ): KnowledgeGraphRelation | null {
   const remappedRelation = remapRelationForCommit(relation, entityIdMap);
   const exact = graphIndexes.relationById.get(relation.id);
-  if (
-    exact &&
-    !hasSourceConflict(relation.source_task_id, exact.source_task_id, taskId)
-  ) {
-    return exact;
-  }
   if (
     exact &&
     areKnowledgeGraphItemsSimilar(remappedRelation, exact, "relation")
@@ -535,18 +789,6 @@ function remapRelationForCommit(
 }
 
 /**
- * 判断提交项来源是否和当前 Executor 产物冲突。
- */
-function hasSourceConflict(
-  expectedSource: string | undefined,
-  committedSource: string | undefined,
-  fallbackTaskId: string,
-): boolean {
-  const expected = expectedSource ?? fallbackTaskId;
-  return Boolean(committedSource && committedSource !== expected);
-}
-
-/**
  * 在最终图谱中寻找决策、风险、开放问题等辅助项的落图结果。
  */
 function findCommittedAuxiliaryItem<
@@ -558,12 +800,6 @@ function findCommittedAuxiliaryItem<
   byId: Map<string, T>,
 ): T | null {
   const exact = byId.get(item.id);
-  if (
-    exact &&
-    !hasSourceConflict(item.source_task_id, exact.source_task_id, taskId)
-  ) {
-    return exact;
-  }
   if (exact && areKnowledgeGraphItemsSimilar(item, exact, "auxiliary")) {
     return exact;
   }
@@ -631,25 +867,18 @@ function countCommittedAuxiliaryItems(
  */
 function getExecutorCommitStatus({
   result,
-  taskIssues,
   committedItemCount,
   totalItemCount,
 }: {
   result: ExecutorAgentResult;
-  taskIssues: CritiqueValidationIssue[];
   committedItemCount: number;
   totalItemCount: number;
 }): ExecutorUpdateRecord["commit_status"] {
   if (!result.quality_result.passed || totalItemCount === 0) {
     return "not_attempted";
   }
-  if (taskIssues.some((issue) => issue.code.includes("DUPLICATE"))) {
-    return "conflict";
-  }
-  if (taskIssues.some((issue) => issue.severity === "error")) {
-    return "rejected";
-  }
-  return committedItemCount >= totalItemCount ? "committed" : "rejected";
+  if (committedItemCount >= totalItemCount) return "committed";
+  return committedItemCount > 0 ? "partial" : "not_committed";
 }
 
 /**
@@ -738,7 +967,7 @@ function createFallbackCritiqueAgentOutput(
   const proposalQuestions = [
     ...(retryQuestion ? [retryQuestion] : []),
     ...createFallbackProposalQuestions(input.executorResults),
-  ].slice(0, 3);
+  ];
   const hasRetry = validationReport.retry_task_ids.length > 0;
   const status = hasRetry
     ? "requires_executor_retry"
@@ -880,6 +1109,7 @@ function createFallbackProposalQuestions(
 
   for (const result of executorResults) {
     result.open_questions.forEach((question, index) => {
+      if (!question.blocking) return;
       const label = formatFallbackOpenQuestionLabel(
         question.text,
         result.task_id,
@@ -890,6 +1120,7 @@ function createFallbackProposalQuestions(
       const source = {
         source_task_id: result.task_id,
         source_agent: result.agent_type,
+        open_question_id: question.id,
       };
       const priority = result.open_questions.length - index;
       const existing = questions.get(key);
@@ -916,9 +1147,9 @@ function createFallbackProposalQuestions(
     });
   }
 
-  return [...questions.values()]
-    .sort((left, right) => right.priority - left.priority)
-    .slice(0, 3);
+  return [...questions.values()].sort(
+    (left, right) => right.priority - left.priority,
+  );
 }
 
 /**
@@ -957,7 +1188,10 @@ function mergeFallbackQuestionSources<
 >(sources: T[]): T[] {
   const byKey = new Map<string, T>();
   for (const source of sources) {
-    byKey.set(`${source.source_agent}:${source.source_task_id}`, source);
+    byKey.set(
+      `${source.source_agent}:${source.source_task_id}:${source.open_question_id ?? ""}`,
+      source,
+    );
   }
   return [...byKey.values()];
 }

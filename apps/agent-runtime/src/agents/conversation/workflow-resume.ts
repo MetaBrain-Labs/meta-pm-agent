@@ -25,6 +25,10 @@ import {
 } from "@repo/shared";
 import { getFormAnswerId } from "../../utils/form-parser";
 import type { WorkflowResumeContext } from "../product-workflow/types";
+import {
+  isExecutorAgentType,
+  type ExecutorAgentType,
+} from "../product-workflow/executor-agent/definitions";
 
 const EXECUTOR_BLOCKER_FORM_PREFIX = "executor-blocker-";
 const PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID = "product-workflow-confirmation";
@@ -126,17 +130,92 @@ function createWorkflowResumeContext({
     !formId && plan.status === "supplement"
       ? removeExecutorResultsForPlanTasks(executorResults, plan)
       : executorResults;
+  const rerunTaskIds = formId
+    ? inferRerunTaskIds(formId, executorResults, productWorkflow)
+    : inferContinuationRerunTaskIds(plan, productWorkflow);
+  const forceSupplementPlan = formId
+    ? isPlannerConfirmationFormId(formId, productWorkflow)
+    : false;
+  const answeredOpenQuestionIds = formId
+    ? inferAnsweredOpenQuestionIds(formId, productWorkflow)
+    : [];
+  const resolvedExecutorResults = formId
+    ? resolveAnsweredOpenQuestions(
+        continuationExecutorResults,
+        answeredOpenQuestionIds,
+      )
+    : continuationExecutorResults;
+  const resolvedKnowledgeGraph = formId
+    ? resolveAnsweredGraphOpenQuestions(
+        knowledgeGraph,
+        answeredOpenQuestionIds,
+      )
+    : knowledgeGraph;
 
   return {
     requestAnalysis,
     plan,
-    executorResults: continuationExecutorResults,
-    knowledgeGraph: knowledgeGraph ?? null,
-    rerunTaskIds: formId
-      ? inferRerunTaskIds(formId, executorResults, productWorkflow)
-      : inferContinuationRerunTaskIds(plan, productWorkflow),
-    forceSupplementPlan: formId ? isPlannerConfirmationFormId(formId) : false,
+    executorResults: resolvedExecutorResults,
+    knowledgeGraph: resolvedKnowledgeGraph ?? null,
+    rerunTaskIds,
+    forceSupplementPlan,
+    supplementAgentTypes: forceSupplementPlan
+      ? inferSupplementAgentTypes(rerunTaskIds, plan)
+      : [],
   };
+}
+
+/**
+ * 用户已经回答表单后，旧 Executor 结果中的同源问题不再参与后续 Critique 聚合。
+ */
+function resolveAnsweredOpenQuestions(
+  executorResults: ExecutorAgentResult[],
+  answeredOpenQuestionIds: string[],
+): ExecutorAgentResult[] {
+  const answeredIds = new Set(answeredOpenQuestionIds);
+  return executorResults.map((result) => ({
+    ...result,
+    open_questions: result.open_questions.filter(
+      (question) => !answeredIds.has(question.id),
+    ),
+  }));
+}
+
+/**
+ * 从本轮运行态移除已经由表单回答的同源问题，避免 Executor 再次把旧问题当成未决输入。
+ * 数据库只持久化实体和关系，因此这里不会删除持久化业务事实。
+ */
+function resolveAnsweredGraphOpenQuestions(
+  knowledgeGraph: ProductKnowledgeGraph | null | undefined,
+  answeredOpenQuestionIds: string[],
+): ProductKnowledgeGraph | null {
+  if (!knowledgeGraph) return null;
+  const answeredIds = new Set(answeredOpenQuestionIds);
+  return {
+    ...knowledgeGraph,
+    open_questions: knowledgeGraph.open_questions.filter(
+      (question) => !answeredIds.has(question.id),
+    ),
+  };
+}
+
+/**
+ * Critique Question Form 的来源携带精确问题 ID；其他表单不得推断并批量关闭问题。
+ */
+function inferAnsweredOpenQuestionIds(
+  formId: string,
+  productWorkflow: ProductWorkflowResult | null,
+): string[] {
+  if (!isPlannerConfirmationFormId(formId, productWorkflow)) return [];
+  return [
+    ...new Set(
+      (productWorkflow?.proposal_questions ?? []).flatMap((question) =>
+        question.sources.flatMap((source) =>
+          source.open_question_id ? [source.open_question_id] : [],
+        ),
+      ),
+    ),
+  ];
 }
 
 /**
@@ -168,7 +247,7 @@ function inferRerunTaskIds(
     ]);
   }
 
-  if (formId === PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID) {
+  if (isPlannerConfirmationFormId(formId, productWorkflow)) {
     return mergeTaskIds([
       ...inferProductWorkflowRerunTaskIds(productWorkflow),
       ...inferOpenQuestionTaskIds(executorResults),
@@ -230,11 +309,33 @@ function mergeTaskIds(taskIds: string[]): string[] {
 /**
  * Planner 汇总后的问题表单答案需要重新进入 Planner，生成补充 DAG。
  */
-function isPlannerConfirmationFormId(formId: string): boolean {
+function isPlannerConfirmationFormId(
+  formId: string,
+  productWorkflow: ProductWorkflowResult | null,
+): boolean {
   return (
     formId === PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID ||
-    formId.endsWith("-proposal-decision")
+    formId.endsWith("-proposal-decision") ||
+    productWorkflow?.confirmation_id === formId
   );
+}
+
+/**
+ * 将 Critique 问题来源任务映射回受影响的 Executor，供 supplement Planner 限定范围。
+ */
+function inferSupplementAgentTypes(
+  taskIds: string[],
+  plan: NonNullable<WorkflowResumeContext["plan"]>,
+): ExecutorAgentType[] {
+  const taskIdSet = new Set(taskIds);
+  return [
+    ...new Set(
+      plan.tasks
+        .filter((task) => taskIdSet.has(task.task_id))
+        .map((task) => task.assigned_agent)
+        .filter(isExecutorAgentType),
+    ),
+  ];
 }
 
 /**
@@ -246,7 +347,9 @@ function inferOpenQuestionTaskIds(
   return [
     ...new Set(
       executorResults
-        .filter((result) => result.open_questions.length > 0)
+        .filter((result) =>
+          result.open_questions.some((question) => question.blocking),
+        )
         .map((result) => result.task_id),
     ),
   ];

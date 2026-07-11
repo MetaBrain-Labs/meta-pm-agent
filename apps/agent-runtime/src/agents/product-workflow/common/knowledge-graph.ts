@@ -23,6 +23,7 @@ Product knowledge graph metamodel:
 - Every output must preserve traceability from goals to requirements, decisions, features, components, and metrics whenever the available evidence supports it.
 - Do not invent confirmed business facts. Put uncertainty into open_questions or risks.
 - Runtime risks and open_questions are archived as Risk and OpenQuestion nodes when the graph is persisted.
+- During Executor tool execution, risks and open_questions are auxiliary records and are not valid relation endpoints. Do not create relations to their IDs.
 - Treat the current knowledge graph state supplied in the payload as the source of truth.
 `;
 
@@ -34,7 +35,62 @@ ${PRODUCT_KNOWLEDGE_GRAPH_METAMODEL_PROMPT.trim()}
 - The knowledge graph state is a structured JSON object maintained in memory. Read compact state via kg_file_read before making updates.
 - Query detailed graph context only when needed via kg_file_query_nodes, kg_file_query_relations, or kg_file_read_by_source_task.
 - Treat the current knowledge graph state as the source of truth for follow-up executor updates.
+- Use canonical directions for typed relations: Goal --Drives--> Decision; Decision --Produces--> Requirement; Feature --Satisfies--> Requirement; Component --Implements--> Feature; Metric --Measures--> Goal, Feature, or Requirement; Evidence --Validates--> Decision, Requirement, Feature, or Component; Custom/Component --Constrains--> Requirement, Feature, or Component; Composes connects same-type Goal, Requirement, Feature, or Component nodes. Use References, Promotes, or Custom only when their broader contextual meaning is explicit.
+- Never write Decision --Drives--> Decision or Goal --Drives--> Requirement. Use References for a decision dependency, and omit a redundant direct Goal-to-Requirement edge when Goal --Drives--> Decision --Produces--> Requirement already provides traceability.
+- Implements is only Component --Implements--> Feature. For Component-to-Component dependencies use References or Custom; for decomposition use parent Component --Composes--> child Component.
 `;
+
+/**
+ * 校验具备固定语义的产品图谱关系方向，供写入工具与 Critique 共用。
+ */
+export function isKnowledgeGraphRelationDirectionValid(
+  relationType: ProductKnowledgeGraph["relations"][number]["type"],
+  sourceType: ProductKnowledgeGraph["entities"][number]["type"],
+  targetType: ProductKnowledgeGraph["entities"][number]["type"],
+): boolean {
+  switch (relationType) {
+    case "Drives":
+      return sourceType === "Goal" && targetType === "Decision";
+    case "Produces":
+      return sourceType === "Decision" && targetType === "Requirement";
+    case "Satisfies":
+      return sourceType === "Feature" && targetType === "Requirement";
+    case "Implements":
+      return sourceType === "Component" && targetType === "Feature";
+    case "Measures":
+      return (
+        sourceType === "Metric" &&
+        (targetType === "Goal" ||
+          targetType === "Feature" ||
+          targetType === "Requirement")
+      );
+    case "Validates":
+      return (
+        sourceType === "Evidence" &&
+        (targetType === "Decision" ||
+          targetType === "Requirement" ||
+          targetType === "Feature" ||
+          targetType === "Component")
+      );
+    case "Constrains":
+      return (
+        (sourceType === "Custom" || sourceType === "Component") &&
+        (targetType === "Requirement" ||
+          targetType === "Feature" ||
+          targetType === "Component")
+      );
+    case "Composes":
+      return (
+        sourceType === targetType &&
+        (sourceType === "Goal" ||
+          sourceType === "Requirement" ||
+          sourceType === "Feature" ||
+          sourceType === "Component")
+      );
+    default:
+      return true;
+  }
+}
 
 /**
  * 构建当前版本的占位知识图谱上下文（结构化，无 markdown 文件）。

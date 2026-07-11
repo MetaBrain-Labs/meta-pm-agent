@@ -60,6 +60,8 @@ Planning rules:
 - Feature-planning tasks must prioritize user-explicit Features. Inferred capabilities such as management, permissions, version history, collaboration awareness, or workflow polish may be planned only as traceable hypotheses, not as mandatory "at least include" outputs.
 - Data Analytics tasks for a greenfield product should define metrics, measurement plans, instrumentation, and benchmark gaps. Prioritize product-operability and artifact-support metrics tied to the request; do not claim measured quantitative results, adoption metrics, or industry benchmarks unless verifiable evidence is available.
 - Use quantity targets as soft coverage guidance only. Do not ask executors to create duplicate or semantically weak entities just to satisfy a count.
+- For an initial DAG with unresolved user decisions, stop at decision-ready product structure. Defer detailed architecture and exhaustive component decomposition to a supplement DAG after the blocking answers arrive.
+- Keep each initial task proportionate: normally no more than 8 new entities and 12 relations. Exceed this soft ceiling only when explicit user scope requires it, and state that reason in the task description.
 - Keep Planner output compact. The whole JSON should stay under about 6000 tokens. Keep request_summary under about 80 Chinese characters or 120 English characters; keep each task description under about 180 Chinese characters or 120 English words; keep expected_output under about 80 Chinese characters or 120 English characters; keep quality_check.criteria to at most 4 concise items.
 - Planner must define graph work, not perform executor work. Do not enumerate detailed components, libraries, frameworks, vendor lists, UI component inventories, or architecture catalogs. Ask the appropriate Executor to compare, discover, or decompose them.
 - Prefer 2-6 tasks for narrow or discussion-first requests and 5-7 tasks for broad greenfield requests. Add more tasks only when a separate executor has a real graph data dependency.
@@ -83,6 +85,8 @@ Planning rules:
 - Artifact coverage must be explicit in the task set: PRD support needs Goal, Requirement, Feature, Metric, and uncertainty; technology recommendations need Evidence, Decision or decision candidate, and Component constraints; wireframe descriptions need UI Component, interaction/visual constraint Component, and supporting Evidence.
 - Preserve completed task intent when updating an existing plan. Add or adjust only the minimum tasks needed for the new business input.
 - If user_input contains a [form answers - product-workflow-confirmation] or [form answers - *-proposal-decision] payload, create a supplement DAG with status "supplement". Plan only the graph corrections or additions required by that answer and the current product_knowledge_graph; do not repeat the original baseline DAG.
+- Treat submitted form answers as authoritative for the questions they answer. Do not plan tasks that ask the same question again, even when stale request_analysis.missing_information or historical open questions still mention it.
+- When supplement_agents is provided, assign tasks only to those executor agent types. This runtime list is authoritative and prevents unrelated baseline tasks from being repeated.
 - The knowledge graph write tools are append-only. Do not plan in-place mutation, deletion, or reusing an existing entity/relation/decision/risk/open-question ID with a different source_task_id.
 - For supplement corrections, create new uniquely identified refinement or supersession records and trace them to the affected existing IDs with allowed relations or concise task text. Do not ask an Executor to "update D-001", "delete REL-001", or rewrite the same graph ID.
 - If a prior relation is wrong but no delete tool exists, plan a corrective node/relation that explains the supersession and leaves final acceptance to Critique Agent instead of instructing direct removal.
@@ -93,6 +97,7 @@ Planning rules:
 ${PRODUCT_KNOWLEDGE_GRAPH_METAMODEL_PROMPT}
 
 Output contract:
+- Start the response with the JSON object immediately. Do not emit analysis, a task-by-task prose draft, progress narration, or a preamble before the JSON.
 - Return JSON only. Do not wrap it in markdown.
 - The JSON object must include: status, request_summary, dag, tasks, assumptions.
 - status must be "initial" for the first DAG and "supplement" for a DAG created from Planner question-form answers.

@@ -181,8 +181,7 @@ export function createFallbackPreOrchResult(
     return {
       intent: "project_evolution",
       decision: "ASK_CLARIFICATION",
-      reason:
-        "Fallback: project context exists and message contains product signals, defaulting to clarification.",
+      reason: "请您进一步澄清以便生成高质量的输出。",
       form_title: "确认需求",
       form_description: "为了更好地帮你推进项目，我需要先确认几个关键信息。",
       questions: [
@@ -228,9 +227,8 @@ export function createFallbackPreOrchResult(
   return {
     intent: "new_project",
     decision: "ASK_CLARIFICATION",
-    reason:
-      "Fallback: message contains product signals, defaulting to new_project clarification.",
-    form_title: "确认需求",
+      reason: "请您进一步澄清以便生成高质量的输出。",
+      form_title: "确认需求",
     form_description: "为了更好地理解你的需求，我需要先确认几个关键信息。",
     questions: [
       {

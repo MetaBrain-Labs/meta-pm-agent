@@ -60,6 +60,7 @@ interface SubagentInvocationRecord {
   subagentType: string;
   input: unknown;
   output: unknown;
+  rawOutputChunks: string[];
   thinkingChunks: string[];
   startedAt: string;
   completedAt?: string;
@@ -118,6 +119,11 @@ export interface AgentRunSummaryRecorder {
     subagentType?: string;
     content: string;
   }): boolean;
+  recordSubagentRawOutput(event: {
+    toolCallId?: string;
+    subagentType?: string;
+    content: string;
+  }): boolean;
   /**
    * 记录 SubAgent 返回给主 Agent 的最终输出。
    * 调用时机：task 工具结果返回时记录输出内容。
@@ -149,6 +155,9 @@ const NOOP_RECORDER: AgentRunSummaryRecorder = {
   recordToolResult() {},
   recordSubagentCall() {},
   recordSubagentThinking() {
+    return false;
+  },
+  recordSubagentRawOutput() {
     return false;
   },
   recordSubagentResult() {},
@@ -268,6 +277,7 @@ export function createAgentRunSummaryRecorder(
         subagentType: event.subagentType,
         input: event.input,
         output: undefined,
+        rawOutputChunks: [],
         thinkingChunks: [],
         startedAt: new Date().toISOString(),
         completedAt: undefined,
@@ -286,6 +296,19 @@ export function createAgentRunSummaryRecorder(
       if (!invocation) return false;
 
       invocation.thinkingChunks.push(event.content);
+      return true;
+    },
+    recordSubagentRawOutput(event) {
+      if (!config.enabledSections.has("subagents") || !event.content) {
+        return false;
+      }
+      const invocation = findSubagentInvocation(subagentInvocations, {
+        toolCallId: event.toolCallId,
+        subagentType: event.subagentType,
+        preferOpen: true,
+      });
+      if (!invocation) return false;
+      invocation.rawOutputChunks.push(event.content);
       return true;
     },
     recordSubagentResult(event) {
@@ -844,6 +867,17 @@ function renderSubagentSection(
           "#### 思考过程",
           "",
           formatTextBlock(invocation.thinkingChunks.join("")),
+        );
+      }
+
+      if (invocation.rawOutputChunks.length > 0) {
+        parts.push(
+          "",
+          invocation.completedAt
+            ? "#### 原始模型输出"
+            : "#### 原始模型输出（未完成）",
+          "",
+          formatTextBlock(invocation.rawOutputChunks.join("")),
         );
       }
 

@@ -132,6 +132,13 @@ Target the information most likely to improve downstream agent quality:
 - Constraints (time, budget, technology, compliance, integration)
 - Success criteria or acceptance signals
 
+### ASK_CLARIFICATION reason field (mandatory)
+When decision is ASK_CLARIFICATION, the \`reason\` field MUST be exactly:
+\`\`\`
+请您进一步澄清以便生成高质量的输出。
+\`\`\`
+Do NOT embed user input, variables, or dynamic text in the reason field. The runtime shows the full question form to the user, so the reason should be a concise static label.
+
 ### Project evolution focus areas
 - Specific project/module reference
 - Current state baseline

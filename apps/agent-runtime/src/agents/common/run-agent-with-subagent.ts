@@ -469,6 +469,8 @@ export async function* runAgentWithSubagent<T, AgentType extends string>(
         toolCallId?: string;
         subagentType: string;
       }> = [];
+      /** 缓存 SubAgent namespace 的原始返回值，兼容未产生 task ToolMessage 的 DeepAgents 流。 */
+      const pendingSubagentOutputs = new Map<string, string>();
       const subagentTaskCallExtractor = createSubagentTaskCallExtractor();
 
       for await (const [namespace, chunk] of run) {
@@ -496,6 +498,23 @@ export async function* runAgentWithSubagent<T, AgentType extends string>(
             options,
             summaryRecorder,
           );
+          const rawSubagentOutput = getTextContent(message);
+          if (rawSubagentOutput) {
+            const activeSubagent =
+              openSubagentCalls[openSubagentCalls.length - 1];
+            if (activeSubagent) {
+              const key = activeSubagent.toolCallId ?? activeSubagent.subagentType;
+              pendingSubagentOutputs.set(
+                key,
+                `${pendingSubagentOutputs.get(key) ?? ""}${rawSubagentOutput}`,
+              );
+            }
+            summaryRecorder.recordSubagentRawOutput({
+              toolCallId: activeSubagent?.toolCallId,
+              subagentType: activeSubagent?.subagentType,
+              content: rawSubagentOutput,
+            });
+          }
           const usage = getTokenUsage(message);
           if (usage) attemptTokenUsage = usage;
           continue;
@@ -539,6 +558,27 @@ export async function* runAgentWithSubagent<T, AgentType extends string>(
       }
 
       // 更新最后一次有效的 token 用量。
+      // 部分 DeepAgents provider 不会回传 task ToolMessage；使用已结束 namespace 的原始输出完成委派。
+      for (const activeSubagent of [...openSubagentCalls]) {
+        const key = activeSubagent.toolCallId ?? activeSubagent.subagentType;
+        const output = pendingSubagentOutputs.get(key);
+        if (!output) continue;
+
+        summaryRecorder.recordSubagentResult({
+          toolCallId: activeSubagent.toolCallId,
+          subagentType: activeSubagent.subagentType,
+          output,
+        });
+        yield {
+          type: "subagent-result",
+          agentType: options.agentType,
+          subagentType: activeSubagent.subagentType,
+          toolCallId: activeSubagent.toolCallId,
+          result: output,
+        };
+        closeSubagentCall(openSubagentCalls, activeSubagent);
+      }
+
       if (attemptTokenUsage) finalTokenUsage = attemptTokenUsage;
 
       const tokenUsageSummary = finalTokenUsage

@@ -19,8 +19,97 @@ import type {
   TaskExecutionNode,
   TaskExecutionPlan,
 } from "@repo/shared";
-import { createCritiqueValidationReport } from "../src/agents/product-workflow/critique-agent/agent";
+import {
+  createCritiqueValidationReport,
+} from "../src/agents/product-workflow/critique-agent/agent";
+import { hasStructuredGraphItems } from "../src/agents/product-workflow/executor-agent/agent";
 import { mergeKnowledgeGraphSnapshots } from "../src/graph/state";
+
+test("retries only when an executor wrote no structured graph items", () => {
+  const emptyGraph = createGraph({});
+  emptyGraph.summary.push("Summary alone is not a graph patch.");
+
+  assert.equal(hasStructuredGraphItems(emptyGraph), false);
+  emptyGraph.entities.push(createGoal("G-001"));
+  assert.equal(hasStructuredGraphItems(emptyGraph), true);
+});
+
+test("critique validation rejects executor boundary violations", () => {
+  const feature: ProductKnowledgeGraph["entities"][number] = {
+    id: "F-001",
+    type: "Feature",
+    name: "Shared editing",
+    description: "Allow users to edit one document together.",
+    source_task_id: "task-00",
+    status: "proposed",
+  };
+  const component: ProductKnowledgeGraph["entities"][number] = {
+    id: "C-001",
+    type: "Component",
+    name: "Collaboration gateway",
+    description: "Coordinates shared editing sessions.",
+    source_task_id: "task-01",
+    status: "proposed",
+  };
+  const requirement = createRequirement(
+    "R-001",
+    "task-01",
+    "Concurrent editing requirement",
+    "The product supports multiple active editors.",
+  );
+  const relations: ProductKnowledgeGraph["relations"] = [
+    {
+      id: "REL-001",
+      type: "Implements",
+      source: component.id,
+      target: feature.id,
+      source_task_id: "task-01",
+    },
+    createRelation(
+      "REL-002",
+      requirement.id,
+      feature.id,
+      "task-01",
+      "The requirement references the collaboration feature.",
+    ),
+  ];
+  const task = createTask("task-01", 1, "executor-toolkit");
+  const result: ExecutorAgentResult = {
+    task_id: task.task_id,
+    agent_type: "executor-toolkit",
+    focus_layer: "Component",
+    summary: "Created collaboration constraints.",
+    entities: [component, requirement],
+    relations,
+    decisions: [],
+    risks: [],
+    open_questions: [],
+    quality_result: { passed: true, notes: "ok" },
+  };
+  const report = createCritiqueValidationReport({
+    workspaceId: "workspace-test",
+    productContext: "",
+    requestAnalysis: createRequestAnalysis(),
+    plan: {
+      status: "initial",
+      request_summary: "Review executor boundaries.",
+      dag: { nodes: [task.task_id], edges: [] },
+      tasks: [task],
+      assumptions: [],
+    },
+    executorResults: [result],
+    knowledgeGraph: createGraph({
+      entities: [feature, component, requirement],
+      relations,
+    }),
+  });
+
+  assert.deepEqual(report.rejected_task_ids, ["task-01"]);
+  assert.deepEqual(
+    report.issues.map((issue) => issue.code),
+    ["UNAUTHORIZED_ENTITY_TYPE", "UNAUTHORIZED_RELATION_TYPE"],
+  );
+});
 
 test("renames non-similar duplicate IDs and remaps relation endpoints", () => {
   const current = createCurrentGraphWithTask03();
@@ -148,7 +237,7 @@ test("critique validation accepts graph items normalized by merge reducer", () =
   });
   const task02Result = createExecutorResult({
     taskId: "task-02",
-    agentType: "executor-toolkit",
+    agentType: "executor-market-research",
     entity: createRequirement(
       "R-003",
       "task-02",
@@ -206,6 +295,226 @@ test("critique validation accepts graph items normalized by merge reducer", () =
     )?.committed_entity_ids,
     ["R-006"],
   );
+});
+
+test("critique validation does not duplicate chained relation renames", () => {
+  const goal = createGoal("G-001");
+  const task03Entities = Array.from({ length: 11 }, (_, index) =>
+    createRequirement(
+      `R-${index + 11}`,
+      "task-03",
+      `Research requirement ${index + 1}`,
+      `Research evidence requirement ${index + 1}.`,
+    ),
+  );
+  const task04Entities = Array.from({ length: 20 }, (_, index) => ({
+    id: `F-${index + 11}`,
+    type: "Feature" as const,
+    name: `Discovery feature ${index + 1}`,
+    description: `Discovery feature hypothesis ${index + 1}.`,
+    source_task_id: "task-04",
+    status: "proposed" as const,
+  }));
+  const task03Relations = task03Entities.map((entity, index) =>
+    createRelation(
+      `REL-${index + 11}`,
+      entity.id,
+      goal.id,
+      "task-03",
+      `Research relation ${index + 1}.`,
+    ),
+  );
+  const task04Relations = task04Entities.map((entity, index) =>
+    createRelation(
+      `REL-${index + 11}`,
+      entity.id,
+      goal.id,
+      "task-04",
+      `Discovery relation ${index + 1}.`,
+    ),
+  );
+  const mergedGraph = mergeKnowledgeGraphSnapshots(
+    createGraph({
+      entities: [goal, ...task03Entities],
+      relations: task03Relations,
+    }),
+    createGraph({
+      entities: task04Entities,
+      relations: task04Relations,
+    }),
+  );
+  assert.ok(mergedGraph);
+
+  const task04 = createTask("task-04", 4, "executor-product-discovery");
+  const report = createCritiqueValidationReport({
+    workspaceId: "workspace-test",
+    productContext: "",
+    requestAnalysis: createRequestAnalysis(),
+    plan: {
+      status: "initial",
+      request_summary: "Create discovery features.",
+      dag: { nodes: [task04.task_id], edges: [] },
+      tasks: [task04],
+      assumptions: [],
+    },
+    executorResults: [
+      {
+        task_id: task04.task_id,
+        agent_type: "executor-product-discovery",
+        focus_layer: "Feature",
+        summary: "Created discovery features.",
+        entities: task04Entities,
+        relations: task04Relations,
+        decisions: [],
+        risks: [],
+        open_questions: [],
+        quality_result: { passed: true, notes: "ok" },
+      },
+    ],
+    knowledgeGraph: mergedGraph,
+  });
+  const record = report.executor_update_records[0];
+
+  assert.deepEqual(record.committed_relation_ids, [
+    ...Array.from({ length: 20 }, (_, index) => `REL-${index + 22}`),
+  ]);
+  assert.equal(new Set(record.committed_relation_ids).size, 20);
+  assert.deepEqual(report.rejected_task_ids, []);
+});
+
+test("critique validation reports pre-existing integrity failures as legacy warnings", () => {
+  const graph = createGraph({
+    entities: [
+      createGoal("G-001"),
+      createRequirement(
+        "R-001",
+        "task-01",
+        "Invalidly connected requirement",
+        "This requirement is connected through an invalid direction.",
+      ),
+      createRequirement(
+        "R-002",
+        "task-01",
+        "Orphan requirement",
+        "This requirement has no relation.",
+      ),
+      {
+        id: "F-001",
+        type: "Feature",
+        name: "Orphan feature",
+        description: "This feature has no relation.",
+        source_task_id: "task-01",
+        status: "proposed",
+      },
+    ],
+    relations: [
+      {
+        id: "REL-INVALID",
+        type: "Drives",
+        source: "G-001",
+        target: "R-001",
+        source_task_id: "task-01",
+      },
+      {
+        id: "REL-DANGLING",
+        type: "References",
+        source: "G-001",
+        target: "MISSING",
+        source_task_id: "task-01",
+      },
+    ],
+  });
+  const report = createCritiqueValidationReport({
+    workspaceId: "workspace-test",
+    productContext: "",
+    requestAnalysis: createRequestAnalysis(),
+    plan: {
+      status: "initial",
+      request_summary: "Review graph integrity.",
+      dag: { nodes: [], edges: [] },
+      tasks: [],
+      assumptions: [],
+    },
+    executorResults: [],
+    knowledgeGraph: graph,
+  });
+
+  assert.deepEqual(report.graph_integrity.dangling_relation_ids, [
+    "REL-DANGLING",
+  ]);
+  assert.deepEqual(report.graph_integrity.invalid_direction_relation_ids, [
+    "REL-INVALID",
+  ]);
+  assert.deepEqual(report.graph_integrity.orphan_requirement_ids, ["R-002"]);
+  assert.deepEqual(report.graph_integrity.orphan_feature_ids, ["F-001"]);
+  assert.deepEqual(
+    report.issues.map((issue) => issue.code),
+    [
+      "LEGACY_RELATION_ENDPOINT_MISSING",
+      "LEGACY_INVALID_RELATION_DIRECTION",
+      "ORPHAN_REQUIREMENT",
+      "ORPHAN_FEATURE",
+    ],
+  );
+  assert.ok(report.issues.every((issue) => issue.severity === "warning"));
+  assert.deepEqual(report.retry_task_ids, []);
+});
+
+test("critique validation rejects invalid relations committed by the current task", () => {
+  const invalidRelation: ProductKnowledgeGraph["relations"][number] = {
+    id: "REL-INVALID",
+    type: "Drives",
+    source: "G-001",
+    target: "R-001",
+    source_task_id: "task-01",
+  };
+  const graph = createGraph({
+    entities: [
+      createGoal("G-001"),
+      createRequirement(
+        "R-001",
+        "task-01",
+        "Invalidly connected requirement",
+        "This requirement is connected through an invalid direction.",
+      ),
+    ],
+    relations: [invalidRelation],
+  });
+  const task = createTask("task-01", 1, "executor-product-strategy");
+  const report = createCritiqueValidationReport({
+    workspaceId: "workspace-test",
+    productContext: "",
+    requestAnalysis: createRequestAnalysis(),
+    plan: {
+      status: "initial",
+      request_summary: "Review current graph updates.",
+      dag: { nodes: [task.task_id], edges: [] },
+      tasks: [task],
+      assumptions: [],
+    },
+    executorResults: [
+      {
+        task_id: task.task_id,
+        agent_type: "executor-product-strategy",
+        focus_layer: "Goal",
+        summary: "Added an invalid relation.",
+        entities: [],
+        relations: [invalidRelation],
+        decisions: [],
+        risks: [],
+        open_questions: [],
+        quality_result: { passed: true, notes: "ok" },
+      },
+    ],
+    knowledgeGraph: graph,
+  });
+
+  assert.deepEqual(report.rejected_task_ids, ["task-01"]);
+  assert.equal(
+    report.executor_update_records[0]?.commit_status,
+    "committed",
+  );
+  assert.equal(report.issues[0]?.code, "INVALID_RELATION_DIRECTION");
 });
 
 /**
@@ -320,7 +629,7 @@ function createRelation(
 ): ProductKnowledgeGraph["relations"][number] {
   return {
     id,
-    type: "Satisfies",
+    type: "References",
     source,
     target,
     description,
@@ -364,7 +673,7 @@ function createExecutorResult({
  */
 function createPlan(): TaskExecutionPlan {
   const tasks = [
-    createTask("task-02", 2, "executor-toolkit"),
+    createTask("task-02", 2, "executor-market-research"),
     createTask("task-03", 3, "executor-product-discovery"),
   ];
 

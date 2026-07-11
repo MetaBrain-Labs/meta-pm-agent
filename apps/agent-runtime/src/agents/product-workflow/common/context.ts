@@ -18,14 +18,12 @@ import type {
   ProductKnowledgeGraph,
   RequestAnalysis,
   TaskExecutionNode,
-  TaskExecutionPlan,
 } from "@repo/shared";
 import type { UserInputRecord } from "../../request/user-input";
 
 const MAX_RELEVANT_NODES = 16;
 const MAX_RELEVANT_RELATIONS = 16;
 const MAX_SOURCE_TASK_ITEMS = 8;
-const MAX_PREVIOUS_RESULTS = 12;
 const MAX_USER_INPUT = 8;
 const MAX_TEXT_LENGTH = 600;
 
@@ -117,37 +115,6 @@ export function createTaskRelevantGraphContext({
       source_task_id: relation.source_task_id,
     })),
   };
-}
-
-/**
- * 压缩 Planner DAG，只保留 Executor 判断依赖关系所需字段。
- */
-export function compactTaskExecutionPlan(plan: TaskExecutionPlan) {
-  return {
-    request_summary: truncateText(plan.request_summary),
-    dag: plan.dag,
-    tasks: plan.tasks.map((task) => ({
-      task_id: task.task_id,
-      sequence: task.sequence,
-      title: truncateText(task.title),
-      assigned_agent: task.assigned_agent,
-      depends_on: task.depends_on,
-      covered_business_model_indexes: task.covered_business_model_indexes,
-      expected_output: truncateText(task.expected_output),
-    })),
-    assumptions: takeTail(plan.assumptions, 4).map((assumption) =>
-      truncateText(assumption),
-    ),
-  };
-}
-
-/**
- * 压缩历史 Executor 结果，避免把完整节点和关系再次注入后续 Executor。
- */
-export function compactPreviousExecutorResults(
-  results: ExecutorAgentResult[],
-) {
-  return takeTail(results, MAX_PREVIOUS_RESULTS).map(compactExecutorResult);
 }
 
 /**

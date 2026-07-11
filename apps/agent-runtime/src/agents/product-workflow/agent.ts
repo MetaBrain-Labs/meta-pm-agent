@@ -28,6 +28,7 @@ import type {
 type ProposalQuestionSource = {
   source_task_id: string;
   source_agent: string;
+  open_question_id?: string;
 };
 
 type ProposalSlot = {
@@ -221,6 +222,7 @@ function collectProposalSlots(result: ProductWorkflowResult): ProposalSlot[] {
 
   for (const executorResult of result.executor_results) {
     executorResult.open_questions.forEach((question, index) => {
+      if (!question.blocking) return;
       const questionText = question.text ?? "";
       const normalized = normalizeSlotQuestion(questionText);
       if (!normalized) return;
@@ -231,6 +233,7 @@ function collectProposalSlots(result: ProductWorkflowResult): ProposalSlot[] {
       const source = {
         source_task_id: executorResult.task_id,
         source_agent: executorResult.agent_type,
+        open_question_id: question.id,
       };
       if (existing) {
         existing.sources = mergeProposalQuestionSources([
@@ -348,7 +351,10 @@ function mergeProposalQuestionSources<T extends ProposalQuestionSource>(
 ): T[] {
   const byKey = new Map<string, T>();
   for (const source of sources) {
-    byKey.set(`${source.source_agent}:${source.source_task_id}`, source);
+    byKey.set(
+      `${source.source_agent}:${source.source_task_id}:${source.open_question_id ?? ""}`,
+      source,
+    );
   }
   return [...byKey.values()];
 }
