@@ -114,11 +114,13 @@ export async function orchestratorAgentNode(
     state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
 
   if (state.requestAnalysis.business_model.length > 0) {
+    const isSupplement = (state.supplementAgentTypes?.length ?? 0) > 0;
     knowledgeGraph = updateProductContextMetadata({
       knowledgeGraph,
-      currentState: "initial",
-      descriptionEntry:
-        "Orchestrator Agent started a product workflow after user clarification or structured input was available.",
+      currentState: isSupplement ? "refining" : "initial",
+      descriptionEntry: isSupplement
+        ? "Orchestrator Agent resumed a refining product workflow from user form answers."
+        : "Orchestrator Agent started a product workflow after user clarification or structured input was available.",
     });
     writer?.({
       type: "knowledge-graph-update",

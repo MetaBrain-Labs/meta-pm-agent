@@ -34,6 +34,7 @@ import {
   scopeSupplementPlan,
 } from "../src/agents/product-workflow/orchestrator-agent/planner-subagent/agent";
 import { requireDelegatedPlannerPlan } from "../src/agents/product-workflow/orchestrator-agent/agent";
+import { getMissingRequiredSubagentError } from "../src/agents/common/run-agent-with-subagent";
 import { selectNextExecutorRouterTargets } from "../src/graph/nodes/product-workflow-node";
 import type { WorkflowGraphStateValue } from "../src/graph/state";
 
@@ -53,6 +54,14 @@ test("selects all ready executors for the next parallel batch", () => {
 });
 
 test("fails when Orchestrator does not actually delegate to Planner", () => {
+  assert.equal(
+    getMissingRequiredSubagentError("planner", new Set()),
+    "required-subagent-not-invoked: planner",
+  );
+  assert.equal(
+    getMissingRequiredSubagentError("planner", new Set(["planner"])),
+    null,
+  );
   assert.throws(
     () => requireDelegatedPlannerPlan("product_workflow", undefined, false),
     /Orchestrator 未调用 Planner Subagent/,
