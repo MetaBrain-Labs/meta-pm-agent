@@ -199,10 +199,30 @@ test("records subagent invocations when AGENT_SUMMARY_SUBAGENTS_ENABLED is on", 
           toolCallId: "call-task-1",
           content: "Planner subagent reasoned about task ordering.",
         });
+        recorder.recordSubagentRawOutput({
+          toolCallId: "call-task-1",
+          subagentType: "planner",
+          content: '{"tasks":[{"id":"t1"}]}',
+        });
         recorder.recordSubagentResult({
           toolCallId: "call-task-1",
           subagentType: "planner",
           output: { tasks: [{ id: "t1", title: "research" }], plan_type: "initial" },
+        });
+        recorder.recordSubagentCall({
+          toolCallId: "call-task-2",
+          subagentType: "planner",
+          input: { subagent_type: "planner", description: "generate DAG again" },
+        });
+        recorder.recordSubagentRawOutput({
+          toolCallId: "call-task-2",
+          subagentType: "planner",
+          content: '{"tasks":[',
+        });
+        recorder.recordSubagentResult({
+          toolCallId: "call-task-2",
+          subagentType: "planner",
+          output: '{"tasks":[',
         });
 
         await recorder.finish({ status: "completed" });
@@ -219,6 +239,10 @@ test("records subagent invocations when AGENT_SUMMARY_SUBAGENTS_ENABLED is on", 
         assert.match(markdown, /planner/);
         assert.match(markdown, /#### 思考过程/);
         assert.match(markdown, /Planner subagent reasoned about task ordering/);
+        assert.match(markdown, /原始模型输出/);
+        assert.match(markdown, /tasks/);
+        assert.doesNotMatch(markdown, /原始模型输出（未完成）/);
+        assert.match(markdown, /\{\"tasks\":\[/);
         assert.match(markdown, /#### 返回给主 Agent 的结果/);
         assert.match(markdown, /t1/);
         assert.ok(

@@ -63,6 +63,7 @@ export async function* streamOrchestratorAgent(
   let preOrchSubagentResult: unknown = undefined;
   let plannerSubagentResult: unknown = undefined;
   let capturedPlan: TaskExecutionPlan | undefined;
+  let plannerInvocationStarted = false;
 
   const payload = isPreCheck
     ? { mode: "pre-check", pre_check_payload: buildPreOrchPayload(input) }
@@ -108,6 +109,7 @@ export async function* streamOrchestratorAgent(
           phase: "planning",
         };
       } else if (!isPreCheck && event.subagentType === "planner") {
+        plannerInvocationStarted = true;
         yield {
           type: "agent-status",
           agentType: "planner",
@@ -194,13 +196,32 @@ export async function* streamOrchestratorAgent(
     ? result.data
     : createFallbackOrchestratorDecision(input, "invalid-orch-output");
   const normalizedDecision = normalizeOrchestratorDecision(input, decision);
-  const plan =
-    capturedPlan ??
-    (normalizedDecision.route === "product_workflow"
-      ? extractPlanFromSubagentResult(null, input)
-      : undefined);
+  return {
+    decision: normalizedDecision,
+    plan: requireDelegatedPlannerPlan(
+      normalizedDecision.route,
+      capturedPlan,
+      plannerInvocationStarted,
+    ),
+  };
+}
 
-  return { decision: normalizedDecision, plan };
+/**
+ * 产品工作流必须来自一次真实 Planner Subagent 委派，不允许伪装为自动兜底计划。
+ */
+export function requireDelegatedPlannerPlan(
+  route: OrchestratorAgentResult["route"],
+  capturedPlan: TaskExecutionPlan | undefined,
+  plannerInvocationStarted: boolean,
+): TaskExecutionPlan | undefined {
+  if (route === "product_workflow" && !capturedPlan) {
+    throw new Error(
+      plannerInvocationStarted
+        ? "Planner Subagent 已调用，但未返回可用计划，请重新运行本轮规划。"
+        : "Orchestrator 未调用 Planner Subagent，请重新运行本轮规划。",
+    );
+  }
+  return capturedPlan;
 }
 
 /**

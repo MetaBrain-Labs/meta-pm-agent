@@ -33,6 +33,7 @@ import {
   scopeInitialDecisionPlan,
   scopeSupplementPlan,
 } from "../src/agents/product-workflow/orchestrator-agent/planner-subagent/agent";
+import { requireDelegatedPlannerPlan } from "../src/agents/product-workflow/orchestrator-agent/agent";
 import { selectNextExecutorRouterTargets } from "../src/graph/nodes/product-workflow-node";
 import type { WorkflowGraphStateValue } from "../src/graph/state";
 
@@ -49,6 +50,21 @@ test("selects all ready executors for the next parallel batch", () => {
     "executor-product-strategy",
     "executor-toolkit",
   ]);
+});
+
+test("fails when Orchestrator does not actually delegate to Planner", () => {
+  assert.throws(
+    () => requireDelegatedPlannerPlan("product_workflow", undefined, false),
+    /Orchestrator 未调用 Planner Subagent/,
+  );
+  assert.throws(
+    () => requireDelegatedPlannerPlan("product_workflow", undefined, true),
+    /Planner Subagent 已调用，但未返回可用计划/,
+  );
+  assert.equal(
+    requireDelegatedPlannerPlan("conversation", undefined, false),
+    undefined,
+  );
 });
 
 test("waits for dependencies before selecting downstream executor", () => {

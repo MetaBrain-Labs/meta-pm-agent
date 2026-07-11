@@ -169,6 +169,7 @@ export const KnowledgeGraphOpenQuestionInputSchema = z.object({
   id: z.string().min(1).describe("Question ID, e.g. OQ-001"),
   text: z.string().min(1).describe("Question text explaining what needs to be confirmed"),
   source_task_id: z.string().optional().describe("Optional executor task ID that raised this question"),
+  blocking: z.boolean().default(false).describe("Whether this question must be answered before the current workflow can complete"),
 });
 
 const ProductWorkflowProposalQuestionTypeSchema = z.preprocess((value) => {
@@ -203,6 +204,7 @@ const ProductWorkflowProposalQuestionSourceSchema = z.object({
     z.string().min(1).describe("Executor task ID that raised this question"),
   ),
   source_agent: LooseProductWorkflowAgentTypeSchema.describe("Agent that raised this question"),
+  open_question_id: z.string().min(1).optional().describe("Exact source OpenQuestion ID resolved by this form field"),
 });
 
 const ProductWorkflowProposalQuestionPrioritySchema = z.preprocess((value) => {
@@ -651,7 +653,7 @@ export const CritiqueAgentOutputSchema = z.object({
   }).describe("Critique Agent decision"),
   product_context_update: z.string().min(1).max(1200).describe("Short product context update summary"),
   knowledge_graph_review: ProductWorkflowKnowledgeGraphReviewSchema.describe("Lightweight graph review, not the full graph"),
-  proposal_questions: z.array(ProductWorkflowProposalQuestionSchema).max(3).default([]).describe("At most three high-priority user questions"),
+  proposal_questions: z.array(ProductWorkflowProposalQuestionSchema).default([]).describe("Unresolved blocking questions that require user confirmation"),
   confirmation_message: z.string().min(1).max(500).describe("Concise user-facing confirmation message"),
 });
 

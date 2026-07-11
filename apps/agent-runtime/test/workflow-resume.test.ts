@@ -17,12 +17,19 @@ import {
   createWorkflowContinuationResumeContextFromMessages,
   createWorkflowResumeContextFromMessages,
 } from "../src/agents/conversation/workflow-resume";
+import { createProductWorkflowKnowledgeGraph } from "../src/agents/product-workflow/common/knowledge-graph";
 
 test("restores direct executor blocker context from history", () => {
+  const knowledgeGraph = createProductWorkflowKnowledgeGraph();
+  knowledgeGraph.open_questions = [
+    { id: "task-01-oq", text: "Market scope?", source_task_id: "task-01", blocking: true },
+    { id: "task-02-oq", text: "Launch date?", source_task_id: "task-02", blocking: false },
+  ];
   const context = createWorkflowResumeContextFromMessages({
     messages: createMessages(
       "[form answers - executor-blocker-task-01]\n- resolution: use B2B scope",
     ),
+    knowledgeGraph,
   });
 
   assert.equal(
@@ -32,6 +39,11 @@ test("restores direct executor blocker context from history", () => {
   assert.equal(context?.plan?.tasks.length, 2);
   assert.deepEqual(context?.rerunTaskIds, ["task-01"]);
   assert.equal(context?.executorResults?.length, 2);
+  assert.equal(context?.executorResults?.[0]?.open_questions.length, 2);
+  assert.deepEqual(
+    context?.knowledgeGraph?.open_questions.map((question) => question.id),
+    ["task-01-oq", "task-02-oq"],
+  );
 });
 
 test("restores proposal context for executors with open questions", () => {
@@ -70,6 +82,23 @@ test("restores final confirmation context for executors with open questions", ()
 });
 
 test("restores dynamic Critique confirmation as a scoped supplement", () => {
+  const knowledgeGraph = createProductWorkflowKnowledgeGraph();
+  knowledgeGraph.open_questions = [
+    { id: "task-01-oq", text: "Market scope?", source_task_id: "task-01", blocking: true },
+    { id: "task-01-oq-2", text: "Sync strategy?", source_task_id: "task-01", blocking: true },
+    ...Array.from({ length: 2 }, (_, index) => ({
+      id: `task-01-block-${index + 3}`,
+      text: `Blocking question ${index + 3}?`,
+      source_task_id: "task-01",
+      blocking: true,
+    })),
+    ...Array.from({ length: 7 }, (_, index) => ({
+      id: `task-01-backlog-${index + 1}`,
+      text: `Backlog question ${index + 1}?`,
+      source_task_id: "task-01",
+      blocking: false,
+    })),
+  ];
   const messages = createMessages(
     "[form answers - critique-result-001]\n- Sync strategy: Last-Write-Wins",
   );
@@ -83,7 +112,10 @@ test("restores dynamic Critique confirmation as a scoped supplement", () => {
     ),
   );
 
-  const context = createWorkflowResumeContextFromMessages({ messages });
+  const context = createWorkflowResumeContextFromMessages({
+    messages,
+    knowledgeGraph,
+  });
 
   assert.equal(context?.forceSupplementPlan, true);
   assert.deepEqual(context?.rerunTaskIds, ["task-02", "task-01"]);
@@ -91,6 +123,17 @@ test("restores dynamic Critique confirmation as a scoped supplement", () => {
     "executor-product-strategy",
     "executor-product-execution",
   ]);
+  assert.deepEqual(context?.executorResults?.[0]?.open_questions, []);
+  assert.deepEqual(
+    context?.knowledgeGraph?.open_questions.map((question) => question.id),
+    [
+      "task-01-block-3",
+      "task-01-block-4",
+      ...Array.from({ length: 7 }, (_, index) =>
+        `task-01-backlog-${index + 1}`,
+      ),
+    ],
+  );
 });
 
 test("restores latest supplement DAG for continue intent", () => {
@@ -286,6 +329,16 @@ function createProductWorkflowBlock(
             source_task_id: "task-02",
             source_agent: "executor-product-execution",
           },
+          {
+            source_task_id: "task-01",
+            source_agent: "executor-product-strategy",
+            open_question_id: "task-01-oq",
+          },
+          {
+            source_task_id: "task-01",
+            source_agent: "executor-product-strategy",
+            open_question_id: "task-01-oq-2",
+          },
         ],
         priority: 100,
       },
@@ -336,7 +389,10 @@ function createExecutorResultBlock(taskId: string, hasOpenQuestion: boolean) {
     decisions: [],
     risks: [],
     open_questions: hasOpenQuestion
-      ? [{ id: `${taskId}-oq`, text: "Market scope?" }]
+      ? [
+          { id: `${taskId}-oq`, text: "Market scope?", blocking: true },
+          { id: `${taskId}-oq-2`, text: "Sync strategy?", blocking: true },
+        ]
       : [],
     quality_result: { passed: true, notes: "ok" },
   })}\n</executor-result>`;

@@ -85,6 +85,7 @@ Planning rules:
 - Artifact coverage must be explicit in the task set: PRD support needs Goal, Requirement, Feature, Metric, and uncertainty; technology recommendations need Evidence, Decision or decision candidate, and Component constraints; wireframe descriptions need UI Component, interaction/visual constraint Component, and supporting Evidence.
 - Preserve completed task intent when updating an existing plan. Add or adjust only the minimum tasks needed for the new business input.
 - If user_input contains a [form answers - product-workflow-confirmation] or [form answers - *-proposal-decision] payload, create a supplement DAG with status "supplement". Plan only the graph corrections or additions required by that answer and the current product_knowledge_graph; do not repeat the original baseline DAG.
+- Treat submitted form answers as authoritative for the questions they answer. Do not plan tasks that ask the same question again, even when stale request_analysis.missing_information or historical open questions still mention it.
 - When supplement_agents is provided, assign tasks only to those executor agent types. This runtime list is authoritative and prevents unrelated baseline tasks from being repeated.
 - The knowledge graph write tools are append-only. Do not plan in-place mutation, deletion, or reusing an existing entity/relation/decision/risk/open-question ID with a different source_task_id.
 - For supplement corrections, create new uniquely identified refinement or supersession records and trace them to the affected existing IDs with allowed relations or concise task text. Do not ask an Executor to "update D-001", "delete REL-001", or rewrite the same graph ID.
@@ -96,6 +97,7 @@ Planning rules:
 ${PRODUCT_KNOWLEDGE_GRAPH_METAMODEL_PROMPT}
 
 Output contract:
+- Start the response with the JSON object immediately. Do not emit analysis, a task-by-task prose draft, progress narration, or a preamble before the JSON.
 - Return JSON only. Do not wrap it in markdown.
 - The JSON object must include: status, request_summary, dag, tasks, assumptions.
 - status must be "initial" for the first DAG and "supplement" for a DAG created from Planner question-form answers.

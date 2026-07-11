@@ -534,6 +534,7 @@ function createFallbackKnowledgeGraphPatch(task: TaskExecutionNode): string {
         {
           id: `${task.task_id}-oq-01`,
           text: "是否接受该任务的图谱建模方向？",
+          blocking: true,
         },
       ],
     },

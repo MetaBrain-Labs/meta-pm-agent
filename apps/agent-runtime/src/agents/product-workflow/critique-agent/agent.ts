@@ -243,6 +243,7 @@ function collectOpenQuestionCandidates(executorResults: ExecutorAgentResult[]) {
       sources: Array<{
         source_task_id: string;
         source_agent: ExecutorAgentResult["agent_type"];
+        open_question_id: string;
       }>;
       priority_hint: number;
     }
@@ -250,12 +251,14 @@ function collectOpenQuestionCandidates(executorResults: ExecutorAgentResult[]) {
 
   for (const result of executorResults) {
     result.open_questions.forEach((question, index) => {
+      if (!question.blocking) return;
       const key = normalizeFallbackQuestionText(question.text);
       if (!key) return;
 
       const source = {
         source_task_id: result.task_id,
         source_agent: result.agent_type,
+        open_question_id: question.id,
       };
       const priority = result.open_questions.length - index;
       const existing = candidates.get(key);
@@ -964,7 +967,7 @@ function createFallbackCritiqueAgentOutput(
   const proposalQuestions = [
     ...(retryQuestion ? [retryQuestion] : []),
     ...createFallbackProposalQuestions(input.executorResults),
-  ].slice(0, 3);
+  ];
   const hasRetry = validationReport.retry_task_ids.length > 0;
   const status = hasRetry
     ? "requires_executor_retry"
@@ -1106,6 +1109,7 @@ function createFallbackProposalQuestions(
 
   for (const result of executorResults) {
     result.open_questions.forEach((question, index) => {
+      if (!question.blocking) return;
       const label = formatFallbackOpenQuestionLabel(
         question.text,
         result.task_id,
@@ -1116,6 +1120,7 @@ function createFallbackProposalQuestions(
       const source = {
         source_task_id: result.task_id,
         source_agent: result.agent_type,
+        open_question_id: question.id,
       };
       const priority = result.open_questions.length - index;
       const existing = questions.get(key);
@@ -1142,9 +1147,9 @@ function createFallbackProposalQuestions(
     });
   }
 
-  return [...questions.values()]
-    .sort((left, right) => right.priority - left.priority)
-    .slice(0, 3);
+  return [...questions.values()].sort(
+    (left, right) => right.priority - left.priority,
+  );
 }
 
 /**
@@ -1183,7 +1188,10 @@ function mergeFallbackQuestionSources<
 >(sources: T[]): T[] {
   const byKey = new Map<string, T>();
   for (const source of sources) {
-    byKey.set(`${source.source_agent}:${source.source_task_id}`, source);
+    byKey.set(
+      `${source.source_agent}:${source.source_task_id}:${source.open_question_id ?? ""}`,
+      source,
+    );
   }
   return [...byKey.values()];
 }

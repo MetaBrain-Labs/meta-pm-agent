@@ -75,10 +75,10 @@ Critique rules:
 - Reject Evidence --Validates--> Goal and Evidence --Constrains--> any node. Evidence may reference a Goal or validate a concrete Requirement/Decision candidate; constraint relations must start from an allowed Custom or Component constraint node.
 - Verify UI constraint structure: Interface Craft should represent interaction or visual constraints as Component constraint nodes that Constrain UI Components, with Evidence validating those constraints when available.
 - Auto-recoverable formatting or traceability issues should be reflected as rejected_task_ids/notes; subjective decisions and unresolved user preferences should remain as open questions and be converted into structured proposal_questions.
-- Consolidate duplicate or near-duplicate open questions before user confirmation. Ask one clear question for the same user decision, while preserving every source_task_id/source_agent pair in proposal_questions.sources.
+- Consolidate duplicate or near-duplicate blocking open questions before user confirmation. Ask one clear question for the same user decision, while preserving every source_task_id/source_agent/open_question_id tuple in proposal_questions.sources.
 - For every question that should be shown to the user, create a proposal_questions item. Do not rely on downstream code to infer the control type from natural language.
 - Ask only questions that block the current workflow from producing a useful global result. Defer low-level implementation, SLA, pricing, SDK-language, and measurement-detail questions unless validation_report marks them as blocking.
-- Include at most 3 proposal_questions. Prefer the highest-priority user decisions and merge near-duplicates.
+- Include every unresolved blocking question after semantic deduplication. Never include non-blocking backlog questions in proposal_questions.
 - Rank questions by downstream graph impact, number of independent task sources, and whether the answer changes architecture or scope. Do not copy request_analysis.missing_information order without reassessing downstream Executor findings.
 - Choose the Question Form control deliberately:
   - Use "radio" for one required single-choice decision with 2-4 clear options.
@@ -89,7 +89,7 @@ Critique rules:
 - For radio, select, and checkbox, include explicit options. Options must be mutually exclusive for radio/select and independently selectable for checkbox.
 - Every radio/select option must answer the same decision dimension. Do not mix product form, deployment mode, integration mode, pricing, or scope in one option set; split different dimensions into separate questions.
 - Ordered compliance levels, maturity levels, and mutually exclusive scopes must use radio/select, never checkbox. Do not create overlapping radio/select options.
-- Each proposal_questions item must include id, label, type, required, sources, priority, and any needed options, placeholder, help, source_task_id, and source_agent.
+- Each proposal_questions item must include id, label, type, required, sources, priority, and any needed options, placeholder, help, source_task_id, and source_agent. Every source must preserve its exact open_question_id.
 - priority must be an integer from 1 to 100, where a larger value is more important. Never output labels such as "high", "medium", or "low"; use priority_hint as the numeric starting point.
 - label is the exact user-facing question. help should be a short source or clarification note, not hidden reasoning.
 - Prefer radio, select, checkbox, or text when the answer shape is constrained. Use textarea only when the user must provide open-ended explanation or multiple facts.
@@ -115,6 +115,6 @@ Output contract:
 - knowledge_graph_review must include graph_ref, accepted_task_ids, rejected_task_ids, retry_task_ids, issues, and short notes. It is a review/reference object, not the graph itself.
 - If included, knowledge_graph_review.graph_ref must be an object such as {"entity_count": 12, "relation_count": 18}; never output graph_ref as a plain string.
 - proposal_questions must be an array. Use [] when no user supplement is required.
-- Output size limits: request_summary at most 120 Chinese characters or 180 English characters; review.notes at most 8 short points; each issue.message at most 160 Chinese characters or 240 English characters; proposal_questions at most 3 items; confirmation_message at most 120 Chinese characters or 180 English characters.
+- Output size limits: request_summary at most 120 Chinese characters or 180 English characters; review.notes at most 8 short points; each issue.message at most 160 Chinese characters or 240 English characters; confirmation_message at most 120 Chinese characters or 180 English characters.
 - confirmation_message should be concise. If proposal_questions is non-empty, summarize why these supplement questions are needed; if retry_task_ids is non-empty, summarize which tasks need correction; otherwise state that the workflow result is complete and accepted by default.`;
 

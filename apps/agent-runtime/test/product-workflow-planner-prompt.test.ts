@@ -69,6 +69,7 @@ test("planner prompt preserves graph-semantics guardrails", () => {
     PLANNER_AGENT_PROMPT,
     /whole JSON should stay under about 6000 tokens/,
   );
+  assert.match(PLANNER_AGENT_PROMPT, /Start the response with the JSON object immediately/);
   assert.match(
     PLANNER_AGENT_PROMPT,
     /Do not enumerate detailed components, libraries, frameworks, vendor lists/,
@@ -174,8 +175,9 @@ test("critique agent prompt stays compact and does not request full graph copies
   );
   assert.match(
     CRITIQUE_AGENT_PROMPT,
-    /Include at most 3 proposal_questions/,
+    /Include every unresolved blocking question after semantic deduplication/,
   );
+  assert.match(CRITIQUE_AGENT_PROMPT, /exact open_question_id/);
   assert.match(
     CRITIQUE_AGENT_PROMPT,
     /Status is a critique classification, not an execution command/,

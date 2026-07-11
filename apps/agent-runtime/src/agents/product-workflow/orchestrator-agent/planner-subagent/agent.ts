@@ -16,6 +16,7 @@ import {
   type TaskExecutionPlan,
 } from "@repo/shared";
 import { createDeepAgentToolAllowlistMiddleware } from "../../../common/deep-agent-tool-policy";
+import { createChatModel } from "../../../common/model";
 import { parseJsonObject } from "../../../../utils/json";
 import type { OrchestratorAgentInput } from "../../types";
 import type { ExecutorAgentType } from "../../executor-agent/definitions";
@@ -41,6 +42,13 @@ export function createPlannerSubagent(): SubAgent {
     description:
       "Generates executable TaskExecutionPlan DAG from product request analysis and knowledge graph context. Returns JSON matching TaskExecutionPlanSchema.",
     systemPrompt: PLANNER_SUBAGENT_PROMPT,
+    model: createChatModel({
+      enableThinking: false,
+      responseFormat: "json_object",
+      temperature: 0,
+      maxTokens: 16_384,
+      timeout: 120_000,
+    }),
     tools: [],
     middleware: [subagentToolAllowlistMiddleware],
   };

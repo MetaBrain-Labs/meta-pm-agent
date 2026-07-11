@@ -136,18 +136,86 @@ function createWorkflowResumeContext({
   const forceSupplementPlan = formId
     ? isPlannerConfirmationFormId(formId, productWorkflow)
     : false;
+  const answeredOpenQuestionIds = formId
+    ? inferAnsweredOpenQuestionIds(formId, productWorkflow)
+    : [];
+  const resolvedExecutorResults = formId
+    ? resolveAnsweredOpenQuestions(
+        continuationExecutorResults,
+        answeredOpenQuestionIds,
+      )
+    : continuationExecutorResults;
+  const resolvedKnowledgeGraph = formId
+    ? resolveAnsweredGraphOpenQuestions(
+        knowledgeGraph,
+        answeredOpenQuestionIds,
+      )
+    : knowledgeGraph;
 
   return {
     requestAnalysis,
     plan,
-    executorResults: continuationExecutorResults,
-    knowledgeGraph: knowledgeGraph ?? null,
+    executorResults: resolvedExecutorResults,
+    knowledgeGraph: resolvedKnowledgeGraph ?? null,
     rerunTaskIds,
     forceSupplementPlan,
     supplementAgentTypes: forceSupplementPlan
       ? inferSupplementAgentTypes(rerunTaskIds, plan)
       : [],
   };
+}
+
+/**
+ * 用户已经回答表单后，旧 Executor 结果中的同源问题不再参与后续 Critique 聚合。
+ */
+function resolveAnsweredOpenQuestions(
+  executorResults: ExecutorAgentResult[],
+  answeredOpenQuestionIds: string[],
+): ExecutorAgentResult[] {
+  const answeredIds = new Set(answeredOpenQuestionIds);
+  return executorResults.map((result) => ({
+    ...result,
+    open_questions: result.open_questions.filter(
+      (question) => !answeredIds.has(question.id),
+    ),
+  }));
+}
+
+/**
+ * 从本轮运行态移除已经由表单回答的同源问题，避免 Executor 再次把旧问题当成未决输入。
+ * 数据库只持久化实体和关系，因此这里不会删除持久化业务事实。
+ */
+function resolveAnsweredGraphOpenQuestions(
+  knowledgeGraph: ProductKnowledgeGraph | null | undefined,
+  answeredOpenQuestionIds: string[],
+): ProductKnowledgeGraph | null {
+  if (!knowledgeGraph) return null;
+  const answeredIds = new Set(answeredOpenQuestionIds);
+  return {
+    ...knowledgeGraph,
+    open_questions: knowledgeGraph.open_questions.filter(
+      (question) => !answeredIds.has(question.id),
+    ),
+  };
+}
+
+/**
+ * Critique Question Form 的来源携带精确问题 ID；其他表单不得推断并批量关闭问题。
+ */
+function inferAnsweredOpenQuestionIds(
+  formId: string,
+  productWorkflow: ProductWorkflowResult | null,
+): string[] {
+  if (!isPlannerConfirmationFormId(formId, productWorkflow)) return [];
+  return [
+    ...new Set(
+      (productWorkflow?.proposal_questions ?? []).flatMap((question) =>
+        question.sources.flatMap((source) =>
+          source.open_question_id ? [source.open_question_id] : [],
+        ),
+      ),
+    ),
+  ];
 }
 
 /**
@@ -279,7 +347,9 @@ function inferOpenQuestionTaskIds(
   return [
     ...new Set(
       executorResults
-        .filter((result) => result.open_questions.length > 0)
+        .filter((result) =>
+          result.open_questions.some((question) => question.blocking),
+        )
         .map((result) => result.task_id),
     ),
   ];

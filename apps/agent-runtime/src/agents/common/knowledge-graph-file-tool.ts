@@ -129,6 +129,11 @@ const openQuestionInputSchema = z.object({
         "Ask one clear and directly answerable question only.",
       ].join(" "),
     ),
+  blocking: z
+    .boolean()
+    .describe(
+      "Set true only when the current workflow cannot complete usefully without the answer; otherwise set false for backlog questions.",
+    ),
 });
 
 const blockerInputSchema = z.object({
@@ -474,7 +479,7 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_add_open_questions",
         description:
-          "Append structured open questions to the knowledge graph. Each question must use a new unique id and has text plus optional source_task_id fields. Duplicate IDs are skipped instead of updated.",
+          "Append structured open questions to the knowledge graph. Each question must use a new unique id, include text, mark whether it blocks current workflow completion, and may include source_task_id. Duplicate IDs are skipped instead of updated.",
         schema: z.object({
           questions: z
             .array(openQuestionInputSchema)
