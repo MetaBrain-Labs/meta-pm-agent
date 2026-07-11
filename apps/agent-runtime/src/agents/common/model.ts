@@ -13,6 +13,9 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { getLlmConfig } from "../../config";
 
+// 在模型实例创建前，全局注册 HarnessProfile 排除 DeepAgents 文件系统工具。
+import "./harness-profile";
+
 /**
  * 单个 Agent 覆盖默认模型参数的配置。
  */
