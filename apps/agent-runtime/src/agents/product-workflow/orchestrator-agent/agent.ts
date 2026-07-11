@@ -87,7 +87,11 @@ export async function* streamOrchestratorAgent(
       : [createPlannerSubagent()],
     payload,
     schema: outputSchema as any,
-    maxRetries: 0,
+    maxRetries: isPreCheck ? 0 : 1,
+    requiredSubagentType:
+      !isPreCheck && input.requestAnalysis.business_model.length > 0
+        ? "planner"
+        : undefined,
     fallback: (reason: string) =>
       isPreCheck
         ? createFallbackPreOrchResult(input)

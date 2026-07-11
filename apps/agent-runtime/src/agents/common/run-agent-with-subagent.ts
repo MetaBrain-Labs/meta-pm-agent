@@ -115,6 +115,8 @@ export interface RunAgentWithSubagentOptions<T, AgentType extends string> {
     ): { success: true; data: T } | { success: false; error: unknown };
   };
   fallback: (reason: string) => T;
+  /** 要求每次成功响应前必须通过 task 真实调用的 SubAgent。 */
+  requiredSubagentType?: string;
   /** JSON 解析失败或 schema 校验失败时的最大重试次数，默认 0（不重试，直接 fallback）。 */
   maxRetries?: number;
   suppressInvalidJsonReasoning?: boolean;
@@ -144,10 +146,23 @@ function buildRetryPayload(
       max_attempts: maxRetries + 1,
       error,
       previous_raw_output: previousRawOutput.slice(0, 3000),
-      instruction:
-        "Your previous attempt produced invalid output. Review the error above, examine the previous raw output to understand what went wrong, fix the issues, and produce valid JSON that strictly matches the required schema. Do not repeat the same mistake.",
+      instruction: error.startsWith("required-subagent-not-invoked:")
+        ? `You did not call the required SubAgent. Call task with subagent_type "${error.slice(error.indexOf(":") + 1).trim()}" before producing any final JSON. Do not invent or summarize a SubAgent result yourself.`
+        : "Your previous attempt produced invalid output. Review the error above, examine the previous raw output to understand what went wrong, fix the issues, and produce valid JSON that strictly matches the required schema. Do not repeat the same mistake.",
     },
   });
+}
+
+/**
+ * 校验当前尝试是否真实调用了指定 SubAgent。
+ */
+export function getMissingRequiredSubagentError(
+  requiredSubagentType: string | undefined,
+  invokedSubagentTypes: ReadonlySet<string>,
+): string | null {
+  return requiredSubagentType && !invokedSubagentTypes.has(requiredSubagentType)
+    ? `required-subagent-not-invoked: ${requiredSubagentType}`
+    : null;
 }
 
 /**
@@ -437,6 +452,7 @@ export async function* runAgentWithSubagent<T, AgentType extends string>(
 
     let responseText = "";
     let attemptTokenUsage: ReturnType<typeof getTokenUsage> = null;
+    const invokedSubagentTypes = new Set<string>();
 
     try {
       const agent = createDeepAgent({
@@ -522,6 +538,9 @@ export async function* runAgentWithSubagent<T, AgentType extends string>(
 
         // 主 Agent 层面：完整处理 task 委派、工具事件、推理和文本。
         const subagentTaskCalls = subagentTaskCallExtractor.extract(message);
+        for (const taskCall of subagentTaskCalls) {
+          invokedSubagentTypes.add(taskCall.subagentType);
+        }
 
         yield* handleSubagentTaskCalls(
           subagentTaskCalls,
@@ -646,6 +665,23 @@ export async function* runAgentWithSubagent<T, AgentType extends string>(
 
       const schemaResult = options.schema.safeParse(parsed);
       if (schemaResult.success) {
+        const missingSubagentError = getMissingRequiredSubagentError(
+          options.requiredSubagentType,
+          invokedSubagentTypes,
+        );
+        if (missingSubagentError) {
+          lastError = missingSubagentError;
+          lastRawOutput = responseText;
+          if (attempt < maxAttempts - 1) continue;
+
+          await summaryRecorder.finish({
+            error: missingSubagentError,
+            output: schemaResult.data,
+            status: "failed",
+            tokenUsage: tokenUsageSummary,
+          });
+          throw new Error(missingSubagentError);
+        }
         await summaryRecorder.finish({
           output: schemaResult.data,
           status: "completed",
@@ -680,6 +716,9 @@ export async function* runAgentWithSubagent<T, AgentType extends string>(
       return fallbackResult;
     } catch (error) {
       const message = getErrorMessage(error);
+      if (message.startsWith("required-subagent-not-invoked:")) {
+        throw error;
+      }
       lastError = message;
 
       if (attempt < maxAttempts - 1) continue; // 还有重试机会
