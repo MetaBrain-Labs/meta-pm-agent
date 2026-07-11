@@ -30,6 +30,18 @@ test("planner prompt preserves graph-semantics guardrails", () => {
   );
   assert.match(
     PLANNER_AGENT_PROMPT,
+    /importance >= 0\.8.*do not schedule a final decision task/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /A user answer is evidence for the stated product constraint, not proof that a specific technology is optimal/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /trace which historical open questions or risks the answer resolves or supersedes/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
     /first plan Goal\/Requirement work plus evidence-producing tasks, then add a downstream Product Strategy refinement task/,
   );
   assert.match(

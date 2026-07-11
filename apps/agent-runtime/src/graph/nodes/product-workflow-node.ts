@@ -114,7 +114,7 @@ export async function orchestratorAgentNode(
     state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
 
   if (state.requestAnalysis.business_model.length > 0) {
-    const isSupplement = (state.supplementAgentTypes?.length ?? 0) > 0;
+    const isSupplement = isSupplementWorkflow(state);
     knowledgeGraph = updateProductContextMetadata({
       knowledgeGraph,
       currentState: isSupplement ? "refining" : "initial",
@@ -160,7 +160,12 @@ export async function orchestratorAgentNode(
   });
   knowledgeGraph = updateProductContextMetadata({
     knowledgeGraph,
-    currentState: plan ? "building" : "initial",
+    currentState:
+      plan?.status === "supplement"
+        ? "refining"
+        : plan
+          ? "building"
+          : "initial",
     descriptionEntry: createOrchestratorDescriptionEntry(decision, plan),
   });
   writer?.({
@@ -345,7 +350,8 @@ async function executeExecutorAgentTask(
   });
   const nextKnowledgeGraph = updateProductContextMetadata({
     knowledgeGraph: patchedKnowledgeGraph,
-    currentState: "building",
+    currentState:
+      state.plan.status === "supplement" ? "refining" : "building",
     descriptionEntry: createExecutorDescriptionEntry(task, result),
   });
   // Executor 只输出本任务结果，知识图谱归档交给批次 barrier 处理。
@@ -442,7 +448,23 @@ function createOrchestratorDescriptionEntry(
     return `Orchestrator Agent routed this turn as ${decision.intent} and did not create an execution DAG.`;
   }
 
-  return `Orchestrator Agent routed this turn as ${decision.intent}, generated a ${plan.status} DAG with ${plan.tasks.length} executor tasks, and moved the product context into building.`;
+  const currentState =
+    plan.status === "supplement" ? "refining" : "building";
+  return `Orchestrator Agent routed this turn as ${decision.intent}, generated a ${plan.status} DAG with ${plan.tasks.length} executor tasks, and moved the product context into ${currentState}.`;
+}
+
+/**
+ * 判断当前输入是否是用户确认后的补充轮次。
+ */
+export function isSupplementWorkflow(
+  state: WorkflowGraphStateValue,
+): boolean {
+  return (
+    (state.supplementAgentTypes?.length ?? 0) > 0 ||
+    state.userInput.some((item) =>
+      /\[form answers - [^\]]+\]/i.test(item.content),
+    )
+  );
 }
 
 /**

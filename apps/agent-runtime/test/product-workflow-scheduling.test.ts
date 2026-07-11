@@ -8,6 +8,7 @@
  * - 验证无依赖任务会被放入同一并行批次
  * - 验证下游任务只在依赖任务完成后进入批次
  * - 验证同一 Executor 的多个 ready 任务按最早 sequence 串行执行
+ * - 验证表单恢复在没有指定 Executor 时仍被识别为 supplement
  *
  * Notes:
  * - 该测试只覆盖调度选择逻辑，不调用模型或 Executor Agent。
@@ -35,7 +36,10 @@ import {
 } from "../src/agents/product-workflow/orchestrator-agent/planner-subagent/agent";
 import { requireDelegatedPlannerPlan } from "../src/agents/product-workflow/orchestrator-agent/agent";
 import { getMissingRequiredSubagentError } from "../src/agents/common/run-agent-with-subagent";
-import { selectNextExecutorRouterTargets } from "../src/graph/nodes/product-workflow-node";
+import {
+  isSupplementWorkflow,
+  selectNextExecutorRouterTargets,
+} from "../src/graph/nodes/product-workflow-node";
 import type { WorkflowGraphStateValue } from "../src/graph/state";
 
 test("selects all ready executors for the next parallel batch", () => {
@@ -51,6 +55,21 @@ test("selects all ready executors for the next parallel batch", () => {
     "executor-product-strategy",
     "executor-toolkit",
   ]);
+});
+
+test("recognizes form-answer workflows as supplements without agent hints", () => {
+  const state = {
+    supplementAgentTypes: [],
+    userInput: [
+      {
+        index: 1,
+        type: "form",
+        content: "[form answers - proposal-decision] confirmed",
+      },
+    ],
+  } as WorkflowGraphStateValue;
+
+  assert.equal(isSupplementWorkflow(state), true);
 });
 
 test("fails when Orchestrator does not actually delegate to Planner", () => {

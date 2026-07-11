@@ -6,6 +6,7 @@
  *
  * Responsibilities:
  * - 验证完整根 JSON 可被正常解析
+ * - 验证 Markdown fenced JSON 不会触发昂贵的模型重试
  * - 验证带前后缀文本的完整 JSON 仍可被提取
  * - 验证截断根 JSON 不会退化解析内部对象
  *
@@ -20,6 +21,12 @@ import { parseJsonObject } from "../src/utils/json";
 test("parseJsonObject returns the full root JSON object", () => {
   assert.deepEqual(parseJsonObject('{"outer":{"inner":true}}'), {
     outer: { inner: true },
+  });
+});
+
+test("parseJsonObject accepts markdown fenced JSON", () => {
+  assert.deepEqual(parseJsonObject('```json\n{"status":"supplement"}\n```'), {
+    status: "supplement",
   });
 });
 
