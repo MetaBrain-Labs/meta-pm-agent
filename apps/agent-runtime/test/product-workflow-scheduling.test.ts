@@ -28,7 +28,11 @@ import {
 import {
   createFallbackPlan,
   normalizeTaskExecutionPlan,
-} from "../src/agents/product-workflow/planner-agent/agent";
+} from "../src/agents/product-workflow/orchestrator-agent/planner-subagent/plan";
+import {
+  scopeInitialDecisionPlan,
+  scopeSupplementPlan,
+} from "../src/agents/product-workflow/orchestrator-agent/planner-subagent/agent";
 import { selectNextExecutorRouterTargets } from "../src/graph/nodes/product-workflow-node";
 import type { WorkflowGraphStateValue } from "../src/graph/state";
 
@@ -320,7 +324,6 @@ test("creates parallel graph-operation fallback plan for broad MVP requests", ()
       "executor-toolkit",
       "executor-market-research",
       "executor-product-discovery",
-      "executor-product-execution",
       "executor-ai-shipping",
     ],
   );
@@ -337,7 +340,6 @@ test("creates parallel graph-operation fallback plan for broad MVP requests", ()
       ["task-01", "task-03"],
       ["task-01", "task-04"],
       ["task-04", "task-05"],
-      ["task-05", "task-06"],
     ],
   );
   assert.notEqual(
@@ -378,6 +380,104 @@ test("creates parallel graph-operation fallback plan for broad MVP requests", ()
   );
 });
 
+test("creates a scoped fallback DAG for dynamic confirmation answers", () => {
+  const plan = createFallbackPlan(
+    {
+      productContext: "Workspace: local test",
+      knowledgeGraph: createEmptyKnowledgeGraph(),
+      requestAnalysis: createCollaborativeDocumentRequestAnalysis(),
+      userInput: [
+        {
+          index: 1,
+          content:
+            "[form answers - critique-result-001]\n- Sync: Last-Write-Wins\n- Concurrent editors: Up to 10",
+          type: "request",
+        },
+      ],
+      supplementAgentTypes: [
+        "executor-product-strategy",
+        "executor-data-analytics",
+        "executor-ai-shipping",
+      ],
+    },
+    "Planner subagent tool call failed schema validation",
+  );
+
+  assert.equal(plan.status, "supplement");
+  assert.deepEqual(
+    plan.tasks.map((task) => task.assigned_agent),
+    [
+      "executor-product-strategy",
+      "executor-data-analytics",
+      "executor-ai-shipping",
+    ],
+  );
+  assert.ok(
+    plan.tasks.every((task) => task.task_id.startsWith("supplement-task-")),
+  );
+  assert.ok(
+    plan.tasks.every((task) =>
+      task.description.includes("do not repeat the baseline DAG"),
+    ),
+  );
+  assertNoDagCycle(plan);
+});
+
+test("scopes a model-generated supplement plan to authorized agents", () => {
+  const scoped = scopeSupplementPlan(
+    createPlan([
+      createTask("task-01", 1, "executor-product-strategy", []),
+      createTask("task-02", 2, "executor-product-discovery", ["task-01"]),
+      createTask("task-03", 3, "executor-data-analytics", ["task-02"]),
+      createTask("task-04", 4, "executor-ai-shipping", ["task-03"]),
+    ]),
+    ["executor-product-strategy", "executor-data-analytics"],
+  );
+
+  assert.equal(scoped.status, "supplement");
+  assert.deepEqual(
+    scoped.tasks.map((task) => [
+      task.task_id,
+      task.assigned_agent,
+      task.depends_on,
+    ]),
+    [
+      ["supplement-task-01", "executor-product-strategy", []],
+      ["supplement-task-02", "executor-data-analytics", []],
+    ],
+  );
+  assert.deepEqual(scoped.dag.nodes, [
+    "supplement-task-01",
+    "supplement-task-02",
+  ]);
+});
+
+test("defers detailed execution from an unresolved initial DAG", () => {
+  const scoped = scopeInitialDecisionPlan(
+    createPlan([
+      createTask("task-01", 1, "executor-product-strategy", []),
+      createTask("task-02", 2, "executor-product-discovery", ["task-01"]),
+      createTask("task-03", 3, "executor-product-execution", ["task-02"]),
+      createTask("task-04", 4, "executor-ai-shipping", ["task-03"]),
+    ]),
+    {
+      productContext: "Workspace: local test",
+      knowledgeGraph: createEmptyKnowledgeGraph(),
+      requestAnalysis: createCollaborativeDocumentRequestAnalysis(),
+      userInput: [{ index: 1, content: "Design the MVP", type: "request" }],
+    },
+  );
+
+  assert.deepEqual(
+    scoped.tasks.map((task) => [task.task_id, task.depends_on]),
+    [
+      ["task-01", []],
+      ["task-02", ["task-01"]],
+      ["task-04", ["task-02"]],
+    ],
+  );
+});
+
 test("keeps document approval fallback focused and acyclic", () => {
   const plan = createFallbackPlan(
     {
@@ -403,7 +503,6 @@ test("keeps document approval fallback focused and acyclic", () => {
       "executor-toolkit",
       "executor-market-research",
       "executor-product-discovery",
-      "executor-product-execution",
       "executor-ai-shipping",
     ],
   );

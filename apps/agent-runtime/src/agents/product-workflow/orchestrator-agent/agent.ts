@@ -244,6 +244,7 @@ function createOrchestratorPayload(input: OrchestratorAgentInput) {
       input.productContext?.trim() || "No product context provided.",
     request_analysis: input.requestAnalysis,
     user_input: input.userInput,
+    supplement_agents: input.supplementAgentTypes ?? [],
     graph_stats: {
       current_state: input.knowledgeGraph.current_state ?? null,
       description: input.knowledgeGraph.description ?? "",
@@ -265,6 +266,7 @@ function createOrchestratorPayload(input: OrchestratorAgentInput) {
       product_knowledge_graph: compactGraph,
       request_analysis: input.requestAnalysis,
       user_input: input.userInput,
+      supplement_agents: input.supplementAgentTypes ?? [],
     }),
   };
 }
@@ -393,9 +395,10 @@ function hasMeaningfulProjectContext(input: OrchestratorAgentInput): boolean {
 }
 
 function isWorkflowSupplementInput(input: OrchestratorAgentInput): boolean {
-  return input.userInput.some((item) =>
-    /\[form answers - (product-workflow-confirmation|.*-proposal-decision|executor-blocker-.*)\]/i.test(
-      item.content,
-    ),
+  return (
+    Boolean(input.supplementAgentTypes?.length) ||
+    input.userInput.some((item) =>
+      /\[form answers - [^\]]+\]/i.test(item.content),
+    )
   );
 }

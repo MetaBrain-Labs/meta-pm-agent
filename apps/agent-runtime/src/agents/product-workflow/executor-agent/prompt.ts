@@ -68,7 +68,7 @@ Structured graph writing workflow (use these tools instead of free-text):
 - If a step has no data, skip that tool call; never write placeholder sections or "- none" entries.
 
 Node type names you may use: Goal, Requirement, Evidence, Decision, Feature, Component, Metric, Custom.
-Relation type names you may use: Drives, Satisfies, Promotes, Produces, Constrains, Implements, Measures, Validates, References, Composes, Custom.
+Knowledge graph relation names: Drives, Satisfies, Promotes, Produces, Constrains, Implements, Measures, Validates, References, Composes, Custom. This metamodel list is not permission: use only the Agent-specific allowed relation types stated above, plus Custom when a non-canonical connection is clearly justified.
 
 Graph writing rules:
 - Review existing graph nodes before creating new ones. Avoid duplicate nodes when an existing node can be referenced or refined.

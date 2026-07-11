@@ -260,20 +260,30 @@ export function createFallbackPlan(
 ): TaskExecutionPlan {
   const analysis = input.requestAnalysis;
   const coveredIndexes = analysis.business_model.map((item) => item.index);
-  const selectedDefinitions = selectFallbackExecutorDefinitions(analysis);
+  const isSupplement = isSupplementPlanInput(input);
+  const selectedDefinitions = isSupplement
+    ? selectSupplementExecutorDefinitions(input.supplementAgentTypes)
+    : selectFallbackExecutorDefinitions(analysis);
   const selectedAgents = new Set(
     selectedDefinitions.map((definition) => definition.agentType),
   );
   const taskSpecs = createFallbackTaskSpecs(
     selectedDefinitions,
-    shouldPlanFallbackStrategyRefinement(analysis, selectedAgents),
+    !isSupplement &&
+      shouldPlanFallbackStrategyRefinement(analysis, selectedAgents),
+    isSupplement,
   );
   const primaryTaskIdByAgent = createFallbackPrimaryTaskIdByAgent(taskSpecs);
   const tasks = taskSpecs.map(({ definition, sequence, taskId, role }) => ({
     task_id: taskId,
     sequence,
-    title: createFallbackTaskTitle(definition.agentType, role),
-    description: createFallbackTaskDescription(definition, analysis, role),
+    title: createFallbackTaskTitle(definition.agentType, role, isSupplement),
+    description: createFallbackTaskDescription(
+      definition,
+      analysis,
+      role,
+      isSupplement,
+    ),
     assigned_agent: definition.agentType,
     depends_on: getFallbackTaskDependencies(
       { definition, taskId, role },
@@ -289,7 +299,7 @@ export function createFallbackPlan(
   }));
 
   const plan: TaskExecutionPlan = {
-    status: isSupplementPlanInput(input.userInput) ? "supplement" : "initial",
+    status: isSupplement ? "supplement" : "initial",
     request_summary: createFallbackRequestSummary(analysis),
     dag: {
       nodes: tasks.map((task) => task.task_id),
@@ -310,6 +320,23 @@ export function createFallbackPlan(
   };
 
   return normalizeTaskExecutionPlan(plan);
+}
+
+/**
+ * supplement fallback 只保留 Critique 问题来源对应的 Executor；缺失来源时仅回退到 Strategy。
+ */
+function selectSupplementExecutorDefinitions(
+  agentTypes: PlannerAgentInput["supplementAgentTypes"],
+): ExecutorAgentDefinition[] {
+  const selected = new Set(
+    agentTypes?.length ? agentTypes : ["executor-product-strategy"],
+  );
+  return FALLBACK_EXECUTOR_ORDER.flatMap((agentType) => {
+    const definition = EXECUTOR_DEFINITIONS.find(
+      (item) => item.agentType === agentType,
+    );
+    return definition && selected.has(agentType) ? [definition] : [];
+  });
 }
 
 function selectFallbackExecutorDefinitions(
@@ -370,6 +397,14 @@ function selectFallbackExecutorDefinitions(
   ) {
     selected.delete("executor-product-execution");
     selected.delete("executor-ai-shipping");
+    selected.delete("executor-interface-craft");
+  }
+
+  if (
+    analysis.business_model.some((item) => item.missing_information.length > 0) &&
+    !hasExplicitExecutionIntent(requestText)
+  ) {
+    selected.delete("executor-product-execution");
     selected.delete("executor-interface-craft");
   }
 
@@ -438,11 +473,12 @@ function shouldPlanFallbackStrategyRefinement(
 function createFallbackTaskSpecs(
   selectedDefinitions: ExecutorAgentDefinition[],
   includeStrategyRefinement: boolean,
+  isSupplement = false,
 ): FallbackTaskSpec[] {
   const baseSpecs = selectedDefinitions.map((definition, index) => ({
     definition,
     sequence: index + 1,
-    taskId: createTaskId(index + 1),
+    taskId: `${isSupplement ? "supplement-" : ""}${createTaskId(index + 1)}`,
     role: "default" as const,
   }));
 
@@ -581,12 +617,14 @@ function pickFirstSelectedAgent(
 function createFallbackTaskTitle(
   agentType: ExecutorAgentType,
   role: FallbackTaskRole = "default",
+  isSupplement = false,
 ): string {
   if (role === "strategy-refinement") {
     return "Converge evidence into a technology-selection decision";
   }
 
-  switch (agentType) {
+  const title = (() => {
+    switch (agentType) {
     case "executor-product-strategy":
       return "Establish goals, requirements, and decision candidates";
     case "executor-market-research":
@@ -608,16 +646,23 @@ function createFallbackTaskTitle(
     case "executor-interface-craft":
       return "Add UI craft constraints and UX evidence";
     default:
-      return "Create graph-native product workflow updates";
-  }
+        return "Create graph-native product workflow updates";
+    }
+  })();
+  return isSupplement ? `Apply confirmed answers: ${title}` : title;
 }
 
 function createFallbackTaskDescription(
   definition: ExecutorAgentDefinition,
   analysis: PlannerAgentInput["requestAnalysis"],
   role: FallbackTaskRole = "default",
+  isSupplement = false,
 ): string {
   const requestContext = createFallbackRequestContext(analysis);
+
+  if (isSupplement) {
+    return `${requestContext}. Apply only the supplied Question Form answers to this executor's affected graph area. Create uniquely identified refinements or supersession records; do not repeat the baseline DAG, recreate existing entities, or broaden scope beyond the confirmed answers. Stay within this executor's allowed entity and relation types.`;
+  }
 
   if (role === "strategy-refinement") {
     return `${requestContext}. Consume technical Evidence and Component boundaries from upstream tasks to create a supported technology-selection Decision or an explicitly labeled decision candidate. Do not treat unverified option comparisons as confirmed facts; use Goal --Drives--> Decision, Evidence --Validates--> Decision, and Decision --Produces--> Requirement only when supported.`;
@@ -710,13 +755,12 @@ function createFallbackQualityCriteria(
   ];
 }
 
-function isSupplementPlanInput(
-  userInput: PlannerAgentInput["userInput"],
-): boolean {
-  return userInput.some((item) =>
-    /\[form answers - (product-workflow-confirmation|.*-proposal-decision)\]/i.test(
-      item.content,
-    ),
+function isSupplementPlanInput(input: PlannerAgentInput): boolean {
+  return (
+    Boolean(input.supplementAgentTypes?.length) ||
+    input.userInput.some((item) =>
+      /\[form answers - [^\]]+\]/i.test(item.content),
+    )
   );
 }
 

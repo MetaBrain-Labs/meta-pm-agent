@@ -130,6 +130,59 @@ test("skips invalid relation directions and allows corrected resubmission", asyn
   assert.deepEqual(corrected.items, [{ id: "REL-COMPONENT" }]);
 });
 
+test("skips entity and relation types outside the executor profile", async () => {
+  const state = createKnowledgeGraph();
+  const tools = createKnowledgeGraphTools(state, {
+    allowedEntityTypes: ["Evidence", "Metric", "Component"],
+    allowedRelationTypes: ["Validates", "Measures", "Implements"],
+  });
+  const addNodes = getTool(tools, "kg_file_add_nodes");
+  const addRelations = getTool(tools, "kg_file_add_relations");
+  const addDecisions = getTool(tools, "kg_file_add_decisions");
+
+  const nodeResult = JSON.parse(
+    String(
+      await addNodes.invoke({
+        nodes: [
+          createTypedNode("M-001", "Metric"),
+          createTypedNode("R-001", "Requirement"),
+        ],
+      }),
+    ),
+  ) as ToolResult;
+  assert.deepEqual(nodeResult.items, [{ id: "M-001" }]);
+  assert.deepEqual(nodeResult.skipped, [
+    { id: "R-001", reason: "unauthorized_entity_type:Requirement" },
+  ]);
+
+  const relationResult = JSON.parse(
+    String(
+      await addRelations.invoke({
+        relations: [
+          createTypedRelation("REL-REF", "References", "M-001", "G-001"),
+          createTypedRelation("REL-MEASURE", "Measures", "M-001", "G-001"),
+        ],
+      }),
+    ),
+  ) as ToolResult;
+  assert.deepEqual(relationResult.items, [{ id: "REL-MEASURE" }]);
+  assert.deepEqual(relationResult.skipped, [
+    { id: "REL-REF", reason: "unauthorized_relation_type:References" },
+  ]);
+
+  const decisionResult = JSON.parse(
+    String(
+      await addDecisions.invoke({
+        decisions: [{ id: "D-001", text: "Unauthorized decision" }],
+      }),
+    ),
+  ) as ToolResult;
+  assert.equal(decisionResult.count, 0);
+  assert.deepEqual(decisionResult.skipped, [
+    { id: "D-001", reason: "unauthorized_entity_type:Decision" },
+  ]);
+});
+
 interface ToolResult {
   count: number;
   items: Array<{ id: string }>;

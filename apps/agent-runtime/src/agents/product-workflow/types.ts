@@ -22,6 +22,7 @@ import type {
   TaskExecutionPlan,
 } from "@repo/shared";
 import type { UserInputRecord } from "../request/user-input";
+import type { ExecutorAgentType } from "./executor-agent/definitions";
 
 /**
  * 产品工作流的公共输入，贯穿 Planner 与 Executor。
@@ -43,6 +44,7 @@ export interface WorkflowResumeContext {
   knowledgeGraph?: ProductKnowledgeGraph | null;
   rerunTaskIds?: string[];
   forceSupplementPlan?: boolean;
+  supplementAgentTypes?: ExecutorAgentType[];
 }
 
 /**
@@ -50,6 +52,7 @@ export interface WorkflowResumeContext {
  */
 export interface PlannerAgentInput extends ProductWorkflowInput {
   knowledgeGraph: ProductKnowledgeGraph;
+  supplementAgentTypes?: ExecutorAgentType[];
 }
 
 /**
@@ -57,6 +60,7 @@ export interface PlannerAgentInput extends ProductWorkflowInput {
  */
 export interface OrchestratorAgentInput extends ProductWorkflowInput {
   knowledgeGraph: ProductKnowledgeGraph;
+  supplementAgentTypes?: ExecutorAgentType[];
 }
 
 /**
@@ -79,6 +83,7 @@ export interface CritiqueAgentInput {
   plan: TaskExecutionPlan;
   executorResults: ExecutorAgentResult[];
   knowledgeGraph: ProductKnowledgeGraph;
+  userInput?: UserInputRecord[];
   signal?: AbortSignal;
 }
 

@@ -225,7 +225,8 @@ function parseProposalQuestionNumericInterval(
   const normalized = option
     .trim()
     .replace(/\s+/g, "")
-    .replace(/[–—~～]/g, "-");
+    .replace(/[–—~～]/g, "-")
+    .toLowerCase();
   const suffix = "(?:人|用户|个)?";
   const range = normalized.match(
     new RegExp(`^(\\d+(?:\\.\\d+)?)(?:-|至|到)(\\d+(?:\\.\\d+)?)${suffix}$`),
@@ -233,7 +234,7 @@ function parseProposalQuestionNumericInterval(
   if (range) return { min: Number(range[1]), max: Number(range[2]) };
 
   const atMost = normalized.match(
-    new RegExp(`^(?:≤|<=|不超过|最多)(\\d+(?:\\.\\d+)?)${suffix}$`),
+    new RegExp(`^(?:≤|<=|不超过|最多|upto)(\\d+(?:\\.\\d+)?)${suffix}$`),
   ) ?? normalized.match(
     new RegExp(`^(\\d+(?:\\.\\d+)?)(?:及)?以下${suffix}$`),
   );
@@ -245,6 +246,13 @@ function parseProposalQuestionNumericInterval(
     new RegExp(`^(\\d+(?:\\.\\d+)?)(?:及)?以上${suffix}$`),
   );
   if (atLeast) return { min: Number(atLeast[1]), max: Number.POSITIVE_INFINITY };
+
+  const moreThan = normalized.match(
+    new RegExp(`^(?:>|morethan)(\\d+)${suffix}$`),
+  );
+  if (moreThan) {
+    return { min: Number(moreThan[1]) + 1, max: Number.POSITIVE_INFINITY };
+  }
 
   return null;
 }

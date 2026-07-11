@@ -361,7 +361,10 @@ test("extracts streamed raw task tool call arguments from additional kwargs", ()
   assert.equal(calls.length, 1);
   assert.equal(calls[0].toolCallId, "call_00_streamed_task");
   assert.equal(calls[0].subagentType, "pre-orchestrator");
-  assert.match(calls[0].description, /设计一个文档协同工具/);
+  assert.match(
+    String(calls[0].input.description),
+    /设计一个文档协同工具/,
+  );
 });
 
 /**

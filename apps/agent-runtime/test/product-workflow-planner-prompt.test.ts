@@ -147,11 +147,11 @@ test("orchestrator planner subagent prompt satisfies json response format", () =
   assert.match(ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT, /json/i);
   assert.match(
     ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
-    /ready_for_planning/,
+    /The JSON object must include: status, request_summary, dag, tasks, assumptions/,
   );
   assert.match(
     ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
-    /recommended_plan_type/,
+    /status must be "initial" for the first DAG and "supplement"/,
   );
   assert.match(
     ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
@@ -211,6 +211,10 @@ test("critique agent prompt stays compact and does not request full graph copies
   assert.match(
     CRITIQUE_AGENT_PROMPT,
     /Rank questions by downstream graph impact/,
+  );
+  assert.match(
+    CRITIQUE_AGENT_PROMPT,
+    /Never ask a proposal question that the current user_input already answered/,
   );
   assert.doesNotMatch(
     CRITIQUE_AGENT_PROMPT,

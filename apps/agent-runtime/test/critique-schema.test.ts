@@ -119,4 +119,13 @@ test("rejects overlapping numeric ranges in single-choice questions", () => {
 
   assert.equal(overlapping.success, false);
   assert.equal(nonOverlapping.success, true);
+
+  const overlappingEnglish = ProductWorkflowProposalQuestionSchema.safeParse({
+    id: "concurrency-en",
+    label: "Expected peak concurrent editors",
+    type: "radio",
+    options: ["Up to 10", "Up to 50", "Up to 100", "More than 100"],
+    priority: 80,
+  });
+  assert.equal(overlappingEnglish.success, false);
 });

@@ -512,7 +512,7 @@ test("critique validation rejects invalid relations committed by the current tas
   assert.deepEqual(report.rejected_task_ids, ["task-01"]);
   assert.equal(
     report.executor_update_records[0]?.commit_status,
-    "rejected",
+    "committed",
   );
   assert.equal(report.issues[0]?.code, "INVALID_RELATION_DIRECTION");
 });

@@ -82,7 +82,11 @@ type ExecutorUpdateRecord = {
   created_relation_ids: string[];
   committed_entity_ids: string[];
   committed_relation_ids: string[];
-  commit_status: "committed" | "rejected" | "conflict" | "not_attempted";
+  commit_status:
+    | "committed"
+    | "partial"
+    | "not_committed"
+    | "not_attempted";
   validation_errors: CritiqueValidationIssue[];
 };
 
@@ -115,6 +119,11 @@ function createCritiqueAgentPayload(input: CritiqueAgentInput) {
       800,
     ),
     request_analysis: compactRequestAnalysisForReview(input.requestAnalysis),
+    user_input: (input.userInput ?? []).map((item) => ({
+      index: item.index,
+      type: item.type,
+      content: truncateText(item.content, 300),
+    })),
     planner_summary: compactPlanForReview(input.plan),
     final_graph_summary: createFinalGraphSummary(input.knowledgeGraph),
     validation_report: validationReport,
@@ -339,7 +348,6 @@ export function createCritiqueValidationReport(
 
     const commitStatus = getExecutorCommitStatus({
       result,
-      taskIssues,
       committedItemCount: commit.committedItemCount,
       totalItemCount: commit.totalItemCount,
     });
@@ -378,7 +386,6 @@ export function createCritiqueValidationReport(
     const record = records.find((item) => item.task_id === issue.task_id);
     if (!record) continue;
     record.validation_errors.push(issue);
-    if (issue.severity === "error") record.commit_status = "rejected";
   }
 
   const issueTaskIds = new Set(
@@ -857,25 +864,18 @@ function countCommittedAuxiliaryItems(
  */
 function getExecutorCommitStatus({
   result,
-  taskIssues,
   committedItemCount,
   totalItemCount,
 }: {
   result: ExecutorAgentResult;
-  taskIssues: CritiqueValidationIssue[];
   committedItemCount: number;
   totalItemCount: number;
 }): ExecutorUpdateRecord["commit_status"] {
   if (!result.quality_result.passed || totalItemCount === 0) {
     return "not_attempted";
   }
-  if (taskIssues.some((issue) => issue.code.includes("DUPLICATE"))) {
-    return "conflict";
-  }
-  if (taskIssues.some((issue) => issue.severity === "error")) {
-    return "rejected";
-  }
-  return committedItemCount >= totalItemCount ? "committed" : "rejected";
+  if (committedItemCount >= totalItemCount) return "committed";
+  return committedItemCount > 0 ? "partial" : "not_committed";
 }
 
 /**

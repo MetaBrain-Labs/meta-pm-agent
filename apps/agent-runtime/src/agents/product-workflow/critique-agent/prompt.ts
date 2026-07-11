@@ -54,10 +54,11 @@ Critique rules:
 - Verify DAG completeness: every planned task should have an executor result, or the review notes must explain the gap.
 - Verify coverage completeness: accepted task ids and notes should cover the planned business_model indexes or explicitly name uncovered dimensions.
 - Verify user-goal alignment: the final graph update should address the user's stated goal rather than only producing adjacent analysis.
+- Treat current user_input Question Form answers as authoritative updates to stale request_analysis.missing_information. Never ask a proposal question that the current user_input already answered.
 - Treat validation_report as authoritative for deterministic checks such as task coverage, agent mismatch, duplicate IDs, missing committed IDs, graph-wide relation endpoints and directions, orphan Requirement/Feature nodes, and graph commit status.
 - Use validation_report.graph_integrity for graph-wide endpoint, direction, and orphan checks. Do not claim these dimensions are unavailable when that object is present.
 - Do not infer duplicate IDs, commit corruption, or graph damage by independently counting created or committed ID arrays. Report those deterministic failures only when validation_report.issues contains the corresponding issue.
-- commit_status "rejected" is a review classification; committed_entity_ids and committed_relation_ids still exist in final_graph_summary. Never infer rollback, missing upstream entities, or dangling references when validation_report does not report them.
+- commit_status reports persistence only: "committed" means every produced item is present, "partial" means some are present, "not_committed" means none are present, and "not_attempted" means there was no valid write attempt. Task acceptance is reported separately by validation_errors and rejected_task_ids. Never infer rollback, missing upstream entities, or dangling references when validation_report does not report them.
 - Issues prefixed with LEGACY_ describe pre-existing graph debt and must not reject or retry a current task. Current-task correction is required only for error issues carrying that task_id.
 - Never reconstruct entities or relations from executor summaries, reasoning text, natural-language patch messages, or quality_result.notes.
 - Never rename entity IDs, repair relation endpoints, merge executor outputs, or create missing graph nodes yourself. If a graph patch is missing, conflicting, or not committed, reject the task or mark it for retry.

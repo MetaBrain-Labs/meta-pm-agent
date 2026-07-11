@@ -25,6 +25,10 @@ import {
 } from "@repo/shared";
 import { getFormAnswerId } from "../../utils/form-parser";
 import type { WorkflowResumeContext } from "../product-workflow/types";
+import {
+  isExecutorAgentType,
+  type ExecutorAgentType,
+} from "../product-workflow/executor-agent/definitions";
 
 const EXECUTOR_BLOCKER_FORM_PREFIX = "executor-blocker-";
 const PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID = "product-workflow-confirmation";
@@ -126,16 +130,23 @@ function createWorkflowResumeContext({
     !formId && plan.status === "supplement"
       ? removeExecutorResultsForPlanTasks(executorResults, plan)
       : executorResults;
+  const rerunTaskIds = formId
+    ? inferRerunTaskIds(formId, executorResults, productWorkflow)
+    : inferContinuationRerunTaskIds(plan, productWorkflow);
+  const forceSupplementPlan = formId
+    ? isPlannerConfirmationFormId(formId, productWorkflow)
+    : false;
 
   return {
     requestAnalysis,
     plan,
     executorResults: continuationExecutorResults,
     knowledgeGraph: knowledgeGraph ?? null,
-    rerunTaskIds: formId
-      ? inferRerunTaskIds(formId, executorResults, productWorkflow)
-      : inferContinuationRerunTaskIds(plan, productWorkflow),
-    forceSupplementPlan: formId ? isPlannerConfirmationFormId(formId) : false,
+    rerunTaskIds,
+    forceSupplementPlan,
+    supplementAgentTypes: forceSupplementPlan
+      ? inferSupplementAgentTypes(rerunTaskIds, plan)
+      : [],
   };
 }
 
@@ -168,7 +179,7 @@ function inferRerunTaskIds(
     ]);
   }
 
-  if (formId === PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID) {
+  if (isPlannerConfirmationFormId(formId, productWorkflow)) {
     return mergeTaskIds([
       ...inferProductWorkflowRerunTaskIds(productWorkflow),
       ...inferOpenQuestionTaskIds(executorResults),
@@ -230,11 +241,33 @@ function mergeTaskIds(taskIds: string[]): string[] {
 /**
  * Planner 汇总后的问题表单答案需要重新进入 Planner，生成补充 DAG。
  */
-function isPlannerConfirmationFormId(formId: string): boolean {
+function isPlannerConfirmationFormId(
+  formId: string,
+  productWorkflow: ProductWorkflowResult | null,
+): boolean {
   return (
     formId === PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID ||
-    formId.endsWith("-proposal-decision")
+    formId.endsWith("-proposal-decision") ||
+    productWorkflow?.confirmation_id === formId
   );
+}
+
+/**
+ * 将 Critique 问题来源任务映射回受影响的 Executor，供 supplement Planner 限定范围。
+ */
+function inferSupplementAgentTypes(
+  taskIds: string[],
+  plan: NonNullable<WorkflowResumeContext["plan"]>,
+): ExecutorAgentType[] {
+  const taskIdSet = new Set(taskIds);
+  return [
+    ...new Set(
+      plan.tasks
+        .filter((task) => taskIdSet.has(task.task_id))
+        .map((task) => task.assigned_agent)
+        .filter(isExecutorAgentType),
+    ),
+  ];
 }
 
 /**

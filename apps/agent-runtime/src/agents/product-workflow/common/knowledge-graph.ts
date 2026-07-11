@@ -23,6 +23,7 @@ Product knowledge graph metamodel:
 - Every output must preserve traceability from goals to requirements, decisions, features, components, and metrics whenever the available evidence supports it.
 - Do not invent confirmed business facts. Put uncertainty into open_questions or risks.
 - Runtime risks and open_questions are archived as Risk and OpenQuestion nodes when the graph is persisted.
+- During Executor tool execution, risks and open_questions are auxiliary records and are not valid relation endpoints. Do not create relations to their IDs.
 - Treat the current knowledge graph state supplied in the payload as the source of truth.
 `;
 

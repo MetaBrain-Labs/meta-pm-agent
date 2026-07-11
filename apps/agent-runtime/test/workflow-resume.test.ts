@@ -69,6 +69,30 @@ test("restores final confirmation context for executors with open questions", ()
   assert.deepEqual(context?.rerunTaskIds, ["task-01"]);
 });
 
+test("restores dynamic Critique confirmation as a scoped supplement", () => {
+  const messages = createMessages(
+    "[form answers - critique-result-001]\n- Sync strategy: Last-Write-Wins",
+  );
+  messages.splice(
+    messages.length - 1,
+    0,
+    message(
+      "a5",
+      "assistant",
+      createProductWorkflowBlock("critique-result-001"),
+    ),
+  );
+
+  const context = createWorkflowResumeContextFromMessages({ messages });
+
+  assert.equal(context?.forceSupplementPlan, true);
+  assert.deepEqual(context?.rerunTaskIds, ["task-02", "task-01"]);
+  assert.deepEqual(context?.supplementAgentTypes, [
+    "executor-product-strategy",
+    "executor-product-execution",
+  ]);
+});
+
 test("restores latest supplement DAG for continue intent", () => {
   const messages = createMessages("继续");
   messages.splice(
@@ -168,10 +192,12 @@ function createSupplementTaskExecutionBlock(): string {
   })}\n</task-execution>`;
 }
 
-function createProductWorkflowBlock(): string {
+function createProductWorkflowBlock(
+  confirmationId = "product-workflow-confirmation",
+): string {
   const result: ProductWorkflowResult = {
     status: "pending_user_confirmation",
-    confirmation_id: "product-workflow-confirmation",
+    confirmation_id: confirmationId,
     request_summary: "Build MVP",
     planner: {
       status: "initial",

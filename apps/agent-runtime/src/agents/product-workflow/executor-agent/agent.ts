@@ -136,7 +136,11 @@ export async function* streamExecutorAgent(
         attempt > 1
           ? getExecutorRetryToolNames()
           : getExecutorDefaultToolNames(definition.agentType),
-        { knowledgeGraph: toolKnowledgeGraph },
+        {
+          knowledgeGraph: toolKnowledgeGraph,
+          allowedEntityTypes: definition.allowedEntityTypes,
+          allowedRelationTypes: definition.allowedRelationTypes,
+        },
       );
       const textGen = runTextAgent({
         agentType: definition.agentType,

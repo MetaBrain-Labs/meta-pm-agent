@@ -89,6 +89,10 @@ const AGENT_TOOL_ACCESS: Record<string, ReadonlySet<AgentRuntimeTool>> = {
 interface CreateToolsForAgentOptions {
   /** 当前产品知识图谱状态对象，工具调用会直接变更该引用。 */
   knowledgeGraph?: ProductKnowledgeGraph;
+  /** 当前 Executor Profile 允许创建的实体类型。 */
+  allowedEntityTypes?: readonly ProductKnowledgeGraph["entities"][number]["type"][];
+  /** 当前 Executor Profile 允许创建的关系类型。 */
+  allowedRelationTypes?: readonly ProductKnowledgeGraph["relations"][number]["type"][];
 }
 
 /**
@@ -114,7 +118,10 @@ export function createToolsForAgent(
     )
   ) {
     tools.push(
-      ...createKnowledgeGraphTools(options.knowledgeGraph).filter(
+      ...createKnowledgeGraphTools(options.knowledgeGraph, {
+        allowedEntityTypes: options.allowedEntityTypes,
+        allowedRelationTypes: options.allowedRelationTypes,
+      }).filter(
         (toolItem) =>
           enabledToolSet.has(toolItem.name as AgentRuntimeTool) &&
           allowedTools.has(toolItem.name as AgentRuntimeTool),
