@@ -159,6 +159,8 @@ function createWorkflowResumeContext({
     knowledgeGraph: resolvedKnowledgeGraph ?? null,
     rerunTaskIds,
     forceSupplementPlan,
+    answeredOpenQuestionIds,
+    productWorkflow,
     supplementAgentTypes: forceSupplementPlan
       ? inferSupplementAgentTypes(rerunTaskIds, plan)
       : [],

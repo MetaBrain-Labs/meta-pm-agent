@@ -123,6 +123,11 @@ test("restores dynamic Critique confirmation as a scoped supplement", () => {
     "executor-product-strategy",
     "executor-product-execution",
   ]);
+  assert.deepEqual(context?.answeredOpenQuestionIds, [
+    "task-01-oq",
+    "task-01-oq-2",
+  ]);
+  assert.equal(context?.productWorkflow?.confirmation_id, "critique-result-001");
   assert.deepEqual(context?.executorResults?.[0]?.open_questions, []);
   assert.deepEqual(
     context?.knowledgeGraph?.open_questions.map((question) => question.id),

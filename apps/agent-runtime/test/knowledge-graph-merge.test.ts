@@ -13,6 +13,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type {
+  CritiqueAgentOutput,
   ExecutorAgentResult,
   ProductKnowledgeGraph,
   RequestAnalysis,
@@ -21,6 +22,7 @@ import type {
 } from "@repo/shared";
 import {
   compactTaskSemanticUpdates,
+  composeProductWorkflowResult,
   createCritiqueValidationReport,
 } from "../src/agents/product-workflow/critique-agent/agent";
 import { hasStructuredGraphItems } from "../src/agents/product-workflow/executor-agent/agent";
@@ -141,7 +143,7 @@ test("critique validation rejects executor boundary violations", () => {
 test("critique validation rejects a task that omits its required blocking question", () => {
   const task = {
     ...createTask("task-01", 1, "executor-product-discovery"),
-    required_open_question_ids: ["OQ-SCALE"],
+    required_open_question_count: 1,
   };
   const requirement = createRequirement(
     "R-001",
@@ -206,7 +208,7 @@ test("critique validation rejects a task that omits its required blocking questi
       {
         ...result,
         open_questions: [
-          { id: "OQ-SCALE", text: "Expected concurrency?", blocking: true },
+          { id: "OQ-runtime-allocated", text: "Expected concurrency?", blocking: true },
         ],
       },
     ],
@@ -216,11 +218,200 @@ test("critique validation rejects a task that omits its required blocking questi
   assert.deepEqual(missing.rejected_task_ids, [task.task_id]);
   assert.equal(
     missing.issues.some(
-      (issue) => issue.code === "MISSING_REQUIRED_BLOCKING_QUESTION",
+      (issue) => issue.code === "MISSING_REQUIRED_BLOCKING_QUESTIONS",
     ),
     true,
   );
   assert.deepEqual(present.rejected_task_ids, []);
+});
+
+test("critique composition keeps runtime validation and graph counts authoritative", () => {
+  const task = createTask("task-01", 1, "executor-product-strategy");
+  const goal = createGoal("G-001");
+  const requirement = createRequirement(
+    "R-001",
+    task.task_id,
+    "Confirmed requirement",
+    "The user confirmed this product requirement.",
+  );
+  const relation = createRelation(
+    "REL-001",
+    requirement.id,
+    goal.id,
+    task.task_id,
+    "The requirement references the product goal.",
+  );
+  const executorResult: ExecutorAgentResult = {
+    task_id: task.task_id,
+    agent_type: task.assigned_agent,
+    focus_layer: "Requirement",
+    summary: "Created a confirmed requirement.",
+    entities: [requirement],
+    relations: [relation],
+    decisions: [],
+    risks: [],
+    open_questions: [],
+    quality_result: { passed: true, notes: "ok" },
+  };
+  const graph = createGraph({
+    entities: [goal, requirement],
+    relations: [relation],
+  });
+  const plan = {
+    status: "supplement" as const,
+    request_summary: "Confirm the requirement.",
+    dag: { nodes: [task.task_id], edges: [] },
+    tasks: [task],
+    assumptions: [],
+  };
+  const modelReview: CritiqueAgentOutput = {
+    status: "completed",
+    confirmation_id: "review-1",
+    request_summary: "Confirm the requirement.",
+    review: {
+      accepted_task_ids: ["invented-task"],
+      rejected_task_ids: [],
+      retry_task_ids: [],
+      issues: [],
+      notes: "ok",
+    },
+    product_context_update: "Requirement confirmed.",
+    knowledge_graph_review: {
+      graph_ref: { entity_count: 999, relation_count: 999 },
+      accepted_task_ids: ["invented-task"],
+      rejected_task_ids: [],
+      retry_task_ids: [],
+      issues: [],
+      notes: ["ok"],
+    },
+    proposal_questions: [],
+    confirmation_message: "Complete.",
+  };
+
+  const result = composeProductWorkflowResult(
+    {
+      requestAnalysis: createRequestAnalysis(),
+      plan,
+      executorResults: [executorResult],
+      knowledgeGraph: graph,
+    },
+    modelReview,
+  );
+
+  assert.deepEqual(result.review.accepted_task_ids, [task.task_id]);
+  assert.deepEqual(result.knowledge_graph_review?.graph_ref, {
+    entity_count: 2,
+    relation_count: 1,
+  });
+});
+
+test("critique validation warns when a task patch exceeds the soft ceiling", () => {
+  const task = createTask("task-01", 1, "executor-product-strategy");
+  const entities = Array.from({ length: 9 }, (_, index) =>
+    createRequirement(
+      `R-${index + 1}`,
+      task.task_id,
+      `Requirement ${index + 1}`,
+      `Requirement ${index + 1} description.`,
+    ),
+  );
+  const report = createCritiqueValidationReport({
+    requestAnalysis: createRequestAnalysis(),
+    plan: {
+      status: "initial",
+      request_summary: "Create requirements.",
+      dag: { nodes: [task.task_id], edges: [] },
+      tasks: [task],
+      assumptions: [],
+    },
+    executorResults: [
+      {
+        task_id: task.task_id,
+        agent_type: task.assigned_agent,
+        focus_layer: "Requirement",
+        summary: "Created requirements.",
+        entities,
+        relations: [],
+        decisions: [],
+        risks: [],
+        open_questions: [],
+        quality_result: { passed: true, notes: "ok" },
+      },
+    ],
+    knowledgeGraph: createGraph({ entities }),
+  });
+
+  assert.equal(
+    report.issues.some((issue) => issue.code === "TASK_PATCH_SIZE_EXCEEDED"),
+    true,
+  );
+  assert.deepEqual(report.retry_task_ids, []);
+});
+
+test("critique validation warns about duplicate metrics", () => {
+  const task = createTask("task-01", 1, "executor-data-analytics");
+  const goal = createGoal("G-001");
+  const metrics: ProductKnowledgeGraph["entities"] = [
+    {
+      id: "M-001",
+      type: "Metric",
+      name: "Offline sync success rate",
+      description: "Measure the successful completion rate of offline synchronization.",
+      source_task_id: task.task_id,
+      status: "proposed",
+    },
+    {
+      id: "M-002",
+      type: "Metric",
+      name: "Offline synchronization success rate",
+      description: "Measure successful completion of offline document synchronization.",
+      source_task_id: task.task_id,
+      status: "proposed",
+    },
+  ];
+  const relations: ProductKnowledgeGraph["relations"] = metrics.map(
+    (metric, index) => ({
+      id: `REL-${index + 1}`,
+      type: "Measures",
+      source: metric.id,
+      target: goal.id,
+      source_task_id: task.task_id,
+    }),
+  );
+  const report = createCritiqueValidationReport({
+    requestAnalysis: createRequestAnalysis(),
+    plan: {
+      status: "initial",
+      request_summary: "Define metrics.",
+      dag: { nodes: [task.task_id], edges: [] },
+      tasks: [task],
+      assumptions: [],
+    },
+    executorResults: [
+      {
+        task_id: task.task_id,
+        agent_type: task.assigned_agent,
+        focus_layer: "Metric",
+        summary: "Defined metrics.",
+        entities: metrics,
+        relations,
+        decisions: [],
+        risks: [],
+        open_questions: [],
+        quality_result: { passed: true, notes: "ok" },
+      },
+    ],
+    knowledgeGraph: createGraph({
+      entities: [goal, ...metrics],
+      relations,
+    }),
+  });
+
+  assert.equal(
+    report.issues.some((issue) => issue.code === "DUPLICATE_METRIC"),
+    true,
+  );
+  assert.deepEqual(report.retry_task_ids, []);
 });
 
 test("renames non-similar duplicate IDs and remaps relation endpoints", () => {

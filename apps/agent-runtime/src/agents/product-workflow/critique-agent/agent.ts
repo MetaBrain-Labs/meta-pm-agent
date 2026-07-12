@@ -175,7 +175,10 @@ function compactPlanForReview(plan: TaskExecutionPlan) {
       depends_on: task.depends_on,
       covered_business_model_indexes: task.covered_business_model_indexes,
       expected_output: truncateText(task.expected_output, 180),
-      required_open_question_ids: task.required_open_question_ids ?? [],
+      required_open_question_count:
+        task.required_open_question_count ??
+        task.required_open_question_ids?.length ??
+        0,
     })),
   };
 }
@@ -292,7 +295,6 @@ function collectOpenQuestionCandidates(executorResults: ExecutorAgentResult[]) {
 
   for (const result of executorResults) {
     result.open_questions.forEach((question, index) => {
-      if (!question.blocking) return;
       const key = normalizeFallbackQuestionText(question.text);
       if (!key) return;
 
@@ -301,7 +303,9 @@ function collectOpenQuestionCandidates(executorResults: ExecutorAgentResult[]) {
         source_agent: result.agent_type,
         open_question_id: question.id,
       };
-      const priority = result.open_questions.length - index;
+      const priority = question.blocking
+        ? 100 - index
+        : 50 - index;
       const existing = candidates.get(key);
       if (existing) {
         existing.sources = mergeFallbackQuestionSources([
@@ -387,19 +391,32 @@ export function createCritiqueValidationReport(
       );
     }
 
-    const blockingQuestionIds = new Set(
-      result.open_questions
-        .filter((question) => question.blocking)
-        .map((question) => question.id),
-    );
-    for (const questionId of task.required_open_question_ids ?? []) {
-      if (blockingQuestionIds.has(questionId)) continue;
+    // Planner 的规模上限是软门禁：超出时保留结果，但要求 Critique 明确提示。
+    if (result.entities.length > 8 || result.relations.length > 12) {
       taskIssues.push(
         createReviewIssue({
-          code: "MISSING_REQUIRED_BLOCKING_QUESTION",
+          code: "TASK_PATCH_SIZE_EXCEEDED",
+          severity: "warning",
+          taskId: task.task_id,
+          message: `Task created ${result.entities.length} entities and ${result.relations.length} relations; the normal ceiling is 8 entities and 12 relations.`,
+        }),
+      );
+    }
+
+    const blockingQuestionCount = result.open_questions.filter(
+      (question) => question.blocking,
+    ).length;
+    const requiredBlockingQuestionCount =
+      task.required_open_question_count ??
+      task.required_open_question_ids?.length ??
+      0;
+    if (blockingQuestionCount < requiredBlockingQuestionCount) {
+      taskIssues.push(
+        createReviewIssue({
+          code: "MISSING_REQUIRED_BLOCKING_QUESTIONS",
           severity: "error",
           taskId: task.task_id,
-          message: `Task did not persist required blocking OpenQuestion ${questionId}.`,
+          message: `Task persisted ${blockingQuestionCount} blocking OpenQuestions but requires ${requiredBlockingQuestionCount}.`,
         }),
       );
     }
@@ -449,6 +466,15 @@ export function createCritiqueValidationReport(
     record.validation_errors.push(issue);
   }
 
+  const semanticQualityIssues = createSemanticQualityIssues(input);
+  for (const issue of semanticQualityIssues) {
+    issues.push(issue);
+    if (!issue.task_id) continue;
+    records
+      .find((record) => record.task_id === issue.task_id)
+      ?.validation_errors.push(issue);
+  }
+
   const issueTaskIds = new Set(
     issues
       .filter((issue) => issue.severity === "error" && issue.task_id)
@@ -467,6 +493,73 @@ export function createCritiqueValidationReport(
     executor_update_records: records,
     graph_integrity: graphIntegrity,
   };
+}
+
+/**
+ * 对适合程序判断的语义质量问题增加软门禁，不把启发式结果升级为重试错误。
+ */
+function createSemanticQualityIssues(
+  input: CritiqueAgentInput,
+): CritiqueValidationIssue[] {
+  const issues: CritiqueValidationIssue[] = [];
+  const currentTaskIds = new Set(input.plan.tasks.map((task) => task.task_id));
+  const metrics = input.knowledgeGraph.entities.filter(
+    (entity) => entity.type === "Metric",
+  );
+  const duplicatePairs = new Set<string>();
+
+  for (let leftIndex = 0; leftIndex < metrics.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < metrics.length; rightIndex += 1) {
+      const left = metrics[leftIndex]!;
+      const right = metrics[rightIndex]!;
+      if (!areKnowledgeGraphItemsSimilar(left, right, "entity")) continue;
+
+      const sourceTaskId = currentTaskIds.has(right.source_task_id ?? "")
+        ? right.source_task_id
+        : currentTaskIds.has(left.source_task_id ?? "")
+          ? left.source_task_id
+          : null;
+      if (!sourceTaskId) continue;
+
+      const pairKey = [left.id, right.id].sort().join("|");
+      if (duplicatePairs.has(pairKey)) continue;
+      duplicatePairs.add(pairKey);
+      issues.push(
+        createReviewIssue({
+          code: "DUPLICATE_METRIC",
+          severity: "warning",
+          taskId: sourceTaskId,
+          message: `Metrics ${left.id} and ${right.id} appear semantically duplicated; consolidate them or clarify distinct measurement scopes.`,
+        }),
+      );
+    }
+  }
+
+  for (const evidence of input.knowledgeGraph.entities) {
+    if (
+      evidence.type !== "Evidence" ||
+      !currentTaskIds.has(evidence.source_task_id ?? "")
+    ) {
+      continue;
+    }
+    const consumed = input.knowledgeGraph.relations.some(
+      (relation) =>
+        relation.source === evidence.id &&
+        ["Validates", "References"].includes(relation.type),
+    );
+    if (consumed) continue;
+
+    issues.push(
+      createReviewIssue({
+        code: "UNCONSUMED_EVIDENCE",
+        severity: "warning",
+        taskId: evidence.source_task_id!,
+        message: `Evidence ${evidence.id} is not consumed by a Validates or References relation.`,
+      }),
+    );
+  }
+
+  return issues;
 }
 
 /**
@@ -972,18 +1065,47 @@ function truncateText(text: string, maxLength: number): string {
 /**
  * 将瘦身 Critique Agent 输出与运行时已有状态组合成完整工作流结果。
  */
-function composeProductWorkflowResult(
+export function composeProductWorkflowResult(
   input: CritiqueAgentInput,
   review: CritiqueAgentOutput,
 ): ProductWorkflowResult {
+  const validationReport = createCritiqueValidationReport(input);
   const proposalQuestions = reconcileProposalQuestions(
     review.proposal_questions,
     input.executorResults,
   );
+  const plannedTaskIds = new Set(input.plan.tasks.map((task) => task.task_id));
+  const retryTaskIds = mergeTextList([
+    ...validationReport.retry_task_ids,
+    ...review.review.retry_task_ids.filter((taskId) => plannedTaskIds.has(taskId)),
+  ]);
+  const rejectedTaskIds = mergeTextList([
+    ...validationReport.rejected_task_ids,
+    ...review.review.rejected_task_ids.filter((taskId) =>
+      plannedTaskIds.has(taskId),
+    ),
+    ...retryTaskIds,
+  ]);
+  const rejectedTaskIdSet = new Set(rejectedTaskIds);
+  const acceptedTaskIds = input.plan.tasks
+    .map((task) => task.task_id)
+    .filter((taskId) => !rejectedTaskIdSet.has(taskId));
+  const reviewIssues = mergeReviewIssues([
+    ...validationReport.issues,
+    ...review.review.issues,
+  ]);
+  const graphIssues = mergeReviewIssues([
+    ...validationReport.issues,
+    ...review.knowledge_graph_review.issues,
+  ]);
+  const hasError = [...reviewIssues, ...graphIssues].some(
+    (issue) => issue.severity === "error",
+  );
   const needsConfirmation =
-    review.status === "requires_executor_retry" ||
     proposalQuestions.length > 0 ||
-    review.review.retry_task_ids.length > 0;
+    rejectedTaskIds.length > 0 ||
+    retryTaskIds.length > 0 ||
+    hasError;
 
   return {
     status: needsConfirmation ? "pending_user_confirmation" : "completed",
@@ -992,10 +1114,10 @@ function composeProductWorkflowResult(
     planner: input.plan,
     executor_results: input.executorResults,
     review: {
-      accepted_task_ids: review.review.accepted_task_ids,
-      rejected_task_ids: review.review.rejected_task_ids,
-      retry_task_ids: review.review.retry_task_ids,
-      issues: review.review.issues,
+      accepted_task_ids: acceptedTaskIds,
+      rejected_task_ids: rejectedTaskIds,
+      retry_task_ids: retryTaskIds,
+      issues: reviewIssues,
       notes: review.review.notes,
     },
     product_context_update: review.product_context_update,
@@ -1008,12 +1130,35 @@ function composeProductWorkflowResult(
         ),
       ]),
     },
-    knowledge_graph_review: review.knowledge_graph_review,
+    knowledge_graph_review: {
+      ...review.knowledge_graph_review,
+      graph_ref: createKnowledgeGraphReviewRef(input.knowledgeGraph),
+      accepted_task_ids: acceptedTaskIds,
+      rejected_task_ids: rejectedTaskIds,
+      retry_task_ids: retryTaskIds,
+      issues: graphIssues,
+    },
     proposal_questions: proposalQuestions,
     confirmation_message: needsConfirmation
       ? review.confirmation_message
       : "本轮任务已完成，所有可追溯的阻塞问题均已处理。",
   };
+}
+
+/**
+ * 合并确定性与语义审查问题，避免同一问题重复展示。
+ */
+function mergeReviewIssues(
+  issues: CritiqueValidationIssue[],
+): CritiqueValidationIssue[] {
+  const merged = new Map<string, CritiqueValidationIssue>();
+  for (const issue of issues) {
+    merged.set(
+      [issue.code, issue.severity, issue.task_id ?? "", issue.message].join("|"),
+      issue,
+    );
+  }
+  return [...merged.values()];
 }
 
 /**
@@ -1023,18 +1168,24 @@ export function reconcileProposalQuestions(
   reviewQuestions: CritiqueAgentOutput["proposal_questions"],
   executorResults: ExecutorAgentResult[],
 ): CritiqueAgentOutput["proposal_questions"] {
-  const actualSourceKeys = new Set<string>();
+  const actualSources = new Map<
+    string,
+    { required: boolean; priority: number }
+  >();
   for (const result of executorResults) {
-    for (const question of result.open_questions) {
-      if (!question.blocking) continue;
-      actualSourceKeys.add(
+    result.open_questions.forEach((question, index) => {
+      actualSources.set(
         formatQuestionSourceKey({
           source_agent: result.agent_type,
           source_task_id: result.task_id,
           open_question_id: question.id,
         }),
+        {
+          required: question.blocking,
+          priority: question.blocking ? 100 - index : 50 - index,
+        },
       );
-    }
+    });
   }
 
   const coveredSourceKeys = new Set<string>();
@@ -1042,7 +1193,7 @@ export function reconcileProposalQuestions(
     const sources = question.sources.filter((source) => {
       if (!source.open_question_id) return false;
       const key = formatQuestionSourceKey(source);
-      if (!actualSourceKeys.has(key)) return false;
+      if (!actualSources.has(key)) return false;
       coveredSourceKeys.add(key);
       return true;
     });
@@ -1051,6 +1202,16 @@ export function reconcileProposalQuestions(
       ? [
           {
             ...question,
+            required: sources.some((source) =>
+              actualSources.get(formatQuestionSourceKey(source))?.required,
+            ),
+            priority: Math.max(
+              ...sources.map(
+                (source) =>
+                  actualSources.get(formatQuestionSourceKey(source))
+                    ?.priority ?? 0,
+              ),
+            ),
             source_task_id: firstSource.source_task_id,
             source_agent: firstSource.source_agent,
             sources,
@@ -1249,7 +1410,6 @@ function createFallbackProposalQuestions(
 
   for (const result of executorResults) {
     result.open_questions.forEach((question, index) => {
-      if (!question.blocking) return;
       const label = formatFallbackOpenQuestionLabel(
         question.text,
         result.task_id,
@@ -1262,7 +1422,9 @@ function createFallbackProposalQuestions(
         source_agent: result.agent_type,
         open_question_id: question.id,
       };
-      const priority = result.open_questions.length - index;
+      const priority = question.blocking
+        ? 100 - index
+        : 50 - index;
       const existing = questions.get(key);
       if (existing) {
         existing.sources = mergeFallbackQuestionSources([
@@ -1270,6 +1432,7 @@ function createFallbackProposalQuestions(
           source,
         ]);
         existing.priority = Math.max(existing.priority, priority);
+        existing.required = existing.required || question.blocking;
         return;
       }
 
@@ -1277,7 +1440,7 @@ function createFallbackProposalQuestions(
         id: `${result.task_id}-${question.id || `slot-${index + 1}`}`,
         label,
         type: "textarea",
-        required: true,
+        required: question.blocking,
         placeholder: "请补充这个问题所需的事实、约束或偏好。",
         source_task_id: result.task_id,
         source_agent: result.agent_type,

@@ -33,8 +33,16 @@ import {
   toLangChainMessages,
 } from "../../utils/message-adapter";
 import { streamTaggedBlock } from "../../utils/tagged-block-stream";
-import { getFormAnswerId, isFormAnswer } from "../../utils/form-parser";
-import { formatProductWorkflowProposalQuestionForm } from "../product-workflow/agent";
+import {
+  getFormAnswerId,
+  isFormAnswer,
+  isProductWorkflowAcceptanceAnswer,
+  isProductWorkflowOptionalStopAnswer,
+} from "../../utils/form-parser";
+import {
+  formatProductWorkflowConfirmationQuestionForm,
+  formatProductWorkflowProposalQuestionForm,
+} from "../product-workflow/agent";
 import {
   isExecutorHumanInputRequiredError,
   type ExecutorHumanInputRequired,
@@ -593,6 +601,62 @@ async function* streamWorkflowResumeAfterFormAnswer(
   }
 
   const latestUserMessage = messages.at(-1);
+  if (
+    latestUserMessage &&
+    resumeContext.productWorkflow &&
+    isProductWorkflowAcceptanceAnswer(latestUserMessage.content)
+  ) {
+    const result = {
+      ...resumeContext.productWorkflow,
+      status: "completed" as const,
+      confirmation_message: "用户已确认接受当前产品知识图谱结果。",
+    };
+    yield { type: "complete", result };
+    yield {
+      type: "text",
+      content:
+        "本轮产品工作流已正式结束，产品知识图谱结果已确认并归档。PRD、线框图等最终交付物需在文档规划页单独生成。",
+      agentType: "conversation_confirmation",
+    };
+    return;
+  }
+
+  if (
+    latestUserMessage &&
+    resumeContext.productWorkflow &&
+    isProductWorkflowOptionalStopAnswer(latestUserMessage.content)
+  ) {
+    const result: ProductWorkflowResult = {
+      ...resumeContext.productWorkflow,
+      status: "pending_user_confirmation",
+      proposal_questions: [],
+      confirmation_message:
+        "用户已跳过可选优化问题，请确认是否接受当前已有设计成果。",
+    };
+    const questionForm = formatProductWorkflowConfirmationQuestionForm(result);
+    yield { type: "complete", result };
+    yield {
+      type: "text",
+      content: "已停止继续补充可选问题，请确认当前已有设计成果。",
+      agentType: "conversation_confirmation",
+    };
+    yield {
+      type: "question-form-start",
+      agentType: "conversation_confirmation",
+    };
+    yield {
+      type: "question-form-complete",
+      content: questionForm,
+      agentType: "conversation_confirmation",
+    };
+    yield* streamHumanInterruptForQuestionForm(
+      questionForm,
+      "conversation_confirmation",
+      options,
+    );
+    return;
+  }
+
   const userInputBlock = createFormAnswerUserInputBlock(
     latestUserMessage?.content ?? "",
   );
@@ -672,32 +736,31 @@ async function* streamPlanningAfterUserInput(
 
       if (event.type === "complete") {
         // 将结构化工作流结果转发给 API 持久化层，供知识图谱归档
-        // 始终基于 Critique Agent 实际输出决定是否完成，不因表单答复轮次强制终止。
+        // Critique 的结构化状态是唯一完成依据，表单是否存在只决定交互形式。
         const proposalForm = formatProductWorkflowProposalQuestionForm(event.result);
-        const shouldFinalize = !proposalForm;
-        const workflowResult = shouldFinalize
-          ? markWorkflowResultCompleted(event.result)
-          : event.result;
+        const shouldFinalize = isAcceptedWorkflowResult(event.result);
+        const questionForm = shouldFinalize
+          ? null
+          : proposalForm ??
+            formatProductWorkflowConfirmationQuestionForm(event.result);
 
-        yield { type: "complete", result: workflowResult };
+        yield { type: "complete", result: event.result };
 
         if (shouldFinalize) {
           yield {
             type: "text",
             content:
-              "本轮产品工作流已正式结束，相关 Executor Agent 的知识图谱修正/补充已完成并归档。",
+              "本轮产品工作流已正式结束，相关 Executor Agent 的产品知识图谱修正/补充已完成并归档。PRD、线框图等最终交付物需在文档规划页单独生成。",
             agentType: "conversation_confirmation",
           };
           continue;
         }
-        if (!proposalForm) continue;
-
         // Planner 只发起确认/补充请求，由 Conversation Agent 面向用户提问。
         yield {
           type: "text",
           content: proposalForm
             ? "Planner SubAgent 汇总了需要补充确认的信息，我需要你先回答这些问题。"
-            : "Planner SubAgent 已完成本轮汇总，我需要你确认下一步处理方式。",
+            : "Critique Agent 发现本轮结果仍需修正，我需要你确认下一步处理方式。",
           agentType: "conversation_confirmation",
         };
         yield {
@@ -708,11 +771,11 @@ async function* streamPlanningAfterUserInput(
         await new Promise((resolve) => setTimeout(resolve, 80));
         yield {
           type: "question-form-complete",
-          content: proposalForm,
+          content: questionForm!,
           agentType: "conversation_confirmation",
         };
         yield* streamHumanInterruptForQuestionForm(
-          proposalForm,
+          questionForm!,
           "conversation_confirmation",
           options,
         );
@@ -839,14 +902,18 @@ async function* streamHumanInterruptForQuestionForm(
  * 将 Executor 硬阻塞转换为 Conversation Agent 对用户展示的 HITL 表单。
  */
 /**
- * 将默认确认的产品工作流结果标记为已完成，避免后续恢复时再次要求最终确认。
+ * 判断 Critique 结果是否满足正式结束条件。
  */
-function markWorkflowResultCompleted(
+export function isAcceptedWorkflowResult(
   result: ProductWorkflowResult,
-): ProductWorkflowResult {
-  return result.status === "completed"
-    ? result
-    : { ...result, status: "completed" };
+): boolean {
+  return (
+    result.status === "completed" &&
+    (result.review.retry_task_ids?.length ?? 0) === 0 &&
+    ![...(result.review.issues ?? []), ...(result.knowledge_graph_review?.issues ?? [])].some(
+      (issue) => issue.severity === "error",
+    )
+  );
 }
 
 /**

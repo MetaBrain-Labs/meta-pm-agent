@@ -185,12 +185,11 @@ export function createFallbackPlan(
     isSupplement,
   );
   const primaryTaskIdByAgent = createFallbackPrimaryTaskIdByAgent(taskSpecs);
-  const requiredOpenQuestionIds = isSupplement
-    ? []
-    : analysis.business_model.flatMap((item) =>
-        item.missing_information.map(
-          (gap) => `OQ-BM${item.index}-GAP${gap.index}`,
-        ),
+  const requiredOpenQuestionCount = isSupplement
+    ? 0
+    : analysis.business_model.reduce(
+        (count, item) => count + item.missing_information.length,
+        0,
       );
   const openQuestionOwnerTaskId =
     primaryTaskIdByAgent.get("executor-product-strategy") ??
@@ -213,8 +212,8 @@ export function createFallbackPlan(
     ),
     covered_business_model_indexes: [...coveredIndexes],
     expected_output: createFallbackExpectedOutput(definition, role),
-    required_open_question_ids:
-      taskId === openQuestionOwnerTaskId ? requiredOpenQuestionIds : [],
+    required_open_question_count:
+      taskId === openQuestionOwnerTaskId ? requiredOpenQuestionCount : 0,
     quality_check: {
       status: "pending" as const,
       criteria: createFallbackQualityCriteria(definition, role),

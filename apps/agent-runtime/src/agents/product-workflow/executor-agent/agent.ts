@@ -153,7 +153,10 @@ export async function* streamExecutorAgent(
         },
         systemPrompt: createExecutorAgentPrompt(definition),
         tools,
-        skills: getExecutorSkillSources(definition),
+        skills: getExecutorSkillSources(
+          definition,
+          input.plan.status === "supplement",
+        ),
         payload: {
           product_context:
             input.productContext?.slice(0, 800) ||
@@ -390,10 +393,15 @@ function isAbortError(error: unknown): boolean {
  * 将 Executor profile 中的技能名映射到 references 下的 DeepAgents skill source 目录。
  */
 function getExecutorSkillSources(definition: {
+  agentType: ExecutorAgentType;
   referencePath: string;
   skills: readonly string[];
-}): string[] {
-  return definition.skills.map(
+}, supplement = false): string[] {
+  const skillNames =
+    supplement && definition.agentType === "executor-product-strategy"
+      ? definition.skills.filter((skillName) => skillName === "product-strategy")
+      : definition.skills;
+  return skillNames.map(
     (skillName) => `${definition.referencePath}/skills/${skillName}`,
   );
 }

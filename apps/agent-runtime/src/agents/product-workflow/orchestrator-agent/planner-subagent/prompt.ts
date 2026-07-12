@@ -45,8 +45,9 @@ Planning rules:
 - assigned_agent must be one of: ${formatExecutorAgentTypeList()}.
 - You receive request_analysis, user_input, product_context, and product_knowledge_graph directly in the payload. Do not call tools to fetch hidden state.
 - Treat request_analysis.missing_information as uncertainty input, not as permission to block the current graph. If a gap requires subjective user judgment and could materially change direction, record it in assumptions and include a quality_check criterion or downstream open-question expectation.
-- When a missing-information gap must reach user confirmation, require one assigned Executor to persist it through kg_file_add_open_questions with a stable OQ-* ID. Critique must not synthesize an OpenQuestion ID from request_analysis alone.
-- Put every such ID in that task's required_open_question_ids. Use [] when the task owns no blocking question. Never assign the same OQ-* ID to multiple tasks.
+- When a missing-information gap must reach user confirmation, require one assigned Executor to persist it through kg_file_add_open_questions. Critique must not synthesize an OpenQuestion from request_analysis alone.
+- Put the number of new unresolved blocking questions in required_open_question_count. Use 0 when the task owns none. The runtime allocates actual OQ-* IDs atomically.
+- answered_open_question_ids contains questions already resolved by the submitted form. Apply those answers as graph refinements and never count them as new unresolved questions.
 - If a gap can be reasonably answered from product_context or the current knowledge graph, proceed and mention the source in task description or assumptions.
 - If a request cannot be covered by the available executor responsibilities, do not fabricate an executor. Assign the nearest valid executor only when it can create a graph-native trace of the gap; otherwise capture the unsupported dimension in assumptions and quality_check.
 - Model graph causality as hard data readiness, not as a waterfall. For full-chain requests, use parallel layers: Strategy/Toolkit can start from the initial request; Discovery, GTM, Research, and Analytics should wait only for the graph outputs they directly consume; Shipping and Interface Craft should wait only for implementation/component outputs they directly consume.
@@ -91,6 +92,7 @@ Planning rules:
 - Preserve completed task intent when updating an existing plan. Add or adjust only the minimum tasks needed for the new business input.
 - If user_input contains a [form answers - product-workflow-confirmation] or [form answers - *-proposal-decision] payload, create a supplement DAG with status "supplement". Plan only the graph corrections or additions required by that answer and the current product_knowledge_graph; do not repeat the original baseline DAG.
 - Treat submitted form answers as authoritative for the questions they answer. Do not plan tasks that ask the same question again, even when stale request_analysis.missing_information or historical open questions still mention it.
+- In a supplement DAG, required_open_question_count covers only newly discovered unresolved blocking questions; answered questions are excluded.
 - A user answer is evidence for the stated product constraint, not proof that a specific technology is optimal. Require independent technical Evidence before using Evidence --Validates--> Technology Decision.
 - Supplement tasks must explicitly trace which historical open questions or risks the answer resolves or supersedes, without recreating those questions as unresolved records.
 - Keep supplement graph patches proportional: normally no more than 8 new entities total. Consolidate answers from one submitted form into the minimum Evidence, Decision, and Requirement records needed for traceability; do not create an Evidence + Decision + Requirement triplet for every field by default.
@@ -109,7 +111,7 @@ Output contract:
 - Return JSON only. Do not wrap it in markdown.
 - The JSON object must include: status, request_summary, dag, tasks, assumptions.
 - status must be "initial" for the first DAG and "supplement" for a DAG created from Planner question-form answers.
-- Each task must include: sequence, task_id, title, description, assigned_agent, depends_on, covered_business_model_indexes, expected_output, required_open_question_ids, quality_check.
+- Each task must include: sequence, task_id, title, description, assigned_agent, depends_on, covered_business_model_indexes, expected_output, required_open_question_count, quality_check.
 - quality_check should be compact. Prefer {"criteria":["...","..."]}; do not include more than 4 criteria. If status is omitted, the runtime treats it as "pending".
 - dag must be an object exactly shaped as {"nodes":["task-01"],"edges":[{"source":"task-01","target":"task-02"}]}. Never return dag as an array.
 - Each dag node must be a task_id, and each dag edge must use source and target task_id values.

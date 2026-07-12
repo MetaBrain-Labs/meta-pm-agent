@@ -272,6 +272,7 @@ function createOrchestratorPayload(input: OrchestratorAgentInput) {
     request_analysis: input.requestAnalysis,
     user_input: input.userInput,
     supplement_agents: input.supplementAgentTypes ?? [],
+    answered_open_question_ids: input.answeredOpenQuestionIds ?? [],
     graph_stats: {
       current_state: input.knowledgeGraph.current_state ?? null,
       description: input.knowledgeGraph.description ?? "",
@@ -294,6 +295,7 @@ function createOrchestratorPayload(input: OrchestratorAgentInput) {
       request_analysis: input.requestAnalysis,
       user_input: input.userInput,
       supplement_agents: input.supplementAgentTypes ?? [],
+      answered_open_question_ids: input.answeredOpenQuestionIds ?? [],
     }),
   };
 }

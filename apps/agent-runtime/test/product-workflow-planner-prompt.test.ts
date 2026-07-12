@@ -40,7 +40,7 @@ test("planner prompt preserves graph-semantics guardrails", () => {
     PLANNER_AGENT_PROMPT,
     /trace which historical open questions or risks the answer resolves or supersedes/,
   );
-  assert.match(PLANNER_AGENT_PROMPT, /stable OQ-\* ID/);
+  assert.match(PLANNER_AGENT_PROMPT, /runtime allocates actual OQ-\* IDs atomically/);
   assert.match(
     PLANNER_AGENT_PROMPT,
     /normally no more than 8 new entities total/,
@@ -177,7 +177,7 @@ test("orchestrator planner subagent prompt satisfies json response format", () =
   );
   assert.match(
     ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
-    /required_open_question_ids/,
+    /required_open_question_count/,
   );
   assert.match(
     ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
@@ -264,11 +264,11 @@ test("executor prompt preserves append-only graph writing semantics", () => {
   assert.match(prompt, /ONLY create new traceable records/);
   assert.match(prompt, /The graph tools are append-only/);
   assert.match(prompt, /Never reuse an existing node, relation, decision, risk, or open-question ID/);
-  assert.match(prompt, /all new IDs unique/);
+  assert.match(prompt, /runtime allocates/);
   assert.match(prompt, /runtime generates the execution summary/);
   assert.match(prompt, /write one new blocking OQ-\*/);
   assert.match(prompt, /specific technology, algorithm, vendor, protocol/);
   assert.match(prompt, /at most two search attempts per topic/);
   assert.match(prompt, /do not add an unsupported numeric target/);
-  assert.match(prompt, /persist every exact ID/);
+  assert.match(prompt, /persist at least that many/);
 });

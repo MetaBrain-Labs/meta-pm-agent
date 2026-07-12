@@ -464,7 +464,13 @@ export const TaskExecutionNodeSchema = z.object({
   required_open_question_ids: z
     .array(z.string().regex(/^OQ-[A-Za-z0-9_-]+$/))
     .optional()
-    .describe("Stable blocking OpenQuestion IDs that this task must persist"),
+    .describe("Legacy blocking OpenQuestion ID hints retained for restored plans"),
+  required_open_question_count: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe("Number of new blocking OpenQuestions this task must persist with runtime-allocated IDs"),
   quality_check: TaskQualityCheckSchema,
 });
 

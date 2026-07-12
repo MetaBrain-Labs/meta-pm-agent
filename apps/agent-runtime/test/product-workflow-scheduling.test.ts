@@ -31,6 +31,7 @@ import {
   normalizeTaskExecutionPlan,
 } from "../src/agents/product-workflow/orchestrator-agent/planner-subagent/plan";
 import {
+  removeAnsweredOpenQuestions,
   scopeInitialDecisionPlan,
   scopeSupplementPlan,
 } from "../src/agents/product-workflow/orchestrator-agent/planner-subagent/agent";
@@ -45,6 +46,20 @@ import {
   selectNextExecutorRouterTargets,
 } from "../src/graph/nodes/product-workflow-node";
 import type { WorkflowGraphStateValue } from "../src/graph/state";
+
+test("removes answered open questions from supplement tasks only", () => {
+  const supplement = createPlan([
+    {
+      ...createTask("task-01", 1, "executor-product-strategy", []),
+      required_open_question_ids: ["OQ-ANSWERED", "OQ-NEW"],
+    },
+  ]);
+  supplement.status = "supplement";
+
+  const normalized = removeAnsweredOpenQuestions(supplement, ["OQ-ANSWERED"]);
+
+  assert.deepEqual(normalized.tasks[0]?.required_open_question_ids, ["OQ-NEW"]);
+});
 
 test("selects all ready executors for the next parallel batch", () => {
   const state = createState({
@@ -408,13 +423,10 @@ test("creates parallel graph-operation fallback plan for broad MVP requests", ()
       "executor-ai-shipping",
     ],
   );
-  assert.deepEqual(plan.tasks[0]?.required_open_question_ids, [
-    "OQ-BM1-GAP1",
-    "OQ-BM1-GAP2",
-  ]);
+  assert.equal(plan.tasks[0]?.required_open_question_count, 2);
   assert.equal(
     plan.tasks.slice(1).every(
-      (task) => task.required_open_question_ids?.length === 0,
+      (task) => task.required_open_question_count === 0,
     ),
     true,
   );

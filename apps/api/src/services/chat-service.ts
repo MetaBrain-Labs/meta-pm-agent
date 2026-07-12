@@ -13,7 +13,7 @@
  * - 本文件不直接编排 LangGraph 节点，只处理 API 层业务持久化。
  */
 
-import type { ChatMessage } from "@repo/shared";
+import type { ChatMessage, ProductWorkflowResult } from "@repo/shared";
 import {
   createConversationWithInitialRequestForm,
   listActiveConversations,
@@ -30,6 +30,7 @@ import {
   getPendingDecisionQuestionForm,
   persistExecutorProposalItems,
   persistProposalDecisionItem,
+  persistProductWorkflowConfirmationDecision,
   persistRequestAnalysisItems,
   updateRequestFormStatus,
 } from "../repositories/request-form-repository";
@@ -183,12 +184,14 @@ export async function persistConversationResult({
   agentOutputs,
   messages,
   skipPendingDecisionItems = false,
+  productWorkflowResult,
 }: {
   conversationId?: string;
   requestFormId?: string;
   agentOutputs: AgentConversationOutput[];
   messages: ChatMessage[];
   skipPendingDecisionItems?: boolean;
+  productWorkflowResult?: ProductWorkflowResult | null;
 }): Promise<ConversationTitleUpdate | null> {
   if (!conversationId || agentOutputs.length === 0) return null;
 
@@ -210,6 +213,7 @@ export async function persistConversationResult({
     .map((output) => parseExecutorResultPayload(output.content))
     .filter((result) => result !== null);
   const productWorkflow =
+    productWorkflowResult ??
     parseProductWorkflowPayload(plannerOutput?.content ?? "") ??
     parseProductWorkflowPayload(
       agentOutputs.find((output) => output.type === "product_director")
@@ -268,6 +272,12 @@ export async function persistConversationResult({
   if (!skipPendingDecisionItems) {
     await persistExecutorProposalItems(requestFormId, sanitizedExecutorResults);
     await persistProposalDecisionItem(requestFormId, finalProductWorkflow);
+    if (shouldPersistProductWorkflowConfirmation(finalProductWorkflow)) {
+      await persistProductWorkflowConfirmationDecision(
+        requestFormId,
+        finalProductWorkflow,
+      );
+    }
   }
 
   const generatedTitle = buildFirstTurnConversationTitle(items, messages);
@@ -281,6 +291,18 @@ export async function persistConversationResult({
   return updatedConversation
     ? { id: updatedConversation.id, title: updatedConversation.title }
     : null;
+}
+
+/**
+ * 判断 Critique 是否需要持久化最终处理确认，而不是补充信息表单。
+ */
+export function shouldPersistProductWorkflowConfirmation(
+  result: ProductWorkflowResult | null,
+): result is ProductWorkflowResult {
+  return (
+    result?.status === "pending_user_confirmation" &&
+    result.proposal_questions.length === 0
+  );
 }
 
 /**

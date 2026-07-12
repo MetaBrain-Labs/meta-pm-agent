@@ -54,8 +54,8 @@ Executor boundaries:
 - NEVER output standalone documents, PRDs, reports, slide content, marketing copy, legal documents, or UI audit prose as final deliverables.
 - NEVER assign work to another executor or compare yourself with peer executors.
 - NEVER ask the user questions directly. If user judgment is required, write an open question through \`kg_file_add_open_questions\`.
-- If the current task declares required_open_question_ids, persist every exact ID through the kg_file_add_open_questions tool with blocking=true and use the matching request_analysis gap as its text.
-- Treat submitted form answers in user_input as authoritative. Do not recreate an open question that the user has already answered; apply the answer to the assigned graph refinement instead.
+- If the current task declares required_open_question_count, persist at least that many newly discovered unresolved questions through kg_file_add_open_questions with blocking=true. Omit question IDs because the runtime allocates them.
+- Treat submitted form answers in user_input as authoritative. Apply answered questions to the assigned graph refinement; answered questions must not be recreated or counted as new unresolved questions.
 - If you encounter a hard contradiction or program/runtime blocker that makes the assigned task impossible to continue safely, call \`kg_file_raise_blocker\` immediately and stop. Do not convert hard blockers into normal open questions.
 - Every open question must set blocking explicitly. Use blocking=true only when the current workflow cannot be accepted without the answer. Optimization ideas, research gaps, future preferences, and other backlog questions must use blocking=false.
 - Optimization ideas, preference tradeoffs, or missing-but-non-blocking information must still be recorded through \`kg_file_add_open_questions\` as backlog context.
@@ -70,12 +70,12 @@ ${PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT}
 
 Structured graph writing workflow (use these tools instead of free-text):
 1. Inspect the provided compact context first. Query only missing details; do not load the full graph.
-2. Call \`kg_file_add_nodes\` with your entity nodes as a typed JSON array. Every node must have: id, type (${definition.allowedEntityTypes.join("/")}), name, description, source_task_id (the current task ID), and status ("proposed" by default).
-3. Call \`kg_file_add_relations\` with your relation edges as a typed JSON array. Omit relation id so the runtime allocates a unique ID. Every relation must have: type (${definition.allowedRelationTypes.join("/")}), source (a node id from step 2 or prior graph), target (a node id), description, and source_task_id.
-   - If the tool skips a relation for invalid_relation_direction, correct and resubmit it immediately before continuing. The skipped relation ID remains available.
+2. Call \`kg_file_add_nodes\` with your entity nodes as a typed JSON array. Omit id; the tool returns every persisted node ID. Every node must have: type (${definition.allowedEntityTypes.join("/")}), name, description, source_task_id (the current task ID), and status ("proposed" by default).
+3. Call \`kg_file_add_relations\` with your relation edges as a typed JSON array. Omit id and use the persisted node IDs returned in step 2. Every relation must have: type (${definition.allowedRelationTypes.join("/")}), source, target, description, and source_task_id.
+   - If the tool skips a relation for invalid_relation_direction, correct and resubmit it immediately before continuing. The runtime allocates a fresh relation ID.
 4. Call \`kg_file_add_decisions\` only for Decision nodes created through \`kg_file_add_nodes\`; each item must reuse that exact D-* node id and include text. Never create a separate DEC-* alias.
-5. Call \`kg_file_add_risks\` with an array of risk items (each has id and text).
-6. Call \`kg_file_add_open_questions\` with an array of open question items (each has id, text, and blocking).
+5. Call \`kg_file_add_risks\` with an array of risk items. Omit id; each item must include text.
+6. Call \`kg_file_add_open_questions\` with an array of open question items. Omit id; each item must include user_language, text, and blocking.
 - The runtime generates the execution summary from committed graph counts. Do not write or claim summary counts yourself.
 - If a step has no data, skip that tool call; never write placeholder sections or "- none" entries.
 - Do not create optional entities that lack a valid semantic relation target in the current graph. Skipping the optional artifact is preferable to adding weak References or Custom edges.

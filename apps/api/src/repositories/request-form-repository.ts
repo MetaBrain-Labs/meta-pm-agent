@@ -234,7 +234,7 @@ export async function persistProductWorkflowConfirmationDecision(
       'planner',
       100,
       ${JSON.stringify({
-        question_id: result.confirmation_id,
+        question_id: "product-workflow-confirmation",
         questions: [
           {
             id: "decision",
@@ -914,14 +914,29 @@ function buildDecisionQuestionForm(payload: Record<string, unknown>): string | n
     : [];
 
   if (!questionId || questions.length === 0) return null;
+  const hasBlockingQuestions = questions.some((question) => question.required);
+  const displayQuestions = questions.map((question) => ({
+    ...question,
+    collapsible: true,
+    defaultCollapsed: hasBlockingQuestions && !question.required,
+  }));
 
-  return `<question-form id="${escapeAttribute(questionId)}" title="补充信息确认">
+  return `<question-form id="${escapeAttribute(questionId)}" title="${hasBlockingQuestions ? "补充信息确认" : "可选优化问题"}">
 ${JSON.stringify(
   {
-    description:
-      "Planner SubAgent 汇总了 Executor Agent 需要你补充确认的信息。",
-    questions,
+    description: hasBlockingQuestions
+      ? "Planner SubAgent 汇总了 Executor Agent 需要你补充确认的信息。必填问题默认展开，选填问题默认折叠。"
+      : "以下问题均为可选优化项。你可以填写任意一项后继续下一轮 DAG，也可以选择“不再继续”并直接确认当前已有设计成果。",
+    questions: displayQuestions,
     submitLabel: "提交补充信息",
+    ...(!hasBlockingQuestions
+      ? {
+          variant: "optional-followup",
+          requireAnyAnswer: true,
+          secondarySubmitLabel: "不再继续",
+          secondaryActionValue: "stop_optional_questions",
+        }
+      : {}),
   },
   null,
   2,

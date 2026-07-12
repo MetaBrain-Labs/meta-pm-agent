@@ -143,6 +143,7 @@ export async function orchestratorAgentNode(
       userInput: state.userInput,
       knowledgeGraph,
       supplementAgentTypes: state.supplementAgentTypes,
+      answeredOpenQuestionIds: state.answeredOpenQuestionIds,
       signal: config?.signal,
     }),
     writer,

@@ -22,12 +22,17 @@ import {
   Select,
   Input,
   Card,
+  Collapse,
   Tag,
   Typography,
   Divider,
 } from "antd";
 import { QuestionCircleOutlined } from "@ant-design/icons";
-import { formatFormAnswers, QuestionForm } from "../utils/question-form";
+import {
+  formatFormAction,
+  formatFormAnswers,
+  QuestionForm,
+} from "../utils/question-form";
 
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -72,7 +77,18 @@ export function QuestionFormView({
     onSubmit(formatFormAnswers(form, answers), answers);
   }
 
-  const ready = form.questions
+  function handleSecondaryAction() {
+    if (locked || !onSubmit || !form.secondarySubmitLabel) return;
+    onSubmit(
+      formatFormAction(
+        form,
+        form.secondaryActionValue ?? "secondary_action",
+      ),
+      {},
+    );
+  }
+
+  const requiredReady = form.questions
     .filter((q) => q.required)
     .every((q) => {
       const v = answers[q.id];
@@ -80,6 +96,10 @@ export function QuestionFormView({
         ? v.length > 0
         : typeof v === "string" && v.trim().length > 0;
     });
+  const hasAnyAnswer = Object.values(answers).some((value) =>
+    Array.isArray(value) ? value.length > 0 : value.trim().length > 0,
+  );
+  const ready = requiredReady && (!form.requireAnyAnswer || hasAnyAnswer);
 
   return (
     <Card
@@ -145,8 +165,8 @@ export function QuestionFormView({
     >
       {form.questions.map((q) => {
         const value = answers[q.id];
-        return (
-          <div key={q.id}>
+        const questionContent = (
+          <div>
             <Form.Item
               layout="vertical"
               label={
@@ -223,10 +243,32 @@ export function QuestionFormView({
             <Divider />
           </div>
         );
+        if (!q.collapsible) {
+          return <div key={q.id}>{questionContent}</div>;
+        }
+        return (
+          <Collapse
+            key={q.id}
+            className="mb-3"
+            defaultActiveKey={q.defaultCollapsed ? [] : [q.id]}
+            items={[
+              {
+                key: q.id,
+                label: `${q.required ? "必填" : "选填"} · ${q.label}`,
+                children: questionContent,
+              },
+            ]}
+          />
+        );
       })}
 
       {!locked && (
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          {form.secondarySubmitLabel && (
+            <Button onClick={handleSecondaryAction}>
+              {form.secondarySubmitLabel}
+            </Button>
+          )}
           <Button type="primary" onClick={handleSubmit} disabled={!ready}>
             {form.submitLabel ?? "提交"}
           </Button>

@@ -95,6 +95,12 @@ export const WorkflowGraphState = Annotation.Root({
     default: () => [],
   }),
 
+  // 用户已通过 Critique 表单回答的问题，Supplement Planner 不得重新创建。
+  answeredOpenQuestionIds: Annotation<string[]>({
+    reducer: (_current, update) => update,
+    default: () => [],
+  }),
+
   // Executor Agent 对 Planner DAG 中每个任务的结构化产出。
   executorResults: Annotation<ExecutorAgentResult[]>({
     reducer: mergeExecutorResults,

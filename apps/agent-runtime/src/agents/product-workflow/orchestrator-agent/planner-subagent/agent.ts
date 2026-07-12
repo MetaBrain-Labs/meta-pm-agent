@@ -63,22 +63,25 @@ export function extractPlanFromSubagentResult(
   input: OrchestratorAgentInput,
 ): TaskExecutionPlan {
   if (rawResult === null || rawResult === undefined) {
-    return normalizeTaskExecutionPlan(
+    return finalizePlan(
       createFallbackPlan(input, "Planner subagent was not invoked or returned no output"),
+      input,
     );
   }
 
   const content = resolveToolMessageContent(rawResult);
   if (content === null) {
-    return normalizeTaskExecutionPlan(
+    return finalizePlan(
       createFallbackPlan(input, "Planner subagent returned no parseable output"),
+      input,
     );
   }
 
   const parsed = parseJsonObject(content);
   if (parsed === null) {
-    return normalizeTaskExecutionPlan(
+    return finalizePlan(
       createFallbackPlan(input, "Planner subagent output was not valid JSON"),
+      input,
     );
   }
 
@@ -88,16 +91,52 @@ export function extractPlanFromSubagentResult(
       ? scopeSupplementPlan(result.data, input.supplementAgentTypes)
       : scopeInitialDecisionPlan(result.data, input);
     if (candidate.tasks.length > 0) {
-      return normalizeTaskExecutionPlan(candidate);
+      return finalizePlan(candidate, input);
     }
   }
 
-  return normalizeTaskExecutionPlan(
+  return finalizePlan(
     createFallbackPlan(
       input,
       `Planner subagent output failed schema validation`,
     ),
+    input,
   );
+}
+
+/**
+ * 统一归一化 Planner 输出，并移除已经由用户回答的阻塞问题。
+ */
+function finalizePlan(
+  plan: TaskExecutionPlan,
+  input: OrchestratorAgentInput,
+): TaskExecutionPlan {
+  return normalizeTaskExecutionPlan(
+    removeAnsweredOpenQuestions(plan, input.answeredOpenQuestionIds),
+  );
+}
+
+/**
+ * 已由用户回答的问题不能在补充 DAG 中再次声明为待创建的阻塞问题。
+ */
+export function removeAnsweredOpenQuestions(
+  plan: TaskExecutionPlan,
+  answeredOpenQuestionIds: string[] = [],
+): TaskExecutionPlan {
+  if (plan.status !== "supplement" || answeredOpenQuestionIds.length === 0) {
+    return plan;
+  }
+
+  const answeredIds = new Set(answeredOpenQuestionIds);
+  return {
+    ...plan,
+    tasks: plan.tasks.map((task) => ({
+      ...task,
+      required_open_question_ids: (
+        task.required_open_question_ids ?? []
+      ).filter((id) => !answeredIds.has(id)),
+    })),
+  };
 }
 
 /**
