@@ -126,6 +126,7 @@ function createCritiqueAgentPayload(input: CritiqueAgentInput) {
     })),
     planner_summary: compactPlanForReview(input.plan),
     final_graph_summary: createFinalGraphSummary(input.knowledgeGraph),
+    task_semantic_updates: compactTaskSemanticUpdates(input.executorResults),
     validation_report: validationReport,
     open_question_candidates: collectOpenQuestionCandidates(
       input.executorResults,
@@ -174,8 +175,48 @@ function compactPlanForReview(plan: TaskExecutionPlan) {
       depends_on: task.depends_on,
       covered_business_model_indexes: task.covered_business_model_indexes,
       expected_output: truncateText(task.expected_output, 180),
+      required_open_question_ids: task.required_open_question_ids ?? [],
     })),
   };
+}
+
+/**
+ * 仅传递本轮 Executor 新增内容，避免 Critique 读取完整图谱仍能进行语义审查。
+ */
+export function compactTaskSemanticUpdates(
+  executorResults: ExecutorAgentResult[],
+) {
+  return executorResults.map((result) => ({
+    task_id: result.task_id,
+    agent_type: result.agent_type,
+    summary: truncateText(result.summary, 240),
+    entities: result.entities.map((entity) => ({
+      id: entity.id,
+      type: entity.type,
+      name: truncateText(entity.name, 120),
+      description: entity.description
+        ? truncateText(entity.description, 280)
+        : undefined,
+      status: entity.status,
+    })),
+    relations: result.relations.map((relation) => ({
+      id: relation.id,
+      type: relation.type,
+      source: relation.source,
+      target: relation.target,
+      description: relation.description
+        ? truncateText(relation.description, 180)
+        : undefined,
+    })),
+    decisions: result.decisions.map((decision) => ({
+      ...decision,
+      text: truncateText(decision.text, 240),
+    })),
+    risks: result.risks.map((risk) => ({
+      ...risk,
+      text: truncateText(risk.text, 240),
+    })),
+  }));
 }
 
 /**
@@ -343,6 +384,23 @@ export function createCritiqueValidationReport(
     if (isExecutorAgentType(task.assigned_agent)) {
       taskIssues.push(
         ...validateExecutorBoundaries(result, task.assigned_agent),
+      );
+    }
+
+    const blockingQuestionIds = new Set(
+      result.open_questions
+        .filter((question) => question.blocking)
+        .map((question) => question.id),
+    );
+    for (const questionId of task.required_open_question_ids ?? []) {
+      if (blockingQuestionIds.has(questionId)) continue;
+      taskIssues.push(
+        createReviewIssue({
+          code: "MISSING_REQUIRED_BLOCKING_QUESTION",
+          severity: "error",
+          taskId: task.task_id,
+          message: `Task did not persist required blocking OpenQuestion ${questionId}.`,
+        }),
       );
     }
 

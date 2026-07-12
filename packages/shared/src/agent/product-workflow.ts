@@ -461,6 +461,10 @@ export const TaskExecutionNodeSchema = z.object({
   depends_on: z.array(z.string().min(1)),
   covered_business_model_indexes: z.array(z.number().int().positive()),
   expected_output: z.string().min(1),
+  required_open_question_ids: z
+    .array(z.string().regex(/^OQ-[A-Za-z0-9_-]+$/))
+    .optional()
+    .describe("Stable blocking OpenQuestion IDs that this task must persist"),
   quality_check: TaskQualityCheckSchema,
 });
 
@@ -637,6 +641,15 @@ export const ProductWorkflowKnowledgeGraphReviewSchema = z.object({
  * 模型只输出审查结论、用户补充问题和短摘要；Planner DAG、Executor 结果和完整知识图谱
  * 由运行时代码按已有状态组合，不再要求模型复制。
  */
+const CritiqueProductContextUpdateSchema = z.preprocess((value) => {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const summary = (value as Record<string, unknown>).summary;
+    if (typeof summary === "string") return summary;
+  }
+  return value;
+}, z.string().min(1).max(1200));
+
 export const CritiqueAgentOutputSchema = z.object({
   status: z.enum([
     "pending_user_confirmation",
@@ -652,7 +665,7 @@ export const CritiqueAgentOutputSchema = z.object({
     issues: ProductWorkflowReviewIssuesSchema.describe("Detected issues"),
     notes: ProductWorkflowReviewNotesSchema.describe("Compact review notes"),
   }).describe("Critique Agent decision"),
-  product_context_update: z.string().min(1).max(1200).describe("Short product context update summary"),
+  product_context_update: CritiqueProductContextUpdateSchema.describe("Short product context update summary"),
   knowledge_graph_review: ProductWorkflowKnowledgeGraphReviewSchema.describe("Lightweight graph review, not the full graph"),
   proposal_questions: z.array(ProductWorkflowProposalQuestionSchema).default([]).describe("Unresolved blocking questions that require user confirmation"),
   confirmation_message: z.string().min(1).max(500).describe("Concise user-facing confirmation message"),

@@ -69,6 +69,7 @@ Critique rules:
 - Distinguish hard constraints from soft recommendations. Meta-model violations, missing committed graph patches, source conflicts, broken relation endpoints, and unjustified orphan nodes are hard constraints. Description style, excessive granularity, and weak wording are recommendations unless they block task completion.
 - No silent truncation. If a critique dimension cannot be fully checked from the compact payload, explicitly state the uncovered dimension in review.notes or knowledge_graph_review.notes.
 - Passing deterministic structure checks proves only endpoint, direction, traceability, and commit integrity. It does not prove semantic uniqueness, evidence quality, or architecture proportionality from the compact payload; never describe the graph as globally consistent, complete, final, or stable while those dimensions remain unchecked or proposal_questions remain open.
+- Use task_semantic_updates to inspect the actual new names, descriptions, evidence, decisions, and relations. Flag duplicate metrics, unsupported numeric targets, unsupported technology choices, and external claims without a preserved source URL; do not infer semantic quality from counts alone.
 - Flag any graph update that converts missing information, unsupported assumptions, or unresolved user preferences into confirmed Decisions. Keep those items as assumptions, risks, open questions, or decision candidates unless evidence or explicit user confirmation supports them.
 - Verify evidence causality: major technology, authentication, scale, pricing, or launch Decisions should be supported by Evidence, user-stated facts, or prior graph context. If evidence is missing, move the item to proposal_questions or review notes instead of accepting it as final.
 - Treat unsupported technology names, algorithms, percentile choices, and capacity targets as semantic issues even when graph structure is valid.
@@ -113,6 +114,7 @@ Output contract:
 - The JSON object must include only: status, confirmation_id, request_summary, review, product_context_update, knowledge_graph_review, proposal_questions, confirmation_message.
 - Never output planner, executor_results, product_knowledge_graph, knowledge_graph_update, full entities, full relations, executor payloads, graph markdown, or long copied descriptions.
 - confirmation_id must be stable for this workflow result and usable as a question-form id.
+- product_context_update must be one short string, not an object or section list.
 - review must include accepted_task_ids, rejected_task_ids, retry_task_ids, issues, and notes.
 - Every issue in review.issues and knowledge_graph_review.issues must include code, severity ("error" or "warning"), optional task_id, and message. task_id must be one string; emit one issue per task when the same issue affects multiple tasks, and omit task_id for global issues. Never use null or an array for task_id.
 - knowledge_graph_review must include graph_ref, accepted_task_ids, rejected_task_ids, retry_task_ids, issues, and short notes. It is a review/reference object, not the graph itself.

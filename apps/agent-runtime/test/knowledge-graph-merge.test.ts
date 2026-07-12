@@ -20,6 +20,7 @@ import type {
   TaskExecutionPlan,
 } from "@repo/shared";
 import {
+  compactTaskSemanticUpdates,
   createCritiqueValidationReport,
 } from "../src/agents/product-workflow/critique-agent/agent";
 import { hasStructuredGraphItems } from "../src/agents/product-workflow/executor-agent/agent";
@@ -32,6 +33,32 @@ test("retries only when an executor wrote no structured graph items", () => {
   assert.equal(hasStructuredGraphItems(emptyGraph), false);
   emptyGraph.entities.push(createGoal("G-001"));
   assert.equal(hasStructuredGraphItems(emptyGraph), true);
+});
+
+test("keeps compact semantic updates reviewable without copying the full graph", () => {
+  const entity = createRequirement(
+    "R-001",
+    "task-01",
+    "Concurrent editing",
+    "The product supports concurrent editing.",
+  );
+  const result = createExecutorResult({
+    taskId: "task-01",
+    agentType: "executor-product-strategy",
+    entity,
+    relation: createRelation(
+      "REL-001",
+      "G-001",
+      entity.id,
+      "task-01",
+      "The goal references the requirement.",
+    ),
+  });
+
+  const updates = compactTaskSemanticUpdates([result]);
+
+  assert.equal(updates[0]?.entities[0]?.description, entity.description);
+  assert.equal(updates[0]?.relations[0]?.target, entity.id);
 });
 
 test("critique validation rejects executor boundary violations", () => {
@@ -109,6 +136,91 @@ test("critique validation rejects executor boundary violations", () => {
     report.issues.map((issue) => issue.code),
     ["UNAUTHORIZED_ENTITY_TYPE", "UNAUTHORIZED_RELATION_TYPE"],
   );
+});
+
+test("critique validation rejects a task that omits its required blocking question", () => {
+  const task = {
+    ...createTask("task-01", 1, "executor-product-discovery"),
+    required_open_question_ids: ["OQ-SCALE"],
+  };
+  const requirement = createRequirement(
+    "R-001",
+    "seed-task",
+    "Concurrent editing",
+    "The product supports concurrent editing.",
+  );
+  const feature: ProductKnowledgeGraph["entities"][number] = {
+    id: "F-001",
+    type: "Feature",
+    name: "Shared editing",
+    description: "Allow users to edit one document together.",
+    source_task_id: task.task_id,
+    status: "proposed",
+  };
+  const relation: ProductKnowledgeGraph["relations"][number] = {
+    id: "REL-001",
+    type: "Satisfies",
+    source: feature.id,
+    target: requirement.id,
+    source_task_id: task.task_id,
+  };
+  const result: ExecutorAgentResult = {
+    task_id: task.task_id,
+    agent_type: task.assigned_agent,
+    focus_layer: "Feature",
+    summary: "Created the collaboration feature.",
+    entities: [feature],
+    relations: [relation],
+    decisions: [],
+    risks: [],
+    open_questions: [],
+    quality_result: { passed: true, notes: "ok" },
+  };
+  const graph = createGraph({
+    entities: [requirement, feature],
+    relations: [relation],
+  });
+
+  const missing = createCritiqueValidationReport({
+    requestAnalysis: createRequestAnalysis(),
+    plan: {
+      status: "initial",
+      request_summary: "Review blocking question persistence.",
+      dag: { nodes: [task.task_id], edges: [] },
+      tasks: [task],
+      assumptions: [],
+    },
+    executorResults: [result],
+    knowledgeGraph: graph,
+  });
+  const present = createCritiqueValidationReport({
+    requestAnalysis: createRequestAnalysis(),
+    plan: {
+      status: "initial",
+      request_summary: "Review blocking question persistence.",
+      dag: { nodes: [task.task_id], edges: [] },
+      tasks: [task],
+      assumptions: [],
+    },
+    executorResults: [
+      {
+        ...result,
+        open_questions: [
+          { id: "OQ-SCALE", text: "Expected concurrency?", blocking: true },
+        ],
+      },
+    ],
+    knowledgeGraph: graph,
+  });
+
+  assert.deepEqual(missing.rejected_task_ids, [task.task_id]);
+  assert.equal(
+    missing.issues.some(
+      (issue) => issue.code === "MISSING_REQUIRED_BLOCKING_QUESTION",
+    ),
+    true,
+  );
+  assert.deepEqual(present.rejected_task_ids, []);
 });
 
 test("renames non-similar duplicate IDs and remaps relation endpoints", () => {

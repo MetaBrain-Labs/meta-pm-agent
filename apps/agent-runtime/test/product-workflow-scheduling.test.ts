@@ -408,6 +408,16 @@ test("creates parallel graph-operation fallback plan for broad MVP requests", ()
       "executor-ai-shipping",
     ],
   );
+  assert.deepEqual(plan.tasks[0]?.required_open_question_ids, [
+    "OQ-BM1-GAP1",
+    "OQ-BM1-GAP2",
+  ]);
+  assert.equal(
+    plan.tasks.slice(1).every(
+      (task) => task.required_open_question_ids?.length === 0,
+    ),
+    true,
+  );
   assert.deepEqual(
     plan.tasks
       .filter((task) => task.depends_on.length === 0)

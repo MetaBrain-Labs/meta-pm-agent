@@ -175,6 +175,14 @@ test("orchestrator planner subagent prompt satisfies json response format", () =
     ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
     /Defer detailed architecture and exhaustive component decomposition to a supplement DAG/,
   );
+  assert.match(
+    ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
+    /required_open_question_ids/,
+  );
+  assert.match(
+    ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
+    /do not create placeholder capacity metrics, numeric targets/,
+  );
 });
 
 test("critique agent prompt stays compact and does not request full graph copies", () => {
@@ -225,6 +233,12 @@ test("critique agent prompt stays compact and does not request full graph copies
     CRITIQUE_AGENT_PROMPT,
     /does not prove semantic uniqueness, evidence quality, or architecture proportionality/,
   );
+  assert.match(CRITIQUE_AGENT_PROMPT, /Use task_semantic_updates/);
+  assert.match(CRITIQUE_AGENT_PROMPT, /unsupported numeric targets/);
+  assert.match(
+    CRITIQUE_AGENT_PROMPT,
+    /product_context_update must be one short string/,
+  );
   assert.match(
     CRITIQUE_AGENT_PROMPT,
     /Every radio\/select option must answer the same decision dimension/,
@@ -254,4 +268,7 @@ test("executor prompt preserves append-only graph writing semantics", () => {
   assert.match(prompt, /runtime generates the execution summary/);
   assert.match(prompt, /write one new blocking OQ-\*/);
   assert.match(prompt, /specific technology, algorithm, vendor, protocol/);
+  assert.match(prompt, /at most two search attempts per topic/);
+  assert.match(prompt, /do not add an unsupported numeric target/);
+  assert.match(prompt, /persist every exact ID/);
 });
