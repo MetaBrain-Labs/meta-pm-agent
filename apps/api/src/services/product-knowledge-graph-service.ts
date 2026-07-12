@@ -353,10 +353,14 @@ export function buildPersistentNodes(
   knowledgeGraph: ProductKnowledgeGraph,
 ): KnowledgeGraphEntity[] {
   const nodes = new Map<string, KnowledgeGraphEntity>();
+  const entityIds = new Set(
+    knowledgeGraph.entities.map((entity) => entity.id.trim()),
+  );
 
   for (const entity of knowledgeGraph.entities) {
     const key = entity.id.trim();
     if (!key) continue;
+    if (isLegacyDecisionAlias(key, entityIds)) continue;
     nodes.set(key, entity);
   }
 
@@ -390,10 +394,19 @@ export function buildPersistentNodes(
       description: question.text,
       source_task_id: question.source_task_id,
       status: "proposed",
+      blocking: question.blocking,
     });
   }
 
   return [...nodes.values()];
+}
+
+/**
+ * 历史 DEC-001 是 D-001 的辅助副本；存在 canonical D-* 时不再持久化别名。
+ */
+function isLegacyDecisionAlias(id: string, entityIds: Set<string>): boolean {
+  const match = /^DEC-(\d+)$/i.exec(id);
+  return Boolean(match && entityIds.has(`D-${match[1]}`));
 }
 
 /**

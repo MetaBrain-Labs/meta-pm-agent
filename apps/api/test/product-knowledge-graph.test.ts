@@ -8,6 +8,7 @@
  * - 覆盖 entities 持久化为 nodes
  * - 覆盖 decisions/risks/open_questions 规范化为节点
  * - 验证已有实体节点优先于同 ID 的简化 decision
+ * - 验证历史 DEC-* 别名不会与 canonical D-* 重复持久化
  */
 
 import assert from "node:assert/strict";
@@ -79,6 +80,14 @@ function createKnowledgeGraph(): ProductKnowledgeGraph {
         type: "Goal",
         name: "提升协作效率",
         description: "团队希望减少需求澄清成本。",
+        source_task_id: "task-01",
+        status: "proposed",
+      },
+      {
+        id: "DEC-001",
+        type: "Decision",
+        name: "历史辅助决策别名",
+        description: "该节点应由 canonical D-001 取代。",
         source_task_id: "task-01",
         status: "proposed",
       },

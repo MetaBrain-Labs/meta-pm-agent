@@ -57,6 +57,8 @@ Parsing process:
 4. Split clearly different goals into separate business items. When unsure whether two goals should merge, prefer splitting.
 5. Extract only explicit constraints from the user's words.
 6. Add missing_information only when it would materially reduce uncertainty for downstream planning.
+   - A missing item must be necessary for the user's current requested outcome, not merely useful for a later roadmap. Do not ask for timeline, compliance standards, document formats, integrations, or implementation preferences when the current concept/strategy graph can remain valid without them.
+   - Use importance >= 0.8 only when downstream cannot produce a decision-ready result without the answer. Otherwise keep the uncertainty as a non-blocking assumption or omit it.
 7. Check that every user_input index appears exactly once across business_model, questions, or chitchat.
 
 Rules:

@@ -2,10 +2,10 @@
  * Planner 规划引擎：DAG 归一化、Fallback 生成与格式化
  *
  * Planner SubAgent 的共享规划逻辑。normalizeTaskExecutionPlan 负责
- * 收敛 LLM 生成的冗余依赖边，createFallbackPlan 在模型不可用时生成确定性图谱操作 DAG。
+ * 校验 LLM 生成的显式依赖边，createFallbackPlan 在模型不可用时生成确定性图谱操作 DAG。
  *
  * Responsibilities:
- * - normalizeTaskExecutionPlan()：归一化 Planner DAG，只保留真实图谱数据依赖
+ * - normalizeTaskExecutionPlan()：归一化 Planner DAG，保留合法的显式图谱数据依赖
  * - createFallbackPlan()：模型不可用时的确定性 DAG 生成（关键词匹配 + 固定顺序）
  * - formatTaskExecutionPlanBlock()：前端 DAG 展示格式化
  */
@@ -28,13 +28,13 @@ import type { PlannerAgentInput } from "../../types";
 // ---------------------------------------------------------------------------
 
 const NORMALIZED_DAG_ASSUMPTION =
-  "Planner DAG was normalized to keep only real graph-data dependencies and remove serial edges that only expressed presentation order.";
+  "Planner DAG dependencies were validated and deduplicated without removing explicit upstream data requirements.";
 
 /**
  * 归一化 Planner 生成的 Executor DAG。
  *
- * Planner 模型容易把"产品工作顺序"写成完整瀑布依赖链。这里将任务依赖收敛为真实
- * 图谱数据前置关系，并保留同一 Executor 的串行约束，确保 LangGraph 可以调度并行批次。
+ * 显式依赖可能表达下游需要消费的实体 ID，运行时不得根据 Executor 类型擅自删除。
+ * 这里只删除不存在、自引用或未来任务依赖，并保留同一 Executor 的串行约束。
  */
 export function normalizeTaskExecutionPlan(
   plan: TaskExecutionPlan,
@@ -93,7 +93,6 @@ function normalizeTaskDependencies(
   tasksByAgent: Map<ExecutorAgentType, TaskExecutionNode[]>,
 ): string[] {
   const agentType = task.assigned_agent as ExecutorAgentType;
-  const hardDependencyAgents = getHardDependencyAgents(agentType, tasksByAgent);
   const dependencies = new Set<string>();
 
   // 同一个 Executor 的多个任务仍然串行，避免同一节点在一个并行批次内重复执行。
@@ -106,95 +105,19 @@ function normalizeTaskDependencies(
     dependencies.add(previousSameAgentTask.task_id);
   }
 
-  // 对跨 Executor 依赖只保留真实的图谱数据前置关系。
+  // 保留 Planner 明确给出的历史任务依赖；描述和验收标准可能消费其实体 ID。
   for (const dependencyId of task.depends_on) {
     const dependencyTask = taskById.get(dependencyId);
-    if (!dependencyTask || dependencyTask.task_id === task.task_id) continue;
-
-    const dependencyAgent = dependencyTask.assigned_agent as ExecutorAgentType;
-    const isSameAgentPreviousTask =
-      dependencyAgent === agentType && dependencyTask.sequence < task.sequence;
-    const isHardDependency = hardDependencyAgents.includes(dependencyAgent);
-    const isExplicitToolkitStrategyDependency =
-      agentType === "executor-toolkit" &&
-      dependencyAgent === "executor-product-strategy";
-    const isStrategyRefinementDependency =
-      isDownstreamStrategyRefinementTask(task, tasksByAgent) &&
-      dependencyTask.sequence < task.sequence;
-
     if (
-      isSameAgentPreviousTask ||
-      isHardDependency ||
-      isExplicitToolkitStrategyDependency ||
-      isStrategyRefinementDependency
+      dependencyTask &&
+      dependencyTask.task_id !== task.task_id &&
+      dependencyTask.sequence < task.sequence
     ) {
       dependencies.add(dependencyTask.task_id);
     }
   }
 
-  for (const dependencyAgent of hardDependencyAgents) {
-    const upstreamTask = getLastTaskForAgentBefore(
-      dependencyAgent,
-      task,
-      tasksByAgent,
-    );
-    if (upstreamTask && upstreamTask.task_id !== task.task_id) {
-      dependencies.add(upstreamTask.task_id);
-    }
-  }
-
   return [...dependencies];
-}
-
-function isDownstreamStrategyRefinementTask(
-  task: TaskExecutionNode,
-  tasksByAgent: Map<ExecutorAgentType, TaskExecutionNode[]>,
-): boolean {
-  const agentType = task.assigned_agent as ExecutorAgentType;
-  if (agentType !== "executor-product-strategy") return false;
-
-  return Boolean(getPreviousTaskForAgent(agentType, task, tasksByAgent));
-}
-
-function getHardDependencyAgents(
-  agentType: ExecutorAgentType,
-  tasksByAgent: Map<ExecutorAgentType, TaskExecutionNode[]>,
-): ExecutorAgentType[] {
-  const selectedAgents = new Set(tasksByAgent.keys());
-  const include = (...agents: ExecutorAgentType[]) =>
-    agents.filter((agent) => selectedAgents.has(agent));
-
-  switch (agentType) {
-    case "executor-product-strategy":
-    case "executor-toolkit":
-      return [];
-    case "executor-market-research":
-    case "executor-gtm":
-    case "executor-data-analytics":
-      return include("executor-product-strategy");
-    case "executor-product-discovery":
-      return include("executor-product-strategy");
-    case "executor-product-execution":
-      return include(
-        "executor-product-discovery",
-        "executor-product-strategy",
-      ).slice(0, 1);
-    case "executor-marketing-growth":
-      return include(
-        "executor-gtm",
-        "executor-product-discovery",
-        "executor-product-strategy",
-      ).slice(0, 1);
-    case "executor-ai-shipping":
-    case "executor-interface-craft":
-      return include(
-        "executor-product-execution",
-        "executor-product-discovery",
-        "executor-product-strategy",
-      ).slice(0, 1);
-    default:
-      return [];
-  }
 }
 
 function getPreviousTaskForAgent(
@@ -210,18 +133,6 @@ function getPreviousTaskForAgent(
   return previousTasks.at(-1) ?? null;
 }
 
-function getLastTaskForAgentBefore(
-  agentType: ExecutorAgentType,
-  task: TaskExecutionNode,
-  tasksByAgent: Map<ExecutorAgentType, TaskExecutionNode[]>,
-): TaskExecutionNode | null {
-  const tasks = tasksByAgent.get(agentType) ?? [];
-  const previousTasks = tasks.filter(
-    (candidate) => candidate.sequence < task.sequence,
-  );
-
-  return previousTasks.at(-1) ?? null;
-}
 
 // ---------------------------------------------------------------------------
 // Fallback DAG 生成

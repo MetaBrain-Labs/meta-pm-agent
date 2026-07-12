@@ -5,7 +5,7 @@
  *
  * Responsibilities:
  * - 校验重复节点 ID 会被跳过
- * - 校验重复关系 ID 会被跳过
+ * - 校验重复关系 ID 会被自动重映射
  * - 校验端点缺失的关系不会进入图谱状态
  */
 
@@ -55,16 +55,45 @@ test("skips duplicate graph IDs and missing relation endpoints", async () => {
     ),
   ) as ToolResult;
 
-  assert.equal(relationResult.count, 1);
+  assert.equal(relationResult.count, 2);
   assert.deepEqual(
     state.relations.map((item) => item.id),
-    ["REL-002"],
+    ["REL-002", "REL-003"],
   );
   assert.deepEqual(
     new Set(relationResult.skipped?.map((item) => item.reason)),
-    new Set(["duplicate_id_append_only_graph", "missing_relation_endpoint"]),
+    new Set(["missing_relation_endpoint"]),
   );
-  assert.deepEqual(relationResult.items, [{ id: "REL-002" }]);
+  assert.deepEqual(relationResult.items, [
+    { id: "REL-002" },
+    { id: "REL-003" },
+  ]);
+});
+
+test("requires decision metadata to reuse a canonical Decision node ID", async () => {
+  const state = createKnowledgeGraph();
+  const tools = createKnowledgeGraphTools(state);
+  const addNodes = getTool(tools, "kg_file_add_nodes");
+  const addDecisions = getTool(tools, "kg_file_add_decisions");
+
+  await addNodes.invoke({
+    nodes: [createTypedNode("D-001", "Decision")],
+  });
+  const result = JSON.parse(
+    String(
+      await addDecisions.invoke({
+        decisions: [
+          { id: "D-001", text: "Canonical decision" },
+          { id: "DEC-001", text: "Legacy duplicate" },
+        ],
+      }),
+    ),
+  ) as ToolResult;
+
+  assert.deepEqual(result.items, [{ id: "D-001" }]);
+  assert.deepEqual(result.skipped, [
+    { id: "DEC-001", reason: "missing_canonical_decision_node" },
+  ]);
 });
 
 test("skips invalid relation directions and allows corrected resubmission", async () => {

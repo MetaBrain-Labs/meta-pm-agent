@@ -40,6 +40,11 @@ test("planner prompt preserves graph-semantics guardrails", () => {
     PLANNER_AGENT_PROMPT,
     /trace which historical open questions or risks the answer resolves or supersedes/,
   );
+  assert.match(PLANNER_AGENT_PROMPT, /stable OQ-\* ID/);
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /normally no more than 8 new entities total/,
+  );
   assert.match(
     PLANNER_AGENT_PROMPT,
     /first plan Goal\/Requirement work plus evidence-producing tasks, then add a downstream Product Strategy refinement task/,
@@ -190,6 +195,8 @@ test("critique agent prompt stays compact and does not request full graph copies
     /Include every unresolved blocking question after semantic deduplication/,
   );
   assert.match(CRITIQUE_AGENT_PROMPT, /exact open_question_id/);
+  assert.match(CRITIQUE_AGENT_PROMPT, /Never invent an open_question_id/);
+  assert.match(CRITIQUE_AGENT_PROMPT, /timelines for internal consistency/);
   assert.match(
     CRITIQUE_AGENT_PROMPT,
     /Status is a critique classification, not an execution command/,
@@ -245,4 +252,6 @@ test("executor prompt preserves append-only graph writing semantics", () => {
   assert.match(prompt, /Never reuse an existing node, relation, decision, risk, or open-question ID/);
   assert.match(prompt, /all new IDs unique/);
   assert.match(prompt, /runtime generates the execution summary/);
+  assert.match(prompt, /write one new blocking OQ-\*/);
+  assert.match(prompt, /specific technology, algorithm, vendor, protocol/);
 });

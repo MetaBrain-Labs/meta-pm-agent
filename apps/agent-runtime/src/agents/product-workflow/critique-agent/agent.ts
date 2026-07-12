@@ -918,9 +918,13 @@ function composeProductWorkflowResult(
   input: CritiqueAgentInput,
   review: CritiqueAgentOutput,
 ): ProductWorkflowResult {
+  const proposalQuestions = reconcileProposalQuestions(
+    review.proposal_questions,
+    input.executorResults,
+  );
   const needsConfirmation =
-    review.status !== "completed" ||
-    review.proposal_questions.length > 0 ||
+    review.status === "requires_executor_retry" ||
+    proposalQuestions.length > 0 ||
     review.review.retry_task_ids.length > 0;
 
   return {
@@ -947,9 +951,87 @@ function composeProductWorkflowResult(
       ]),
     },
     knowledge_graph_review: review.knowledge_graph_review,
-    proposal_questions: review.proposal_questions,
-    confirmation_message: review.confirmation_message,
+    proposal_questions: proposalQuestions,
+    confirmation_message: needsConfirmation
+      ? review.confirmation_message
+      : "本轮任务已完成，所有可追溯的阻塞问题均已处理。",
   };
+}
+
+/**
+ * 只接受能追溯到真实 blocking OpenQuestion 的模型问题，并补齐模型遗漏的问题。
+ */
+export function reconcileProposalQuestions(
+  reviewQuestions: CritiqueAgentOutput["proposal_questions"],
+  executorResults: ExecutorAgentResult[],
+): CritiqueAgentOutput["proposal_questions"] {
+  const actualSourceKeys = new Set<string>();
+  for (const result of executorResults) {
+    for (const question of result.open_questions) {
+      if (!question.blocking) continue;
+      actualSourceKeys.add(
+        formatQuestionSourceKey({
+          source_agent: result.agent_type,
+          source_task_id: result.task_id,
+          open_question_id: question.id,
+        }),
+      );
+    }
+  }
+
+  const coveredSourceKeys = new Set<string>();
+  const verified = reviewQuestions.flatMap((question) => {
+    const sources = question.sources.filter((source) => {
+      if (!source.open_question_id) return false;
+      const key = formatQuestionSourceKey(source);
+      if (!actualSourceKeys.has(key)) return false;
+      coveredSourceKeys.add(key);
+      return true;
+    });
+    const firstSource = sources[0];
+    return firstSource
+      ? [
+          {
+            ...question,
+            source_task_id: firstSource.source_task_id,
+            source_agent: firstSource.source_agent,
+            sources,
+          },
+        ]
+      : [];
+  });
+
+  const missing = createFallbackProposalQuestions(executorResults).flatMap(
+    (question) => {
+      const sources = question.sources.filter(
+        (source) => !coveredSourceKeys.has(formatQuestionSourceKey(source)),
+      );
+      const firstSource = sources[0];
+      return firstSource
+        ? [
+            {
+              ...question,
+              source_task_id: firstSource.source_task_id,
+              source_agent: firstSource.source_agent,
+              sources,
+            },
+          ]
+        : [];
+    },
+  );
+
+  return [...verified, ...missing].sort(
+    (left, right) => right.priority - left.priority,
+  );
+}
+
+/**
+ * 生成稳定问题来源 key，防止模型伪造 missing-* ID 或错误任务归属。
+ */
+function formatQuestionSourceKey(
+  source: ProductWorkflowProposalQuestion["sources"][number],
+): string {
+  return `${source.source_agent}:${source.source_task_id}:${source.open_question_id ?? ""}`;
 }
 
 /**

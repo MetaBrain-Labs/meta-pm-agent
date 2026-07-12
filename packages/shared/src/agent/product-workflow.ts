@@ -71,6 +71,7 @@ export const KnowledgeGraphEntitySchema = z.object({
   description: z.string().optional(),
   source_task_id: z.string().optional(),
   status: z.enum(["proposed", "confirmed", "deprecated"]).optional(),
+  blocking: z.boolean().optional(),
 });
 
 /**

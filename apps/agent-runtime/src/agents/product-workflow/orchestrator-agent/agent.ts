@@ -258,7 +258,10 @@ function isPreOrchestratorInput(
 }
 
 function createOrchestratorPayload(input: OrchestratorAgentInput) {
-  const compactGraph = compactGraphForPlanner(input.knowledgeGraph);
+  const compactGraph = compactGraphForPlanner(
+    input.knowledgeGraph,
+    isWorkflowSupplementInput(input),
+  );
 
   return {
     mode: "full",
@@ -300,11 +303,24 @@ function createOrchestratorPayload(input: OrchestratorAgentInput) {
  * Planner 仅需了解图谱结构（有哪些节点、什么类型、关系拓扑）即可生成 DAG，
  * 无需完整节点描述（每个 entity description 约 200-600 字符，在 100+ 节点时浪费严重）。
  */
-function compactGraphForPlanner(
+export function compactGraphForPlanner(
   knowledgeGraph: OrchestratorAgentInput["knowledgeGraph"],
+  supplement = false,
 ) {
   const MAX_ENTITY_NAME = 120;
   const MAX_SUMMARY_LEN = 600;
+  const entities = supplement
+    ? selectSupplementPlannerEntities(knowledgeGraph.entities)
+    : knowledgeGraph.entities;
+  const entityIds = new Set(entities.map((entity) => entity.id));
+  const relations = supplement
+    ? knowledgeGraph.relations
+        .filter(
+          (relation) =>
+            entityIds.has(relation.source) && entityIds.has(relation.target),
+        )
+        .slice(-24)
+    : knowledgeGraph.relations;
 
   return {
     current_state: knowledgeGraph.current_state,
@@ -323,7 +339,13 @@ function compactGraphForPlanner(
           ? `${s.slice(0, MAX_SUMMARY_LEN)}...`
           : s,
       ),
-    entities: knowledgeGraph.entities.map((node) => ({
+    open_questions: knowledgeGraph.open_questions.slice(-8).map((question) => ({
+      id: question.id,
+      text: question.text.slice(0, MAX_ENTITY_NAME),
+      blocking: question.blocking,
+      source_task_id: question.source_task_id,
+    })),
+    entities: entities.map((node) => ({
       id: node.id,
       type: node.type,
       name:
@@ -333,13 +355,31 @@ function compactGraphForPlanner(
       source_task_id: node.source_task_id,
       status: node.status,
     })),
-    relations: knowledgeGraph.relations.map((rel) => ({
+    relations: relations.map((rel) => ({
       id: rel.id,
       type: rel.type,
       source: rel.source,
       target: rel.target,
     })),
   };
+}
+
+/**
+ * 补充轮次只传目标、决策、待确认问题和最近节点，避免为少量表单答案复制全图。
+ */
+function selectSupplementPlannerEntities(
+  entities: OrchestratorAgentInput["knowledgeGraph"]["entities"],
+) {
+  const selected = new Map<string, (typeof entities)[number]>();
+  for (const entity of entities) {
+    if (["Goal", "Decision", "OpenQuestion"].includes(entity.type)) {
+      selected.set(entity.id, entity);
+    }
+  }
+  for (const entity of entities.slice(-10)) {
+    selected.set(entity.id, entity);
+  }
+  return [...selected.values()].slice(-20);
 }
 
 export function createFallbackOrchestratorDecision(

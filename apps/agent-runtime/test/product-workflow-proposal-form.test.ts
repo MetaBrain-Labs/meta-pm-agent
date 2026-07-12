@@ -19,6 +19,61 @@ import type {
 import {
   formatProductWorkflowProposalQuestionForm,
 } from "../src/agents/product-workflow/agent";
+import { reconcileProposalQuestions } from "../src/agents/product-workflow/critique-agent/agent";
+
+test("rejects fabricated question sources and restores actual blocking questions", () => {
+  const executorResult = createExecutorResult(
+    "task-01",
+    "executor-product-strategy",
+    ["真实问题一？", "真实问题二？"],
+  );
+  const questions = reconcileProposalQuestions(
+    [
+      {
+        id: "verified",
+        label: "真实问题一？",
+        type: "textarea",
+        required: true,
+        source_task_id: "task-01",
+        source_agent: "executor-product-strategy",
+        sources: [
+          {
+            source_task_id: "task-01",
+            source_agent: "executor-product-strategy",
+            open_question_id: "task-01-oq-1",
+          },
+        ],
+        priority: 10,
+      },
+      {
+        id: "fabricated",
+        label: "伪造问题？",
+        type: "textarea",
+        required: true,
+        source_task_id: "task-01",
+        source_agent: "executor-product-strategy",
+        sources: [
+          {
+            source_task_id: "task-01",
+            source_agent: "executor-product-strategy",
+            open_question_id: "missing-1",
+          },
+        ],
+        priority: 100,
+      },
+    ],
+    [executorResult],
+  );
+
+  assert.deepEqual(
+    questions.map((question) => question.label),
+    ["真实问题一？", "真实问题二？"],
+  );
+  assert.equal(
+    questions.some((question) => question.id === "fabricated"),
+    false,
+  );
+});
 
 test("merges duplicate planner proposal questions and preserves sources", () => {
   const form = parseQuestionForm(

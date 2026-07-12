@@ -68,9 +68,9 @@ ${PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT}
 Structured graph writing workflow (use these tools instead of free-text):
 1. Inspect the provided compact context first. Query only missing details; do not load the full graph.
 2. Call \`kg_file_add_nodes\` with your entity nodes as a typed JSON array. Every node must have: id, type (${definition.allowedEntityTypes.join("/")}), name, description, source_task_id (the current task ID), and status ("proposed" by default).
-3. Call \`kg_file_add_relations\` with your relation edges as a typed JSON array. Every relation must have: id, type (${definition.allowedRelationTypes.join("/")}), source (a node id from step 2 or prior graph), target (a node id), description, and source_task_id.
+3. Call \`kg_file_add_relations\` with your relation edges as a typed JSON array. Omit relation id so the runtime allocates a unique ID. Every relation must have: type (${definition.allowedRelationTypes.join("/")}), source (a node id from step 2 or prior graph), target (a node id), description, and source_task_id.
    - If the tool skips a relation for invalid_relation_direction, correct and resubmit it immediately before continuing. The skipped relation ID remains available.
-4. Call \`kg_file_add_decisions\` with an array of decision items (each has id and text).
+4. Call \`kg_file_add_decisions\` only for Decision nodes created through \`kg_file_add_nodes\`; each item must reuse that exact D-* node id and include text. Never create a separate DEC-* alias.
 5. Call \`kg_file_add_risks\` with an array of risk items (each has id and text).
 6. Call \`kg_file_add_open_questions\` with an array of open question items (each has id, text, and blocking).
 - The runtime generates the execution summary from committed graph counts. Do not write or claim summary counts yourself.
@@ -86,6 +86,8 @@ Graph writing rules:
 - New node names should be short and specific. Descriptions should use natural business language, normally 2-3 sentences when detail is needed.
 - A node description must describe only the entity itself: what it is, why it matters, and key details.
 - Do not embed relationships inside node descriptions. Use \`kg_file_add_relations\` for dependencies, support, satisfaction, implementation, measurement, validation, composition, or reference links.
+- Do not name a specific technology, algorithm, vendor, protocol, percentile, or capacity target as confirmed unless user_input or an Evidence/Decision node explicitly supports it. Preserve unsupported choices as hypotheses or open questions.
+- Before writing confirmed timeline or scope nodes, compare dates, years, quarters, durations, and selected options in user_input. If they cannot all hold, write one new blocking OQ-* through kg_file_add_open_questions instead of encoding contradictory facts as Decisions.
 - Do not describe entities from a global layer perspective such as "this belongs to the strategy layer"; describe the concrete entity.
 - Relation endpoints must reference existing graph node IDs or new node IDs created by your own tool calls in this task.
 - If the available relation types cannot express an important semantic connection, use Custom only when it remains clear and traceable; otherwise record the gap as a risk or open question.

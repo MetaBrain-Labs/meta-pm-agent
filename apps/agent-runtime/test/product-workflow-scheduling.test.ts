@@ -35,6 +35,7 @@ import {
   scopeSupplementPlan,
 } from "../src/agents/product-workflow/orchestrator-agent/planner-subagent/agent";
 import {
+  compactGraphForPlanner,
   ORCHESTRATOR_AGENT_MAX_RETRIES,
   requireDelegatedPlannerPlan,
 } from "../src/agents/product-workflow/orchestrator-agent/agent";
@@ -73,6 +74,37 @@ test("recognizes form-answer workflows as supplements without agent hints", () =
   } as WorkflowGraphStateValue;
 
   assert.equal(isSupplementWorkflow(state), true);
+});
+
+test("limits supplement Planner context and preserves tracked questions", () => {
+  const graph = createEmptyKnowledgeGraph();
+  graph.entities = Array.from({ length: 30 }, (_, index) => ({
+    id: index === 0 ? "G-001" : `R-${String(index).padStart(3, "0")}`,
+    type: index === 0 ? ("Goal" as const) : ("Requirement" as const),
+    name: `Node ${index}`,
+    source_task_id: "task-01",
+    status: "proposed" as const,
+  }));
+  graph.open_questions = [
+    {
+      id: "OQ-001",
+      text: "Which launch date is authoritative?",
+      blocking: true,
+      source_task_id: "task-01",
+    },
+  ];
+
+  const compact = compactGraphForPlanner(graph, true);
+
+  assert.ok(compact.entities.length <= 20);
+  assert.deepEqual(compact.open_questions, [
+    {
+      id: "OQ-001",
+      text: "Which launch date is authoritative?",
+      blocking: true,
+      source_task_id: "task-01",
+    },
+  ]);
 });
 
 test("fails when Orchestrator does not actually delegate to Planner", () => {
@@ -132,7 +164,7 @@ test("keeps multiple ready tasks for one executor in separate batches", () => {
   ]);
 });
 
-test("normalizes waterfall planner DAG into parallel-ready layers", () => {
+test("preserves explicit planner data dependencies", () => {
   const plan = normalizeTaskExecutionPlan(
     createPlan([
       createTask("task-01", 1, "executor-product-strategy", []),
@@ -151,18 +183,19 @@ test("normalizes waterfall planner DAG into parallel-ready layers", () => {
       ["task-01", []],
       ["task-02", ["task-01"]],
       ["task-03", ["task-02"]],
-      ["task-04", ["task-01"]],
-      ["task-05", ["task-03"]],
-      ["task-06", []],
-      ["task-07", ["task-03"]],
+      ["task-04", ["task-03"]],
+      ["task-05", ["task-04"]],
+      ["task-06", ["task-05"]],
+      ["task-07", ["task-06"]],
     ],
   );
   assert.deepEqual(plan.dag.edges, [
     { source: "task-01", target: "task-02" },
     { source: "task-02", target: "task-03" },
-    { source: "task-01", target: "task-04" },
-    { source: "task-03", target: "task-05" },
-    { source: "task-03", target: "task-07" },
+    { source: "task-03", target: "task-04" },
+    { source: "task-04", target: "task-05" },
+    { source: "task-05", target: "task-06" },
+    { source: "task-06", target: "task-07" },
   ]);
 });
 
@@ -653,19 +686,16 @@ test("selects normalized planner roots and downstream parallel batches", () => {
 
   assert.deepEqual(
     selectNextExecutorRouterTargets(createState({ tasks: plan.tasks })),
-    ["executor-product-strategy", "executor-toolkit"],
+    ["executor-product-strategy"],
   );
   assert.deepEqual(
     selectNextExecutorRouterTargets(
       createState({
         tasks: plan.tasks,
-        results: [
-          createResult("task-01", "executor-product-strategy"),
-          createResult("task-06", "executor-toolkit"),
-        ],
+        results: [createResult("task-01", "executor-product-strategy")],
       }),
     ),
-    ["executor-product-discovery", "executor-data-analytics"],
+    ["executor-product-discovery"],
   );
   assert.deepEqual(
     selectNextExecutorRouterTargets(
@@ -675,12 +705,10 @@ test("selects normalized planner roots and downstream parallel batches", () => {
           createResult("task-01", "executor-product-strategy"),
           createResult("task-02", "executor-product-discovery"),
           createResult("task-03", "executor-product-execution"),
-          createResult("task-04", "executor-data-analytics"),
-          createResult("task-06", "executor-toolkit"),
         ],
       }),
     ),
-    ["executor-ai-shipping", "executor-interface-craft"],
+    ["executor-data-analytics"],
   );
 });
 

@@ -71,7 +71,11 @@ const nodeInputSchema = z.object({
 });
 
 const relationInputSchema = z.object({
-  id: z.string().min(1).describe("Unique relation ID, e.g. REL-001"),
+  id: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Optional relation ID; the runtime assigns one when omitted or duplicated"),
   type: z.enum(RELATION_TYPE_VALUES).describe("Relation type"),
   source: z.string().min(1).describe("Source node ID"),
   target: z.string().min(1).describe("Target node ID"),
@@ -91,6 +95,7 @@ const decisionInputSchema = z.object({
     .string()
     .min(1)
     .describe("Decision text including choice, rationale, and risk assessment"),
+  source_task_id: z.string().min(1).optional().describe("Source task ID"),
 });
 
 const riskInputSchema = z.object({
@@ -349,7 +354,10 @@ export function createKnowledgeGraphTools(
     // 将 relations 写入当前上下文中
     tool(
       async ({ relations }) => {
-        const validated = relations.map((r) => relationInputSchema.parse(r));
+        const validated = assignUniqueRelationIds(
+          relations.map((r) => relationInputSchema.parse(r)),
+          state.relations.map((relation) => relation.id),
+        );
         const appendResult = filterAppendOnlyRelations(
           validated,
           state,
@@ -370,7 +378,7 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_add_relations",
         description:
-          `Append structured relations to the knowledge graph. Each relation must have a new unique id, type, source, target, description, and source_task_id. Duplicate IDs, unauthorized relation types, missing endpoints, and invalid typed-relation directions are skipped. A skipped ID is not reserved and may be resubmitted immediately with corrected endpoints or type. Allowed types for this Agent: ${(policy.allowedRelationTypes ?? RELATION_TYPE_VALUES).join("/")}; Custom remains available only for a clearly described non-canonical connection.`,
+          `Append structured relations to the knowledge graph. Omit id and let the runtime allocate a unique REL-* ID; duplicated supplied IDs are remapped automatically. Unauthorized relation types, missing endpoints, and invalid typed-relation directions are skipped. Allowed types for this Agent: ${(policy.allowedRelationTypes ?? RELATION_TYPE_VALUES).join("/")}; Custom remains available only for a clearly described non-canonical connection.`,
         schema: z.object({
           relations: z
             .array(relationInputSchema)
@@ -385,15 +393,29 @@ export function createKnowledgeGraphTools(
     tool(
       async ({ decisions }) => {
         const validated = decisions.map((d) => decisionInputSchema.parse(d));
-        const authorized = policy.allowedEntityTypes?.includes("Decision") === false
-          ? {
-              items: [] as typeof validated,
-              skipped: validated.map((item) => ({
-                id: item.id,
-                reason: "unauthorized_entity_type:Decision",
-              })),
-            }
-          : { items: validated, skipped: [] };
+        const decisionNodeIds = new Set(
+          state.entities
+            .filter((entity) => entity.type === "Decision")
+            .map((entity) => entity.id),
+        );
+        const authorized =
+          policy.allowedEntityTypes?.includes("Decision") === false
+            ? {
+                items: [] as typeof validated,
+                skipped: validated.map((item) => ({
+                  id: item.id,
+                  reason: "unauthorized_entity_type:Decision",
+                })),
+              }
+            : {
+                items: validated.filter((item) => decisionNodeIds.has(item.id)),
+                skipped: validated
+                  .filter((item) => !decisionNodeIds.has(item.id))
+                  .map((item) => ({
+                    id: item.id,
+                    reason: "missing_canonical_decision_node",
+                  })),
+              };
         const appendResult = filterAppendOnlyItems(
           authorized.items,
           state.decisions.map((item) => item.id),
@@ -413,7 +435,7 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_add_decisions",
         description:
-          `Append structured decisions to the knowledge graph. Each decision must use a new unique id and has text plus optional source_task_id fields. Duplicate IDs are skipped instead of updated. This Agent ${policy.allowedEntityTypes?.includes("Decision") === false ? "is not authorized" : "is authorized"} to write Decision records.`,
+          `Append decision metadata for canonical Decision nodes already written through kg_file_add_nodes. Every item must reuse the exact D-* node id; DEC-* aliases and metadata without a matching Decision node are rejected. Duplicate IDs are skipped instead of updated. This Agent ${policy.allowedEntityTypes?.includes("Decision") === false ? "is not authorized" : "is authorized"} to write Decision records.`,
         schema: z.object({
           decisions: z
             .array(decisionInputSchema)
@@ -514,6 +536,38 @@ function compactWrittenItems<T extends { id: string }>(
   items: T[],
 ): Array<{ id: string }> {
   return items.map(({ id }) => ({ id }));
+}
+
+/**
+ * 为本次关系批次原子分配唯一 ID，避免恢复轮次基于过期最大值发生整批冲突。
+ */
+function assignUniqueRelationIds<
+  T extends Omit<ProductKnowledgeGraph["relations"][number], "id"> & {
+    id?: string;
+  },
+>(relations: T[], existingIds: string[]): Array<T & { id: string }> {
+  const usedIds = new Set(existingIds);
+  let nextNumber = Math.max(0, ...existingIds.map(parseRelationNumber)) + 1;
+
+  return relations.map((relation) => {
+    let id = relation.id?.trim();
+    if (!id || usedIds.has(id)) {
+      do {
+        id = `REL-${String(nextNumber).padStart(3, "0")}`;
+        nextNumber += 1;
+      } while (usedIds.has(id));
+    }
+    usedIds.add(id);
+    return { ...relation, id };
+  });
+}
+
+/**
+ * 读取标准关系 ID 的数字部分；非标准 ID 不影响后续分配。
+ */
+function parseRelationNumber(id: string): number {
+  const match = /^REL-(\d+)$/i.exec(id.trim());
+  return match ? Number(match[1]) : 0;
 }
 
 /**
