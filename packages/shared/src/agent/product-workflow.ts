@@ -71,6 +71,7 @@ export const KnowledgeGraphEntitySchema = z.object({
   description: z.string().optional(),
   source_task_id: z.string().optional(),
   status: z.enum(["proposed", "confirmed", "deprecated"]).optional(),
+  blocking: z.boolean().optional(),
 });
 
 /**
@@ -169,6 +170,7 @@ export const KnowledgeGraphOpenQuestionInputSchema = z.object({
   id: z.string().min(1).describe("Question ID, e.g. OQ-001"),
   text: z.string().min(1).describe("Question text explaining what needs to be confirmed"),
   source_task_id: z.string().optional().describe("Optional executor task ID that raised this question"),
+  source_agent: LooseProductWorkflowAgentTypeSchema.optional().describe("Optional agent that raised this question"),
   blocking: z.boolean().default(false).describe("Whether this question must be answered before the current workflow can complete"),
 });
 
@@ -275,13 +277,13 @@ function hasOverlappingProposalQuestionIntervals(options: string[]): boolean {
 }
 
 /**
- * Planner Agent 输出给 Conversation Agent 渲染的结构化 Question Form 问题。
+ * Planner SubAgent 输出给 Conversation Agent 渲染的结构化 Question Form 问题。
  */
 export const ProductWorkflowProposalQuestionSchema = z
   .object({
     id: z.string().min(1).describe("Stable field ID used in the submitted form answer"),
     label: z.string().min(1).describe("User-facing question label"),
-    type: ProductWorkflowProposalQuestionTypeSchema.describe("Question Form control type chosen by Planner Agent"),
+    type: ProductWorkflowProposalQuestionTypeSchema.describe("Question Form control type chosen by the Planner SubAgent"),
     options: z.array(ProductWorkflowProposalQuestionOptionSchema).optional().catch(undefined).describe("Required for radio, checkbox, and select controls"),
     placeholder: z.string().optional().describe("Optional placeholder for text or textarea controls"),
     required: z.boolean().default(true).describe("Whether the user must answer this field"),
@@ -359,6 +361,10 @@ export const ProductKnowledgeGraphSchema = z.object({
   decisions: z.array(KnowledgeGraphDecisionInputSchema).default([]),
   risks: z.array(KnowledgeGraphRiskInputSchema).default([]),
   open_questions: z.array(KnowledgeGraphOpenQuestionInputSchema).default([]),
+  resolved_open_question_ids: z
+    .array(z.string().min(1))
+    .optional()
+    .describe("Runtime tombstones for answered OpenQuestions that stale graph snapshots must not restore"),
   summary: z.array(z.string()).default([]),
   markdown: z.string().default(""),
   notes: z.array(z.string()).default([]),
@@ -445,7 +451,7 @@ const TaskExecutionAssumptionSchema = z.union([
 ]);
 
 /**
- * Planner Agent 生成的 DAG 节点，描述执行顺序、分配对象和验收标准。
+ * Planner SubAgent 生成的 DAG 节点，描述执行顺序、分配对象和验收标准。
  */
 export const TaskExecutionNodeSchema = z.object({
   task_id: z.string().min(1),
@@ -460,11 +466,21 @@ export const TaskExecutionNodeSchema = z.object({
   depends_on: z.array(z.string().min(1)),
   covered_business_model_indexes: z.array(z.number().int().positive()),
   expected_output: z.string().min(1),
+  required_open_question_ids: z
+    .array(z.string().regex(/^OQ-[A-Za-z0-9_-]+$/))
+    .optional()
+    .describe("Legacy blocking OpenQuestion ID hints retained for restored plans"),
+  required_open_question_count: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe("Number of new blocking OpenQuestions this task must persist with runtime-allocated IDs"),
   quality_check: TaskQualityCheckSchema,
 });
 
 /**
- * Planner Agent 写入 task_execution 的结构化计划。
+ * Planner SubAgent 写入 task_execution 的结构化计划。
  */
 export const TaskExecutionPlanSchema = z.object({
   status: z.enum(["initial", "supplement"]).default("initial"),
@@ -538,7 +554,7 @@ export const ExecutorAgentResultSchema = z.object({
 });
 
 /**
- * Planner Agent 对完整 MVP 工作流的汇总与确认结果。
+ * Critique Agent 对完整 MVP 工作流的汇总与确认结果。
  */
 export const ProductWorkflowReviewIssueSchema = z.object({
   code: z.string().min(1).describe("Stable machine-readable issue code"),
@@ -636,6 +652,15 @@ export const ProductWorkflowKnowledgeGraphReviewSchema = z.object({
  * 模型只输出审查结论、用户补充问题和短摘要；Planner DAG、Executor 结果和完整知识图谱
  * 由运行时代码按已有状态组合，不再要求模型复制。
  */
+const CritiqueProductContextUpdateSchema = z.preprocess((value) => {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const summary = (value as Record<string, unknown>).summary;
+    if (typeof summary === "string") return summary;
+  }
+  return value;
+}, z.string().min(1).max(1200));
+
 export const CritiqueAgentOutputSchema = z.object({
   status: z.enum([
     "pending_user_confirmation",
@@ -651,7 +676,7 @@ export const CritiqueAgentOutputSchema = z.object({
     issues: ProductWorkflowReviewIssuesSchema.describe("Detected issues"),
     notes: ProductWorkflowReviewNotesSchema.describe("Compact review notes"),
   }).describe("Critique Agent decision"),
-  product_context_update: z.string().min(1).max(1200).describe("Short product context update summary"),
+  product_context_update: CritiqueProductContextUpdateSchema.describe("Short product context update summary"),
   knowledge_graph_review: ProductWorkflowKnowledgeGraphReviewSchema.describe("Lightweight graph review, not the full graph"),
   proposal_questions: z.array(ProductWorkflowProposalQuestionSchema).default([]).describe("Unresolved blocking questions that require user confirmation"),
   confirmation_message: z.string().min(1).max(500).describe("Concise user-facing confirmation message"),
@@ -707,7 +732,7 @@ export const OrchestratorContextSourceSchema = z.enum([
 /**
  * Orchestrator Agent 的路由决策。
  *
- * 该结构只表达顶层编排意图，不承载 Planner DAG。真正的 DAG 仍由 Planner Agent
+ * 该结构只表达顶层编排意图，不承载 Planner DAG。真正的 DAG 由 Planner SubAgent
  * 通过现有 TaskExecutionPlanSchema 生成并归一化。
  */
 export const OrchestratorAgentResultSchema = z.object({

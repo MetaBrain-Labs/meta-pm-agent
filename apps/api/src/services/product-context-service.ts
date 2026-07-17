@@ -133,10 +133,14 @@ async function loadPersistedKnowledgeGraphFromDatabase(
   const row = await getProductKnowledgeGraphByWorkspaceId(workspaceId);
   if (!row) return null;
 
-  const nodes = asArray<KnowledgeGraphEntity>(row.nodes);
+  const nodes = removeLegacyDecisionAliases(
+    asArray<KnowledgeGraphEntity>(row.nodes),
+  );
 
   return {
-    entities: nodes,
+    entities: nodes.filter(
+      (node) => node.type !== "Risk" && node.type !== "OpenQuestion",
+    ),
     relations: asArray<KnowledgeGraphRelation>(row.relations),
     decisions: restoreDecisionInputs(nodes),
     risks: restoreRiskInputs(nodes),
@@ -145,6 +149,19 @@ async function loadPersistedKnowledgeGraphFromDatabase(
     markdown: "",
     notes: [],
   };
+}
+
+/**
+ * 加载历史图谱时折叠 DEC-* / D-* 双写，避免恢复后 Decision 数量漂移。
+ */
+function removeLegacyDecisionAliases(
+  nodes: KnowledgeGraphEntity[],
+): KnowledgeGraphEntity[] {
+  const ids = new Set(nodes.map((node) => node.id));
+  return nodes.filter((node) => {
+    const match = node.type === "Decision" ? /^DEC-(\d+)$/i.exec(node.id) : null;
+    return !match || !ids.has(`D-${match[1]}`);
+  });
 }
 
 /**
@@ -253,6 +270,7 @@ function restoreOpenQuestionInputs(
     .map((node) => ({
       id: node.id,
       text: node.description || node.name,
+      blocking: node.blocking ?? false,
       ...(node.source_task_id ? { source_task_id: node.source_task_id } : {}),
     }));
 }

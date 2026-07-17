@@ -21,6 +21,8 @@ import type {
   ProductWorkflowResult,
   ProductWorkflowProposalQuestion,
 } from "@repo/shared";
+
+const PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID = "product-workflow-confirmation";
 import type {
   ProductWorkflowStreamEvent,
 } from "./types";
@@ -38,6 +40,7 @@ type ProposalSlot = {
   source_agent: string;
   sources: ProposalQuestionSource[];
   priority: number;
+  required: boolean;
 };
 
 export {
@@ -63,7 +66,6 @@ export {
   normalizeTaskExecutionPlan,
   createFallbackPlan,
   formatTaskExecutionPlanBlock,
-  formatPlannerReasoningSummary,
 } from "./orchestrator-agent/planner-subagent";
 
 /**
@@ -110,7 +112,7 @@ export function formatProductWorkflowConfirmationQuestionForm(
   };
 
   return `<question-form id="${escapeAttribute(
-    result.confirmation_id,
+    PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID,
   )}" title="设计结果确认">\n${JSON.stringify(form, null, 2)}\n</question-form>`;
 }
 
@@ -122,17 +124,31 @@ export function formatProductWorkflowProposalQuestionForm(
 ): string | null {
   const questions = getProposalFormQuestions(result);
   if (questions.length === 0) return null;
+  const hasBlockingQuestions = questions.some((question) => question.required);
 
   const form = {
-    description:
-      "Planner Agent 汇总了 Executor Agent 需要你补充确认的信息，请先回答这些高优先级问题。",
-    questions,
+    description: hasBlockingQuestions
+      ? "Planner SubAgent 汇总了 Executor Agent 需要你补充确认的信息。必填问题默认展开，选填问题默认折叠。"
+      : "以下问题均为可选优化项。你可以填写任意一项后继续下一轮 DAG，也可以选择“不再继续”并直接确认当前已有设计成果。",
+    questions: questions.map((question) => ({
+      ...question,
+      collapsible: true,
+      defaultCollapsed: hasBlockingQuestions && !question.required,
+    })),
     submitLabel: "提交补充信息",
+    ...(!hasBlockingQuestions
+      ? {
+          variant: "optional-followup",
+          requireAnyAnswer: true,
+          secondarySubmitLabel: "不再继续",
+          secondaryActionValue: "stop_optional_questions",
+        }
+      : {}),
   };
 
   return `<question-form id="${escapeAttribute(
     getProposalDecisionId(result),
-  )}" title="补充信息确认">\n${JSON.stringify(form, null, 2)}\n</question-form>`;
+  )}" title="${hasBlockingQuestions ? "补充信息确认" : "可选优化问题"}">\n${JSON.stringify(form, null, 2)}\n</question-form>`;
 }
 
 /**
@@ -222,12 +238,11 @@ function collectProposalSlots(result: ProductWorkflowResult): ProposalSlot[] {
 
   for (const executorResult of result.executor_results) {
     executorResult.open_questions.forEach((question, index) => {
-      if (!question.blocking) return;
       const questionText = question.text ?? "";
       const normalized = normalizeSlotQuestion(questionText);
       if (!normalized) return;
 
-      const priority = executorResult.open_questions.length - index;
+      const priority = question.blocking ? 100 - index : 50 - index;
       const slotKey = normalized;
       const existing = slots.get(slotKey);
       const source = {
@@ -241,6 +256,7 @@ function collectProposalSlots(result: ProductWorkflowResult): ProposalSlot[] {
           source,
         ]);
         existing.priority = Math.max(existing.priority, priority);
+        existing.required = existing.required || question.blocking;
         return;
       }
 
@@ -251,7 +267,62 @@ function collectProposalSlots(result: ProductWorkflowResult): ProposalSlot[] {
         source_agent: executorResult.agent_type,
         sources: [source],
         priority,
+        required: question.blocking,
       });
+    });
+  }
+
+  const coveredQuestionIds = new Set(
+    [...slots.values()].flatMap((slot) =>
+      slot.sources.flatMap((source) =>
+        source.open_question_id ? [source.open_question_id] : [],
+      ),
+    ),
+  );
+  const sourceAgentByTask = new Map([
+    ...result.executor_results.map(
+      (executorResult) =>
+        [executorResult.task_id, executorResult.agent_type] as const,
+    ),
+    ...result.planner.tasks.map(
+      (task) => [task.task_id, task.assigned_agent] as const,
+    ),
+  ]);
+  for (const question of result.knowledge_graph_update.open_questions) {
+    if (!question.blocking || coveredQuestionIds.has(question.id)) continue;
+    const fallbackTask = result.planner.tasks[0];
+    const sourceTaskId =
+      question.source_task_id ?? fallbackTask?.task_id ?? "unknown-task";
+    const sourceAgent =
+      question.source_agent ??
+      sourceAgentByTask.get(sourceTaskId) ??
+      fallbackTask?.assigned_agent ??
+      "critique";
+    const normalized = normalizeSlotQuestion(question.text);
+    if (!normalized) continue;
+    const source = {
+      source_task_id: sourceTaskId,
+      source_agent: sourceAgent,
+      open_question_id: question.id,
+    };
+    const existing = slots.get(normalized);
+    if (existing) {
+      existing.sources = mergeProposalQuestionSources([
+        ...existing.sources,
+        source,
+      ]);
+      existing.required = true;
+      existing.priority = Math.max(existing.priority, 100);
+      continue;
+    }
+    slots.set(normalized, {
+      id: `${sourceTaskId}-${question.id}`,
+      question: question.text,
+      source_task_id: sourceTaskId,
+      source_agent: sourceAgent,
+      sources: [source],
+      priority: 100,
+      required: true,
     });
   }
 
@@ -268,7 +339,7 @@ function toProposalQuestionFromSlot(
     id: slot.id,
     label: slot.question,
     type: "textarea",
-    required: true,
+    required: slot.required,
     source_task_id: slot.source_task_id,
     source_agent:
       slot.source_agent as ProductWorkflowProposalQuestion["source_agent"],

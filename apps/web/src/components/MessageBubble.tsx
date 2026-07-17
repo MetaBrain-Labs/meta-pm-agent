@@ -103,14 +103,10 @@ export function MessageBubble({
   const conversationToolCalls = getToolCallsForAgent(message, "conversation");
   const requestToolCalls = getToolCallsForAgent(message, "request");
   const orchestratorToolCalls = getToolCallsForAgent(message, "orchestrator");
-  const plannerToolCalls = getToolCallsForAgent(message, "planner");
   const critiqueToolCalls = getToolCallsForAgent(message, "critique");
   const productDirectorToolCalls = getToolCallsForAgent(
     message,
     "product_director",
-  );
-  const plannerReasoningBlocks = message.reasoningBlocks?.filter(
-    (block) => block.agentType === "planner",
   );
   const orchestratorReasoningBlocks = message.reasoningBlocks?.filter(
     (block) => block.agentType === "orchestrator",
@@ -261,21 +257,6 @@ export function MessageBubble({
             tokenUsage={findTokenUsageForAgent(message, "orchestrator")}
           />
         )}
-
-      {showProcessContent &&
-        plannerReasoningBlocks?.map((block) => (
-          <AgentProcessGroup
-            key={block.agentType}
-            agentType={block.agentType}
-            thinkingContent={block.content}
-            thinkingActive={
-              streamActive && isAgentActive(message, block.agentType)
-            }
-            toolCalls={plannerToolCalls}
-            active={streamActive && isAgentActive(message, block.agentType)}
-            tokenUsage={findTokenUsageForAgent(message, block.agentType)}
-          />
-        ))}
 
       {showProcessContent &&
         EXECUTOR_AGENT_TYPES.map((agentType) => {
@@ -1366,7 +1347,7 @@ function getReasoningLabel(agentType: string): string {
     return "思考过程（Conversation Agent）";
   }
   if (agentType === "orchestrator") return "思考过程（Orchestrator Agent）";
-  if (agentType === "planner") return "思考过程（Planner Agent）";
+  if (agentType === "planner") return "思考过程（Planner SubAgent）";
   if (agentType === "critique") return "思考过程（Critique Agent）";
   if (agentType === "product_director") {
     return "思考过程（Critique Agent）";
@@ -1390,7 +1371,7 @@ const EXECUTOR_AGENT_TYPES = [
 const AGENT_LABELS: Record<string, string> = {
   request: "Request Agent",
   orchestrator: "Orchestrator Agent",
-  planner: "Planner Agent",
+  planner: "Planner SubAgent",
   critique: "Critique Agent",
   product_director: "Critique Agent",
   "executor-product-strategy": "Product Strategy Executor",

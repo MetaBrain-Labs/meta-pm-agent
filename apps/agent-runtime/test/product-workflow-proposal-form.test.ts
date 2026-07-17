@@ -17,8 +17,134 @@ import type {
   ProductWorkflowResult,
 } from "@repo/shared";
 import {
+  formatProductWorkflowConfirmationQuestionForm,
   formatProductWorkflowProposalQuestionForm,
 } from "../src/agents/product-workflow/agent";
+import { reconcileProposalQuestions } from "../src/agents/product-workflow/critique-agent/agent";
+import { isAcceptedWorkflowResult } from "../src/agents/conversation/stream";
+import {
+  isProductWorkflowAcceptanceAnswer,
+  isProductWorkflowOptionalStopAnswer,
+} from "../src/utils/form-parser";
+
+test("uses final confirmation when retry has no proposal question", () => {
+  const result = createWorkflowResult({
+    proposalQuestions: [],
+    executorResults: [],
+  });
+  result.review.retry_task_ids = ["task-01"];
+  result.review.issues = [
+    {
+      code: "RETRY_REQUIRED",
+      severity: "error",
+      task_id: "task-01",
+      message: "Task needs correction.",
+    },
+  ];
+
+  assert.equal(isAcceptedWorkflowResult(result), false);
+  assert.equal(formatProductWorkflowProposalQuestionForm(result), null);
+  assert.match(
+    formatProductWorkflowConfirmationQuestionForm(result),
+    /id="product-workflow-confirmation"/,
+  );
+});
+
+test("uses a supplement form when a graph blocking question remains", () => {
+  const result = createWorkflowResult({
+    proposalQuestions: [],
+    executorResults: [],
+  });
+  result.knowledge_graph_update.open_questions = [
+    {
+      id: "OQ-deployment",
+      text: "确认部署环境？",
+      blocking: true,
+    },
+  ];
+
+  const form = formatProductWorkflowProposalQuestionForm(result);
+  assert.match(form ?? "", /title="补充信息确认"/);
+  assert.match(form ?? "", /OQ-deployment/);
+  assert.doesNotMatch(form ?? "", /设计结果确认/);
+});
+
+test("allows warning-only completion and recognizes explicit acceptance", () => {
+  const result = createWorkflowResult({
+    proposalQuestions: [],
+    executorResults: [],
+  });
+  result.status = "completed";
+  result.review.issues = [
+    {
+      code: "SOFT_WARNING",
+      severity: "warning",
+      message: "Review later.",
+    },
+  ];
+
+  assert.equal(isAcceptedWorkflowResult(result), true);
+  assert.equal(
+    isProductWorkflowAcceptanceAnswer(
+      "[form answers - product-workflow-confirmation]\n- 你希望如何处理当前结果？: 确认接受",
+    ),
+    true,
+  );
+});
+
+test("rejects fabricated question sources and restores actual blocking questions", () => {
+  const executorResult = createExecutorResult(
+    "task-01",
+    "executor-product-strategy",
+    ["真实问题一？", "真实问题二？"],
+  );
+  const questions = reconcileProposalQuestions(
+    [
+      {
+        id: "verified",
+        label: "真实问题一？",
+        type: "textarea",
+        required: true,
+        source_task_id: "task-01",
+        source_agent: "executor-product-strategy",
+        sources: [
+          {
+            source_task_id: "task-01",
+            source_agent: "executor-product-strategy",
+            open_question_id: "task-01-oq-1",
+          },
+        ],
+        priority: 10,
+      },
+      {
+        id: "fabricated",
+        label: "伪造问题？",
+        type: "textarea",
+        required: true,
+        source_task_id: "task-01",
+        source_agent: "executor-product-strategy",
+        sources: [
+          {
+            source_task_id: "task-01",
+            source_agent: "executor-product-strategy",
+            open_question_id: "missing-1",
+          },
+        ],
+        priority: 100,
+      },
+    ],
+    [executorResult],
+  );
+
+  assert.deepEqual(
+    questions.map((question) => question.label),
+    ["真实问题一？", "真实问题二？"],
+  );
+  assert.equal(
+    questions.some((question) => question.id === "fabricated"),
+    false,
+  );
+});
 
 test("merges duplicate planner proposal questions and preserves sources", () => {
   const form = parseQuestionForm(
@@ -98,7 +224,7 @@ test("merges legacy executor open questions by actual question text", () => {
   assert.match(form.questions[0]?.help ?? "", /executor-gtm \/ task-02/);
 });
 
-test("shows every blocking question and keeps non-blocking questions as backlog", () => {
+test("shows blocking and optional questions in one mixed form", () => {
   const executorResult = createExecutorResult(
     "task-01",
     "executor-product-strategy",
@@ -117,14 +243,60 @@ test("shows every blocking question and keeps non-blocking questions as backlog"
     ),
   );
 
-  assert.equal(form.questions.length, 4);
+  assert.equal(form.questions.length, 11);
+  assert.equal(form.questions.filter((question) => question.required).length, 4);
+  assert.equal(
+    form.questions.filter((question) => question.defaultCollapsed).length,
+    7,
+  );
+  assert.equal(form.requireAnyAnswer, undefined);
+});
+
+test("uses the optional follow-up variant when no blocking question exists", () => {
+  const executorResult = createExecutorResult(
+    "task-01",
+    "executor-product-strategy",
+    ["是否补充长期目标？", "是否指定偏好的分析框架？"],
+  );
+  executorResult.open_questions = executorResult.open_questions.map(
+    (question) => ({ ...question, blocking: false }),
+  );
+
+  const form = parseQuestionForm(
+    formatProductWorkflowProposalQuestionForm(
+      createWorkflowResult({
+        proposalQuestions: [],
+        executorResults: [executorResult],
+      }),
+    ),
+  );
+
+  assert.equal(form.variant, "optional-followup");
+  assert.equal(form.requireAnyAnswer, true);
+  assert.equal(form.secondarySubmitLabel, "不再继续");
+  assert.equal(form.questions.every((question) => !question.required), true);
+  assert.equal(
+    form.questions.every((question) => !question.defaultCollapsed),
+    true,
+  );
+  assert.equal(
+    isProductWorkflowOptionalStopAnswer(
+      "[form answers - product-workflow-confirmation-proposal-decision]\n- workflow_action: stop_optional_questions",
+    ),
+    true,
+  );
 });
 
 interface ParsedQuestionForm {
   questions: Array<{
     label: string;
     help?: string;
+    required?: boolean;
+    defaultCollapsed?: boolean;
   }>;
+  requireAnyAnswer?: boolean;
+  variant?: string;
+  secondarySubmitLabel?: string;
 }
 
 /**

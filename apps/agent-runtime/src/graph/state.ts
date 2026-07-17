@@ -83,7 +83,7 @@ export const WorkflowGraphState = Annotation.Root({
     default: () => null,
   }),
 
-  // Planner Agent 生成的 DAG 计划，后续 Executor 节点按该计划执行。
+  // Orchestrator 内 Planner SubAgent 生成的 DAG，后续 Executor 节点按该计划执行。
   plan: Annotation<TaskExecutionPlan | null>({
     reducer: (_current, update) => update,
     default: () => null,
@@ -95,13 +95,19 @@ export const WorkflowGraphState = Annotation.Root({
     default: () => [],
   }),
 
+  // 用户已通过 Critique 表单回答的问题，Supplement Planner 不得重新创建。
+  answeredOpenQuestionIds: Annotation<string[]>({
+    reducer: (_current, update) => update,
+    default: () => [],
+  }),
+
   // Executor Agent 对 Planner DAG 中每个任务的结构化产出。
   executorResults: Annotation<ExecutorAgentResult[]>({
     reducer: mergeExecutorResults,
     default: () => [],
   }),
 
-  // Planner Agent 对 Planner 和 Executor 结果的最终汇总结果。
+  // Critique Agent 对 Planner SubAgent 计划和 Executor 结果的最终汇总。
   productWorkflow: Annotation<ProductWorkflowResult | null>({
     reducer: (_current, update) => update,
     default: () => null,

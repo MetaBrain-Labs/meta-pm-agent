@@ -13,7 +13,7 @@
  * - 本文件不直接编排 LangGraph 节点，只处理 API 层业务持久化。
  */
 
-import type { ChatMessage } from "@repo/shared";
+import type { ChatMessage, ProductWorkflowResult } from "@repo/shared";
 import {
   createConversationWithInitialRequestForm,
   listActiveConversations,
@@ -30,6 +30,7 @@ import {
   getPendingDecisionQuestionForm,
   persistExecutorProposalItems,
   persistProposalDecisionItem,
+  persistProductWorkflowConfirmationDecision,
   persistRequestAnalysisItems,
   updateRequestFormStatus,
 } from "../repositories/request-form-repository";
@@ -162,16 +163,21 @@ export async function persistConversationStart(
   conversationId: string | undefined,
   requestFormId: string | undefined,
   messages: ChatMessage[],
-): Promise<void> {
-  if (!conversationId) return;
+): Promise<Awaited<ReturnType<typeof finishAnsweredDecisionItems>>> {
+  if (!conversationId) return null;
 
-  await finishAnsweredDecisionItems(requestFormId, messages);
+  const workflowAnswerResolution = await finishAnsweredDecisionItems(
+    requestFormId,
+    messages,
+  );
 
   // 只持久化用户消息，助手回复由 persistConversationResult 统一写入。
   await persistConversationMessages(
     conversationId,
     messages.filter((message) => message.role === "user"),
   );
+
+  return workflowAnswerResolution;
 }
 
 /**
@@ -183,12 +189,14 @@ export async function persistConversationResult({
   agentOutputs,
   messages,
   skipPendingDecisionItems = false,
+  productWorkflowResult,
 }: {
   conversationId?: string;
   requestFormId?: string;
   agentOutputs: AgentConversationOutput[];
   messages: ChatMessage[];
   skipPendingDecisionItems?: boolean;
+  productWorkflowResult?: ProductWorkflowResult | null;
 }): Promise<ConversationTitleUpdate | null> {
   if (!conversationId || agentOutputs.length === 0) return null;
 
@@ -210,6 +218,7 @@ export async function persistConversationResult({
     .map((output) => parseExecutorResultPayload(output.content))
     .filter((result) => result !== null);
   const productWorkflow =
+    productWorkflowResult ??
     parseProductWorkflowPayload(plannerOutput?.content ?? "") ??
     parseProductWorkflowPayload(
       agentOutputs.find((output) => output.type === "product_director")
@@ -268,6 +277,12 @@ export async function persistConversationResult({
   if (!skipPendingDecisionItems) {
     await persistExecutorProposalItems(requestFormId, sanitizedExecutorResults);
     await persistProposalDecisionItem(requestFormId, finalProductWorkflow);
+    if (shouldPersistProductWorkflowConfirmation(finalProductWorkflow)) {
+      await persistProductWorkflowConfirmationDecision(
+        requestFormId,
+        finalProductWorkflow,
+      );
+    }
   }
 
   const generatedTitle = buildFirstTurnConversationTitle(items, messages);
@@ -281,6 +296,21 @@ export async function persistConversationResult({
   return updatedConversation
     ? { id: updatedConversation.id, title: updatedConversation.title }
     : null;
+}
+
+/**
+ * 判断 Critique 是否需要持久化最终处理确认，而不是补充信息表单。
+ */
+export function shouldPersistProductWorkflowConfirmation(
+  result: ProductWorkflowResult | null,
+): result is ProductWorkflowResult {
+  return (
+    result?.status === "pending_user_confirmation" &&
+    result.proposal_questions.length === 0 &&
+    !result.knowledge_graph_update.open_questions.some(
+      (question) => question.blocking,
+    )
+  );
 }
 
 /**
@@ -322,7 +352,7 @@ function replaceProductWorkflowPayload(
 
   const blockEnd = endIndex + endMarker.length;
   const summary = [
-    "Planner Agent 已完成产品工作流汇总，结构化结果已归档。",
+    "Planner SubAgent 已完成产品工作流汇总，结构化结果已归档。",
     `确认 ID：${productWorkflow.confirmation_id}`,
     `状态：${productWorkflow.status}`,
     `Executor 结果数：${productWorkflow.executor_results.length}`,

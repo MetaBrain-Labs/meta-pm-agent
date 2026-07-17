@@ -1,12 +1,12 @@
 /**
  * 产品工作流图节点
  *
- * 实现 Planner Agent、Executor Router、Executor Aggregator、Critique Agent 阶段和全部 10 个 Executor Agent 的 LangGraph 节点。
+ * 实现 Planner SubAgent 计划回放、Executor Router、Executor Aggregator、Critique Agent 阶段和全部 10 个 Executor Agent 的 LangGraph 节点。
  * Router 根据 Planner 生成的 DAG 动态选择下一批 Executor 分支，每个 Executor 节点按定义
  * 从 streamExecutorAgent 驱动并输出推理、工具调用和补丁结果。
  *
  * Responsibilities:
- * - 实现 plannerAgentNode：调用 Planner 生成 DAG，并在 Executor 全部完成后执行 Critique Agent
+ * - 实现 plannerAgentNode：回放 Orchestrator 内 Planner SubAgent 生成的 DAG
  * - 实现各 Executor 节点：读取知识图谱、执行任务、产出图谱补丁
  * - 实现 executorRouterNode / selectNextExecutorRouterTargets：按 DAG 依赖顺序调度下一批 Executor
  * - 实现 executorAggregatorNode：汇合同批 Executor 状态并发出知识图谱更新
@@ -114,7 +114,7 @@ export async function orchestratorAgentNode(
     state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
 
   if (state.requestAnalysis.business_model.length > 0) {
-    const isSupplement = (state.supplementAgentTypes?.length ?? 0) > 0;
+    const isSupplement = isSupplementWorkflow(state);
     knowledgeGraph = updateProductContextMetadata({
       knowledgeGraph,
       currentState: isSupplement ? "refining" : "initial",
@@ -143,6 +143,7 @@ export async function orchestratorAgentNode(
       userInput: state.userInput,
       knowledgeGraph,
       supplementAgentTypes: state.supplementAgentTypes,
+      answeredOpenQuestionIds: state.answeredOpenQuestionIds,
       signal: config?.signal,
     }),
     writer,
@@ -160,7 +161,12 @@ export async function orchestratorAgentNode(
   });
   knowledgeGraph = updateProductContextMetadata({
     knowledgeGraph,
-    currentState: plan ? "building" : "initial",
+    currentState:
+      plan?.status === "supplement"
+        ? "refining"
+        : plan
+          ? "building"
+          : "initial",
     descriptionEntry: createOrchestratorDescriptionEntry(decision, plan),
   });
   writer?.({
@@ -345,7 +351,8 @@ async function executeExecutorAgentTask(
   });
   const nextKnowledgeGraph = updateProductContextMetadata({
     knowledgeGraph: patchedKnowledgeGraph,
-    currentState: "building",
+    currentState:
+      state.plan.status === "supplement" ? "refining" : "building",
     descriptionEntry: createExecutorDescriptionEntry(task, result),
   });
   // Executor 只输出本任务结果，知识图谱归档交给批次 barrier 处理。
@@ -442,7 +449,23 @@ function createOrchestratorDescriptionEntry(
     return `Orchestrator Agent routed this turn as ${decision.intent} and did not create an execution DAG.`;
   }
 
-  return `Orchestrator Agent routed this turn as ${decision.intent}, generated a ${plan.status} DAG with ${plan.tasks.length} executor tasks, and moved the product context into building.`;
+  const currentState =
+    plan.status === "supplement" ? "refining" : "building";
+  return `Orchestrator Agent routed this turn as ${decision.intent}, generated a ${plan.status} DAG with ${plan.tasks.length} executor tasks, and moved the product context into ${currentState}.`;
+}
+
+/**
+ * 判断当前输入是否是用户确认后的补充轮次。
+ */
+export function isSupplementWorkflow(
+  state: WorkflowGraphStateValue,
+): boolean {
+  return (
+    (state.supplementAgentTypes?.length ?? 0) > 0 ||
+    state.userInput.some((item) =>
+      /\[form answers - [^\]]+\]/i.test(item.content),
+    )
+  );
 }
 
 /**

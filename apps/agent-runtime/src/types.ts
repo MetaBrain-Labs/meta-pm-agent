@@ -140,7 +140,24 @@ export interface ConversationStreamOptions {
   productContext?: string;
   contextSource?: OrchestratorContextSource;
   knowledgeGraph?: ProductKnowledgeGraph | null;
+  workflowAnswerResolution?: WorkflowAnswerResolution | null;
   signal?: AbortSignal;
   /** "chat" 模式使用纯闲聊提示词，不产生标记块或表单 */
   mode?: "project" | "chat";
+}
+
+/**
+ * 当前 Question Form 字段与其 OpenQuestion 来源的对应关系。
+ */
+export interface WorkflowAnswerResolution {
+  formId: string;
+  questions: Array<{
+    label: string;
+    answered: boolean;
+    sources: Array<{
+      source_task_id: string;
+      source_agent: string;
+      open_question_id?: string;
+    }>;
+  }>;
 }

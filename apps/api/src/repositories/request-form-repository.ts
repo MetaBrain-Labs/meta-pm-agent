@@ -14,6 +14,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import type { WorkflowAnswerResolution } from "@repo/agent-runtime";
 import { prisma } from "@repo/database";
 import type {
   ChatMessage,
@@ -208,7 +209,7 @@ export async function persistProposalDecisionItem(
 }
 
 /**
- * 将 Planner Agent 的最终确认请求写入请求表单。
+ * 将 Planner SubAgent 的最终确认请求写入请求表单。
  */
 export async function persistProductWorkflowConfirmationDecision(
   requestFormId: string | undefined,
@@ -234,7 +235,7 @@ export async function persistProductWorkflowConfirmationDecision(
       'planner',
       100,
       ${JSON.stringify({
-        question_id: result.confirmation_id,
+        question_id: "product-workflow-confirmation",
         questions: [
           {
             id: "decision",
@@ -260,8 +261,8 @@ export async function persistProductWorkflowConfirmationDecision(
 export async function finishAnsweredDecisionItems(
   requestFormId: string | undefined,
   messages: ChatMessage[],
-): Promise<void> {
-  if (!requestFormId) return;
+): Promise<WorkflowAnswerResolution | null> {
+  if (!requestFormId) return null;
 
   const latestUserMessage = messages
     .filter((message) => message.role === "user")
@@ -269,9 +270,9 @@ export async function finishAnsweredDecisionItems(
   const answer = latestUserMessage
     ? parseFormAnswer(latestUserMessage.content)
     : null;
-  if (!answer) return;
+  if (!answer) return null;
 
-  await prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<RequestFormDecisionRow[]>`
       SELECT "id", "type", "payload"
       FROM "request_form_item"
@@ -282,7 +283,7 @@ export async function finishAnsweredDecisionItems(
       LIMIT 1
     `;
     const row = rows[0];
-    if (!row) return;
+    if (!row) return null;
 
     const answeredAt = new Date().toISOString();
     const answerPatch = {
@@ -300,9 +301,13 @@ export async function finishAnsweredDecisionItems(
     `;
 
     // 补充信息确认表单提交后，同步关闭它汇总的 Executor proposal 条目。
-    if (row.type !== "decision") return;
+    if (row.type !== "decision") {
+      return { formId: answer.formId, questions: [] };
+    }
 
-    const taskIds = extractProposalTaskIds(parsePayload(row.payload));
+    const payload = parsePayload(row.payload);
+    const resolution = collectWorkflowAnswerResolution(payload, answer);
+    const taskIds = extractProposalTaskIds(payload);
     for (const taskId of taskIds) {
       await tx.$executeRaw`
         UPDATE "request_form_item"
@@ -319,6 +324,8 @@ export async function finishAnsweredDecisionItems(
           AND "payload"->>'task_id' = ${taskId}
       `;
     }
+
+    return resolution;
   });
 }
 
@@ -332,6 +339,12 @@ interface RequestFormProposalRow {
   payload: unknown;
 }
 
+interface ProposalQuestionSource {
+  source_task_id: string;
+  source_agent: string;
+  open_question_id?: string;
+}
+
 interface ProposalQuestion {
   id: string;
   question: string;
@@ -343,7 +356,7 @@ interface ProposalQuestion {
   maxSelections?: number;
   source_task_id: string;
   source_agent: string;
-  sources: Array<{ source_task_id: string; source_agent: string }>;
+  sources: ProposalQuestionSource[];
   priority: number;
 }
 
@@ -373,8 +386,10 @@ function collectExecutorProposalSlots(
           {
             source_task_id: result.task_id,
             source_agent: result.agent_type,
+            open_question_id: question.id,
           },
         ],
+        required: question.blocking,
         priority: result.open_questions.length - index,
       },
     ];
@@ -453,7 +468,10 @@ function mergeProposalQuestionSources<T extends ProposalQuestion["sources"][numb
 ): T[] {
   const byKey = new Map<string, T>();
   for (const source of sources) {
-    byKey.set(`${source.source_agent}:${source.source_task_id}`, source);
+    byKey.set(
+      `${source.source_agent}:${source.source_task_id}:${source.open_question_id ?? ""}`,
+      source,
+    );
   }
   return [...byKey.values()];
 }
@@ -620,9 +638,7 @@ function parseDecisionQuestions(value: unknown): ProposalQuestion[] {
 /**
  * 解析合并问题保留的来源列表，保证同一答案仍能关闭所有源 proposal。
  */
-function parseProposalQuestionSources(
-  value: unknown,
-): Array<{ source_task_id: string; source_agent: string }> {
+function parseProposalQuestionSources(value: unknown): ProposalQuestionSource[] {
   if (!Array.isArray(value)) return [];
 
   const sources = value.flatMap((item) => {
@@ -634,6 +650,9 @@ function parseProposalQuestionSources(
           {
             source_task_id: record.source_task_id,
             source_agent: record.source_agent,
+            ...(typeof record.open_question_id === "string"
+              ? { open_question_id: record.open_question_id }
+              : {}),
           },
         ]
       : [];
@@ -657,6 +676,44 @@ function parseFormAnswer(content: string): { formId: string; content: string } |
 }
 
 /**
+ * 将本次实际填写的字段映射回请求表单中保存的 OpenQuestion 来源。
+ */
+export function collectWorkflowAnswerResolution(
+  payload: Record<string, unknown> | null,
+  answer: { formId: string; content: string },
+): WorkflowAnswerResolution {
+  const submittedAnswers = parseSubmittedFormAnswers(answer.content);
+  const questions = parseDecisionQuestions(payload?.questions).map((question) => ({
+    label: question.question,
+    answered: isSubmittedAnswer(submittedAnswers.get(question.question)),
+    sources: question.sources,
+  }));
+
+  return { formId: answer.formId, questions };
+}
+
+/**
+ * 解析前端稳定生成的“问题标签: 答案”行。
+ */
+function parseSubmittedFormAnswers(content: string): Map<string, string> {
+  const answers = new Map<string, string>();
+  for (const line of content.split("\n").slice(1)) {
+    const match = /^[-*]\s*([^:]+):\s*(.*)$/.exec(line.trim());
+    if (match?.[1] !== undefined && match[2] !== undefined) {
+      answers.set(match[1].trim(), match[2].trim());
+    }
+  }
+  return answers;
+}
+
+/**
+ * 空值和前端显式 skipped 标记都不能关闭问题。
+ */
+function isSubmittedAnswer(value: string | undefined): boolean {
+  return Boolean(value && value.toLowerCase() !== "(skipped)");
+}
+
+/**
  * 汇总、去重、过滤并按优先级排序 Planner 收集到的 proposal slots。
  */
 function collectProposalSlots(result: ProductWorkflowResult): Array<{
@@ -670,7 +727,7 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
   maxSelections?: number;
   source_task_id: string;
   source_agent: string;
-  sources: Array<{ source_task_id: string; source_agent: string }>;
+  sources: ProposalQuestionSource[];
   priority: number;
 }> {
   const proposalQuestions = result.proposal_questions ?? [];
@@ -689,7 +746,7 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
     maxSelections?: number;
     source_task_id: string;
     source_agent: string;
-    sources: Array<{ source_task_id: string; source_agent: string }>;
+    sources: ProposalQuestionSource[];
     priority: number;
   }>();
 
@@ -708,6 +765,7 @@ function collectProposalSlots(result: ProductWorkflowResult): Array<{
       const source = {
         source_task_id: executorResult.task_id,
         source_agent: executorResult.agent_type,
+        open_question_id: question.id,
       };
       if (existing) {
         existing.sources = mergeProposalQuestionSources([
@@ -914,14 +972,29 @@ function buildDecisionQuestionForm(payload: Record<string, unknown>): string | n
     : [];
 
   if (!questionId || questions.length === 0) return null;
+  const hasBlockingQuestions = questions.some((question) => question.required);
+  const displayQuestions = questions.map((question) => ({
+    ...question,
+    collapsible: true,
+    defaultCollapsed: hasBlockingQuestions && !question.required,
+  }));
 
-  return `<question-form id="${escapeAttribute(questionId)}" title="补充信息确认">
+  return `<question-form id="${escapeAttribute(questionId)}" title="${hasBlockingQuestions ? "补充信息确认" : "可选优化问题"}">
 ${JSON.stringify(
   {
-    description:
-      "Planner Agent 汇总了 Executor Agent 需要你补充确认的信息。",
-    questions,
+    description: hasBlockingQuestions
+      ? "Planner SubAgent 汇总了 Executor Agent 需要你补充确认的信息。必填问题默认展开，选填问题默认折叠。"
+      : "以下问题均为可选优化项。你可以填写任意一项后继续下一轮 DAG，也可以选择“不再继续”并直接确认当前已有设计成果。",
+    questions: displayQuestions,
     submitLabel: "提交补充信息",
+    ...(!hasBlockingQuestions
+      ? {
+          variant: "optional-followup",
+          requireAnyAnswer: true,
+          secondarySubmitLabel: "不再继续",
+          secondaryActionValue: "stop_optional_questions",
+        }
+      : {}),
   },
   null,
   2,

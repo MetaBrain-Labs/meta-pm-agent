@@ -231,7 +231,7 @@ function FormBlock({
           form.id,
           text,
           hitlThreadId
-            ? formatHumanInTheLoopResume(hitlThreadId, form, answers)
+            ? formatHumanInTheLoopResume(hitlThreadId, form, answers, text)
             : undefined,
         )
       }

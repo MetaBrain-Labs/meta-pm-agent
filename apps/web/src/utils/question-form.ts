@@ -65,6 +65,10 @@ export interface FormQuestion {
   maxSelections?: number;
   /** Only present when `type === 'direction-cards'`. Mapped to options by `id`. */
   cards?: DirectionCard[];
+  /** 是否允许用户折叠单个问题。 */
+  collapsible?: boolean;
+  /** 首次渲染时是否默认折叠。 */
+  defaultCollapsed?: boolean;
 }
 
 export interface QuestionForm {
@@ -73,6 +77,14 @@ export interface QuestionForm {
   description?: string;
   questions: FormQuestion[];
   submitLabel?: string;
+  /** 仅包含选填问题时使用的流程变体。 */
+  variant?: "optional-followup";
+  /** 主提交按钮是否至少需要一个非空答案。 */
+  requireAnyAnswer?: boolean;
+  /** 不提交答案时显示的次要动作文案。 */
+  secondarySubmitLabel?: string;
+  /** 发送给运行时的稳定次要动作值。 */
+  secondaryActionValue?: string;
 }
 
 /**
@@ -216,6 +228,8 @@ function tryParseForm(
         ? qo.maxSelections
         : undefined;
     const cards = parseDirectionCards(qo.cards);
+    const collapsible = qo.collapsible === true;
+    const defaultCollapsed = qo.defaultCollapsed === true;
     const defaultValue =
       typeof qo.defaultValue === "string"
         ? qo.defaultValue
@@ -237,6 +251,8 @@ function tryParseForm(
         ? { maxSelections }
         : {}),
       ...(cards ? { cards } : {}),
+      ...(collapsible ? { collapsible } : {}),
+      ...(defaultCollapsed ? { defaultCollapsed } : {}),
     });
   });
   if (questions.length === 0) return null;
@@ -248,12 +264,27 @@ function tryParseForm(
     typeof obj.description === "string" ? obj.description : undefined;
   const submitLabel =
     typeof obj.submitLabel === "string" ? obj.submitLabel : undefined;
+  const variant =
+    obj.variant === "optional-followup" ? obj.variant : undefined;
+  const requireAnyAnswer = obj.requireAnyAnswer === true;
+  const secondarySubmitLabel =
+    typeof obj.secondarySubmitLabel === "string"
+      ? obj.secondarySubmitLabel
+      : undefined;
+  const secondaryActionValue =
+    typeof obj.secondaryActionValue === "string"
+      ? obj.secondaryActionValue
+      : undefined;
   return {
     id,
     title,
     questions,
     ...(description ? { description } : {}),
     ...(submitLabel ? { submitLabel } : {}),
+    ...(variant ? { variant } : {}),
+    ...(requireAnyAnswer ? { requireAnyAnswer } : {}),
+    ...(secondarySubmitLabel ? { secondarySubmitLabel } : {}),
+    ...(secondaryActionValue ? { secondaryActionValue } : {}),
   };
 }
 
@@ -332,12 +363,20 @@ export function formatFormAnswers(
 }
 
 /**
+ * 格式化无需填写字段的表单动作，供运行时选择后续确认流程。
+ */
+export function formatFormAction(form: QuestionForm, action: string): string {
+  return `[form answers - ${form.id}]\n- workflow_action: ${action}`;
+}
+
+/**
  * 将 Question Form 答案转换为 LangChain HITL 的 respond 决策。
  */
 export function formatHumanInTheLoopResume(
   threadId: string,
   form: QuestionForm,
   answers: Record<string, string | string[]>,
+  message?: string,
 ): HumanInTheLoopResume {
   return {
     threadId,
@@ -345,7 +384,7 @@ export function formatHumanInTheLoopResume(
       decisions: [
         {
           type: "respond",
-          message: formatFormAnswers(form, answers),
+          message: message ?? formatFormAnswers(form, answers),
         },
       ],
     },

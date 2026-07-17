@@ -12,7 +12,8 @@
  * - 注入运行时日期到搜索结果中
  *
  * Notes:
- * - 搜索超时 8s，防止阻塞 SSE 流
+ * - 搜索超时默认 15s（可通过 WEB_SEARCH_TIMEOUT_MS 环境变量配置），防止阻塞 SSE 流
+ * - Tavily 搜索失败后自动重试 1 次，再回退到免费公开索引
  * - 网络/解析失败不终止流，保证用户体验连续性
  */
 
@@ -34,7 +35,10 @@ interface WebSearchResponse {
   error?: string;
 }
 
-const WEB_SEARCH_TIMEOUT_MS = 8_000;
+const WEB_SEARCH_TIMEOUT_MS = parseInt(
+  process.env.WEB_SEARCH_TIMEOUT_MS ?? "15000",
+  10,
+);
 
 /**
  * 创建联网搜索工具，供被授权的 Agent 查询外部事实和近期信息。
@@ -108,13 +112,17 @@ async function searchWeb(
   const tavilyApiKey = process.env.TAVILY_API_KEY?.trim();
 
   if (tavilyApiKey) {
-    try {
-      return {
-        results: await searchWithTavily(query, maxResults, tavilyApiKey),
-        source: "tavily",
-      };
-    } catch (error) {
-      warnings.push(`Tavily search unavailable: ${formatSearchError(error)}`);
+    // Tavily 失败后重试一次，再回退到免费公开索引
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return {
+          results: await searchWithTavily(query, maxResults, tavilyApiKey),
+          source: "tavily",
+        };
+      } catch (error) {
+        if (attempt === 0) continue;
+        warnings.push(`Tavily search unavailable: ${formatSearchError(error)}`);
+      }
     }
   }
 
@@ -153,7 +161,7 @@ async function searchWithTavily(
     },
     body: JSON.stringify({
       query,
-      search_depth: "advanced",
+      search_depth: "basic",
       chunks_per_source: 3,
       max_results: maxResults,
       include_answer: false,
@@ -343,17 +351,19 @@ function stripHtml(value: string): string {
 
 /**
  * 为搜索请求设置超时，避免工具调用长时间占用 Agent 流。
+ * 优先使用原生 AbortSignal.timeout()（Node 17.3+），
+ * 旧版本 Node 则回退到 setTimeout + AbortController 兜底。
  */
-function createTimeoutSignal(): AbortSignal | undefined {
-  if (typeof AbortSignal === "undefined" || !("timeout" in AbortSignal)) {
-    return undefined;
+function createTimeoutSignal(timeoutMs: number = WEB_SEARCH_TIMEOUT_MS): AbortSignal {
+  if (typeof AbortSignal !== "undefined" && "timeout" in AbortSignal) {
+    return (AbortSignal as typeof AbortSignal & {
+      timeout(milliseconds: number): AbortSignal;
+    }).timeout(timeoutMs);
   }
 
-  return (
-    AbortSignal as typeof AbortSignal & {
-      timeout(milliseconds: number): AbortSignal;
-    }
-  ).timeout(WEB_SEARCH_TIMEOUT_MS);
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), timeoutMs);
+  return controller.signal;
 }
 
 /**

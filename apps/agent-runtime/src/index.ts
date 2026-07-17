@@ -29,7 +29,6 @@ export {
   normalizeTaskExecutionPlan,
   createFallbackPlan,
   formatTaskExecutionPlanBlock,
-  formatPlannerReasoningSummary,
 } from "./agents/product-workflow/orchestrator-agent/planner-subagent";
 export type {
   ProductWorkflowInput,
@@ -61,6 +60,7 @@ export type {
   ConversationStreamEvent,
   ConversationStreamOptions,
   StreamChunk,
+  WorkflowAnswerResolution,
 } from "./types";
 export { getFormAnswerId, isFormAnswer } from "./utils/form-parser";
 export { parseGraphConflictAction, isPreOrchGraphConflictFormId } from "./agents/product-workflow/orchestrator-agent/pre-orchestrator-subagent";

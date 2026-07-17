@@ -18,6 +18,7 @@
  */
 
 import type { ProductKnowledgeGraph } from "@repo/shared";
+import { randomUUID } from "node:crypto";
 import { tool } from "langchain/tools";
 import { z } from "zod";
 import {
@@ -56,7 +57,13 @@ const RELATION_TYPE_VALUES = [
 ] as const;
 
 const nodeInputSchema = z.object({
-  id: z.string().min(1).describe("Unique node ID, e.g. G-001, D-003"),
+  id: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Optional legacy node ID hint; the runtime always allocates the persisted ID",
+    ),
   type: z.enum(ENTITY_TYPE_VALUES).describe("Entity type"),
   name: z.string().min(1).describe("Node name"),
   description: z
@@ -71,7 +78,11 @@ const nodeInputSchema = z.object({
 });
 
 const relationInputSchema = z.object({
-  id: z.string().min(1).describe("Unique relation ID, e.g. REL-001"),
+  id: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Optional relation ID; the runtime assigns one when omitted or duplicated"),
   type: z.enum(RELATION_TYPE_VALUES).describe("Relation type"),
   source: z.string().min(1).describe("Source node ID"),
   target: z.string().min(1).describe("Target node ID"),
@@ -91,10 +102,17 @@ const decisionInputSchema = z.object({
     .string()
     .min(1)
     .describe("Decision text including choice, rationale, and risk assessment"),
+  source_task_id: z.string().min(1).optional().describe("Source task ID"),
 });
 
 const riskInputSchema = z.object({
-  id: z.string().min(1).describe("Risk ID, e.g. RISK-001"),
+  id: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Optional legacy risk ID hint; the runtime always allocates the persisted ID",
+    ),
   text: z
     .string()
     .min(1)
@@ -105,8 +123,9 @@ const openQuestionInputSchema = z.object({
   id: z
     .string()
     .min(1)
+    .optional()
     .describe(
-      "Stable question ID used for internal tracking, e.g. OQ-001. Do not translate this value.",
+      "Optional legacy question ID hint. Omit it because the runtime always allocates the persisted OQ-* ID.",
     ),
 
   user_language: z
@@ -312,7 +331,10 @@ export function createKnowledgeGraphTools(
     // 将 nodes 写入当前上下文中
     tool(
       async ({ nodes }) => {
-        const validated = nodes.map((n) => nodeInputSchema.parse(n));
+        const validated = allocatePersistedIds(
+          nodes.map((n) => nodeInputSchema.parse(n)),
+          (node) => ENTITY_ID_PREFIXES[node.type],
+        );
         const authorized = filterAuthorizedItems(
           validated,
           policy.allowedEntityTypes,
@@ -337,7 +359,7 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_add_nodes",
         description:
-          `Append structured nodes to the knowledge graph. Each node must have a new unique id, type, name, description, source_task_id, and status. Duplicate IDs and entity types outside this Agent's authorization are skipped. Allowed types for this Agent: ${(policy.allowedEntityTypes ?? ENTITY_TYPE_VALUES).join("/")}. Prefer kg_file_add_risks and kg_file_add_open_questions for uncertainty records.`,
+          `Append structured nodes to the knowledge graph. Omit id: the runtime atomically allocates the persisted ID and returns it for later relation or decision calls. Entity types outside this Agent's authorization are skipped. Allowed types for this Agent: ${(policy.allowedEntityTypes ?? ENTITY_TYPE_VALUES).join("/")}. Prefer kg_file_add_risks and kg_file_add_open_questions for uncertainty records.`,
         schema: z.object({
           nodes: z
             .array(nodeInputSchema)
@@ -349,7 +371,10 @@ export function createKnowledgeGraphTools(
     // 将 relations 写入当前上下文中
     tool(
       async ({ relations }) => {
-        const validated = relations.map((r) => relationInputSchema.parse(r));
+        const validated = allocatePersistedIds(
+          relations.map((r) => relationInputSchema.parse(r)),
+          () => "REL",
+        );
         const appendResult = filterAppendOnlyRelations(
           validated,
           state,
@@ -370,7 +395,7 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_add_relations",
         description:
-          `Append structured relations to the knowledge graph. Each relation must have a new unique id, type, source, target, description, and source_task_id. Duplicate IDs, unauthorized relation types, missing endpoints, and invalid typed-relation directions are skipped. A skipped ID is not reserved and may be resubmitted immediately with corrected endpoints or type. Allowed types for this Agent: ${(policy.allowedRelationTypes ?? RELATION_TYPE_VALUES).join("/")}; Custom remains available only for a clearly described non-canonical connection.`,
+          `Append structured relations to the knowledge graph. Omit id: the runtime atomically allocates the persisted REL-* ID. Use persisted node IDs returned by kg_file_add_nodes as endpoints. Unauthorized relation types, missing endpoints, and invalid typed-relation directions are skipped. Allowed types for this Agent: ${(policy.allowedRelationTypes ?? RELATION_TYPE_VALUES).join("/")}; Custom remains available only for a clearly described non-canonical connection.`,
         schema: z.object({
           relations: z
             .array(relationInputSchema)
@@ -385,15 +410,29 @@ export function createKnowledgeGraphTools(
     tool(
       async ({ decisions }) => {
         const validated = decisions.map((d) => decisionInputSchema.parse(d));
-        const authorized = policy.allowedEntityTypes?.includes("Decision") === false
-          ? {
-              items: [] as typeof validated,
-              skipped: validated.map((item) => ({
-                id: item.id,
-                reason: "unauthorized_entity_type:Decision",
-              })),
-            }
-          : { items: validated, skipped: [] };
+        const decisionNodeIds = new Set(
+          state.entities
+            .filter((entity) => entity.type === "Decision")
+            .map((entity) => entity.id),
+        );
+        const authorized =
+          policy.allowedEntityTypes?.includes("Decision") === false
+            ? {
+                items: [] as typeof validated,
+                skipped: validated.map((item) => ({
+                  id: item.id,
+                  reason: "unauthorized_entity_type:Decision",
+                })),
+              }
+            : {
+                items: validated.filter((item) => decisionNodeIds.has(item.id)),
+                skipped: validated
+                  .filter((item) => !decisionNodeIds.has(item.id))
+                  .map((item) => ({
+                    id: item.id,
+                    reason: "missing_canonical_decision_node",
+                  })),
+              };
         const appendResult = filterAppendOnlyItems(
           authorized.items,
           state.decisions.map((item) => item.id),
@@ -413,7 +452,7 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_add_decisions",
         description:
-          `Append structured decisions to the knowledge graph. Each decision must use a new unique id and has text plus optional source_task_id fields. Duplicate IDs are skipped instead of updated. This Agent ${policy.allowedEntityTypes?.includes("Decision") === false ? "is not authorized" : "is authorized"} to write Decision records.`,
+          `Append decision metadata for canonical Decision nodes already written through kg_file_add_nodes. Every item must reuse the exact D-* node id; DEC-* aliases and metadata without a matching Decision node are rejected. Duplicate IDs are skipped instead of updated. This Agent ${policy.allowedEntityTypes?.includes("Decision") === false ? "is not authorized" : "is authorized"} to write Decision records.`,
         schema: z.object({
           decisions: z
             .array(decisionInputSchema)
@@ -425,7 +464,10 @@ export function createKnowledgeGraphTools(
     // 将 risks 写入当前上下文中
     tool(
       async ({ risks }) => {
-        const validated = risks.map((r) => riskInputSchema.parse(r));
+        const validated = allocatePersistedIds(
+          risks.map((r) => riskInputSchema.parse(r)),
+          () => "RISK",
+        );
         const appendResult = filterAppendOnlyItems(
           validated,
           state.risks.map((item) => item.id),
@@ -445,7 +487,7 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_add_risks",
         description:
-          "Write structured risks to the knowledge graph. Each risk has id, text, and optional source_task_id fields.",
+          "Write structured risks to the knowledge graph. Omit id: the runtime atomically allocates the persisted RISK-* ID. Each risk also has text and optional source_task_id fields.",
         schema: z.object({
           risks: z
             .array(riskInputSchema)
@@ -457,8 +499,9 @@ export function createKnowledgeGraphTools(
     // 将 open questions 写入当前上下文中
     tool(
       async ({ questions }) => {
-        const validated = questions.map((q) =>
-          openQuestionInputSchema.parse(q),
+        const validated = allocatePersistedIds(
+          questions.map((q) => openQuestionInputSchema.parse(q)),
+          () => "OQ",
         );
         const appendResult = filterAppendOnlyItems(
           validated,
@@ -479,7 +522,7 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_add_open_questions",
         description:
-          "Append structured open questions to the knowledge graph. Each question must use a new unique id, include text, mark whether it blocks current workflow completion, and may include source_task_id. Duplicate IDs are skipped instead of updated.",
+          "Append structured open questions to the knowledge graph. Omit id: the runtime atomically allocates the persisted OQ-* ID. Each question must include text, mark whether it blocks current workflow completion, and may include source_task_id.",
         schema: z.object({
           questions: z
             .array(openQuestionInputSchema)
@@ -514,6 +557,33 @@ function compactWrittenItems<T extends { id: string }>(
   items: T[],
 ): Array<{ id: string }> {
   return items.map(({ id }) => ({ id }));
+}
+
+/**
+ * 不同实体类型使用稳定前缀，便于工具结果被后续关系和决策调用引用。
+ */
+const ENTITY_ID_PREFIXES: Record<(typeof ENTITY_TYPE_VALUES)[number], string> = {
+  Goal: "G",
+  Requirement: "R",
+  Evidence: "E",
+  Decision: "D",
+  Feature: "F",
+  Component: "COMP",
+  Metric: "M",
+  Custom: "CUS",
+};
+
+/**
+ * 为一批图谱写入原子分配不可预测 ID，避免并行 Executor 基于相同快照产生冲突。
+ */
+function allocatePersistedIds<T extends { id?: string }>(
+  items: T[],
+  getPrefix: (item: T) => string,
+): Array<Omit<T, "id"> & { id: string }> {
+  return items.map(({ id: _legacyId, ...item }) => ({
+    ...item,
+    id: `${getPrefix(item as T)}-${randomUUID()}`,
+  }));
 }
 
 /**

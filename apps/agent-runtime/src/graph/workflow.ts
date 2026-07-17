@@ -2,7 +2,7 @@
  * 产品工作流主图定义
  *
  * 使用 LangGraph 构建完整的产品管理工作流图，包含固定骨架：
- * parse_user_input -> request_agent -> planner_agent -> executor_router -> executor-* -> executor_aggregator -> END。
+ * parse_user_input -> request_agent -> orchestrator_agent -> planner_agent（计划回放） -> executor_router -> executor-* -> executor_aggregator -> END。
  * 通过 Router 条件边和 Executor 节点内部任务选择实现 DAG 的动态规划与执行。
  *
  * Responsibilities:
@@ -118,7 +118,7 @@ function createWorkflowGraph(checkpointer: BaseCheckpointSaver) {
   .addNode("request_agent", requestAgentNode)
   // Orchestrator Agent 负责产品意图路由、上下文来源判断和生命周期调度。
   .addNode("orchestrator_agent", orchestratorAgentNode)
-  // Planner Agent 负责把业务建模项规划为可执行 DAG。
+  // 兼容节点负责回放 Orchestrator 内 Planner SubAgent 已生成的 DAG。
   .addNode("planner_agent", plannerAgentNode)
   // Router 在固定图内根据 Planner DAG 动态选择下一批 Executor 分支。
   .addNode("executor_router", executorRouterNode)
@@ -217,7 +217,7 @@ export async function* streamWorkflowGraph(
 }
 
 /**
- * 根据 Orchestrator Agent 的路由决策，决定是否进入 Planner Agent。
+ * 根据 Orchestrator Agent 的路由决策，决定是否进入 Planner SubAgent 计划回放节点。
  */
 function selectNextNodeAfterOrchestrator(state: WorkflowGraphStateValue) {
   if (state.productWorkflow) return "end";
@@ -251,6 +251,7 @@ function createWorkflowInitialState(input: WorkflowGraphInput) {
     orchestratorDecision: resume?.orchestratorDecision ?? null,
     plan,
     supplementAgentTypes: resume?.supplementAgentTypes ?? [],
+    answeredOpenQuestionIds: resume?.answeredOpenQuestionIds ?? [],
     executorResults,
     knowledgeGraph: resume?.knowledgeGraph ?? input.knowledgeGraph ?? null,
     productWorkflow: null,

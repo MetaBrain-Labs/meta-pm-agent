@@ -5,7 +5,7 @@
  *
  * Responsibilities:
  * - 校验重复节点 ID 会被跳过
- * - 校验重复关系 ID 会被跳过
+ * - 校验重复关系 ID 会被自动重映射
  * - 校验端点缺失的关系不会进入图谱状态
  */
 
@@ -14,7 +14,7 @@ import test from "node:test";
 import type { ProductKnowledgeGraph } from "@repo/shared";
 import { createKnowledgeGraphTools } from "../src/agents/common/knowledge-graph-file-tool";
 
-test("skips duplicate graph IDs and missing relation endpoints", async () => {
+test("atomically allocates graph IDs and skips missing relation endpoints", async () => {
   const state = createKnowledgeGraph();
   const tools = createKnowledgeGraphTools(state);
   const addNodes = getTool(tools, "kg_file_add_nodes");
@@ -32,39 +32,62 @@ test("skips duplicate graph IDs and missing relation endpoints", async () => {
     ),
   ) as ToolResult;
 
-  assert.equal(nodeResult.count, 1);
-  assert.deepEqual(
-    state.entities.map((item) => item.id),
-    ["G-001", "G-002"],
-  );
-  assert.deepEqual(
-    nodeResult.skipped?.map((item) => item.id),
-    ["G-001", "G-002"],
-  );
-  assert.deepEqual(nodeResult.items, [{ id: "G-002" }]);
+  assert.equal(nodeResult.count, 3);
+  assert.equal(new Set(state.entities.map((item) => item.id)).size, 4);
+  assert.equal(nodeResult.items.every((item) => /^G-[0-9a-f-]{36}$/.test(item.id)), true);
+  const [firstNode, secondNode] = nodeResult.items;
+  assert.ok(firstNode && secondNode);
 
   const relationResult = JSON.parse(
     String(
       await addRelations.invoke({
         relations: [
           createRelation("REL-001", "G-001", "MISSING"),
-          createRelation("REL-002", "G-001", "G-002"),
-          createRelation("REL-002", "G-001", "G-002"),
+          createRelation("REL-002", "G-001", firstNode.id),
+          createRelation("REL-002", "G-001", secondNode.id),
         ],
       }),
     ),
   ) as ToolResult;
 
-  assert.equal(relationResult.count, 1);
-  assert.deepEqual(
-    state.relations.map((item) => item.id),
-    ["REL-002"],
-  );
+  assert.equal(relationResult.count, 2);
+  assert.equal(new Set(state.relations.map((item) => item.id)).size, 2);
   assert.deepEqual(
     new Set(relationResult.skipped?.map((item) => item.reason)),
-    new Set(["duplicate_id_append_only_graph", "missing_relation_endpoint"]),
+    new Set(["missing_relation_endpoint"]),
   );
-  assert.deepEqual(relationResult.items, [{ id: "REL-002" }]);
+  assert.equal(
+    relationResult.items.every((item) => /^REL-[0-9a-f-]{36}$/.test(item.id)),
+    true,
+  );
+});
+
+test("requires decision metadata to reuse a canonical Decision node ID", async () => {
+  const state = createKnowledgeGraph();
+  const tools = createKnowledgeGraphTools(state);
+  const addNodes = getTool(tools, "kg_file_add_nodes");
+  const addDecisions = getTool(tools, "kg_file_add_decisions");
+
+  const nodeResult = JSON.parse(String(await addNodes.invoke({
+    nodes: [createTypedNode("D-001", "Decision")],
+  }))) as ToolResult;
+  const decisionNodeId = nodeResult.items[0]?.id;
+  assert.ok(decisionNodeId);
+  const result = JSON.parse(
+    String(
+      await addDecisions.invoke({
+        decisions: [
+          { id: decisionNodeId, text: "Canonical decision" },
+          { id: "DEC-001", text: "Legacy duplicate" },
+        ],
+      }),
+    ),
+  ) as ToolResult;
+
+  assert.deepEqual(result.items, [{ id: decisionNodeId }]);
+  assert.deepEqual(result.skipped, [
+    { id: "DEC-001", reason: "missing_canonical_decision_node" },
+  ]);
 });
 
 test("skips invalid relation directions and allows corrected resubmission", async () => {
@@ -83,27 +106,38 @@ test("skips invalid relation directions and allows corrected resubmission", asyn
       createTypedNode("C-002", "Component"),
     ],
   });
+  const decisionIds = state.entities
+    .filter((item) => item.type === "Decision")
+    .map((item) => item.id);
+  const requirementId = state.entities.find((item) => item.type === "Requirement")?.id;
+  const featureId = state.entities.find((item) => item.type === "Feature")?.id;
+  const componentIds = state.entities
+    .filter((item) => item.type === "Component")
+    .map((item) => item.id);
+  assert.ok(decisionIds[0] && decisionIds[1] && requirementId && featureId);
+  assert.ok(componentIds[0] && componentIds[1]);
 
   const result = JSON.parse(
     String(
       await addRelations.invoke({
         relations: [
-          createTypedRelation("REL-DRIVES", "Drives", "D-001", "D-002"),
-          createTypedRelation("REL-GOAL-REQ", "Drives", "G-001", "R-001"),
+          createTypedRelation("REL-DRIVES", "Drives", decisionIds[0], decisionIds[1]),
+          createTypedRelation("REL-GOAL-REQ", "Drives", "G-001", requirementId),
           createTypedRelation(
             "REL-COMPONENT",
             "Implements",
-            "C-001",
-            "C-002",
+            componentIds[0],
+            componentIds[1],
           ),
-          createTypedRelation("REL-VALID", "Implements", "C-001", "F-001"),
+          createTypedRelation("REL-VALID", "Implements", componentIds[0], featureId),
         ],
       }),
     ),
   ) as ToolResult;
 
   assert.equal(result.count, 1);
-  assert.deepEqual(result.items, [{ id: "REL-VALID" }]);
+  assert.equal(result.items.length, 1);
+  assert.match(result.items[0]!.id, /^REL-[0-9a-f-]{36}$/);
   assert.deepEqual(
     result.skipped?.map((item) => item.reason),
     [
@@ -120,14 +154,15 @@ test("skips invalid relation directions and allows corrected resubmission", asyn
           createTypedRelation(
             "REL-COMPONENT",
             "References",
-            "C-001",
-            "C-002",
+            componentIds[0],
+            componentIds[1],
           ),
         ],
       }),
     ),
   ) as ToolResult;
-  assert.deepEqual(corrected.items, [{ id: "REL-COMPONENT" }]);
+  assert.equal(corrected.items.length, 1);
+  assert.match(corrected.items[0]!.id, /^REL-[0-9a-f-]{36}$/);
 });
 
 test("skips entity and relation types outside the executor profile", async () => {
@@ -150,25 +185,24 @@ test("skips entity and relation types outside the executor profile", async () =>
       }),
     ),
   ) as ToolResult;
-  assert.deepEqual(nodeResult.items, [{ id: "M-001" }]);
-  assert.deepEqual(nodeResult.skipped, [
-    { id: "R-001", reason: "unauthorized_entity_type:Requirement" },
-  ]);
+  assert.equal(nodeResult.items.length, 1);
+  const metricId = nodeResult.items[0]!.id;
+  assert.match(metricId, /^M-[0-9a-f-]{36}$/);
+  assert.equal(nodeResult.skipped?.[0]?.reason, "unauthorized_entity_type:Requirement");
 
   const relationResult = JSON.parse(
     String(
       await addRelations.invoke({
         relations: [
-          createTypedRelation("REL-REF", "References", "M-001", "G-001"),
-          createTypedRelation("REL-MEASURE", "Measures", "M-001", "G-001"),
+          createTypedRelation("REL-REF", "References", metricId, "G-001"),
+          createTypedRelation("REL-MEASURE", "Measures", metricId, "G-001"),
         ],
       }),
     ),
   ) as ToolResult;
-  assert.deepEqual(relationResult.items, [{ id: "REL-MEASURE" }]);
-  assert.deepEqual(relationResult.skipped, [
-    { id: "REL-REF", reason: "unauthorized_relation_type:References" },
-  ]);
+  assert.equal(relationResult.items.length, 1);
+  assert.match(relationResult.items[0]!.id, /^REL-[0-9a-f-]{36}$/);
+  assert.equal(relationResult.skipped?.[0]?.reason, "unauthorized_relation_type:References");
 
   const decisionResult = JSON.parse(
     String(
@@ -181,6 +215,32 @@ test("skips entity and relation types outside the executor profile", async () =>
   assert.deepEqual(decisionResult.skipped, [
     { id: "D-001", reason: "unauthorized_entity_type:Decision" },
   ]);
+});
+
+test("atomically allocates risk and OpenQuestion IDs despite duplicate hints", async () => {
+  const state = createKnowledgeGraph();
+  const tools = createKnowledgeGraphTools(state);
+  const addRisks = getTool(tools, "kg_file_add_risks");
+  const addQuestions = getTool(tools, "kg_file_add_open_questions");
+
+  const riskResult = JSON.parse(String(await addRisks.invoke({
+    risks: [
+      { id: "RISK-001", text: "First risk" },
+      { id: "RISK-001", text: "Second risk" },
+    ],
+  }))) as ToolResult;
+  const questionResult = JSON.parse(String(await addQuestions.invoke({
+    questions: [
+      { id: "OQ-001", user_language: "zh", text: "问题一？", blocking: true },
+      { id: "OQ-001", user_language: "zh", text: "问题二？", blocking: false },
+    ],
+  }))) as ToolResult;
+
+  assert.equal(riskResult.count, 2);
+  assert.equal(questionResult.count, 2);
+  assert.equal(new Set(riskResult.items.map((item) => item.id)).size, 2);
+  assert.equal(new Set(questionResult.items.map((item) => item.id)).size, 2);
+  assert.equal(questionResult.items.every((item) => /^OQ-[0-9a-f-]{36}$/.test(item.id)), true);
 });
 
 interface ToolResult {

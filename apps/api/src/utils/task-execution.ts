@@ -5,7 +5,7 @@ import {
 import { parseJsonObject } from "./json";
 
 /**
- * 从 Planner Agent 消息中解析 task_execution 计划，用于后续落库。
+ * 从 Planner SubAgent 输出中解析 task_execution 计划，用于后续落库。
  */
 export function parseTaskExecutionPlanPayload(
   text: string,

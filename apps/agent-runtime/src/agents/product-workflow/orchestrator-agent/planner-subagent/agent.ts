@@ -63,22 +63,25 @@ export function extractPlanFromSubagentResult(
   input: OrchestratorAgentInput,
 ): TaskExecutionPlan {
   if (rawResult === null || rawResult === undefined) {
-    return normalizeTaskExecutionPlan(
+    return finalizePlan(
       createFallbackPlan(input, "Planner subagent was not invoked or returned no output"),
+      input,
     );
   }
 
   const content = resolveToolMessageContent(rawResult);
   if (content === null) {
-    return normalizeTaskExecutionPlan(
+    return finalizePlan(
       createFallbackPlan(input, "Planner subagent returned no parseable output"),
+      input,
     );
   }
 
   const parsed = parseJsonObject(content);
   if (parsed === null) {
-    return normalizeTaskExecutionPlan(
+    return finalizePlan(
       createFallbackPlan(input, "Planner subagent output was not valid JSON"),
+      input,
     );
   }
 
@@ -88,20 +91,56 @@ export function extractPlanFromSubagentResult(
       ? scopeSupplementPlan(result.data, input.supplementAgentTypes)
       : scopeInitialDecisionPlan(result.data, input);
     if (candidate.tasks.length > 0) {
-      return normalizeTaskExecutionPlan(candidate);
+      return finalizePlan(candidate, input);
     }
   }
 
-  return normalizeTaskExecutionPlan(
+  return finalizePlan(
     createFallbackPlan(
       input,
       `Planner subagent output failed schema validation`,
     ),
+    input,
   );
 }
 
 /**
- * 首轮仍有关键缺口时移除详细执行/UI拆分，并把下游依赖回接到已保留上游任务。
+ * 统一归一化 Planner 输出，并移除已经由用户回答的阻塞问题。
+ */
+function finalizePlan(
+  plan: TaskExecutionPlan,
+  input: OrchestratorAgentInput,
+): TaskExecutionPlan {
+  return normalizeTaskExecutionPlan(
+    removeAnsweredOpenQuestions(plan, input.answeredOpenQuestionIds),
+  );
+}
+
+/**
+ * 已由用户回答的问题不能在补充 DAG 中再次声明为待创建的阻塞问题。
+ */
+export function removeAnsweredOpenQuestions(
+  plan: TaskExecutionPlan,
+  answeredOpenQuestionIds: string[] = [],
+): TaskExecutionPlan {
+  if (plan.status !== "supplement" || answeredOpenQuestionIds.length === 0) {
+    return plan;
+  }
+
+  const answeredIds = new Set(answeredOpenQuestionIds);
+  return {
+    ...plan,
+    tasks: plan.tasks.map((task) => ({
+      ...task,
+      required_open_question_ids: (
+        task.required_open_question_ids ?? []
+      ).filter((id) => !answeredIds.has(id)),
+    })),
+  };
+}
+
+/**
+ * 首轮仍有关键缺口时移除详细执行/UI拆分及其真实下游任务。
  */
 export function scopeInitialDecisionPlan(
   plan: TaskExecutionPlan,
@@ -127,19 +166,28 @@ export function scopeInitialDecisionPlan(
     "executor-product-execution",
     "executor-interface-craft",
   ]);
-  const taskById = new Map(plan.tasks.map((task) => [task.task_id, task]));
-  const tasks = plan.tasks
-    .filter((task) => !removedAgents.has(task.assigned_agent))
-    .map((task) => ({
-      ...task,
-      depends_on: [
-        ...new Set(
-          task.depends_on.flatMap((taskId) =>
-            resolveRetainedDependencies(taskId, taskById, removedAgents),
-          ),
-        ),
-      ],
-    }));
+  const removedTaskIds = new Set(
+    plan.tasks
+      .filter((task) => removedAgents.has(task.assigned_agent))
+      .map((task) => task.task_id),
+  );
+
+  // depends_on 表示真实数据依赖；上游被延后时，下游不能伪装成仍可执行。
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const task of plan.tasks) {
+      if (
+        !removedTaskIds.has(task.task_id) &&
+        task.depends_on.some((taskId) => removedTaskIds.has(taskId))
+      ) {
+        removedTaskIds.add(task.task_id);
+        changed = true;
+      }
+    }
+  }
+
+  const tasks = plan.tasks.filter((task) => !removedTaskIds.has(task.task_id));
 
   return {
     ...plan,
@@ -151,24 +199,6 @@ export function scopeInitialDecisionPlan(
       ),
     },
   };
-}
-
-/**
- * 被移除任务只承载顺序时，递归寻找其真实上游依赖。
- */
-function resolveRetainedDependencies(
-  taskId: string,
-  taskById: Map<string, TaskExecutionPlan["tasks"][number]>,
-  removedAgents: Set<string>,
-  visited = new Set<string>(),
-): string[] {
-  if (visited.has(taskId)) return [];
-  visited.add(taskId);
-  const task = taskById.get(taskId);
-  if (!task || !removedAgents.has(task.assigned_agent)) return task ? [taskId] : [];
-  return task.depends_on.flatMap((dependency) =>
-    resolveRetainedDependencies(dependency, taskById, removedAgents, visited),
-  );
 }
 
 /**

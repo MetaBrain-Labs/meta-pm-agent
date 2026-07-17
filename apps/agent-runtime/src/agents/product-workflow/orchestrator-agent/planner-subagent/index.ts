@@ -9,11 +9,11 @@ export { PLANNER_SUBAGENT_PROMPT } from "./prompt";
 export {
   createPlannerSubagent,
   extractPlanFromSubagentResult,
+  removeAnsweredOpenQuestions,
   resolveToolMessageContent,
 } from "./agent";
 export {
   normalizeTaskExecutionPlan,
   createFallbackPlan,
   formatTaskExecutionPlanBlock,
-  formatPlannerReasoningSummary,
 } from "./plan";

@@ -104,6 +104,7 @@ export function createProductWorkflowKnowledgeGraph(): ProductKnowledgeGraph {
     decisions: [],
     risks: [],
     open_questions: [],
+    resolved_open_question_ids: [],
     summary: [],
     markdown: "",
     notes: ["MVP placeholder: 产品设计知识图谱尚未接入正式存储。"],
@@ -147,7 +148,9 @@ export function appendKnowledgeGraphPatch({
 }: {
   knowledgeGraph: ProductKnowledgeGraph;
   taskId: string;
-  agentType: string;
+  agentType: NonNullable<
+    ProductKnowledgeGraph["open_questions"][number]["source_agent"]
+  >;
   entities: ProductKnowledgeGraph["entities"];
   relations: ProductKnowledgeGraph["relations"];
   decisions: ProductKnowledgeGraph["decisions"];
@@ -157,7 +160,12 @@ export function appendKnowledgeGraphPatch({
 }): ProductKnowledgeGraph {
   const decisionsWithSource = withSourceTaskId(decisions, taskId);
   const risksWithSource = withSourceTaskId(risks, taskId);
-  const openQuestionsWithSource = withSourceTaskId(openQuestions, taskId);
+  const openQuestionsWithSource = withSourceTaskId(openQuestions, taskId).map(
+    (question) => ({
+      ...question,
+      source_agent: question.source_agent ?? agentType,
+    }),
+  );
 
   return {
     ...knowledgeGraph,

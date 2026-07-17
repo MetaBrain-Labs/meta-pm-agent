@@ -1,7 +1,7 @@
 /**
  * Planner 执行计划卡片
  *
- * 展示 Planner Agent 生成的任务 DAG、Executor 实时运行状态，以及 Critique Agent
+ * 展示 Planner SubAgent 生成的任务 DAG、Executor 实时运行状态，以及 Critique Agent
  * 对 Executor 结果和知识图谱一致性的收尾审查。
  *
  * Responsibilities:
@@ -51,7 +51,7 @@ const AGENT_LABELS: Record<string, string> = {
 };
 
 /**
- * 展示 Planner Agent 生成的执行 DAG，以及每个节点的实时运行状态。
+ * 展示 Planner SubAgent 生成的执行 DAG，以及每个节点的实时运行状态。
  */
 export function PlannerExecutionCard({
   plan,
@@ -80,7 +80,7 @@ export function PlannerExecutionCard({
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <PartitionOutlined style={{ color: "var(--primary)" }} />
               <span className="text-[14px] font-extrabold text-[var(--ink)]">
-                Planner Agent DAG
+                Planner SubAgent DAG
               </span>
               <Tag color={plan.status === "supplement" ? "purple" : "blue"}>
                 {plan.status === "supplement" ? "补充 DAG" : "初始 DAG"}
@@ -141,7 +141,7 @@ export function PlannerExecutionCard({
 }
 
 /**
- * 展示 Planner Agent DAG 结构生成期间的占位卡片。
+ * 展示 Planner SubAgent DAG 结构生成期间的占位卡片。
  */
 export function PlannerExecutionLoadingCard() {
   return (
@@ -159,7 +159,7 @@ export function PlannerExecutionLoadingCard() {
       <div className="min-w-0">
         <div className="flex items-center gap-2 text-[13px] font-extrabold text-[var(--ink)]">
           <PartitionOutlined style={{ color: "var(--primary)" }} />
-          <span>Planner Agent DAG</span>
+          <span>Planner SubAgent DAG</span>
         </div>
         <div className="mt-1 text-[12px] font-bold text-[var(--ink-faint)]">
           正在生成执行 DAG

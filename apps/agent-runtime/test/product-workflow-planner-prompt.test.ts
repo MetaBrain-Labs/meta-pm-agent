@@ -30,6 +30,23 @@ test("planner prompt preserves graph-semantics guardrails", () => {
   );
   assert.match(
     PLANNER_AGENT_PROMPT,
+    /importance >= 0\.8.*do not schedule a final decision task/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /A user answer is evidence for the stated product constraint, not proof that a specific technology is optimal/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /trace which historical open questions or risks the answer resolves or supersedes/,
+  );
+  assert.match(PLANNER_AGENT_PROMPT, /runtime allocates actual OQ-\* IDs atomically/);
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /normally no more than 8 new entities total/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
     /first plan Goal\/Requirement work plus evidence-producing tasks, then add a downstream Product Strategy refinement task/,
   );
   assert.match(
@@ -158,6 +175,14 @@ test("orchestrator planner subagent prompt satisfies json response format", () =
     ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
     /Defer detailed architecture and exhaustive component decomposition to a supplement DAG/,
   );
+  assert.match(
+    ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
+    /required_open_question_count/,
+  );
+  assert.match(
+    ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
+    /do not create placeholder capacity metrics, numeric targets/,
+  );
 });
 
 test("critique agent prompt stays compact and does not request full graph copies", () => {
@@ -178,6 +203,8 @@ test("critique agent prompt stays compact and does not request full graph copies
     /Include every unresolved blocking question after semantic deduplication/,
   );
   assert.match(CRITIQUE_AGENT_PROMPT, /exact open_question_id/);
+  assert.match(CRITIQUE_AGENT_PROMPT, /Never invent an open_question_id/);
+  assert.match(CRITIQUE_AGENT_PROMPT, /timelines for internal consistency/);
   assert.match(
     CRITIQUE_AGENT_PROMPT,
     /Status is a critique classification, not an execution command/,
@@ -206,6 +233,12 @@ test("critique agent prompt stays compact and does not request full graph copies
     CRITIQUE_AGENT_PROMPT,
     /does not prove semantic uniqueness, evidence quality, or architecture proportionality/,
   );
+  assert.match(CRITIQUE_AGENT_PROMPT, /Use task_semantic_updates/);
+  assert.match(CRITIQUE_AGENT_PROMPT, /unsupported numeric targets/);
+  assert.match(
+    CRITIQUE_AGENT_PROMPT,
+    /product_context_update must be one short string/,
+  );
   assert.match(
     CRITIQUE_AGENT_PROMPT,
     /Every radio\/select option must answer the same decision dimension/,
@@ -231,6 +264,11 @@ test("executor prompt preserves append-only graph writing semantics", () => {
   assert.match(prompt, /ONLY create new traceable records/);
   assert.match(prompt, /The graph tools are append-only/);
   assert.match(prompt, /Never reuse an existing node, relation, decision, risk, or open-question ID/);
-  assert.match(prompt, /all new IDs unique/);
+  assert.match(prompt, /runtime allocates/);
   assert.match(prompt, /runtime generates the execution summary/);
+  assert.match(prompt, /write one new blocking OQ-\*/);
+  assert.match(prompt, /specific technology, algorithm, vendor, protocol/);
+  assert.match(prompt, /at most two search attempts per topic/);
+  assert.match(prompt, /do not add an unsupported numeric target/);
+  assert.match(prompt, /persist at least that many/);
 });

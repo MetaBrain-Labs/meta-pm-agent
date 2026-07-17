@@ -234,7 +234,7 @@ export async function chatStreamHandler(c: Context) {
       }
 
       // 持久化用户发送的消息
-      await persistConversationStart(
+      const workflowAnswerResolution = await persistConversationStart(
         parsed.data.chatId,
         parsed.data.requestFormId,
         parsed.data.messages,
@@ -247,7 +247,7 @@ export async function chatStreamHandler(c: Context) {
       if (pendingDecisionForm) {
         await markStatus("pending_user_confirmation");
         const promptText =
-          "Conversation Agent 正在根据 Planner Agent 的决策项向你确认信息。";
+          "Conversation Agent 正在根据 Planner SubAgent 的决策项向你确认信息。";
         const output = getAgentOutput(
           agentOutputs,
           "conversation_confirmation",
@@ -323,20 +323,15 @@ export async function chatStreamHandler(c: Context) {
           productContext: runtimeContext.productContext,
           contextSource: runtimeContext.contextSource,
           knowledgeGraph: runtimeContext.knowledgeGraph,
+          workflowAnswerResolution,
           signal: runtimeController.signal,
         },
       )) {
         if (event.type === "complete") {
           // 捕获工作流完整结构化结果，供最终知识图谱归档使用
           productWorkflowResult = event.result;
+          autoFinalizedWorkflowRound = event.result.status === "completed";
           continue;
-        }
-        if (
-          event.type === "text" &&
-          event.agentType === "conversation_confirmation" &&
-          productWorkflowResult
-        ) {
-          autoFinalizedWorkflowRound = true;
         }
         if (
           event.type === "question-form-complete" &&
@@ -483,10 +478,11 @@ export async function chatStreamHandler(c: Context) {
         requestFormId: parsed.data.requestFormId,
         agentOutputs: [...agentOutputs.values()],
         messages: parsed.data.messages,
-        // 是否跳过待确认条目应完全由流内事件决定，
-        // autoFinalizedWorkflowRound 会在 Conversation Agent
-        // 产出新一轮 question-form 时被重置为 false。
+        // 是否跳过待确认条目由结构化 workflow 状态决定；新表单会重置该标记。
         skipPendingDecisionItems: autoFinalizedWorkflowRound,
+        productWorkflowResult: isProductWorkflowResult(productWorkflowResult)
+          ? productWorkflowResult
+          : null,
       });
 
       await finalizeWorkspaceKnowledgeGraph({

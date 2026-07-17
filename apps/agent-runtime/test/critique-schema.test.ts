@@ -89,6 +89,50 @@ test("normalizes critique issues with null and multiple task IDs", () => {
   );
 });
 
+test("normalizes object product context updates without discarding questions", () => {
+  const result = CritiqueAgentOutputSchema.safeParse({
+    status: "pending_user_confirmation",
+    confirmation_id: "product-workflow-confirmation",
+    request_summary: "Review a product workflow.",
+    review: {
+      accepted_task_ids: ["task-01"],
+      rejected_task_ids: [],
+      retry_task_ids: [],
+      issues: [],
+      notes: "User confirmation is required.",
+    },
+    product_context_update: {
+      summary: "Scale decisions remain open.",
+      unresolved_dimensions: ["concurrency"],
+    },
+    knowledge_graph_review: {
+      accepted_task_ids: ["task-01"],
+      rejected_task_ids: [],
+      retry_task_ids: [],
+      issues: [],
+      notes: ["Compact graph review completed."],
+    },
+    proposal_questions: [
+      {
+        id: "q-scale",
+        label: "Expected concurrency?",
+        type: "text",
+        priority: 80,
+      },
+    ],
+    confirmation_message: "Please confirm scale.",
+  });
+
+  assert.equal(result.success, true);
+  if (!result.success) return;
+  assert.equal(
+    result.data.product_context_update,
+    "Scale decisions remain open.",
+  );
+  assert.equal(result.data.proposal_questions.length, 1);
+  assert.equal(result.data.status, "pending_user_confirmation");
+});
+
 test("rejects structurally invalid choice questions", () => {
   const result = ProductWorkflowProposalQuestionSchema.safeParse({
     id: "invalid-choice",
