@@ -170,6 +170,7 @@ export const KnowledgeGraphOpenQuestionInputSchema = z.object({
   id: z.string().min(1).describe("Question ID, e.g. OQ-001"),
   text: z.string().min(1).describe("Question text explaining what needs to be confirmed"),
   source_task_id: z.string().optional().describe("Optional executor task ID that raised this question"),
+  source_agent: LooseProductWorkflowAgentTypeSchema.optional().describe("Optional agent that raised this question"),
   blocking: z.boolean().default(false).describe("Whether this question must be answered before the current workflow can complete"),
 });
 
@@ -360,6 +361,10 @@ export const ProductKnowledgeGraphSchema = z.object({
   decisions: z.array(KnowledgeGraphDecisionInputSchema).default([]),
   risks: z.array(KnowledgeGraphRiskInputSchema).default([]),
   open_questions: z.array(KnowledgeGraphOpenQuestionInputSchema).default([]),
+  resolved_open_question_ids: z
+    .array(z.string().min(1))
+    .optional()
+    .describe("Runtime tombstones for answered OpenQuestions that stale graph snapshots must not restore"),
   summary: z.array(z.string()).default([]),
   markdown: z.string().default(""),
   notes: z.array(z.string()).default([]),

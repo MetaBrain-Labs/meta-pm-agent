@@ -37,6 +37,7 @@ import {
 } from "../src/agents/product-workflow/orchestrator-agent/planner-subagent/agent";
 import {
   compactGraphForPlanner,
+  createPlannerDelegationSummary,
   ORCHESTRATOR_AGENT_MAX_RETRIES,
   requireDelegatedPlannerPlan,
 } from "../src/agents/product-workflow/orchestrator-agent/agent";
@@ -576,9 +577,11 @@ test("defers detailed execution from an unresolved initial DAG", () => {
     [
       ["task-01", []],
       ["task-02", ["task-01"]],
-      ["task-04", ["task-02"]],
     ],
   );
+  const summary = createPlannerDelegationSummary(scoped);
+  assert.match(summary, /with 2 tasks/);
+  assert.doesNotMatch(summary, /task-03|task-04/);
 });
 
 test("keeps document approval fallback focused and acyclic", () => {

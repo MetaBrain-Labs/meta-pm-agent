@@ -163,16 +163,21 @@ export async function persistConversationStart(
   conversationId: string | undefined,
   requestFormId: string | undefined,
   messages: ChatMessage[],
-): Promise<void> {
-  if (!conversationId) return;
+): Promise<Awaited<ReturnType<typeof finishAnsweredDecisionItems>>> {
+  if (!conversationId) return null;
 
-  await finishAnsweredDecisionItems(requestFormId, messages);
+  const workflowAnswerResolution = await finishAnsweredDecisionItems(
+    requestFormId,
+    messages,
+  );
 
   // 只持久化用户消息，助手回复由 persistConversationResult 统一写入。
   await persistConversationMessages(
     conversationId,
     messages.filter((message) => message.role === "user"),
   );
+
+  return workflowAnswerResolution;
 }
 
 /**
@@ -301,7 +306,10 @@ export function shouldPersistProductWorkflowConfirmation(
 ): result is ProductWorkflowResult {
   return (
     result?.status === "pending_user_confirmation" &&
-    result.proposal_questions.length === 0
+    result.proposal_questions.length === 0 &&
+    !result.knowledge_graph_update.open_questions.some(
+      (question) => question.blocking,
+    )
   );
 }
 

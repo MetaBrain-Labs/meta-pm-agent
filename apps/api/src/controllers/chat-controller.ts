@@ -234,7 +234,7 @@ export async function chatStreamHandler(c: Context) {
       }
 
       // 持久化用户发送的消息
-      await persistConversationStart(
+      const workflowAnswerResolution = await persistConversationStart(
         parsed.data.chatId,
         parsed.data.requestFormId,
         parsed.data.messages,
@@ -323,6 +323,7 @@ export async function chatStreamHandler(c: Context) {
           productContext: runtimeContext.productContext,
           contextSource: runtimeContext.contextSource,
           knowledgeGraph: runtimeContext.knowledgeGraph,
+          workflowAnswerResolution,
           signal: runtimeController.signal,
         },
       )) {

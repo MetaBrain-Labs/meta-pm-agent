@@ -12,6 +12,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ProductWorkflowResult } from "@repo/shared";
+import { collectWorkflowAnswerResolution } from "../src/repositories/request-form-repository";
 import { shouldPersistProductWorkflowConfirmation } from "../src/services/chat-service";
 
 test("persists final handling confirmation only for pending results without proposals", () => {
@@ -37,6 +38,67 @@ test("persists final handling confirmation only for pending results without prop
       ],
     }),
     false,
+  );
+  result.knowledge_graph_update.open_questions = [
+    {
+      id: "OQ-1",
+      text: "Confirm deployment?",
+      source_task_id: "task-01",
+      source_agent: "executor-product-strategy",
+      blocking: true,
+    },
+  ];
+  assert.equal(shouldPersistProductWorkflowConfirmation(result), false);
+});
+
+test("keeps exact question sources and only marks submitted fields answered", () => {
+  const resolution = collectWorkflowAnswerResolution(
+    {
+      questions: [
+        {
+          id: "roles",
+          question: "确认角色权限？",
+          source_task_id: "task-01",
+          source_agent: "executor-product-strategy",
+          sources: [
+            {
+              source_task_id: "task-01",
+              source_agent: "executor-product-strategy",
+              open_question_id: "OQ-roles",
+            },
+          ],
+        },
+        {
+          id: "deployment",
+          question: "确认部署环境？",
+          source_task_id: "task-01",
+          source_agent: "executor-product-strategy",
+          sources: [
+            {
+              source_task_id: "task-01",
+              source_agent: "executor-product-strategy",
+              open_question_id: "OQ-deployment",
+            },
+          ],
+        },
+      ],
+    },
+    {
+      formId: "review-proposal-decision",
+      content:
+        "[form answers - review-proposal-decision]\n- 确认角色权限？: 管理员、编辑、只读\n- 确认部署环境？: (skipped)",
+    },
+  );
+
+  assert.deepEqual(
+    resolution.questions.map((question) => ({
+      answered: question.answered,
+      openQuestionId: question.sources[0]?.open_question_id,
+    })),
+    [
+      { answered: true, openQuestionId: "OQ-roles" },
+      { answered: false, openQuestionId: "OQ-deployment" },
+    ],
   );
 });
 

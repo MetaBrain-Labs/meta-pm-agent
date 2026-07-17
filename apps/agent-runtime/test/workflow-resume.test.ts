@@ -141,6 +141,162 @@ test("restores dynamic Critique confirmation as a scoped supplement", () => {
   );
 });
 
+test("closes all answered form questions without restored product workflow payload", () => {
+  const knowledgeGraph = createProductWorkflowKnowledgeGraph();
+  knowledgeGraph.open_questions = [
+    { id: "OQ-roles", text: "确认角色权限？", source_task_id: "task-01", blocking: true },
+    { id: "OQ-formats", text: "确认文档格式？", source_task_id: "task-01", blocking: true },
+    { id: "OQ-deployment", text: "确认部署环境？", source_task_id: "task-01", blocking: true },
+  ];
+  const context = createWorkflowResumeContextFromMessages({
+    messages: createMessages(
+      "[form answers - review-proposal-decision]\n- 确认角色权限？: 管理员、编辑、只读\n- 确认文档格式？: Markdown 与 Word\n- 确认部署环境？: Docker Compose",
+    ),
+    knowledgeGraph,
+    workflowAnswerResolution: {
+      formId: "review-proposal-decision",
+      questions: knowledgeGraph.open_questions.map((question) => ({
+        label: question.text,
+        answered: true,
+        sources: [
+          {
+            source_task_id: "task-01",
+            source_agent: "executor-product-strategy",
+            open_question_id: question.id,
+          },
+        ],
+      })),
+    },
+  });
+
+  assert.deepEqual(context?.answeredOpenQuestionIds, [
+    "OQ-roles",
+    "OQ-formats",
+    "OQ-deployment",
+  ]);
+  assert.deepEqual(context?.knowledgeGraph?.open_questions, []);
+  assert.deepEqual(context?.knowledgeGraph?.resolved_open_question_ids, [
+    "OQ-roles",
+    "OQ-formats",
+    "OQ-deployment",
+  ]);
+});
+
+test("keeps skipped questions open and preserves their source agent", () => {
+  const knowledgeGraph = createProductWorkflowKnowledgeGraph();
+  knowledgeGraph.open_questions = [
+    { id: "task-01-oq", text: "Market scope?", source_task_id: "task-01", blocking: true },
+    { id: "task-01-oq-2", text: "Sync strategy?", source_task_id: "task-01", blocking: true },
+  ];
+  const context = createWorkflowResumeContextFromMessages({
+    messages: createMessages(
+      "[form answers - review-proposal-decision]\n- Market scope?: enterprise\n- Sync strategy?: (skipped)",
+    ),
+    knowledgeGraph,
+    workflowAnswerResolution: {
+      formId: "review-proposal-decision",
+      questions: [
+        {
+          label: "Market scope?",
+          answered: true,
+          sources: [
+            {
+              source_task_id: "task-01",
+              source_agent: "executor-product-strategy",
+              open_question_id: "task-01-oq",
+            },
+          ],
+        },
+        {
+          label: "Sync strategy?",
+          answered: false,
+          sources: [
+            {
+              source_task_id: "task-01",
+              source_agent: "executor-product-strategy",
+              open_question_id: "task-01-oq-2",
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  assert.deepEqual(context?.answeredOpenQuestionIds, ["task-01-oq"]);
+  assert.deepEqual(context?.knowledgeGraph?.open_questions, [
+    {
+      id: "task-01-oq-2",
+      text: "Sync strategy?",
+      source_task_id: "task-01",
+      source_agent: "executor-product-strategy",
+      blocking: true,
+    },
+  ]);
+});
+
+test("uses unique task and text matching for legacy form sources", () => {
+  const knowledgeGraph = createProductWorkflowKnowledgeGraph();
+  knowledgeGraph.open_questions = [
+    { id: "task-01-oq", text: "Market scope?", source_task_id: "task-01", blocking: true },
+  ];
+  const context = createWorkflowResumeContextFromMessages({
+    messages: createMessages(
+      "[form answers - review-proposal-decision]\n- Market scope?: enterprise",
+    ),
+    knowledgeGraph,
+    workflowAnswerResolution: {
+      formId: "review-proposal-decision",
+      questions: [
+        {
+          label: "Market scope?",
+          answered: true,
+          sources: [
+            {
+              source_task_id: "task-01",
+              source_agent: "executor-product-strategy",
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  assert.deepEqual(context?.answeredOpenQuestionIds, ["task-01-oq"]);
+  assert.deepEqual(context?.knowledgeGraph?.open_questions, []);
+});
+
+test("does not close ambiguous legacy text matches", () => {
+  const knowledgeGraph = createProductWorkflowKnowledgeGraph();
+  knowledgeGraph.open_questions = [
+    { id: "task-01-oq", text: "Market scope?", source_task_id: "task-01", blocking: true },
+    { id: "task-01-oq-copy", text: "Market scope?", source_task_id: "task-01", blocking: true },
+  ];
+  const context = createWorkflowResumeContextFromMessages({
+    messages: createMessages(
+      "[form answers - review-proposal-decision]\n- Market scope?: enterprise",
+    ),
+    knowledgeGraph,
+    workflowAnswerResolution: {
+      formId: "review-proposal-decision",
+      questions: [
+        {
+          label: "Market scope?",
+          answered: true,
+          sources: [
+            {
+              source_task_id: "task-01",
+              source_agent: "executor-product-strategy",
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  assert.deepEqual(context?.answeredOpenQuestionIds, []);
+  assert.equal(context?.knowledgeGraph?.open_questions.length, 2);
+});
+
 test("restores latest supplement DAG for continue intent", () => {
   const messages = createMessages("继续");
   messages.splice(

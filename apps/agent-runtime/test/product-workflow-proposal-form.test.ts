@@ -50,6 +50,25 @@ test("uses final confirmation when retry has no proposal question", () => {
   );
 });
 
+test("uses a supplement form when a graph blocking question remains", () => {
+  const result = createWorkflowResult({
+    proposalQuestions: [],
+    executorResults: [],
+  });
+  result.knowledge_graph_update.open_questions = [
+    {
+      id: "OQ-deployment",
+      text: "确认部署环境？",
+      blocking: true,
+    },
+  ];
+
+  const form = formatProductWorkflowProposalQuestionForm(result);
+  assert.match(form ?? "", /title="补充信息确认"/);
+  assert.match(form ?? "", /OQ-deployment/);
+  assert.doesNotMatch(form ?? "", /设计结果确认/);
+});
+
 test("allows warning-only completion and recognizes explicit acceptance", () => {
   const result = createWorkflowResult({
     proposalQuestions: [],

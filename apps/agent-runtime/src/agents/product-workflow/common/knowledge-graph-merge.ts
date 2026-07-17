@@ -43,6 +43,13 @@ export function mergeProductKnowledgeGraphSnapshots(
   current: ProductKnowledgeGraph,
   update: ProductKnowledgeGraph,
 ): ProductKnowledgeGraph {
+  const resolvedOpenQuestionIds = [
+    ...new Set([
+      ...(current.resolved_open_question_ids ?? []),
+      ...(update.resolved_open_question_ids ?? []),
+    ]),
+  ];
+  const resolvedOpenQuestionIdSet = new Set(resolvedOpenQuestionIds);
   const entityMerge = mergeGraphItems({
     current: current.entities,
     update: update.entities,
@@ -76,7 +83,8 @@ export function mergeProductKnowledgeGraphSnapshots(
       current: current.open_questions,
       update: update.open_questions,
       kind: "auxiliary",
-    }).items,
+    }).items.filter((question) => !resolvedOpenQuestionIdSet.has(question.id)),
+    resolved_open_question_ids: resolvedOpenQuestionIds,
     summary: mergeTextList(current.summary, update.summary),
     markdown: update.markdown || current.markdown,
     notes: mergeTextList(current.notes, update.notes),

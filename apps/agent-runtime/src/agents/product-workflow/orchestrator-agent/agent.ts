@@ -199,14 +199,37 @@ export async function* streamOrchestratorAgent(
     ? result.data
     : createFallbackOrchestratorDecision(input, "invalid-orch-output");
   const normalizedDecision = normalizeOrchestratorDecision(input, decision);
+  const plan = requireDelegatedPlannerPlan(
+    normalizedDecision.route,
+    capturedPlan,
+    plannerInvocationStarted,
+  );
   return {
-    decision: normalizedDecision,
-    plan: requireDelegatedPlannerPlan(
-      normalizedDecision.route,
-      capturedPlan,
-      plannerInvocationStarted,
-    ),
+    decision: plan
+      ? {
+          ...normalizedDecision,
+          plan_type: plan.status,
+          planner_delegation_summary: createPlannerDelegationSummary(plan),
+        }
+      : normalizedDecision,
+    plan,
   };
+}
+
+/**
+ * 基于运行时最终采用的 DAG 生成摘要，避免模型原始计划与裁剪后计划不一致。
+ */
+export function createPlannerDelegationSummary(plan: TaskExecutionPlan): string {
+  const tasks = plan.tasks.map((task) => {
+    const dependencies = task.depends_on.length
+      ? ` after ${task.depends_on.join(", ")}`
+      : "";
+    return `${task.task_id} (${task.title}, ${task.assigned_agent}${dependencies})`;
+  });
+  return `Planner produced a ${plan.status} DAG with ${plan.tasks.length} tasks: ${tasks.join("; ")}.`.slice(
+    0,
+    1200,
+  );
 }
 
 /**

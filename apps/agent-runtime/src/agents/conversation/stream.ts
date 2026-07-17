@@ -593,6 +593,7 @@ async function* streamWorkflowResumeAfterFormAnswer(
   const resumeContext = createWorkflowResumeContextFromMessages({
     messages,
     knowledgeGraph: options.knowledgeGraph,
+    workflowAnswerResolution: options.workflowAnswerResolution,
   });
 
   if (!resumeContext) {

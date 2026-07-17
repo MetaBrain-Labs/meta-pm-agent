@@ -506,7 +506,35 @@ function createSemanticQualityIssues(
   const metrics = input.knowledgeGraph.entities.filter(
     (entity) => entity.type === "Metric",
   );
+  const measuredMetricIds = new Set(
+    input.knowledgeGraph.relations
+      .filter((relation) => relation.type === "Measures")
+      .map((relation) => relation.source),
+  );
   const duplicatePairs = new Set<string>();
+
+  issues.push(...createSuccessTargetCoverageIssues(input));
+
+  // 本轮创建的 Metric 必须落到业务目标、功能或需求上，否则指标任务尚未完成。
+  for (const task of input.plan.tasks) {
+    const unmeasuredMetricIds = metrics
+      .filter(
+        (metric) =>
+          metric.source_task_id === task.task_id &&
+          !measuredMetricIds.has(metric.id),
+      )
+      .map((metric) => metric.id);
+    if (unmeasuredMetricIds.length === 0) continue;
+
+    issues.push(
+      createReviewIssue({
+        code: "UNMEASURED_METRIC",
+        severity: "error",
+        taskId: task.task_id,
+        message: `Metric nodes have no outgoing Measures relation: ${formatCompactIdList(unmeasuredMetricIds)}.`,
+      }),
+    );
+  }
 
   for (let leftIndex = 0; leftIndex < metrics.length; leftIndex += 1) {
     for (let rightIndex = leftIndex + 1; rightIndex < metrics.length; rightIndex += 1) {
@@ -560,6 +588,111 @@ function createSemanticQualityIssues(
   }
 
   return issues;
+}
+
+/**
+ * 用户明确给出的量化成功标准必须进入 Requirement 或 Metric，不能在流程结束时丢失。
+ */
+function createSuccessTargetCoverageIssues(
+  input: CritiqueAgentInput,
+): CritiqueValidationIssue[] {
+  const artifacts = input.knowledgeGraph.entities
+    .filter((entity) => entity.type === "Requirement" || entity.type === "Metric")
+    .map((entity) => normalizeMetricText(`${entity.name} ${entity.description ?? ""}`));
+  const issues: CritiqueValidationIssue[] = [];
+
+  for (const businessModel of input.requestAnalysis.business_model) {
+    for (const constraint of businessModel.goal_constraints) {
+      const normalizedConstraint = normalizeMetricText(constraint);
+      if (!isExplicitSuccessTarget(normalizedConstraint)) continue;
+
+      const targetValues = normalizedConstraint.match(/\d+(?:\.\d+)?%?/g) ?? [];
+      const targetDimension = getSuccessTargetDimension(normalizedConstraint);
+      if (
+        targetValues.length === 0 ||
+        targetValues.every((value) =>
+          artifacts.some(
+            (artifact) =>
+              artifact.includes(value) &&
+              (!targetDimension || artifact.includes(targetDimension)),
+          ),
+        )
+      ) {
+        continue;
+      }
+
+      const ownerTask = findSuccessTargetOwnerTask(input.plan, businessModel.index);
+      issues.push(
+        createReviewIssue({
+          code: "MISSING_SUCCESS_TARGET_COVERAGE",
+          severity: "error",
+          taskId: ownerTask?.task_id,
+          message: `Explicit success target is not represented by a Requirement or Metric: ${truncateText(constraint, 220)}`,
+        }),
+      );
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * 优先让具备 Metric 写入权限的已规划任务补齐成功标准，否则回退到同业务项首个任务。
+ */
+function findSuccessTargetOwnerTask(
+  plan: TaskExecutionPlan,
+  businessModelIndex: number,
+) {
+  const candidates = plan.tasks.filter((task) =>
+    task.covered_business_model_indexes.includes(businessModelIndex),
+  );
+  return (
+    candidates.find(
+      (task) =>
+        isExecutorAgentType(task.assigned_agent) &&
+        getExecutorDefinition(task.assigned_agent).allowedEntityTypes.some(
+          (entityType) => entityType === "Metric",
+        ),
+    ) ?? candidates[0]
+  );
+}
+
+/**
+ * 只识别明确的成功/KPI语句，避免把“20-200人”等普通约束误判成指标。
+ */
+function isExplicitSuccessTarget(text: string): boolean {
+  return /成功标准|成功指标|满意度|采用率|迁移率|留存率|转化率|活跃率|success\s*(?:metric|criterion|target)|satisfaction|adoption\s*rate|retention\s*rate|conversion\s*rate/i.test(
+    text,
+  );
+}
+
+/**
+ * 提取常见成功指标维度，避免用无关指标中的相同数字误判为已覆盖。
+ */
+function getSuccessTargetDimension(text: string): string | null {
+  if (/满意度|satisfaction/.test(text)) {
+    return text.includes("满意度") ? "满意度" : "satisfaction";
+  }
+  if (/迁移率|迁移到|adoption/.test(text)) {
+    return text.includes("迁移") ? "迁移" : "adoption";
+  }
+  if (/留存率|retention/.test(text)) {
+    return text.includes("留存") ? "留存" : "retention";
+  }
+  if (/转化率|conversion/.test(text)) {
+    return text.includes("转化") ? "转化" : "conversion";
+  }
+  if (/活跃率|active\s*rate/.test(text)) {
+    return text.includes("活跃") ? "活跃" : "active";
+  }
+  return null;
+}
+
+/**
+ * 统一全角字符、大小写和空白，使数值目标比较保持稳定。
+ */
+function normalizeMetricText(text: string): string {
+  return text.normalize("NFKC").toLowerCase().replace(/\s+/g, "");
 }
 
 /**
@@ -1073,6 +1206,8 @@ export function composeProductWorkflowResult(
   const proposalQuestions = reconcileProposalQuestions(
     review.proposal_questions,
     input.executorResults,
+    input.knowledgeGraph,
+    input.plan,
   );
   const plannedTaskIds = new Set(input.plan.tasks.map((task) => task.task_id));
   const retryTaskIds = mergeTextList([
@@ -1101,11 +1236,15 @@ export function composeProductWorkflowResult(
   const hasError = [...reviewIssues, ...graphIssues].some(
     (issue) => issue.severity === "error",
   );
+  const unresolvedBlockingQuestionCount = input.knowledgeGraph.open_questions.filter(
+    (question) => question.blocking,
+  ).length;
   const needsConfirmation =
     proposalQuestions.length > 0 ||
     rejectedTaskIds.length > 0 ||
     retryTaskIds.length > 0 ||
-    hasError;
+    hasError ||
+    unresolvedBlockingQuestionCount > 0;
 
   return {
     status: needsConfirmation ? "pending_user_confirmation" : "completed",
@@ -1140,8 +1279,10 @@ export function composeProductWorkflowResult(
     },
     proposal_questions: proposalQuestions,
     confirmation_message: needsConfirmation
-      ? review.confirmation_message
-      : "本轮任务已完成，所有可追溯的阻塞问题均已处理。",
+      ? unresolvedBlockingQuestionCount > 0 && proposalQuestions.length === 0
+        ? `仍有 ${unresolvedBlockingQuestionCount} 个阻塞问题未关闭，本轮不能标记为完成。`
+        : review.confirmation_message
+      : `本轮任务已完成：${truncateText(review.product_context_update, 240)}`,
   };
 }
 
@@ -1167,6 +1308,8 @@ function mergeReviewIssues(
 export function reconcileProposalQuestions(
   reviewQuestions: CritiqueAgentOutput["proposal_questions"],
   executorResults: ExecutorAgentResult[],
+  knowledgeGraph?: ProductKnowledgeGraph,
+  plan?: TaskExecutionPlan,
 ): CritiqueAgentOutput["proposal_questions"] {
   const actualSources = new Map<
     string,
@@ -1186,6 +1329,18 @@ export function reconcileProposalQuestions(
         },
       );
     });
+  }
+  for (const question of createFallbackGraphProposalQuestions(
+    knowledgeGraph,
+    plan,
+    executorResults,
+  )) {
+    for (const source of question.sources) {
+      actualSources.set(formatQuestionSourceKey(source), {
+        required: question.required,
+        priority: question.priority,
+      });
+    }
   }
 
   const coveredSourceKeys = new Set<string>();
@@ -1220,7 +1375,10 @@ export function reconcileProposalQuestions(
       : [];
   });
 
-  const missing = createFallbackProposalQuestions(executorResults).flatMap(
+  const missing = [
+    ...createFallbackProposalQuestions(executorResults),
+    ...createFallbackGraphProposalQuestions(knowledgeGraph, plan, executorResults),
+  ].flatMap(
     (question) => {
       const sources = question.sources.filter(
         (source) => !coveredSourceKeys.has(formatQuestionSourceKey(source)),
@@ -1268,6 +1426,11 @@ function createFallbackCritiqueAgentOutput(
   const proposalQuestions = [
     ...(retryQuestion ? [retryQuestion] : []),
     ...createFallbackProposalQuestions(input.executorResults),
+    ...createFallbackGraphProposalQuestions(
+      input.knowledgeGraph,
+      input.plan,
+      input.executorResults,
+    ),
   ];
   const hasRetry = validationReport.retry_task_ids.length > 0;
   const status = hasRetry
@@ -1453,6 +1616,65 @@ function createFallbackProposalQuestions(
   return [...questions.values()].sort(
     (left, right) => right.priority - left.priority,
   );
+}
+
+/**
+ * Executor 结果已被 supplement 轮次替换时，从累计图谱补齐仍真实存在的阻塞问题。
+ */
+function createFallbackGraphProposalQuestions(
+  knowledgeGraph: ProductKnowledgeGraph | undefined,
+  plan: TaskExecutionPlan | undefined,
+  executorResults: ExecutorAgentResult[],
+): CritiqueAgentOutput["proposal_questions"] {
+  if (!knowledgeGraph) return [];
+  const executorQuestionIds = new Set(
+    executorResults.flatMap((result) =>
+      result.open_questions.map((question) => question.id),
+    ),
+  );
+  const sourceAgentByTask = new Map<
+    string,
+    ProductWorkflowProposalQuestion["sources"][number]["source_agent"]
+  >([
+    ...executorResults.map(
+      (result) => [result.task_id, result.agent_type] as const,
+    ),
+    ...(plan?.tasks ?? []).map(
+      (task) => [task.task_id, task.assigned_agent] as const,
+    ),
+  ]);
+
+  return knowledgeGraph.open_questions.flatMap((question, index) => {
+    if (!question.blocking || executorQuestionIds.has(question.id)) return [];
+    const fallbackTask = plan?.tasks[0];
+    const sourceTaskId =
+      question.source_task_id ?? fallbackTask?.task_id ?? "unknown-task";
+    const sourceAgent =
+      question.source_agent ??
+      sourceAgentByTask.get(sourceTaskId) ??
+      fallbackTask?.assigned_agent ??
+      "critique";
+
+    return [
+      {
+        id: `${sourceTaskId}-${question.id}`,
+        label: formatFallbackOpenQuestionLabel(question.text, sourceTaskId),
+        type: "textarea" as const,
+        required: true,
+        placeholder: "请补充这个问题所需的事实、约束或偏好。",
+        source_task_id: sourceTaskId,
+        source_agent: sourceAgent,
+        sources: [
+          {
+            source_task_id: sourceTaskId,
+            source_agent: sourceAgent,
+            open_question_id: question.id,
+          },
+        ],
+        priority: 100 - index,
+      },
+    ];
+  });
 }
 
 /**

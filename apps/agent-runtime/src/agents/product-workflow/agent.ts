@@ -272,6 +272,60 @@ function collectProposalSlots(result: ProductWorkflowResult): ProposalSlot[] {
     });
   }
 
+  const coveredQuestionIds = new Set(
+    [...slots.values()].flatMap((slot) =>
+      slot.sources.flatMap((source) =>
+        source.open_question_id ? [source.open_question_id] : [],
+      ),
+    ),
+  );
+  const sourceAgentByTask = new Map([
+    ...result.executor_results.map(
+      (executorResult) =>
+        [executorResult.task_id, executorResult.agent_type] as const,
+    ),
+    ...result.planner.tasks.map(
+      (task) => [task.task_id, task.assigned_agent] as const,
+    ),
+  ]);
+  for (const question of result.knowledge_graph_update.open_questions) {
+    if (!question.blocking || coveredQuestionIds.has(question.id)) continue;
+    const fallbackTask = result.planner.tasks[0];
+    const sourceTaskId =
+      question.source_task_id ?? fallbackTask?.task_id ?? "unknown-task";
+    const sourceAgent =
+      question.source_agent ??
+      sourceAgentByTask.get(sourceTaskId) ??
+      fallbackTask?.assigned_agent ??
+      "critique";
+    const normalized = normalizeSlotQuestion(question.text);
+    if (!normalized) continue;
+    const source = {
+      source_task_id: sourceTaskId,
+      source_agent: sourceAgent,
+      open_question_id: question.id,
+    };
+    const existing = slots.get(normalized);
+    if (existing) {
+      existing.sources = mergeProposalQuestionSources([
+        ...existing.sources,
+        source,
+      ]);
+      existing.required = true;
+      existing.priority = Math.max(existing.priority, 100);
+      continue;
+    }
+    slots.set(normalized, {
+      id: `${sourceTaskId}-${question.id}`,
+      question: question.text,
+      source_task_id: sourceTaskId,
+      source_agent: sourceAgent,
+      sources: [source],
+      priority: 100,
+      required: true,
+    });
+  }
+
   return [...slots.values()].sort((left, right) => right.priority - left.priority);
 }
 

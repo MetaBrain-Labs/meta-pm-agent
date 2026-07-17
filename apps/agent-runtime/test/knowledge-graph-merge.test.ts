@@ -303,6 +303,143 @@ test("critique composition keeps runtime validation and graph counts authoritati
     entity_count: 2,
     relation_count: 1,
   });
+  assert.equal(result.confirmation_message, "本轮任务已完成：Requirement confirmed.");
+});
+
+test("blocks completion while graph blocking questions remain", () => {
+  const task = createTask("task-01", 1, "executor-product-strategy");
+  const graph = createGraph({});
+  graph.open_questions = [
+    {
+      id: "OQ-001",
+      text: "Which deployment target should be used?",
+      source_task_id: task.task_id,
+      blocking: true,
+    },
+  ];
+  const review: CritiqueAgentOutput = {
+    status: "completed",
+    confirmation_id: "review-blocking-question",
+    request_summary: "Review deployment planning.",
+    review: {
+      accepted_task_ids: [task.task_id],
+      rejected_task_ids: [],
+      retry_task_ids: [],
+      issues: [],
+      notes: "Model considered the task complete.",
+    },
+    product_context_update: "Deployment planning reviewed.",
+    knowledge_graph_review: {
+      accepted_task_ids: [task.task_id],
+      rejected_task_ids: [],
+      retry_task_ids: [],
+      issues: [],
+      notes: [],
+    },
+    proposal_questions: [],
+    confirmation_message: "Complete.",
+  };
+
+  const result = composeProductWorkflowResult(
+    {
+      requestAnalysis: createRequestAnalysis(),
+      plan: {
+        status: "supplement",
+        request_summary: "Review deployment planning.",
+        dag: { nodes: [task.task_id], edges: [] },
+        tasks: [task],
+        assumptions: [],
+      },
+      executorResults: [
+        {
+          task_id: task.task_id,
+          agent_type: task.assigned_agent,
+          focus_layer: "Decision",
+          summary: "Reviewed deployment planning.",
+          entities: [],
+          relations: [],
+          decisions: [],
+          risks: [],
+          open_questions: [],
+          quality_result: { passed: true, notes: "ok" },
+        },
+      ],
+      knowledgeGraph: graph,
+    },
+    review,
+  );
+
+  assert.equal(result.status, "pending_user_confirmation");
+  assert.equal(result.proposal_questions.length, 1);
+  assert.equal(
+    result.proposal_questions[0]?.sources[0]?.open_question_id,
+    "OQ-001",
+  );
+  assert.equal(result.proposal_questions[0]?.required, true);
+});
+
+test("rejects the metric-capable task when explicit success targets are missing", () => {
+  const task = createTask("task-01", 1, "executor-product-discovery");
+  const requestAnalysis = createRequestAnalysis();
+  requestAnalysis.business_model[0]!.goal_constraints = [
+    "成功标准：团队内 80% 的文档协作迁移到该工具",
+    "成功标准：用户满意度达到 4.5 分以上",
+  ];
+  const result: ExecutorAgentResult = {
+    task_id: task.task_id,
+    agent_type: task.assigned_agent,
+    focus_layer: "Metric",
+    summary: "No success metrics were created.",
+    entities: [],
+    relations: [],
+    decisions: [],
+    risks: [],
+    open_questions: [],
+    quality_result: { passed: true, notes: "ok" },
+  };
+  const input = {
+    requestAnalysis,
+    plan: {
+      status: "initial" as const,
+      request_summary: "Design a collaborative document tool.",
+      dag: { nodes: [task.task_id], edges: [] },
+      tasks: [task],
+      assumptions: [],
+    },
+    executorResults: [result],
+  };
+
+  const missing = createCritiqueValidationReport({
+    ...input,
+    knowledgeGraph: createGraph({}),
+  });
+  assert.deepEqual(missing.retry_task_ids, [task.task_id]);
+  assert.equal(
+    missing.issues.filter(
+      (issue) => issue.code === "MISSING_SUCCESS_TARGET_COVERAGE",
+    ).length,
+    2,
+  );
+
+  const metric: ProductKnowledgeGraph["entities"][number] = {
+    id: "M-001",
+    type: "Metric",
+    name: "文档迁移率与用户满意度",
+    description: "至少 80% 的文档协作完成迁移，用户满意度达到 4.5。",
+    source_task_id: task.task_id,
+    status: "proposed",
+  };
+  const covered = createCritiqueValidationReport({
+    ...input,
+    executorResults: [{ ...result, entities: [metric] }],
+    knowledgeGraph: createGraph({ entities: [metric] }),
+  });
+  assert.equal(
+    covered.issues.some(
+      (issue) => issue.code === "MISSING_SUCCESS_TARGET_COVERAGE",
+    ),
+    false,
+  );
 });
 
 test("critique validation warns when a task patch exceeds the soft ceiling", () => {
@@ -414,6 +551,75 @@ test("critique validation warns about duplicate metrics", () => {
   assert.deepEqual(report.retry_task_ids, []);
 });
 
+test("critique validation retries a metric task until Measures relations are committed", () => {
+  const task = createTask("task-05", 1, "executor-data-analytics");
+  const goal = createGoal("G-001");
+  const metric: ProductKnowledgeGraph["entities"][number] = {
+    id: "M-001",
+    type: "Metric",
+    name: "Collaboration efficiency improvement",
+    description: "Measures the target 30% collaboration efficiency improvement.",
+    source_task_id: task.task_id,
+    status: "proposed",
+  };
+  const executorResult: ExecutorAgentResult = {
+    task_id: task.task_id,
+    agent_type: task.assigned_agent,
+    focus_layer: "Metric",
+    summary: "Created the requested metric.",
+    entities: [metric],
+    relations: [],
+    decisions: [],
+    risks: [],
+    open_questions: [],
+    quality_result: { passed: true, notes: "ok" },
+  };
+  const plan: TaskExecutionPlan = {
+    status: "initial",
+    request_summary: "Define collaboration success metrics.",
+    dag: { nodes: [task.task_id], edges: [] },
+    tasks: [task],
+    assumptions: [],
+  };
+  const input = {
+    requestAnalysis: createRequestAnalysis(),
+    plan,
+    executorResults: [executorResult],
+  };
+
+  const missingRelation = createCritiqueValidationReport({
+    ...input,
+    knowledgeGraph: createGraph({ entities: [goal, metric] }),
+  });
+  assert.deepEqual(missingRelation.retry_task_ids, [task.task_id]);
+  assert.equal(
+    missingRelation.issues.some(
+      (issue) =>
+        issue.code === "UNMEASURED_METRIC" &&
+        issue.severity === "error" &&
+        issue.task_id === task.task_id,
+    ),
+    true,
+  );
+
+  const measureRelation: ProductKnowledgeGraph["relations"][number] = {
+    id: "REL-001",
+    type: "Measures",
+    source: metric.id,
+    target: goal.id,
+    source_task_id: task.task_id,
+  };
+  const completed = createCritiqueValidationReport({
+    ...input,
+    executorResults: [{ ...executorResult, relations: [measureRelation] }],
+    knowledgeGraph: createGraph({
+      entities: [goal, metric],
+      relations: [measureRelation],
+    }),
+  });
+  assert.deepEqual(completed.retry_task_ids, []);
+});
+
 test("renames non-similar duplicate IDs and remaps relation endpoints", () => {
   const current = createCurrentGraphWithTask03();
   const update = createGraph({
@@ -518,6 +724,40 @@ test("merges product context metadata without losing graph items", () => {
   ]);
   assert.equal(merged.entities.length, 1);
   assert.equal(merged.relations.length, 1);
+});
+
+test("does not restore answered questions from stale graph snapshots", () => {
+  const current = createGraph({});
+  current.open_questions = [
+    { id: "OQ-answered", text: "Answered?", blocking: true },
+    { id: "OQ-open", text: "Still open?", blocking: true },
+  ];
+  const resolved = {
+    ...current,
+    open_questions: [current.open_questions[1]!],
+    resolved_open_question_ids: ["OQ-answered"],
+  };
+
+  const merged = mergeKnowledgeGraphSnapshots(current, resolved);
+  const staleBranch = {
+    ...current,
+    open_questions: [
+      ...current.open_questions,
+      { id: "OQ-new", text: "New question?", blocking: true },
+    ],
+  };
+  const mergedWithStaleBranch = mergeKnowledgeGraphSnapshots(
+    merged,
+    staleBranch,
+  );
+
+  assert.deepEqual(
+    mergedWithStaleBranch.open_questions.map((question) => question.id),
+    ["OQ-open", "OQ-new"],
+  );
+  assert.deepEqual(mergedWithStaleBranch.resolved_open_question_ids, [
+    "OQ-answered",
+  ]);
 });
 
 test("critique validation accepts graph items normalized by merge reducer", () => {

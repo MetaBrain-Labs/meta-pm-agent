@@ -24,6 +24,7 @@ import {
   type ProductWorkflowResult,
 } from "@repo/shared";
 import { getFormAnswerId } from "../../utils/form-parser";
+import type { WorkflowAnswerResolution } from "../../types";
 import type { WorkflowResumeContext } from "../product-workflow/types";
 import {
   isExecutorAgentType,
@@ -39,9 +40,11 @@ const PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID = "product-workflow-confirmation";
 export function createWorkflowResumeContextFromMessages({
   messages,
   knowledgeGraph,
+  workflowAnswerResolution,
 }: {
   messages: ChatMessage[];
   knowledgeGraph?: ProductKnowledgeGraph | null;
+  workflowAnswerResolution?: WorkflowAnswerResolution | null;
 }): WorkflowResumeContext | null {
   const formId = parseLatestFormAnswerId(messages);
   if (!formId) return null;
@@ -50,6 +53,7 @@ export function createWorkflowResumeContextFromMessages({
     formId,
     knowledgeGraph,
     messages,
+    workflowAnswerResolution,
   });
 }
 
@@ -77,10 +81,12 @@ function createWorkflowResumeContext({
   formId,
   messages,
   knowledgeGraph,
+  workflowAnswerResolution,
 }: {
   formId: string | null;
   messages: ChatMessage[];
   knowledgeGraph?: ProductKnowledgeGraph | null;
+  workflowAnswerResolution?: WorkflowAnswerResolution | null;
 }): WorkflowResumeContext | null {
   const requestAnalysis =
     findLatestTaggedPayload(
@@ -137,7 +143,13 @@ function createWorkflowResumeContext({
     ? isPlannerConfirmationFormId(formId, productWorkflow)
     : false;
   const answeredOpenQuestionIds = formId
-    ? inferAnsweredOpenQuestionIds(formId, productWorkflow)
+    ? inferAnsweredOpenQuestionIds({
+        formId,
+        productWorkflow,
+        executorResults: continuationExecutorResults,
+        knowledgeGraph,
+        workflowAnswerResolution,
+      })
     : [];
   const resolvedExecutorResults = formId
     ? resolveAnsweredOpenQuestions(
@@ -149,6 +161,7 @@ function createWorkflowResumeContext({
     ? resolveAnsweredGraphOpenQuestions(
         knowledgeGraph,
         answeredOpenQuestionIds,
+        workflowAnswerResolution,
       )
     : knowledgeGraph;
 
@@ -190,34 +203,127 @@ function resolveAnsweredOpenQuestions(
 function resolveAnsweredGraphOpenQuestions(
   knowledgeGraph: ProductKnowledgeGraph | null | undefined,
   answeredOpenQuestionIds: string[],
+  workflowAnswerResolution?: WorkflowAnswerResolution | null,
 ): ProductKnowledgeGraph | null {
   if (!knowledgeGraph) return null;
   const answeredIds = new Set(answeredOpenQuestionIds);
+  const resolvedOpenQuestionIds = [
+    ...new Set([
+      ...(knowledgeGraph.resolved_open_question_ids ?? []),
+      ...answeredOpenQuestionIds,
+    ]),
+  ];
+  const sourceAgentByQuestionId = new Map(
+    (workflowAnswerResolution?.questions ?? []).flatMap((question) =>
+      question.sources.flatMap((source) =>
+        source.open_question_id && isExecutorAgentType(source.source_agent)
+          ? [[source.open_question_id, source.source_agent] as const]
+          : [],
+      ),
+    ),
+  );
   return {
     ...knowledgeGraph,
-    open_questions: knowledgeGraph.open_questions.filter(
-      (question) => !answeredIds.has(question.id),
-    ),
+    resolved_open_question_ids: resolvedOpenQuestionIds,
+    open_questions: knowledgeGraph.open_questions
+      .filter((question) => !answeredIds.has(question.id))
+      .map((question) => ({
+        ...question,
+        source_agent:
+          question.source_agent ?? sourceAgentByQuestionId.get(question.id),
+      })),
   };
 }
 
 /**
  * Critique Question Form 的来源携带精确问题 ID；其他表单不得推断并批量关闭问题。
  */
-function inferAnsweredOpenQuestionIds(
-  formId: string,
-  productWorkflow: ProductWorkflowResult | null,
-): string[] {
+function inferAnsweredOpenQuestionIds({
+  formId,
+  productWorkflow,
+  executorResults,
+  knowledgeGraph,
+  workflowAnswerResolution,
+}: {
+  formId: string;
+  productWorkflow: ProductWorkflowResult | null;
+  executorResults: ExecutorAgentResult[];
+  knowledgeGraph?: ProductKnowledgeGraph | null;
+  workflowAnswerResolution?: WorkflowAnswerResolution | null;
+}): string[] {
   if (!isPlannerConfirmationFormId(formId, productWorkflow)) return [];
-  return [
-    ...new Set(
-      (productWorkflow?.proposal_questions ?? []).flatMap((question) =>
-        question.sources.flatMap((source) =>
-          source.open_question_id ? [source.open_question_id] : [],
+  const matchingResolution =
+    workflowAnswerResolution?.formId === formId
+      ? workflowAnswerResolution
+      : null;
+  const answeredIds = new Set<string>(
+    matchingResolution
+      ? matchingResolution.questions.flatMap((question) =>
+          question.answered
+            ? question.sources.flatMap((source) =>
+                source.open_question_id ? [source.open_question_id] : [],
+              )
+            : [],
+        )
+      : (productWorkflow?.proposal_questions ?? []).flatMap((question) =>
+          question.sources.flatMap((source) =>
+            source.open_question_id ? [source.open_question_id] : [],
+          ),
         ),
-      ),
+  );
+
+  if (!matchingResolution) return [...answeredIds];
+
+  const candidates = [
+    ...executorResults.flatMap((result) =>
+      result.open_questions.map((question) => ({
+        id: question.id,
+        text: question.text,
+        sourceTaskId: result.task_id,
+      })),
     ),
+    ...(knowledgeGraph?.open_questions ?? []).map((question) => ({
+      id: question.id,
+      text: question.text,
+      sourceTaskId: question.source_task_id,
+    })),
   ];
+
+  for (const question of matchingResolution.questions.filter(
+    (item) => item.answered,
+  )) {
+    for (const source of question.sources.filter(
+      (item) => !item.open_question_id,
+    )) {
+      const candidateIds = new Set(
+        candidates
+          .filter(
+            (candidate) =>
+              candidate.sourceTaskId === source.source_task_id &&
+              normalizeQuestionText(candidate.text) ===
+                normalizeQuestionText(question.label),
+          )
+          .map((candidate) => candidate.id),
+      );
+      if (candidateIds.size === 1) {
+        answeredIds.add([...candidateIds][0]!);
+      }
+    }
+  }
+
+  return [...answeredIds];
+}
+
+/**
+ * 旧表单缺少问题 ID 时，仅在同一来源任务内做稳定文本匹配。
+ */
+function normalizeQuestionText(text: string): string {
+  return text
+    .normalize("NFKC")
+    .trim()
+    .replace(/[?？。.!！]+$/g, "")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
 /**

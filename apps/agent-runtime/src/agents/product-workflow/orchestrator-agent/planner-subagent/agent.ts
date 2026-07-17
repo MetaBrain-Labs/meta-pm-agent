@@ -140,7 +140,7 @@ export function removeAnsweredOpenQuestions(
 }
 
 /**
- * 首轮仍有关键缺口时移除详细执行/UI拆分，并把下游依赖回接到已保留上游任务。
+ * 首轮仍有关键缺口时移除详细执行/UI拆分及其真实下游任务。
  */
 export function scopeInitialDecisionPlan(
   plan: TaskExecutionPlan,
@@ -166,19 +166,28 @@ export function scopeInitialDecisionPlan(
     "executor-product-execution",
     "executor-interface-craft",
   ]);
-  const taskById = new Map(plan.tasks.map((task) => [task.task_id, task]));
-  const tasks = plan.tasks
-    .filter((task) => !removedAgents.has(task.assigned_agent))
-    .map((task) => ({
-      ...task,
-      depends_on: [
-        ...new Set(
-          task.depends_on.flatMap((taskId) =>
-            resolveRetainedDependencies(taskId, taskById, removedAgents),
-          ),
-        ),
-      ],
-    }));
+  const removedTaskIds = new Set(
+    plan.tasks
+      .filter((task) => removedAgents.has(task.assigned_agent))
+      .map((task) => task.task_id),
+  );
+
+  // depends_on 表示真实数据依赖；上游被延后时，下游不能伪装成仍可执行。
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const task of plan.tasks) {
+      if (
+        !removedTaskIds.has(task.task_id) &&
+        task.depends_on.some((taskId) => removedTaskIds.has(taskId))
+      ) {
+        removedTaskIds.add(task.task_id);
+        changed = true;
+      }
+    }
+  }
+
+  const tasks = plan.tasks.filter((task) => !removedTaskIds.has(task.task_id));
 
   return {
     ...plan,
@@ -190,24 +199,6 @@ export function scopeInitialDecisionPlan(
       ),
     },
   };
-}
-
-/**
- * 被移除任务只承载顺序时，递归寻找其真实上游依赖。
- */
-function resolveRetainedDependencies(
-  taskId: string,
-  taskById: Map<string, TaskExecutionPlan["tasks"][number]>,
-  removedAgents: Set<string>,
-  visited = new Set<string>(),
-): string[] {
-  if (visited.has(taskId)) return [];
-  visited.add(taskId);
-  const task = taskById.get(taskId);
-  if (!task || !removedAgents.has(task.assigned_agent)) return task ? [taskId] : [];
-  return task.depends_on.flatMap((dependency) =>
-    resolveRetainedDependencies(dependency, taskById, removedAgents, visited),
-  );
 }
 
 /**
