@@ -26,6 +26,7 @@ import type {
 import { mergeProductKnowledgeGraphSnapshots } from "../agents/product-workflow/common/knowledge-graph-merge";
 import type { UserInputRecord } from "../agents/request/user-input";
 import type { ExecutorAgentType } from "../agents/product-workflow/executor-agent/definitions";
+import type { CritiqueReviewIssue } from "../agents/product-workflow/types";
 
 /**
  * 公共 LangGraph 状态。后续新增 Planner、QA 或模块 Agent 时，
@@ -104,6 +105,12 @@ export const WorkflowGraphState = Annotation.Root({
   // Executor Agent 对 Planner DAG 中每个任务的结构化产出。
   executorResults: Annotation<ExecutorAgentResult[]>({
     reducer: mergeExecutorResults,
+    default: () => [],
+  }),
+
+  // Supplement 轮次继承历史 Critique 未关闭问题，避免只审当前 DAG。
+  priorCritiqueIssues: Annotation<CritiqueReviewIssue[]>({
+    reducer: (_current, update) => update,
     default: () => [],
   }),
 

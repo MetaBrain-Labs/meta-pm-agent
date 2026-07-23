@@ -243,6 +243,51 @@ test("atomically allocates risk and OpenQuestion IDs despite duplicate hints", a
   assert.equal(questionResult.items.every((item) => /^OQ-[0-9a-f-]{36}$/.test(item.id)), true);
 });
 
+test("requires the configured number of blocking OpenQuestions", async () => {
+  const state = createKnowledgeGraph();
+  const addQuestions = getTool(
+    createKnowledgeGraphTools(state, {
+      requiredBlockingOpenQuestionCount: 2,
+    }),
+    "kg_file_add_open_questions",
+  );
+
+  await assert.rejects(
+    addQuestions.invoke({
+      questions: [
+        {
+          user_language: "en",
+          text: "Which deployment model should be used?",
+          blocking: true,
+        },
+        {
+          user_language: "en",
+          text: "Which later optimization should be considered?",
+          blocking: false,
+        },
+      ],
+    }),
+    /at least 2 questions with blocking=true/i,
+  );
+  assert.equal(state.open_questions.length, 0);
+
+  await addQuestions.invoke({
+    questions: [
+      {
+        user_language: "en",
+        text: "Which deployment model should be used?",
+        blocking: true,
+      },
+      {
+        user_language: "en",
+        text: "Which access policy should be used?",
+        blocking: true,
+      },
+    ],
+  });
+  assert.equal(state.open_questions.length, 2);
+});
+
 interface ToolResult {
   count: number;
   items: Array<{ id: string }>;

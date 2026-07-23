@@ -93,6 +93,8 @@ interface CreateToolsForAgentOptions {
   allowedEntityTypes?: readonly ProductKnowledgeGraph["entities"][number]["type"][];
   /** 当前 Executor Profile 允许创建的关系类型。 */
   allowedRelationTypes?: readonly ProductKnowledgeGraph["relations"][number]["type"][];
+  /** 当前任务必须新增的阻塞问题数量。 */
+  requiredBlockingOpenQuestionCount?: number;
 }
 
 /**
@@ -121,6 +123,8 @@ export function createToolsForAgent(
       ...createKnowledgeGraphTools(options.knowledgeGraph, {
         allowedEntityTypes: options.allowedEntityTypes,
         allowedRelationTypes: options.allowedRelationTypes,
+        requiredBlockingOpenQuestionCount:
+          options.requiredBlockingOpenQuestionCount,
       }).filter(
         (toolItem) =>
           enabledToolSet.has(toolItem.name as AgentRuntimeTool) &&

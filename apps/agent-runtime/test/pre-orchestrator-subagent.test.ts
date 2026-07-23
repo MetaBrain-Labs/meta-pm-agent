@@ -13,6 +13,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createPreOrchestratorSubagent,
   extractPreOrchFromSubagentResult,
   type PreOrchestratorInput,
 } from "../src/agents/product-workflow/orchestrator-agent/pre-orchestrator-subagent";
@@ -49,6 +50,17 @@ function createModelResult() {
     ],
   };
 }
+
+test("forces the pre-orchestrator task result to be JSON", () => {
+  process.env.OPENAI_API_KEY ??= "test-key";
+  const model = createPreOrchestratorSubagent().model as {
+    modelKwargs?: Record<string, unknown>;
+  };
+
+  assert.deepEqual(model.modelKwargs?.response_format, {
+    type: "json_object",
+  });
+});
 
 test("extracts pre-orch result from already parsed orchestrator output", () => {
   const result = extractPreOrchFromSubagentResult(createModelResult(), INPUT);

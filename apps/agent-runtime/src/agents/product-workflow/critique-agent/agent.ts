@@ -25,8 +25,10 @@ import {
 } from "@repo/shared";
 import {
   JSON_AGENT_MODEL_OPTIONS,
-  runJsonAgent,
-} from "../../common/run-json-agent";
+  resolveJsonOutput,
+  runAgent,
+} from "../../common/run-agent";
+import { canExecutorUseWebSearch } from "../../common/tool-access";
 import type {
   CritiqueAgentInput,
   ProductWorkflowStreamEvent,
@@ -46,7 +48,7 @@ import { CRITIQUE_AGENT_PROMPT } from "./prompt";
 export async function* streamCritiqueAgent(
   input: CritiqueAgentInput,
 ): AsyncGenerator<ProductWorkflowStreamEvent, ProductWorkflowResult, void> {
-  const review = yield* runJsonAgent({
+  const review = yield* runAgent({
     agentType: "critique",
     agentLabel: "Critique Agent",
     name: "critique-agent",
@@ -56,7 +58,8 @@ export async function* streamCritiqueAgent(
     },
     systemPrompt: CRITIQUE_AGENT_PROMPT,
     payload: createCritiqueAgentPayload(input),
-    schema: CritiqueAgentOutputSchema,
+    resolveOutput: (context) =>
+      resolveJsonOutput(context, CritiqueAgentOutputSchema),
     fallback: (reason) => createFallbackCritiqueAgentOutput(input, reason),
     signal: input.signal,
   });
@@ -128,6 +131,14 @@ function createCritiqueAgentPayload(input: CritiqueAgentInput) {
     final_graph_summary: createFinalGraphSummary(input.knowledgeGraph),
     task_semantic_updates: compactTaskSemanticUpdates(input.executorResults),
     validation_report: validationReport,
+    prior_unresolved_issues: (input.priorIssues ?? []).map((issue) => ({
+      issue_key: createReviewIssueKey(issue),
+      ...issue,
+    })),
+    non_blocking_risk_candidates: input.knowledgeGraph.risks.map((risk) => ({
+      ...risk,
+      text: truncateText(risk.text, 240),
+    })),
     open_question_candidates: collectOpenQuestionCandidates(
       input.executorResults,
     ),
@@ -192,6 +203,7 @@ export function compactTaskSemanticUpdates(
   return executorResults.map((result) => ({
     task_id: result.task_id,
     agent_type: result.agent_type,
+    web_search_enabled: canExecutorUseWebSearch(result.agent_type),
     summary: truncateText(result.summary, 240),
     entities: result.entities.map((entity) => ({
       id: entity.id,
@@ -1225,11 +1237,16 @@ export function composeProductWorkflowResult(
   const acceptedTaskIds = input.plan.tasks
     .map((task) => task.task_id)
     .filter((taskId) => !rejectedTaskIdSet.has(taskId));
+  const retainedPriorIssues = (input.priorIssues ?? []).filter(
+    (issue) => !isPriorIssueClosed(issue, review, input.knowledgeGraph),
+  );
   const reviewIssues = mergeReviewIssues([
+    ...retainedPriorIssues,
     ...validationReport.issues,
     ...review.review.issues,
   ]);
   const graphIssues = mergeReviewIssues([
+    ...retainedPriorIssues,
     ...validationReport.issues,
     ...review.knowledge_graph_review.issues,
   ]);
@@ -1294,12 +1311,43 @@ function mergeReviewIssues(
 ): CritiqueValidationIssue[] {
   const merged = new Map<string, CritiqueValidationIssue>();
   for (const issue of issues) {
-    merged.set(
-      [issue.code, issue.severity, issue.task_id ?? "", issue.message].join("|"),
-      issue,
-    );
+    const key = createReviewIssueKey(issue);
+    const existing = merged.get(key);
+    merged.set(key, {
+      ...issue,
+      severity:
+        existing?.severity === "error" ? "error" : issue.severity,
+    });
   }
   return [...merged.values()];
+}
+
+/**
+ * 为跨轮 Critique 问题生成稳定键。
+ */
+function createReviewIssueKey(issue: CritiqueValidationIssue): string {
+  return `${issue.code}|${issue.task_id ?? ""}`;
+}
+
+/**
+ * 仅接受 Critique 明确声明的关闭；风险降级还必须引用图谱中的真实 Risk。
+ */
+function isPriorIssueClosed(
+  issue: CritiqueValidationIssue,
+  review: CritiqueAgentOutput,
+  knowledgeGraph: ProductKnowledgeGraph,
+): boolean {
+  const resolution = (review.prior_issue_resolutions ?? []).find(
+    (item) =>
+      item.code === issue.code &&
+      (item.task_id ?? "") === (issue.task_id ?? ""),
+  );
+  if (!resolution) return false;
+  if (resolution.disposition === "resolved") return true;
+  return Boolean(
+    resolution.risk_id &&
+      knowledgeGraph.risks.some((risk) => risk.id === resolution.risk_id),
+  );
 }
 
 /**

@@ -13,7 +13,7 @@
  * - MRD/BRD 按钮先禁用，后续接入对应 Document Agent 工作流。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Button,
@@ -37,7 +37,6 @@ import {
   PauseCircleOutlined,
   ReloadOutlined,
 } from "@ant-design/icons";
-import { Graph } from "@antv/g6";
 import {
   fetchProductKnowledgeGraph,
   type KnowledgeGraphNodeData,
@@ -57,6 +56,11 @@ import {
   type DocumentWorkflowStage,
 } from "../../api/document-api";
 import { TodoCard } from "../../components/TodoCard";
+import {
+  KnowledgeGraphView,
+  NODE_TYPE_LABELS,
+  getKnowledgeGraphNodeColor,
+} from "../../components/KnowledgeGraphView";
 import { renderMarkdown } from "../../utils/markdown";
 import { mapErrorToChinese } from "../../utils/errors";
 
@@ -68,107 +72,6 @@ interface DocumentPlanningPageProps {
   workspaceName: string;
   onBack: () => void;
 }
-
-interface G6Datum {
-  id?: string;
-  source?: string;
-  target?: string;
-  data?: {
-    label?: string;
-    nodeType?: string;
-    relType?: string;
-    description?: string;
-    fullName?: string;
-    status?: string;
-    iconText?: string;
-    sourceTaskId?: string;
-  };
-}
-
-/** 节点类型对应的颜色，保持与知识图谱 Modal 一致。 */
-const NODE_COLORS: Record<string, string> = {
-  Goal: "#1677ff",
-  Requirement: "#13c2c2",
-  Evidence: "#52c41a",
-  Decision: "#faad14",
-  Feature: "#fa541c",
-  Component: "#722ed1",
-  Metric: "#eb2f96",
-  Risk: "#dc2626",
-  OpenQuestion: "#0891b2",
-  Custom: "#64748b",
-};
-
-/** 节点类型对应的中文标签，保持与知识图谱 Modal 一致。 */
-const NODE_TYPE_LABELS: Record<string, string> = {
-  Goal: "目标",
-  Requirement: "需求",
-  Evidence: "证据",
-  Decision: "决策",
-  Feature: "功能",
-  Component: "组件",
-  Metric: "指标",
-  Risk: "风险",
-  OpenQuestion: "待确认问题",
-  Custom: "自定义",
-};
-
-/** 节点类型对应的简化图标文本，保持与知识图谱 Modal 一致。 */
-const NODE_TYPE_ICONS: Record<string, string> = {
-  Goal: "◎",
-  Requirement: "◇",
-  Evidence: "◆",
-  Decision: "✓",
-  Feature: "✦",
-  Component: "▣",
-  Metric: "∑",
-  Risk: "!",
-  OpenQuestion: "?",
-  Custom: "•",
-};
-
-/** 关系类型对应的中文标签，保持与知识图谱 Modal 一致。 */
-const RELATION_TYPE_LABELS: Record<string, string> = {
-  Drives: "驱动",
-  Satisfies: "满足",
-  Promotes: "促进",
-  Produces: "产出",
-  Constrains: "约束",
-  Implements: "实现",
-  Measures: "衡量",
-  Validates: "验证",
-  References: "引用",
-  Composes: "组成",
-  Custom: "自定义",
-};
-
-/** 关系类型对应的边颜色，保持与知识图谱 Modal 一致。 */
-const RELATION_COLORS: Record<string, string> = {
-  Drives: "#2563eb",
-  Satisfies: "#059669",
-  Promotes: "#65a30d",
-  Produces: "#0891b2",
-  Constrains: "#dc2626",
-  Implements: "#ea580c",
-  Measures: "#7c3aed",
-  Validates: "#ca8a04",
-  References: "#64748b",
-  Composes: "#4f46e5",
-  Custom: "#475569",
-};
-
-/** 容器尺寸轮询最大重试次数。 */
-const MAX_RETRIES = 30;
-/** 每次轮询间隔（ms）。 */
-const RETRY_INTERVAL = 100;
-/** 节点 name 最大显示字符数，超出则截断。 */
-const MAX_NAME_LENGTH = 18;
-/** 直接展示边标签的关系数量上限。 */
-const MAX_VISIBLE_EDGE_LABELS = 120;
-/** BubbleSets 的节点规模上限，避免复杂轮廓拖慢大图。 */
-const MAX_BUBBLE_SET_NODES = 90;
-/** EdgeBundling 的关系规模上限，避免大图反复模拟。 */
-const MAX_EDGE_BUNDLING_EDGES = 80;
 
 const STAGE_LABELS: Record<DocumentWorkflowStage, string> = {
   parseKg: "读取当前知识图谱",
@@ -400,10 +303,10 @@ export function DocumentPlanningPage({
                   )}
                 </div>
                 {graphReady ? (
-                  <KnowledgeGraphCanvas
+                  <KnowledgeGraphView
                     nodes={kgData?.nodes ?? []}
                     relations={kgData?.relations ?? []}
-                    onSelectNode={setSelectedNode}
+                    onNodeSelect={setSelectedNode}
                   />
                 ) : (
                   <div className="h-[620px] flex items-center justify-center">
@@ -602,438 +505,6 @@ export function DocumentPlanningPage({
 /**
  * 嵌入式 G6 知识图谱画布。
  */
-function KnowledgeGraphCanvas({
-  nodes,
-  relations,
-  onSelectNode,
-}: {
-  nodes: KnowledgeGraphNodeData[];
-  relations: KnowledgeGraphRelationData[];
-  onSelectNode: (node: KnowledgeGraphNodeData | null) => void;
-}) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const [graphReady, setGraphReady] = useState(false);
-
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container || nodes.length === 0) {
-      setGraphReady(true);
-      return;
-    }
-
-    let disposed = false;
-    let graph: Graph | null = null;
-    let timer: number | null = null;
-    const validNodeIds = new Set(nodes.map((node) => node.id));
-    const validRelations = relations.filter(
-      (relation) =>
-        validNodeIds.has(relation.source) && validNodeIds.has(relation.target),
-    );
-
-    setGraphReady(false);
-
-    /**
-     * 初始化图谱实例，保持视觉参数与知识图谱 Modal 一致。
-     */
-    const buildAndRenderGraph = () => {
-      if (disposed) return;
-
-      graph = new Graph({
-        container,
-        width: container.clientWidth,
-        height: container.clientHeight,
-        background: "#ffffff",
-        data: buildGraphData(nodes, validRelations),
-        layout: {
-          type: "dagre",
-          rankdir: nodes.length > 18 ? "LR" : "TB",
-          nodesep: nodes.length > 40 ? 72 : 96,
-          ranksep: nodes.length > 40 ? 118 : 152,
-          comboPadding: 28,
-        },
-        node: {
-          type: "circle",
-          style: {
-            size: 48,
-            fill: (datum: G6Datum) => getNodeColor(datum.data?.nodeType),
-            fillOpacity: 0.14,
-            stroke: (datum: G6Datum) => getNodeColor(datum.data?.nodeType),
-            strokeWidth: 2,
-            icon: true,
-            iconText: (datum: G6Datum) =>
-              datum.data?.iconText ?? NODE_TYPE_ICONS.Custom,
-            iconFill: (datum: G6Datum) => getNodeColor(datum.data?.nodeType),
-            iconFontSize: 21,
-            iconFontWeight: 700,
-            labelText: (datum: G6Datum) => datum.data?.label ?? "",
-            labelFill: "#1f2937",
-            labelFontSize: 11,
-            labelFontWeight: 600,
-            labelLineHeight: 14,
-            labelPlacement: "bottom",
-            labelOffsetY: 8,
-            labelWordWrap: true,
-            labelMaxWidth: 112,
-            halo: true,
-            haloStroke: (datum: G6Datum) => getNodeColor(datum.data?.nodeType),
-            haloStrokeOpacity: 0.12,
-            haloLineWidth: 10,
-          },
-          state: {
-            active: {
-              haloStrokeOpacity: 0.32,
-              strokeWidth: 3,
-            },
-            selected: {
-              haloStrokeOpacity: 0.4,
-              strokeWidth: 3,
-            },
-          },
-        },
-        combo: {
-          type: "rect",
-          style: {
-            padding: [34, 42, 38, 42],
-            radius: 8,
-            fill: (datum: G6Datum) => getNodeColor(datum.data?.nodeType),
-            fillOpacity: 0.035,
-            stroke: (datum: G6Datum) => getNodeColor(datum.data?.nodeType),
-            strokeOpacity: 0.28,
-            lineDash: [8, 6],
-            lineWidth: 1.2,
-            labelText: (datum: G6Datum) => datum.data?.label ?? "",
-            labelPlacement: "top-left",
-            labelOffsetX: 8,
-            labelOffsetY: -8,
-            labelFill: (datum: G6Datum) => getNodeColor(datum.data?.nodeType),
-            labelFontSize: 12,
-            labelFontWeight: 700,
-            collapsedMarker: true,
-          },
-        },
-        edge: {
-          type: nodes.length > 18 ? "cubic-horizontal" : "cubic-vertical",
-          style: {
-            stroke: (datum: G6Datum) => getRelationColor(datum.data?.relType),
-            strokeOpacity: 0.78,
-            strokeWidth: (datum: G6Datum) =>
-              datum.data?.relType === "Constrains" ? 2.2 : 1.6,
-            endArrow: true,
-            endArrowSize: 8,
-            labelText: (datum: G6Datum) => datum.data?.label ?? "",
-            labelFill: (datum: G6Datum) => getRelationColor(datum.data?.relType),
-            labelFontSize: 10,
-            labelFontWeight: 600,
-            labelBackground: true,
-            labelBackgroundFill: "#ffffff",
-            labelBackgroundOpacity: 0.92,
-            labelBackgroundRadius: 4,
-            labelBackgroundPadding: [2, 4],
-            labelOffsetY: -8,
-          },
-          state: {
-            active: {
-              strokeOpacity: 1,
-              strokeWidth: 2.6,
-            },
-          },
-        },
-        behaviors: [
-          "drag-canvas",
-          "zoom-canvas",
-          {
-            type: "drag-element",
-            enable: (event: unknown) => {
-              const targetId = getEventTargetId(event);
-              return Boolean(targetId && !targetId.startsWith("kg-combo-"));
-            },
-          },
-          {
-            type: "focus-element",
-            animation: { duration: 360, easing: "ease-in-out" },
-          },
-          {
-            type: "hover-activate",
-            degree: 1,
-            direction: "both",
-          },
-          "collapse-expand",
-        ],
-        transforms: [
-          {
-            type: "process-parallel-edges",
-            mode: "bundle",
-            distance: 24,
-            loopMode: "spread",
-          },
-        ],
-        plugins: buildGraphPlugins(nodes, validRelations),
-        autoFit: "view",
-        animation: false,
-      });
-
-      graph
-        .render()
-        .then(async () => {
-          try {
-            await graph?.fitView({ when: "always" });
-          } catch {
-            // fitView 失败不影响用户继续查看图谱。
-          }
-        })
-        .catch((error: unknown) => {
-          console.error("[document-kg] Failed to render graph:", error);
-        })
-        .finally(() => {
-          if (!disposed) {
-            setGraphReady(true);
-          }
-        });
-
-      // 点击节点时把完整节点数据交给右侧详情框。
-      graph.on("node:click", (event) => {
-        const nodeId = getEventTargetId(event);
-        if (!nodeId) return;
-        const found = nodes.find((node) => node.id === nodeId);
-        if (found) {
-          onSelectNode(found);
-        }
-      });
-
-      // 点击画布空白处取消选中，避免右侧详情误导用户。
-      graph.on("canvas:click", () => {
-        onSelectNode(null);
-      });
-    };
-
-    /**
-     * 等待容器尺寸就绪后再初始化，避免 G6 在 0 尺寸容器中渲染空白。
-     */
-    const tryInit = (attempt: number) => {
-      if (disposed) return;
-
-      if (!container.clientWidth || !container.clientHeight) {
-        if (attempt < MAX_RETRIES) {
-          timer = window.setTimeout(
-            () => tryInit(attempt + 1),
-            RETRY_INTERVAL,
-          );
-        } else {
-          setGraphReady(true);
-        }
-        return;
-      }
-
-      buildAndRenderGraph();
-    };
-
-    const rafId = window.requestAnimationFrame(() => {
-      tryInit(0);
-    });
-
-    return () => {
-      disposed = true;
-      window.cancelAnimationFrame(rafId);
-      if (timer) {
-        window.clearTimeout(timer);
-      }
-      try {
-        graph?.destroy();
-      } catch {
-        // 忽略销毁错误，保持页面切换稳定。
-      }
-    };
-  }, [nodes, onSelectNode, relations]);
-
-  return (
-    <div className="relative h-[620px] w-full bg-white">
-      <div ref={containerRef} className="absolute inset-0" />
-      {!graphReady && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-white">
-          <Spin size="large" />
-          <Text type="secondary">
-            正在渲染知识图谱，节点较多请耐心等待...
-          </Text>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
- * 将 KG 节点转换为 G6 节点数据格式。
- */
-const toG6Node = (node: KnowledgeGraphNodeData) => ({
-  id: node.id,
-  type: "circle",
-  combo: toComboId(node.type),
-  data: {
-    label: truncateName(node.name),
-    nodeType: node.type,
-    description: node.description ?? "",
-    status: node.status ?? "proposed",
-    sourceTaskId: node.source_task_id ?? "",
-    fullName: node.name,
-    iconText: NODE_TYPE_ICONS[node.type] ?? NODE_TYPE_ICONS.Custom,
-  },
-});
-
-/**
- * 将节点类型转换为 G6 Combo 数据。
- */
-const toG6Combo = (type: string) => ({
-  id: toComboId(type),
-  type: "rect",
-  data: {
-    label: NODE_TYPE_LABELS[type] ?? type,
-    nodeType: type,
-  },
-});
-
-/**
- * 将 KG 关系转换为 G6 边数据格式。
- */
-const toG6Edge = (
-  relation: KnowledgeGraphRelationData,
-  showLabel: boolean,
-) => ({
-  id: relation.id,
-  source: relation.source,
-  target: relation.target,
-  data: {
-    label: showLabel
-      ? RELATION_TYPE_LABELS[relation.type] ?? relation.type
-      : "",
-    tooltipLabel: RELATION_TYPE_LABELS[relation.type] ?? relation.type,
-    relType: relation.type,
-    description: relation.description ?? "",
-    sourceTaskId: relation.source_task_id ?? "",
-  },
-});
-
-/**
- * 构建 G6 图数据，结构保持与知识图谱 Modal 一致。
- */
-function buildGraphData(
-  nodes: KnowledgeGraphNodeData[],
-  relations: KnowledgeGraphRelationData[],
-) {
-  const visibleTypes = Array.from(new Set(nodes.map((node) => node.type)));
-  const showEdgeLabels = relations.length <= MAX_VISIBLE_EDGE_LABELS;
-
-  return {
-    nodes: nodes.map(toG6Node),
-    combos: visibleTypes.map(toG6Combo),
-    edges: relations.map((relation) => toG6Edge(relation, showEdgeLabels)),
-  };
-}
-
-/**
- * 为节点类型构建 BubbleSets 插件配置。
- */
-const buildBubbleSetsPlugins = (nodes: KnowledgeGraphNodeData[]) => {
-  if (nodes.length === 0 || nodes.length > MAX_BUBBLE_SET_NODES) {
-    return [];
-  }
-
-  const grouped = nodes.reduce<Record<string, string[]>>((acc, node) => {
-    acc[node.type] = [...(acc[node.type] ?? []), node.id];
-    return acc;
-  }, {});
-
-  return Object.entries(grouped)
-    .filter(([, members]) => members.length >= 2)
-    .map(([type, members]) => ({
-      type: "bubble-sets",
-      key: `kg-bubble-${type}`,
-      members,
-      fill: getNodeColor(type),
-      fillOpacity: 0.08,
-      stroke: getNodeColor(type),
-      strokeOpacity: 0.12,
-      lineWidth: 1,
-    }));
-};
-
-/**
- * 构建嵌入式 G6 插件配置，保留 Modal 的 tooltip、minimap、边聚合和分组轮廓。
- */
-const buildGraphPlugins = (
-  nodes: KnowledgeGraphNodeData[],
-  relations: KnowledgeGraphRelationData[],
-) => [
-  {
-    type: "tooltip",
-    key: "kg-tooltip",
-    trigger: "hover",
-    enable: (event: unknown) => Boolean(getEventTargetId(event)),
-    getContent: (_event: unknown, items: G6Datum[]) => {
-      const datum = items[0];
-      if (!datum?.data) return "";
-
-      if (datum.source && datum.target) {
-        const label =
-          RELATION_TYPE_LABELS[datum.data.relType ?? "Custom"] ??
-          datum.data.relType ??
-          "关系";
-        const description = datum.data.description
-          ? `<div style="margin-top:4px;color:#475569;line-height:1.5">${escapeHtml(datum.data.description)}</div>`
-          : "";
-        return `<div style="max-width:260px"><strong>${escapeHtml(label)}</strong>${description}</div>`;
-      }
-
-      const name = datum.data.fullName ?? datum.data.label ?? "节点";
-      const typeLabel =
-        NODE_TYPE_LABELS[datum.data.nodeType ?? "Custom"] ??
-        datum.data.nodeType ??
-        "节点";
-      const description = datum.data.description
-        ? `<div style="margin-top:4px;color:#475569;line-height:1.5">${escapeHtml(datum.data.description)}</div>`
-        : "";
-      return `<div style="max-width:280px"><strong>${escapeHtml(name)}</strong><div style="color:#64748b;margin-top:2px">${escapeHtml(typeLabel)}</div>${description}</div>`;
-    },
-    onOpenChange: () => undefined,
-  },
-  {
-    type: "minimap",
-    key: "kg-minimap",
-    size: [180, 120],
-    position: "right-bottom",
-    padding: 12,
-    shape: "key",
-    delay: 180,
-    containerStyle: {
-      right: "16px",
-      bottom: "16px",
-      border: "1px solid #d9e2ef",
-      borderRadius: "8px",
-      background: "rgba(255,255,255,0.92)",
-      boxShadow: "0 8px 24px rgba(15,23,42,0.12)",
-      overflow: "hidden",
-    },
-    maskStyle: {
-      border: "1px solid #1677ff",
-      background: "rgba(22,119,255,0.12)",
-    },
-  },
-  ...(relations.length > 6 && relations.length <= MAX_EDGE_BUNDLING_EDGES
-    ? [
-        {
-          type: "edge-bundling",
-          key: "kg-edge-bundling",
-          bundleThreshold: 0.72,
-          cycles: 3,
-          iterations: 45,
-          divisions: 1,
-        },
-      ]
-    : []),
-  ...buildBubbleSetsPlugins(nodes),
-];
-
-/**
- * 页面首屏加载态，确保进入策划产出文档页面后再加载并有明确动画反馈。
- */
 function PageLoadingState() {
   return (
     <div className="min-h-[620px] rounded border border-gray-200 bg-white flex flex-col items-center justify-center gap-4">
@@ -1106,7 +577,10 @@ function NodeDetailPanel({
           <Text type="secondary" className="block text-xs mb-1">
             类型
           </Text>
-          <Tag color={getNodeColor(node.type)} className="m-0">
+          <Tag
+            color={getKnowledgeGraphNodeColor(node.type)}
+            className="m-0"
+          >
             {NODE_TYPE_LABELS[node.type] ?? node.type}
           </Tag>
         </div>
@@ -1287,54 +761,6 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 
 /**
  * 获取节点颜色。
- */
-function getNodeColor(type?: string): string {
-  return NODE_COLORS[type ?? "Custom"] ?? NODE_COLORS.Custom;
-}
-
-/**
- * 获取关系颜色。
- */
-function getRelationColor(type?: string): string {
-  return RELATION_COLORS[type ?? "Custom"] ?? RELATION_COLORS.Custom;
-}
-
-/**
- * 从 G6 通用事件中安全读取目标元素 ID。
- */
-function getEventTargetId(event: unknown): string {
-  const target = (event as { target?: { id?: unknown } })?.target;
-  return typeof target?.id === "string" ? target.id : "";
-}
-
-/**
- * 转义 tooltip HTML，避免图谱内容被当作 DOM 注入。
- */
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-/**
- * 截断过长的节点名称。
- */
-function truncateName(name: string, maxLen = MAX_NAME_LENGTH): string {
-  return name.length > maxLen ? `${name.slice(0, maxLen - 1)}...` : name;
-}
-
-/**
- * 将节点类型转换为稳定的 Combo ID。
- */
-function toComboId(type: string): string {
-  return `kg-combo-${type.replace(/[^a-zA-Z0-9_-]/g, "-") || "Custom"}`;
-}
-
-/**
- * 将节点状态转换为用户可读文本。
  */
 function getNodeStatusLabel(status: string): string {
   if (status === "proposed") return "待确认";

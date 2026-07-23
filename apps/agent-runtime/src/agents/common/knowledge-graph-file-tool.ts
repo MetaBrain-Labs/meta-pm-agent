@@ -203,6 +203,7 @@ export interface StructuredToolCallResult<T = unknown> {
 export interface KnowledgeGraphToolPolicy {
   allowedEntityTypes?: readonly ProductKnowledgeGraph["entities"][number]["type"][];
   allowedRelationTypes?: readonly ProductKnowledgeGraph["relations"][number]["type"][];
+  requiredBlockingOpenQuestionCount?: number;
 }
 
 /**
@@ -212,6 +213,21 @@ export function createKnowledgeGraphTools(
   state: ProductKnowledgeGraph,
   policy: KnowledgeGraphToolPolicy = {},
 ) {
+  const requiredBlockingOpenQuestionCount =
+    policy.requiredBlockingOpenQuestionCount ?? 0;
+  const openQuestionsSchema = z
+    .array(openQuestionInputSchema)
+    .min(1)
+    .refine(
+      (questions) =>
+        questions.filter((question) => question.blocking).length >=
+        requiredBlockingOpenQuestionCount,
+      `Include at least ${requiredBlockingOpenQuestionCount} questions with blocking=true.`,
+    )
+    .describe(
+      `Array of questions to write. At least ${requiredBlockingOpenQuestionCount} must use blocking=true.`,
+    );
+
   return [
     // 从当前上下文中读取 product context
     tool(
@@ -522,12 +538,9 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_add_open_questions",
         description:
-          "Append structured open questions to the knowledge graph. Omit id: the runtime atomically allocates the persisted OQ-* ID. Each question must include text, mark whether it blocks current workflow completion, and may include source_task_id.",
+          `Append structured open questions to the knowledge graph. Omit id: the runtime atomically allocates the persisted OQ-* ID. Each question must include text and mark whether it blocks current workflow completion. This task requires at least ${requiredBlockingOpenQuestionCount} questions with blocking=true in this call.`,
         schema: z.object({
-          questions: z
-            .array(openQuestionInputSchema)
-            .min(1)
-            .describe("Array of questions to write"),
+          questions: openQuestionsSchema,
         }),
       },
     ),

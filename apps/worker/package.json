@@ -8,11 +8,8 @@
     "build": "tsc"
   },
   "dependencies": {
-    "@repo/agent-runtime": "workspace:*",
-    "@repo/shared": "workspace:*",
     "bullmq": "^5.34.11",
-    "dotenv": "^16.4.7",
-    "ioredis": "^5.4.2"
+    "dotenv": "^16.4.7"
   },
   "devDependencies": {
     "@types/node": "^20.19.41",

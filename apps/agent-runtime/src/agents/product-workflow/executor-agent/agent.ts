@@ -10,7 +10,7 @@
  * - streamExecutorAgent()：执行单个任务并产出结构化图谱补丁
  * - 根据 task.assigned_agent 查找对应 ExecutorDefinition 配置
  * - 为 Executor 附加知识图谱工具（基于内存状态对象，不写文件）
- * - 使用 runTextAgent 通用执行器（文本输出而非 JSON）
+ * - 使用 runAgent 通用执行器并解析文本输出
  * - 从 tool-call 事件中收集结构化数据填充 ExecutorAgentResult
  *
  * Notes:
@@ -29,10 +29,11 @@ import {
   type ProductKnowledgeGraph,
 } from "@repo/shared";
 import {
+  type AgentRunEvent,
   TEXT_AGENT_MODEL_OPTIONS,
-  runTextAgent,
-  type TextAgentEvent,
-} from "../../common/run-text-agent";
+  resolveTextOutput,
+  runAgent,
+} from "../../common/run-agent";
 import {
   createToolsForAgent,
   getExecutorDefaultToolNames,
@@ -118,6 +119,7 @@ export async function* streamExecutorAgent(
   const toolKnowledgeGraph = cloneKnowledgeGraph(input.knowledgeGraph);
   // 手动迭代生成器以在透传事件给上游的同时收集结构化数据。
   let patch = "";
+  let retryInstruction = "";
   try {
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       // 重试时基于同一工作副本继续执行，保留首次已完成的工具写入。
@@ -140,9 +142,11 @@ export async function* streamExecutorAgent(
           knowledgeGraph: toolKnowledgeGraph,
           allowedEntityTypes: definition.allowedEntityTypes,
           allowedRelationTypes: definition.allowedRelationTypes,
+          requiredBlockingOpenQuestionCount:
+            input.task.required_open_question_count ?? 0,
         },
       );
-      const textGen = runTextAgent({
+      const textGen = runAgent({
         agentType: definition.agentType,
         agentLabel: definition.displayName,
         name: `${definition.agentType}-agent${attempt > 1 ? "-retry" : ""}`,
@@ -163,14 +167,15 @@ export async function* streamExecutorAgent(
             "No product context provided.",
           graph_context_summary: graphContextSummary,
           task_relevant_context: taskRelevantContext,
+          user_input: input.userInput,
           task: input.task,
           ...(attempt > 1
             ? {
-                retry_instruction:
-                  "The previous attempt wrote no structured graph items. This retry exposes write tools only: do not repeat research or analysis. Write the minimum required graph items immediately; record unavailable external evidence as a risk or open question.",
+                retry_instruction: retryInstruction,
               }
             : {}),
         },
+        resolveOutput: resolveTextOutput,
         fallback: () => createFallbackKnowledgeGraphPatch(input.task),
         signal: input.signal,
         throwOnError: true,
@@ -178,7 +183,7 @@ export async function* streamExecutorAgent(
 
       let genResult = await textGen.next();
       while (!genResult.done) {
-        const event = genResult.value as TextAgentEvent<string>;
+        const event = genResult.value as AgentRunEvent<string>;
 
         yield event as ProductWorkflowStreamEvent;
         if (
@@ -210,12 +215,41 @@ export async function* streamExecutorAgent(
         baseKnowledgeGraph,
         toolKnowledgeGraph,
       );
-      if (hasStructuredGraphItems(attemptDelta) || attempt === 2) break;
+      const requiredBlockingCount =
+        input.task.required_open_question_count ?? 0;
+      const blockingQuestionCount = attemptDelta.open_questions.filter(
+        (question) => question.blocking,
+      ).length;
+      const hasStructuredItems = hasStructuredGraphItems(attemptDelta);
+      if (
+        (hasStructuredItems &&
+          blockingQuestionCount >= requiredBlockingCount) ||
+        attempt === 2
+      ) {
+        if (blockingQuestionCount < requiredBlockingCount) {
+          throw new Error(
+            `Executor output validation failed after retry: required ${requiredBlockingCount} blocking open questions, committed ${blockingQuestionCount}.`,
+          );
+        }
+        break;
+      }
+
+      retryInstruction = [
+        "The previous attempt failed executor output validation. This is the only retry and exposes write tools only; do not repeat research or analysis.",
+        !hasStructuredItems
+          ? "Write the minimum required graph items immediately."
+          : "",
+        blockingQuestionCount < requiredBlockingCount
+          ? `Persist at least ${requiredBlockingCount} new open questions with blocking=true in one kg_file_add_open_questions call; currently ${blockingQuestionCount} are committed.`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
 
       yield {
         type: "reasoning",
         agentType: definition.agentType,
-        content: `${definition.displayName} 未完成结构化图谱写入，正在自动重试一次。\n`,
+        content: `${definition.displayName} 的结构化产出未满足任务契约，正在原地修正一次。\n`,
       };
     }
   } catch (error) {
@@ -268,7 +302,10 @@ function createExecutorSummary(
   task: TaskExecutionNode,
   delta: ReturnType<typeof getKnowledgeGraphDelta>,
 ): string {
-  return `${displayName} completed ${task.title}: ${delta.entities.length} entities, ${delta.relations.length} relations, ${delta.decisions.length} decisions, ${delta.risks.length} risks, and ${delta.open_questions.length} open questions committed.`;
+  const blockingQuestionCount = delta.open_questions.filter(
+    (question) => question.blocking,
+  ).length;
+  return `${displayName} completed ${task.title}: ${delta.entities.length} entities, ${delta.relations.length} relations, ${delta.decisions.length} decisions, ${delta.risks.length} risks, and open questions: ${delta.open_questions.length} total / ${blockingQuestionCount} blocking.`;
 }
 
 /**

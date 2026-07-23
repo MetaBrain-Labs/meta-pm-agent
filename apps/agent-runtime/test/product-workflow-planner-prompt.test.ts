@@ -18,7 +18,7 @@ import test from "node:test";
 import { PLANNER_SUBAGENT_PROMPT } from "../src/agents/product-workflow/orchestrator-agent/planner-subagent/prompt";
 import { CRITIQUE_AGENT_PROMPT } from "../src/agents/product-workflow/critique-agent/prompt";
 import { createExecutorAgentPrompt } from "../src/agents/product-workflow/executor-agent/prompt";
-import { productStrategyExecutorProfile } from "../src/agents/product-workflow/executor-agent/product-strategy-executor/profile";
+import { getExecutorDefinition } from "../src/agents/product-workflow/executor-agent/definitions";
 
 const PLANNER_AGENT_PROMPT = PLANNER_SUBAGENT_PROMPT;
 const ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT = PLANNER_SUBAGENT_PROMPT;
@@ -69,6 +69,14 @@ test("planner prompt preserves graph-semantics guardrails", () => {
   assert.match(
     PLANNER_AGENT_PROMPT,
     /Data Analytics tasks for a greenfield product should define metrics, measurement plans, instrumentation, and benchmark gaps/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /broad initial product-design DAG must include source-verifiable evidence research owned by Market Research and minimum MVP Component plus acceptance decomposition owned by Product Execution/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /concept foundation only, not a complete product design/,
   );
   assert.match(
     PLANNER_AGENT_PROMPT,
@@ -259,7 +267,12 @@ test("critique agent prompt stays compact and does not request full graph copies
 });
 
 test("executor prompt preserves append-only graph writing semantics", () => {
-  const prompt = createExecutorAgentPrompt(productStrategyExecutorProfile);
+  const prompt = createExecutorAgentPrompt(
+    getExecutorDefinition("executor-product-strategy"),
+  );
+  const searchPrompt = createExecutorAgentPrompt(
+    getExecutorDefinition("executor-market-research"),
+  );
 
   assert.match(prompt, /ONLY create new traceable records/);
   assert.match(prompt, /The graph tools are append-only/);
@@ -271,4 +284,16 @@ test("executor prompt preserves append-only graph writing semantics", () => {
   assert.match(prompt, /at most two search attempts per topic/);
   assert.match(prompt, /do not add an unsupported numeric target/);
   assert.match(prompt, /persist at least that many/);
+  assert.match(prompt, /Search availability: disabled/);
+  assert.match(
+    prompt,
+    /Only explicit statements in user_input may be written as new Evidence/,
+  );
+  assert.match(prompt, /Unverified assumption/);
+  assert.match(
+    prompt,
+    /Network bandwidth, data residency, deployment topology/,
+  );
+  assert.match(searchPrompt, /Search availability: enabled/);
+  assert.match(searchPrompt, /preserve its title, URL, and sourceId/);
 });

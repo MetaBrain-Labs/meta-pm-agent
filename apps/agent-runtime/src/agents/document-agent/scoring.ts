@@ -16,10 +16,11 @@
 import { z } from "zod";
 import type { DocumentSectionDraft } from "@repo/shared";
 import {
+  type AgentRunEvent,
   JSON_AGENT_MODEL_OPTIONS,
-  runJsonAgent,
-  type JsonAgentEvent,
-} from "../common/run-json-agent";
+  resolveJsonOutput,
+  runAgent,
+} from "../common/run-agent";
 import {
   PRD_GAOKAO_SCORING_AGENT_PROMPT,
   PRD_WEIGHTED_SCORING_AGENT_PROMPT,
@@ -31,7 +32,7 @@ export const DOCUMENT_SCORE_MAX_ATTEMPTS = 3;
 
 export type DocumentScoreAgentType = "document-score";
 
-export type DocumentScoringStreamEvent = JsonAgentEvent<DocumentScoreAgentType>;
+export type DocumentScoringStreamEvent = AgentRunEvent<DocumentScoreAgentType>;
 
 export type DocumentScoringReviewerId =
   | "gaokao-reviewer-a"
@@ -171,7 +172,7 @@ export async function runPrdScoringReviewers({
   const reviews: DocumentScoreReview[] = [];
 
   for (const reviewer of REVIEWERS) {
-    const stream = runJsonAgent({
+    const stream = runAgent({
       agentType: "document-score",
       agentLabel: reviewer.name,
       name: `document-${reviewer.id}`,
@@ -187,7 +188,8 @@ export async function runPrdScoringReviewers({
         markdown,
         sections,
       },
-      schema: ReviewerScoreSchema,
+      resolveOutput: (context) =>
+        resolveJsonOutput(context, ReviewerScoreSchema),
       fallback: (reason) =>
         createReviewerFallback({
           reviewer,
@@ -196,7 +198,7 @@ export async function runPrdScoringReviewers({
           reason,
         }),
       signal,
-      suppressInvalidJsonReasoning: true,
+      suppressFallbackReasoning: true,
     });
 
     const parsed = await consumeJsonAgentStream(stream, onEvent);
@@ -240,7 +242,7 @@ export async function runPrdWeightedScoringAgent({
   signal?: AbortSignal;
   onEvent?: (event: DocumentScoringStreamEvent) => void;
 }): Promise<DocumentWeightedScore> {
-  const stream = runJsonAgent({
+  const stream = runAgent({
     agentType: "document-score",
     agentLabel: "Document Weighted Scoring Agent",
     name: "document-weighted-scoring-agent",
@@ -259,7 +261,8 @@ export async function runPrdWeightedScoringAgent({
       reviewerScores,
       markdown,
     },
-    schema: WeightedScoreSchema,
+    resolveOutput: (context) =>
+      resolveJsonOutput(context, WeightedScoreSchema),
     fallback: (reason) =>
       createWeightedFallback({
         reviewerScores,
@@ -268,7 +271,7 @@ export async function runPrdWeightedScoringAgent({
         reason,
       }),
     signal,
-    suppressInvalidJsonReasoning: true,
+    suppressFallbackReasoning: true,
   });
 
   const parsed = await consumeJsonAgentStream(stream, onEvent);

@@ -254,8 +254,29 @@ function createWorkflowInitialState(input: WorkflowGraphInput) {
     answeredOpenQuestionIds: resume?.answeredOpenQuestionIds ?? [],
     executorResults,
     knowledgeGraph: resume?.knowledgeGraph ?? input.knowledgeGraph ?? null,
+    priorCritiqueIssues: collectPriorCritiqueIssues(resume?.productWorkflow),
     productWorkflow: null,
   };
+}
+
+/**
+ * 从上一轮 Critique 结果提取未关闭问题，并按问题代码和来源任务去重。
+ */
+function collectPriorCritiqueIssues(
+  productWorkflow?: ProductWorkflowResult | null,
+) {
+  const issues = [
+    ...(productWorkflow?.review.issues ?? []),
+    ...(productWorkflow?.knowledge_graph_review?.issues ?? []),
+  ];
+  return [
+    ...new Map(
+      issues.map((issue) => [
+        `${issue.code}|${issue.task_id ?? ""}`,
+        issue,
+      ]),
+    ).values(),
+  ];
 }
 
 /**

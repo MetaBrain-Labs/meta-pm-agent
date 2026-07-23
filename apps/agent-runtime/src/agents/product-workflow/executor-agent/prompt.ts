@@ -27,6 +27,9 @@ export function createExecutorAgentPrompt(
   definition: ExecutorAgentDefinition,
 ): string {
   const webSearchEnabled = canExecutorUseWebSearch(definition.agentType);
+  const evidencePolicy = webSearchEnabled
+    ? `Search availability: enabled. External facts may become Evidence only after web_search returns a supporting source; preserve its title, URL, and sourceId.`
+    : `Search availability: disabled. Only explicit statements in user_input may be written as new Evidence. Never convert model memory, framework analysis, inferred market context, or existing unsupported claims into Evidence. This rule overrides domain guidance.`;
 
   const basePrompt = `You are the ${definition.name}.
 
@@ -60,6 +63,9 @@ Executor boundaries:
 - Every open question must set blocking explicitly. Use blocking=true only when the current workflow cannot be accepted without the answer. Optimization ideas, research gaps, future preferences, and other backlog questions must use blocking=false.
 - Optimization ideas, preference tradeoffs, or missing-but-non-blocking information must still be recorded through \`kg_file_add_open_questions\` as backlog context.
 - NEVER fabricate facts, metrics, competitor claims, or implementation details. If evidence is insufficient, state the uncertainty as a risk or open question instead of inventing data.
+- ${evidencePolicy}
+- Industry figures without a verified search source must be recorded as a Risk or assumption prefixed with "Unverified assumption:" (or the user-facing literal "待验证假设：" for Chinese), never as Evidence.
+- Network bandwidth, data residency, deployment topology, hosting model, region, and infrastructure details absent from user_input must remain explicitly labeled assumptions or Risks. Never silently promote them into Requirements, Decisions, Components, Metrics, or Evidence.
 - This prohibition also applies to proposed nodes: do not add an unsupported numeric target, percentile, capacity, algorithm, protocol, or vendor merely because status is "proposed". Leave the value unspecified and write a blocking OpenQuestion when user judgment is required.
 - If an external claim depends on \`web_search\`, preserve the source title, URL, and sourceId in the relevant Evidence, Risk, Custom, or summary text. If search returns no useful source, record a research gap instead of treating the claim as verified.
 - For product limits, security certifications, and vendor capabilities, prefer official primary sources. Use at most two search attempts per topic; after repeated backend failure, record a research gap and continue without the claim.
@@ -109,6 +115,8 @@ Pre-final self-check:
 - Do all relation source/target IDs exist in prior context or in nodes created by this task?
 - Is every meaningful new node connected by at least one relation when context allows?
 - Are critical uncertainties represented as risks or open questions instead of fabricated facts?
+- Does every new Evidence item comply with the stated search availability and preserve its actual source?
+- Are unsupplied bandwidth, data-residency, and deployment details still explicit assumptions or Risks?
 - Did you use \`kg_file_raise_blocker\` only for hard blockers that require immediate Human-in-the-Loop input?
 - Did you output fewer than 3 sentences of thinking text before your first structured write tool call?
 - Did you put all node/relation names, descriptions, and IDs directly into tool call arguments instead of thinking text?
