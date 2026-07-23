@@ -29,6 +29,8 @@ import type { PlannerAgentInput } from "../../types";
 
 const NORMALIZED_DAG_ASSUMPTION =
   "Planner DAG dependencies were validated and deduplicated without removing explicit upstream data requirements.";
+export const CONCEPT_FOUNDATION_NOTICE =
+  "Concept foundation only; this is not a complete product design.";
 
 /**
  * 归一化 Planner 生成的 Executor DAG。
@@ -265,15 +267,15 @@ function selectFallbackExecutorDefinitions(
   analysis: PlannerAgentInput["requestAnalysis"],
 ): ExecutorAgentDefinition[] {
   const requestText = createRequestAnalysisText(analysis);
+  const isBroadProductDesign = isBroadProductDesignRequest(analysis);
   const selected = new Set<ExecutorAgentType>([
     "executor-product-strategy",
     "executor-product-discovery",
-    "executor-product-execution",
   ]);
 
-  if (matchesAny(requestText, getProductDesignKeywords())) {
+  if (isBroadProductDesign) {
     selected.add("executor-market-research");
-    selected.add("executor-toolkit");
+    selected.add("executor-product-execution");
   }
 
   addExecutorWhenMatches(selected, requestText, "executor-market-research", [
@@ -326,7 +328,10 @@ function selectFallbackExecutorDefinitions(
     analysis.business_model.some((item) => item.missing_information.length > 0) &&
     !hasExplicitExecutionIntent(requestText)
   ) {
-    selected.delete("executor-product-execution");
+    if (!isBroadProductDesign) {
+      selected.delete("executor-product-execution");
+    }
+    selected.delete("executor-ai-shipping");
     selected.delete("executor-interface-craft");
   }
 
@@ -436,12 +441,46 @@ function createFallbackPrimaryTaskIdByAgent(
   return taskIdByAgent;
 }
 
-function getProductDesignKeywords(): string[] {
-  return [
-    "mvp", "product design", "design an", "design a", "roadmap", "requirements",
-    "feature", "collaboration", "document", "tool", "workflow", "solution",
-    "产品设计", "设计", "方案", "需求", "功能", "文档", "协同", "工具",
-  ];
+/**
+ * 判断当前请求是否是需要形成可执行产品设计的宽泛首轮，而非仅讨论概念。
+ */
+export function isBroadProductDesignRequest(
+  analysis: PlannerAgentInput["requestAnalysis"],
+): boolean {
+  const requestText = createRequestAnalysisText(analysis);
+  return (
+    matchesAny(requestText, [
+      "mvp",
+      "product design",
+      "design an",
+      "design a",
+      "roadmap",
+      "设计",
+      "方案",
+    ]) &&
+    matchesAny(requestText, [
+      "product",
+      "tool",
+      "app",
+      "platform",
+      "workflow",
+      "产品",
+      "工具",
+      "应用",
+      "平台",
+      "系统",
+    ]) &&
+    !isConceptOrFunctionalDesignRequest(requestText)
+  );
+}
+
+/**
+ * 判断用户是否明确把当前轮次限制为概念或方向讨论。
+ */
+export function isConceptFoundationRequest(
+  analysis: PlannerAgentInput["requestAnalysis"],
+): boolean {
+  return isConceptOrFunctionalDesignRequest(createRequestAnalysisText(analysis));
 }
 
 function isConceptOrFunctionalDesignRequest(requestText: string): boolean {
@@ -629,7 +668,13 @@ function createFallbackRequestContext(
 function createFallbackRequestSummary(
   analysis: PlannerAgentInput["requestAnalysis"],
 ): string {
-  return truncateText(summarizeBusinessModels(analysis.business_model), 100);
+  const summary = summarizeBusinessModels(analysis.business_model);
+  return truncateText(
+    isConceptFoundationRequest(analysis)
+      ? `${CONCEPT_FOUNDATION_NOTICE} ${summary}`
+      : summary,
+    100,
+  );
 }
 
 function createFallbackUncertaintyAssumptions(
@@ -653,6 +698,13 @@ function createFallbackExpectedOutput(
     return "Technology Decision or decision candidate linked to upstream Evidence and Requirements.";
   }
 
+  if (definition.agentType === "executor-market-research") {
+    return "Source-verifiable Evidence and benchmark gaps linked to Requirements or decision candidates.";
+  }
+  if (definition.agentType === "executor-product-execution") {
+    return "Minimum MVP Component breakdown linked to Features, with traceable acceptance Requirements or Metrics.";
+  }
+
   return `Allowed entities only: ${definition.allowedEntityTypes.join(", ")}. Include traceable relation updates.`;
 }
 
@@ -666,6 +718,23 @@ function createFallbackQualityCriteria(
       "Create a supported Decision or explicitly labeled decision candidate.",
       "Do not promote unverified option comparisons into confirmed facts.",
       "Use approved explicit relation directions.",
+    ];
+  }
+
+  if (definition.agentType === "executor-market-research") {
+    return [
+      "Use verifiable sources or explicitly record a research gap.",
+      "Link Evidence to concrete Requirements or decision candidates.",
+      "Do not present model memory as verified fact.",
+      "Preserve source traceability.",
+    ];
+  }
+  if (definition.agentType === "executor-product-execution") {
+    return [
+      "Keep the breakdown to the minimum viable product scope.",
+      "Link each essential Component to a selected Feature.",
+      "Add traceable acceptance Requirements or Metrics.",
+      "Avoid speculative architecture and count-filler Components.",
     ];
   }
 

@@ -22,9 +22,17 @@ import type { OrchestratorAgentInput } from "../../types";
 import type { ExecutorAgentType } from "../../executor-agent/definitions";
 import { PLANNER_SUBAGENT_PROMPT } from "./prompt";
 import {
+  CONCEPT_FOUNDATION_NOTICE,
   normalizeTaskExecutionPlan,
   createFallbackPlan,
+  isBroadProductDesignRequest,
+  isConceptFoundationRequest,
 } from "./plan";
+
+const BROAD_PRODUCT_DESIGN_REQUIRED_AGENTS = [
+  "executor-market-research",
+  "executor-product-execution",
+] as const;
 
 /**
  * 创建 Planner 子代理；该子代理接收完整产品上下文并通过 task 描述返回 DAG JSON。
@@ -91,6 +99,15 @@ export function extractPlanFromSubagentResult(
       ? scopeSupplementPlan(result.data, input.supplementAgentTypes)
       : scopeInitialDecisionPlan(result.data, input);
     if (candidate.tasks.length > 0) {
+      if (isUnderScopedBroadProductDesign(candidate, input)) {
+        return finalizePlan(
+          createFallbackPlan(
+            input,
+            "Planner omitted required evidence-research or MVP-component coverage for a broad initial product-design request",
+          ),
+          input,
+        );
+      }
       return finalizePlan(candidate, input);
     }
   }
@@ -101,6 +118,26 @@ export function extractPlanFromSubagentResult(
       `Planner subagent output failed schema validation`,
     ),
     input,
+  );
+}
+
+/**
+ * 宽泛首轮必须同时落下可信证据和 MVP 组件验收任务，避免两节点概念图被误当完整设计。
+ */
+function isUnderScopedBroadProductDesign(
+  plan: TaskExecutionPlan,
+  input: OrchestratorAgentInput,
+): boolean {
+  if (
+    plan.status !== "initial" ||
+    !isBroadProductDesignRequest(input.requestAnalysis)
+  ) {
+    return false;
+  }
+
+  const assignedAgents = new Set(plan.tasks.map((task) => task.assigned_agent));
+  return BROAD_PRODUCT_DESIGN_REQUIRED_AGENTS.some(
+    (agentType) => !assignedAgents.has(agentType),
   );
 }
 
@@ -146,6 +183,9 @@ export function scopeInitialDecisionPlan(
   plan: TaskExecutionPlan,
   input: OrchestratorAgentInput,
 ): TaskExecutionPlan {
+  if (plan.status !== "initial") return plan;
+
+  const conceptOnly = isConceptFoundationRequest(input.requestAnalysis);
   const hasMissingInformation = input.requestAnalysis.business_model.some(
     (item) => item.missing_information.length > 0,
   );
@@ -155,17 +195,22 @@ export function scopeInitialDecisionPlan(
     ),
   );
   if (
-    plan.status !== "initial" ||
     !hasMissingInformation ||
     explicitlyRequestsExecution
   ) {
-    return plan;
+    return conceptOnly ? markConceptFoundation(plan) : plan;
   }
 
-  const removedAgents = new Set([
-    "executor-product-execution",
-    "executor-interface-craft",
-  ]);
+  const broadProductDesign = isBroadProductDesignRequest(input.requestAnalysis);
+  const removedAgents = new Set(
+    broadProductDesign
+      ? ["executor-ai-shipping", "executor-interface-craft"]
+      : [
+          "executor-product-execution",
+          "executor-ai-shipping",
+          "executor-interface-craft",
+        ],
+  );
   const removedTaskIds = new Set(
     plan.tasks
       .filter((task) => removedAgents.has(task.assigned_agent))
@@ -188,8 +233,7 @@ export function scopeInitialDecisionPlan(
   }
 
   const tasks = plan.tasks.filter((task) => !removedTaskIds.has(task.task_id));
-
-  return {
+  const scopedPlan = {
     ...plan,
     tasks,
     dag: {
@@ -198,6 +242,22 @@ export function scopeInitialDecisionPlan(
         task.depends_on.map((source) => ({ source, target: task.task_id })),
       ),
     },
+  };
+
+  return conceptOnly ? markConceptFoundation(scopedPlan) : scopedPlan;
+}
+
+/**
+ * 在用户可见的 Planner 摘要和假设中明确概念轮次的交付边界。
+ */
+function markConceptFoundation(plan: TaskExecutionPlan): TaskExecutionPlan {
+  if (plan.assumptions.includes(CONCEPT_FOUNDATION_NOTICE)) return plan;
+  return {
+    ...plan,
+    request_summary: plan.request_summary.includes(CONCEPT_FOUNDATION_NOTICE)
+      ? plan.request_summary
+      : `${CONCEPT_FOUNDATION_NOTICE} ${plan.request_summary}`,
+    assumptions: [...plan.assumptions, CONCEPT_FOUNDATION_NOTICE],
   };
 }
 

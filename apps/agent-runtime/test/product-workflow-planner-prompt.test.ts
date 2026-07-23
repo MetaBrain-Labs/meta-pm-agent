@@ -72,6 +72,14 @@ test("planner prompt preserves graph-semantics guardrails", () => {
   );
   assert.match(
     PLANNER_AGENT_PROMPT,
+    /broad initial product-design DAG must include source-verifiable evidence research owned by Market Research and minimum MVP Component plus acceptance decomposition owned by Product Execution/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /concept foundation only, not a complete product design/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
     /Goal --Drives--> Decision/,
   );
   assert.match(

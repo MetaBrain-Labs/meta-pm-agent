@@ -31,6 +31,7 @@ import {
   normalizeTaskExecutionPlan,
 } from "../src/agents/product-workflow/orchestrator-agent/planner-subagent/plan";
 import {
+  extractPlanFromSubagentResult,
   removeAnsweredOpenQuestions,
   scopeInitialDecisionPlan,
   scopeSupplementPlan,
@@ -419,7 +420,7 @@ test("creates parallel graph-operation fallback plan for broad MVP requests", ()
       "executor-toolkit",
       "executor-market-research",
       "executor-product-discovery",
-      "executor-ai-shipping",
+      "executor-product-execution",
     ],
   );
   assert.equal(plan.tasks[0]?.required_open_question_count, 2);
@@ -452,17 +453,16 @@ test("creates parallel graph-operation fallback plan for broad MVP requests", ()
   const strategyTask = plan.tasks.find(
     (task) => task.assigned_agent === "executor-product-strategy",
   );
-  const shippingTask = plan.tasks.find(
-    (task) => task.assigned_agent === "executor-ai-shipping",
+  const executionTask = plan.tasks.find(
+    (task) => task.assigned_agent === "executor-product-execution",
   );
 
   assert.ok(strategyTask);
   assert.match(strategyTask.description, /decision candidates/i);
   assert.match(strategyTask.description, /do not convert unknown/i);
-  assert.ok(shippingTask);
-  assert.match(shippingTask.description, /compare technical option families/i);
-  assert.doesNotMatch(shippingTask.description, /CRDT vs OT/i);
-  assert.doesNotMatch(shippingTask.description, /selected CRDT/i);
+  assert.ok(executionTask);
+  assert.match(executionTask.expected_output, /Minimum MVP Component breakdown/i);
+  assert.match(executionTask.expected_output, /acceptance Requirements or Metrics/i);
   assert.equal(
     plan.tasks.filter(
       (task) => task.assigned_agent === "executor-product-strategy",
@@ -554,7 +554,7 @@ test("scopes a model-generated supplement plan to authorized agents", () => {
   ]);
 });
 
-test("defers detailed execution from an unresolved initial DAG", () => {
+test("keeps minimum MVP execution while deferring detailed technical work", () => {
   const scoped = scopeInitialDecisionPlan(
     createPlan([
       createTask("task-01", 1, "executor-product-strategy", []),
@@ -575,11 +575,41 @@ test("defers detailed execution from an unresolved initial DAG", () => {
     [
       ["task-01", []],
       ["task-02", ["task-01"]],
+      ["task-03", ["task-02"]],
     ],
   );
   const summary = createPlannerDelegationSummary(scoped);
-  assert.match(summary, /with 2 tasks/);
-  assert.doesNotMatch(summary, /task-03|task-04/);
+  assert.match(summary, /with 3 tasks/);
+  assert.match(summary, /task-03/);
+  assert.doesNotMatch(summary, /task-04/);
+});
+
+test("replaces an under-scoped broad model plan with evidence and MVP coverage", () => {
+  const result = extractPlanFromSubagentResult(
+    JSON.stringify(
+      createPlan([
+        createTask("task-01", 1, "executor-product-strategy", []),
+        createTask("task-02", 2, "executor-product-discovery", ["task-01"]),
+      ]),
+    ),
+    {
+      productContext: "Workspace: local test",
+      knowledgeGraph: createEmptyKnowledgeGraph(),
+      requestAnalysis: createCollaborativeDocumentRequestAnalysis(),
+      userInput: [{ index: 1, content: "Design the MVP", type: "request" }],
+    },
+  );
+
+  assert.ok(
+    result.tasks.some(
+      (task) => task.assigned_agent === "executor-market-research",
+    ),
+  );
+  assert.ok(
+    result.tasks.some(
+      (task) => task.assigned_agent === "executor-product-execution",
+    ),
+  );
 });
 
 test("keeps document approval fallback focused and acyclic", () => {
@@ -607,7 +637,7 @@ test("keeps document approval fallback focused and acyclic", () => {
       "executor-toolkit",
       "executor-market-research",
       "executor-product-discovery",
-      "executor-ai-shipping",
+      "executor-product-execution",
     ],
   );
   assert.equal(
@@ -660,7 +690,7 @@ test("keeps strategy refinement dependencies downstream only", () => {
   assertNoDagCycle(plan);
 });
 
-test("keeps concept-stage fallback focused on strategy, discovery, research, and toolkit", () => {
+test("keeps concept-stage fallback focused and labels the limited outcome", () => {
   const plan = createFallbackPlan(
     {
       productContext: "Workspace: local test",
@@ -683,7 +713,6 @@ test("keeps concept-stage fallback focused on strategy, discovery, research, and
     [
       "executor-product-strategy",
       "executor-toolkit",
-      "executor-market-research",
       "executor-product-discovery",
     ],
   );
@@ -692,6 +721,7 @@ test("keeps concept-stage fallback focused on strategy, discovery, research, and
     plan.tasks.every((task) => task.quality_check.criteria.length <= 4),
   );
   assert.ok(plan.tasks.every((task) => task.description.length < 500));
+  assert.match(plan.request_summary, /Concept foundation only/);
 });
 
 test("selects normalized planner roots and downstream parallel batches", () => {
