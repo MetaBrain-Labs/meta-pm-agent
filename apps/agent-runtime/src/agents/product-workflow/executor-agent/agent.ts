@@ -10,7 +10,7 @@
  * - streamExecutorAgent()：执行单个任务并产出结构化图谱补丁
  * - 根据 task.assigned_agent 查找对应 ExecutorDefinition 配置
  * - 为 Executor 附加知识图谱工具（基于内存状态对象，不写文件）
- * - 使用 runTextAgent 通用执行器（文本输出而非 JSON）
+ * - 使用 runAgent 通用执行器并解析文本输出
  * - 从 tool-call 事件中收集结构化数据填充 ExecutorAgentResult
  *
  * Notes:
@@ -29,10 +29,11 @@ import {
   type ProductKnowledgeGraph,
 } from "@repo/shared";
 import {
+  type AgentRunEvent,
   TEXT_AGENT_MODEL_OPTIONS,
-  runTextAgent,
-  type TextAgentEvent,
-} from "../../common/run-text-agent";
+  resolveTextOutput,
+  runAgent,
+} from "../../common/run-agent";
 import {
   createToolsForAgent,
   getExecutorDefaultToolNames,
@@ -142,7 +143,7 @@ export async function* streamExecutorAgent(
           allowedRelationTypes: definition.allowedRelationTypes,
         },
       );
-      const textGen = runTextAgent({
+      const textGen = runAgent({
         agentType: definition.agentType,
         agentLabel: definition.displayName,
         name: `${definition.agentType}-agent${attempt > 1 ? "-retry" : ""}`,
@@ -171,6 +172,7 @@ export async function* streamExecutorAgent(
               }
             : {}),
         },
+        resolveOutput: resolveTextOutput,
         fallback: () => createFallbackKnowledgeGraphPatch(input.task),
         signal: input.signal,
         throwOnError: true,
@@ -178,7 +180,7 @@ export async function* streamExecutorAgent(
 
       let genResult = await textGen.next();
       while (!genResult.done) {
-        const event = genResult.value as TextAgentEvent<string>;
+        const event = genResult.value as AgentRunEvent<string>;
 
         yield event as ProductWorkflowStreamEvent;
         if (

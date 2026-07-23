@@ -19,7 +19,10 @@ import {
   type TaskExecutionPlan,
 } from "@repo/shared";
 
-import { runAgentWithSubagent } from "../../common/run-agent-with-subagent";
+import {
+  resolveJsonOutput,
+  runAgent,
+} from "../../common/run-agent";
 import type {
   OrchestratorAgentInput,
   ProductWorkflowStreamEvent,
@@ -40,11 +43,6 @@ import {
   extractPreOrchFromSubagentResult,
   extractPreOrchReasoning,
 } from "./pre-orchestrator-subagent";
-
-/**
- * Orchestrator 父级输出失败时直接使用确定性路由，避免重复调用已成功的 SubAgent。
- */
-export const ORCHESTRATOR_AGENT_MAX_RETRIES = 0;
 
 export interface OrchestratorAgentOutput {
   decision: OrchestratorAgentResult;
@@ -76,7 +74,7 @@ export async function* streamOrchestratorAgent(
     ? PreOrchResultSchema
     : OrchestratorAgentResultSchema;
 
-  const runner = runAgentWithSubagent({
+  const runner = runAgent({
     agentType: "orchestrator" as any,
     agentLabel: "Orchestrator Agent",
     name: "orchestrator-agent",
@@ -90,8 +88,8 @@ export async function* streamOrchestratorAgent(
       ? [createPreOrchestratorSubagent()]
       : [createPlannerSubagent()],
     payload,
-    schema: outputSchema as any,
-    maxRetries: ORCHESTRATOR_AGENT_MAX_RETRIES,
+    resolveOutput: (context) =>
+      resolveJsonOutput(context, outputSchema as any),
     requiredSubagentType:
       !isPreCheck && input.requestAnalysis.business_model.length > 0
         ? "planner"

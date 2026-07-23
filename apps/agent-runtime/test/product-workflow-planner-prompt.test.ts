@@ -18,7 +18,7 @@ import test from "node:test";
 import { PLANNER_SUBAGENT_PROMPT } from "../src/agents/product-workflow/orchestrator-agent/planner-subagent/prompt";
 import { CRITIQUE_AGENT_PROMPT } from "../src/agents/product-workflow/critique-agent/prompt";
 import { createExecutorAgentPrompt } from "../src/agents/product-workflow/executor-agent/prompt";
-import { productStrategyExecutorProfile } from "../src/agents/product-workflow/executor-agent/product-strategy-executor/profile";
+import { getExecutorDefinition } from "../src/agents/product-workflow/executor-agent/definitions";
 
 const PLANNER_AGENT_PROMPT = PLANNER_SUBAGENT_PROMPT;
 const ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT = PLANNER_SUBAGENT_PROMPT;
@@ -259,7 +259,9 @@ test("critique agent prompt stays compact and does not request full graph copies
 });
 
 test("executor prompt preserves append-only graph writing semantics", () => {
-  const prompt = createExecutorAgentPrompt(productStrategyExecutorProfile);
+  const prompt = createExecutorAgentPrompt(
+    getExecutorDefinition("executor-product-strategy"),
+  );
 
   assert.match(prompt, /ONLY create new traceable records/);
   assert.match(prompt, /The graph tools are append-only/);

@@ -206,10 +206,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      zod:
-        specifier: ^3.25.32
-        version: 3.25.32
     devDependencies:
       turbo:
         specifier: ^2.9.14
@@ -352,21 +348,12 @@ importers:
 
   apps/worker:
     dependencies:
-      '@repo/agent-runtime':
-        specifier: workspace:*
-        version: link:../agent-runtime
-      '@repo/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
       bullmq:
         specifier: ^5.34.11
         version: 5.77.3
       dotenv:
         specifier: ^16.4.7
         version: 16.6.1
-      ioredis:
-        specifier: ^5.4.2
-        version: 5.10.1
     devDependencies:
       '@types/node':
         specifier: ^20.19.41
@@ -4124,9 +4111,6 @@ packages:
 
   zod@3.23.8:
     resolution: {integrity: sha512-XBx9AXhXktjUqnepgTiE5flcKIYWi/rme0Eaj+5Y0lftuGBq+jyRu/md4WnuxqgP1ubdpNCsYEYPxrzVHD8d6g==}
-
-  zod@3.25.32:
-    resolution: {integrity: sha512-OSm2xTIRfW8CV5/QKgngwmQW/8aPfGdaQFlrGoErlgg/Epm7cjb6K6VEyExfe65a3VybUOnu381edLb0dfJl0g==}
 
   zod@4.4.3:
     resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
@@ -8376,8 +8360,6 @@ snapshots:
       zod: 4.4.3
 
   zod@3.23.8: {}
-
-  zod@3.25.32: {}
 
   zod@4.4.3: {}
 

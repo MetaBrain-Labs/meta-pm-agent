@@ -10,7 +10,7 @@
  * - 清理最终 Markdown，避免持久化 DeepAgents 编排说明
  *
  * Notes:
- * - 本模块不复用 runJsonAgent 或 runAgentWithSubagent。
+ * - 本模块拥有独立文档流式协议，不复用产品工作流 runAgent。
  * - Document Agent 不写知识图谱；知识图谱只作为输入事实源。
  */
 

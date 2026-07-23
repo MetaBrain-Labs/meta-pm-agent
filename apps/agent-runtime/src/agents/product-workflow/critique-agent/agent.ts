@@ -25,8 +25,9 @@ import {
 } from "@repo/shared";
 import {
   JSON_AGENT_MODEL_OPTIONS,
-  runJsonAgent,
-} from "../../common/run-json-agent";
+  resolveJsonOutput,
+  runAgent,
+} from "../../common/run-agent";
 import type {
   CritiqueAgentInput,
   ProductWorkflowStreamEvent,
@@ -46,7 +47,7 @@ import { CRITIQUE_AGENT_PROMPT } from "./prompt";
 export async function* streamCritiqueAgent(
   input: CritiqueAgentInput,
 ): AsyncGenerator<ProductWorkflowStreamEvent, ProductWorkflowResult, void> {
-  const review = yield* runJsonAgent({
+  const review = yield* runAgent({
     agentType: "critique",
     agentLabel: "Critique Agent",
     name: "critique-agent",
@@ -56,7 +57,8 @@ export async function* streamCritiqueAgent(
     },
     systemPrompt: CRITIQUE_AGENT_PROMPT,
     payload: createCritiqueAgentPayload(input),
-    schema: CritiqueAgentOutputSchema,
+    resolveOutput: (context) =>
+      resolveJsonOutput(context, CritiqueAgentOutputSchema),
     fallback: (reason) => createFallbackCritiqueAgentOutput(input, reason),
     signal: input.signal,
   });

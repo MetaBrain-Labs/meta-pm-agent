@@ -38,10 +38,9 @@ import {
 import {
   compactGraphForPlanner,
   createPlannerDelegationSummary,
-  ORCHESTRATOR_AGENT_MAX_RETRIES,
   requireDelegatedPlannerPlan,
 } from "../src/agents/product-workflow/orchestrator-agent/agent";
-import { getMissingRequiredSubagentError } from "../src/agents/common/run-agent-with-subagent";
+import { getMissingRequiredSubagentError } from "../src/agents/common/run-agent";
 import {
   isSupplementWorkflow,
   selectNextExecutorRouterTargets,
@@ -124,7 +123,6 @@ test("limits supplement Planner context and preserves tracked questions", () => 
 });
 
 test("fails when Orchestrator does not actually delegate to Planner", () => {
-  assert.equal(ORCHESTRATOR_AGENT_MAX_RETRIES, 0);
   assert.equal(
     getMissingRequiredSubagentError("planner", new Set()),
     "required-subagent-not-invoked: planner",
