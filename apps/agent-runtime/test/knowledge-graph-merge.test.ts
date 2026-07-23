@@ -61,6 +61,7 @@ test("keeps compact semantic updates reviewable without copying the full graph",
 
   assert.equal(updates[0]?.entities[0]?.description, entity.description);
   assert.equal(updates[0]?.relations[0]?.target, entity.id);
+  assert.equal(updates[0]?.web_search_enabled, false);
 });
 
 test("critique validation rejects executor boundary violations", () => {

@@ -270,6 +270,9 @@ test("executor prompt preserves append-only graph writing semantics", () => {
   const prompt = createExecutorAgentPrompt(
     getExecutorDefinition("executor-product-strategy"),
   );
+  const searchPrompt = createExecutorAgentPrompt(
+    getExecutorDefinition("executor-market-research"),
+  );
 
   assert.match(prompt, /ONLY create new traceable records/);
   assert.match(prompt, /The graph tools are append-only/);
@@ -281,4 +284,16 @@ test("executor prompt preserves append-only graph writing semantics", () => {
   assert.match(prompt, /at most two search attempts per topic/);
   assert.match(prompt, /do not add an unsupported numeric target/);
   assert.match(prompt, /persist at least that many/);
+  assert.match(prompt, /Search availability: disabled/);
+  assert.match(
+    prompt,
+    /Only explicit statements in user_input may be written as new Evidence/,
+  );
+  assert.match(prompt, /Unverified assumption/);
+  assert.match(
+    prompt,
+    /Network bandwidth, data residency, deployment topology/,
+  );
+  assert.match(searchPrompt, /Search availability: enabled/);
+  assert.match(searchPrompt, /preserve its title, URL, and sourceId/);
 });

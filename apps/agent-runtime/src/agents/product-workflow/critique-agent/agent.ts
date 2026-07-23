@@ -28,6 +28,7 @@ import {
   resolveJsonOutput,
   runAgent,
 } from "../../common/run-agent";
+import { canExecutorUseWebSearch } from "../../common/tool-access";
 import type {
   CritiqueAgentInput,
   ProductWorkflowStreamEvent,
@@ -202,6 +203,7 @@ export function compactTaskSemanticUpdates(
   return executorResults.map((result) => ({
     task_id: result.task_id,
     agent_type: result.agent_type,
+    web_search_enabled: canExecutorUseWebSearch(result.agent_type),
     summary: truncateText(result.summary, 240),
     entities: result.entities.map((entity) => ({
       id: entity.id,

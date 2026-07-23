@@ -158,3 +158,5 @@ product-knowledge-graph.md
 docs/
 resources/product-contexts/*.json
 !resources/product-contexts/.gitkeep
+
+fallback/

@@ -167,6 +167,7 @@ export async function* streamExecutorAgent(
             "No product context provided.",
           graph_context_summary: graphContextSummary,
           task_relevant_context: taskRelevantContext,
+          user_input: input.userInput,
           task: input.task,
           ...(attempt > 1
             ? {
