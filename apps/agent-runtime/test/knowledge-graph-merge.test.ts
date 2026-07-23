@@ -306,6 +306,138 @@ test("critique composition keeps runtime validation and graph counts authoritati
   assert.equal(result.confirmation_message, "本轮任务已完成：Requirement confirmed.");
 });
 
+test("carries prior critique issues until explicitly resolved or downgraded to a real risk", () => {
+  const task = createTask("task-03", 3, "executor-product-strategy");
+  const goal = createGoal("G-003");
+  const requirement = createRequirement(
+    "R-003",
+    task.task_id,
+    "Supplement requirement",
+    "The supplement adds a traceable product requirement.",
+  );
+  const relation = createRelation(
+    "REL-003",
+    requirement.id,
+    goal.id,
+    task.task_id,
+    "The supplement requirement references the product goal.",
+  );
+  const executorResult = createExecutorResult({
+    taskId: task.task_id,
+    agentType: task.assigned_agent,
+    entity: requirement,
+    relation,
+  });
+  const graph = createGraph({
+    entities: [goal, requirement],
+    relations: [relation],
+  });
+  const priorIssue = {
+    code: "WEAK_EVIDENCE",
+    severity: "warning" as const,
+    task_id: "task-02",
+    message: "Industry claims still lack trustworthy source evidence.",
+  };
+  const input = {
+    requestAnalysis: createRequestAnalysis(),
+    plan: {
+      status: "supplement" as const,
+      request_summary: "Add the supplement requirement.",
+      dag: { nodes: [task.task_id], edges: [] },
+      tasks: [task],
+      assumptions: [],
+    },
+    executorResults: [executorResult],
+    knowledgeGraph: graph,
+    priorIssues: [priorIssue],
+  };
+  const review: CritiqueAgentOutput = {
+    status: "completed",
+    confirmation_id: "review-prior-issue",
+    request_summary: "Review the supplement.",
+    review: {
+      accepted_task_ids: [task.task_id],
+      rejected_task_ids: [],
+      retry_task_ids: [],
+      issues: [],
+      notes: "The supplement task passed.",
+    },
+    product_context_update: "Supplement reviewed.",
+    knowledge_graph_review: {
+      accepted_task_ids: [task.task_id],
+      rejected_task_ids: [],
+      retry_task_ids: [],
+      issues: [],
+      notes: [],
+    },
+    proposal_questions: [],
+    confirmation_message: "Complete.",
+  };
+
+  const carried = composeProductWorkflowResult(input, review);
+  assert.equal(
+    carried.review.issues?.some((issue) => issue.code === "WEAK_EVIDENCE"),
+    true,
+  );
+
+  const invalidDowngrade = composeProductWorkflowResult(input, {
+    ...review,
+    prior_issue_resolutions: [
+      {
+        code: priorIssue.code,
+        task_id: priorIssue.task_id,
+        disposition: "downgraded_to_non_blocking_risk",
+        rationale: "Track the evidence limitation as an accepted research risk.",
+        risk_id: "RISK-EVIDENCE",
+      },
+    ],
+  });
+  assert.equal(
+    invalidDowngrade.review.issues?.some(
+      (issue) => issue.code === "WEAK_EVIDENCE",
+    ),
+    true,
+  );
+
+  const resolved = composeProductWorkflowResult(input, {
+    ...review,
+    prior_issue_resolutions: [
+      {
+        code: priorIssue.code,
+        task_id: priorIssue.task_id,
+        disposition: "resolved",
+        rationale: "The supplement added a trustworthy source and traceable evidence.",
+      },
+    ],
+  });
+  assert.equal(
+    resolved.review.issues?.some((issue) => issue.code === "WEAK_EVIDENCE"),
+    false,
+  );
+
+  graph.risks.push({
+    id: "RISK-EVIDENCE",
+    text: "External evidence quality remains a non-blocking research risk.",
+    source_task_id: task.task_id,
+  });
+  const downgraded = composeProductWorkflowResult(input, {
+    ...review,
+    prior_issue_resolutions: [
+      {
+        code: priorIssue.code,
+        task_id: priorIssue.task_id,
+        disposition: "downgraded_to_non_blocking_risk",
+        rationale: "Track the evidence limitation as an accepted research risk.",
+        risk_id: "RISK-EVIDENCE",
+      },
+    ],
+  });
+  assert.equal(
+    downgraded.review.issues?.some((issue) => issue.code === "WEAK_EVIDENCE"),
+    false,
+  );
+});
+
 test("blocks completion while graph blocking questions remain", () => {
   const task = createTask("task-01", 1, "executor-product-strategy");
   const graph = createGraph({});

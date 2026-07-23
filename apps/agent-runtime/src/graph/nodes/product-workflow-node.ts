@@ -398,6 +398,7 @@ async function executeCritiqueAgentReview(
       plan: state.plan,
       executorResults: state.executorResults,
       knowledgeGraph,
+      priorIssues: state.priorCritiqueIssues,
       userInput: state.userInput,
       signal: config?.signal,
     }),

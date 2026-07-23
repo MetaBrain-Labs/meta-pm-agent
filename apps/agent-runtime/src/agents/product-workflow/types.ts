@@ -86,9 +86,17 @@ export interface CritiqueAgentInput {
   plan: TaskExecutionPlan;
   executorResults: ExecutorAgentResult[];
   knowledgeGraph: ProductKnowledgeGraph;
+  priorIssues?: CritiqueReviewIssue[];
   userInput?: UserInputRecord[];
   signal?: AbortSignal;
 }
+
+/**
+ * 跨轮继承的 Critique 问题，沿用稳定工作流结果中的既有契约。
+ */
+export type CritiqueReviewIssue = NonNullable<
+  ProductWorkflowResult["review"]["issues"]
+>[number];
 
 /**
  * 历史兼容别名：旧模块仍可引用 PlannerWorkflowReviewInput。

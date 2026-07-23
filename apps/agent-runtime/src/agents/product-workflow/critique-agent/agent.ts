@@ -130,6 +130,14 @@ function createCritiqueAgentPayload(input: CritiqueAgentInput) {
     final_graph_summary: createFinalGraphSummary(input.knowledgeGraph),
     task_semantic_updates: compactTaskSemanticUpdates(input.executorResults),
     validation_report: validationReport,
+    prior_unresolved_issues: (input.priorIssues ?? []).map((issue) => ({
+      issue_key: createReviewIssueKey(issue),
+      ...issue,
+    })),
+    non_blocking_risk_candidates: input.knowledgeGraph.risks.map((risk) => ({
+      ...risk,
+      text: truncateText(risk.text, 240),
+    })),
     open_question_candidates: collectOpenQuestionCandidates(
       input.executorResults,
     ),
@@ -1227,11 +1235,16 @@ export function composeProductWorkflowResult(
   const acceptedTaskIds = input.plan.tasks
     .map((task) => task.task_id)
     .filter((taskId) => !rejectedTaskIdSet.has(taskId));
+  const retainedPriorIssues = (input.priorIssues ?? []).filter(
+    (issue) => !isPriorIssueClosed(issue, review, input.knowledgeGraph),
+  );
   const reviewIssues = mergeReviewIssues([
+    ...retainedPriorIssues,
     ...validationReport.issues,
     ...review.review.issues,
   ]);
   const graphIssues = mergeReviewIssues([
+    ...retainedPriorIssues,
     ...validationReport.issues,
     ...review.knowledge_graph_review.issues,
   ]);
@@ -1296,12 +1309,43 @@ function mergeReviewIssues(
 ): CritiqueValidationIssue[] {
   const merged = new Map<string, CritiqueValidationIssue>();
   for (const issue of issues) {
-    merged.set(
-      [issue.code, issue.severity, issue.task_id ?? "", issue.message].join("|"),
-      issue,
-    );
+    const key = createReviewIssueKey(issue);
+    const existing = merged.get(key);
+    merged.set(key, {
+      ...issue,
+      severity:
+        existing?.severity === "error" ? "error" : issue.severity,
+    });
   }
   return [...merged.values()];
+}
+
+/**
+ * 为跨轮 Critique 问题生成稳定键。
+ */
+function createReviewIssueKey(issue: CritiqueValidationIssue): string {
+  return `${issue.code}|${issue.task_id ?? ""}`;
+}
+
+/**
+ * 仅接受 Critique 明确声明的关闭；风险降级还必须引用图谱中的真实 Risk。
+ */
+function isPriorIssueClosed(
+  issue: CritiqueValidationIssue,
+  review: CritiqueAgentOutput,
+  knowledgeGraph: ProductKnowledgeGraph,
+): boolean {
+  const resolution = (review.prior_issue_resolutions ?? []).find(
+    (item) =>
+      item.code === issue.code &&
+      (item.task_id ?? "") === (issue.task_id ?? ""),
+  );
+  if (!resolution) return false;
+  if (resolution.disposition === "resolved") return true;
+  return Boolean(
+    resolution.risk_id &&
+      knowledgeGraph.risks.some((risk) => risk.id === resolution.risk_id),
+  );
 }
 
 /**

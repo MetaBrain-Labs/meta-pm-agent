@@ -676,6 +676,13 @@ export const CritiqueAgentOutputSchema = z.object({
     issues: ProductWorkflowReviewIssuesSchema.describe("Detected issues"),
     notes: ProductWorkflowReviewNotesSchema.describe("Compact review notes"),
   }).describe("Critique Agent decision"),
+  prior_issue_resolutions: z.array(z.object({
+    code: z.string().min(1).describe("Issue code from prior_unresolved_issues"),
+    task_id: z.string().min(1).optional().describe("Related prior task ID when applicable"),
+    disposition: z.enum(["resolved", "downgraded_to_non_blocking_risk"]).describe("Explicit lifecycle decision for the prior issue"),
+    rationale: z.string().min(1).max(500).describe("Concrete evidence for closing or downgrading the issue"),
+    risk_id: z.string().min(1).optional().describe("Existing knowledge-graph Risk ID required for a risk downgrade"),
+  })).optional().describe("Explicit dispositions for issues inherited from an earlier critique round"),
   product_context_update: CritiqueProductContextUpdateSchema.describe("Short product context update summary"),
   knowledge_graph_review: ProductWorkflowKnowledgeGraphReviewSchema.describe("Lightweight graph review, not the full graph"),
   proposal_questions: z.array(ProductWorkflowProposalQuestionSchema).default([]).describe("Unresolved blocking questions that require user confirmation"),

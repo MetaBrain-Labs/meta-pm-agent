@@ -13,6 +13,7 @@
 
 import type { SubAgent } from "deepagents";
 import { createDeepAgentToolAllowlistMiddleware } from "../../../common/deep-agent-tool-policy";
+import { createChatModel } from "../../../common/model";
 import { parseJsonObject } from "../../../../utils/json";
 import { PRE_ORCHESTRATOR_SUBAGENT_PROMPT } from "./prompt";
 import {
@@ -38,6 +39,12 @@ export function createPreOrchestratorSubagent(): SubAgent {
     description:
       "Classifies user intent (casual_chat/new_project/project_evolution) based on product context and generates clarification questions when needed. Returns a JSON with intent, decision, reason, and optional questions.",
     systemPrompt: PRE_ORCHESTRATOR_SUBAGENT_PROMPT,
+    model: createChatModel({
+      enableThinking: false,
+      responseFormat: "json_object",
+      temperature: 0,
+      maxTokens: 4096,
+    }),
     tools: [],
     middleware: [subagentToolAllowlistMiddleware],
   };
