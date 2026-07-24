@@ -1,3 +1,8 @@
+---
+name: delight
+description: "Add domain-appropriate moments of delight without harming usability or trust. Use when an experience is functional but lacks warmth, character, or memorable feedback."
+---
+
 > **Additional context needed**: what's appropriate for the domain (playful vs professional vs quirky vs elegant).
 
 Find the moments where personality and unexpected polish would turn a functional interface into one users remember and tell other people about. Add only where the moment earns it; delight everywhere reads as noise.

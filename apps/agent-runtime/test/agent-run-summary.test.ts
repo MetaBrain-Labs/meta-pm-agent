@@ -16,11 +16,13 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { AIMessage } from "langchain";
+import { AIMessage, ToolMessage } from "langchain";
 import {
   createAgentRunSummaryRecorder,
   createSubagentTaskCallExtractor,
+  type AgentRunSummaryRecorder,
 } from "../src/agents/common/agent-run-summary";
+import { recordSkillReadForSummary } from "../src/agents/common/run-agent";
 
 const SUMMARY_ENV_KEYS = [
   "AGENT_SUMMARY_THINKING_ENABLED",
@@ -30,6 +32,67 @@ const SUMMARY_ENV_KEYS = [
   "AGENT_SUMMARY_SUBAGENTS_ENABLED",
   "AGENT_SUMMARY_OUTPUT_DIR",
 ] as const;
+
+test("records internal Skill reads without exposing file content", () => {
+  const toolCalls: Parameters<
+    AgentRunSummaryRecorder["recordToolCall"]
+  >[0][] = [];
+  const toolResults: Parameters<
+    AgentRunSummaryRecorder["recordToolResult"]
+  >[0][] = [];
+  const recorder: Pick<
+    AgentRunSummaryRecorder,
+    "recordToolCall" | "recordToolResult"
+  > = {
+    recordToolCall: (event) => toolCalls.push(event),
+    recordToolResult: (event) => toolResults.push(event),
+  };
+
+  const call = new AIMessage({
+    content: "",
+    tool_calls: [
+      {
+        id: "skill-read-1",
+        name: "read_file",
+        args: {
+          path: "/skills/product-strategy/SKILL.md",
+          limit: 1000,
+        },
+        type: "tool_call",
+      },
+    ],
+  });
+  const result = new ToolMessage({
+    content: "private Skill instructions",
+    name: "read_file",
+    status: "success",
+    tool_call_id: "skill-read-1",
+  });
+
+  assert.equal(recordSkillReadForSummary(call, recorder), false);
+  assert.equal(recordSkillReadForSummary(result, recorder), true);
+  assert.deepEqual(toolCalls, [
+    {
+      toolCallId: "skill-read-1",
+      toolName: "read_file",
+      toolArgs: {
+        path: "/skills/product-strategy/SKILL.md",
+        limit: 1000,
+      },
+    },
+  ]);
+  assert.deepEqual(toolResults, [
+    {
+      toolCallId: "skill-read-1",
+      toolName: "read_file",
+      toolResult: {
+        status: "success",
+        content: "Skill file content omitted.",
+      },
+    },
+  ]);
+  assert.equal(JSON.stringify(toolResults).includes("private Skill"), false);
+});
 
 test("does not create summary files when all switches are disabled", async () => {
   const tempRoot = await mkdtemp(path.join(tmpdir(), "agent-summary-off-"));

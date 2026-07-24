@@ -20,7 +20,7 @@ import {
   type BaseMessage,
   type StructuredTool,
 } from "langchain";
-import { createDeepAgent, type SubAgent } from "deepagents";
+import { createDeepAgent, type FileData, type SubAgent } from "deepagents";
 import { calculateCost } from "../../config";
 import { parseJsonObject } from "../../utils/json";
 import {
@@ -39,6 +39,8 @@ import {
 import { createDeepAgentToolAllowlistMiddleware } from "./deep-agent-tool-policy";
 import { createDefaultAgentMiddleware } from "./middleware";
 import { createChatModel, type ChatModelOptions } from "./model";
+
+const SKILL_READ_TOOL_NAMES = new Set(["read_file"]);
 
 /**
  * 带 SubAgent Agent 的推理事件。
@@ -125,6 +127,7 @@ export interface RunAgentOptions<T, AgentType extends string> {
   systemPrompt: string;
   tools?: StructuredTool[];
   skills?: string[];
+  skillFiles?: Record<string, FileData>;
   subagents?: SubAgent[];
   payload: unknown;
   resolveOutput: AgentOutputResolver<T>;
@@ -291,8 +294,41 @@ async function* handleVisibleToolEvents<AgentType extends string>(
 }
 
 /**
- * 当消息是可见工具结果时，后续无需再处理文本/推理。
+ * 仅在本地调试摘要中记录隔离 Skill 的读取，不暴露正文或产生运行时工具事件。
+ *
+ * @returns 当前消息是否为需要从普通文本处理链路中移除的 read_file 结果。
  */
+export function recordSkillReadForSummary(
+  message: BaseMessage,
+  summaryRecorder: Pick<
+    AgentRunSummaryRecorder,
+    "recordToolCall" | "recordToolResult"
+  >,
+): boolean {
+  for (const toolCall of getToolCalls(message, SKILL_READ_TOOL_NAMES)) {
+    summaryRecorder.recordToolCall({
+      toolCallId: toolCall.id,
+      toolName: toolCall.name,
+      toolArgs: toolCall.args,
+    });
+  }
+
+  if (!ToolMessage.isInstance(message) || message.name !== "read_file") {
+    return false;
+  }
+
+  summaryRecorder.recordToolResult({
+    toolCallId: message.tool_call_id,
+    toolName: "read_file",
+    toolResult: {
+      status: message.status ?? "unknown",
+      content: "Skill file content omitted.",
+    },
+  });
+  return true;
+}
+
+/** 判断当前消息是否为业务可见工具结果。 */
 function shouldSkipTextAfterToolResult(
   message: BaseMessage,
   visibleToolNames: ReadonlySet<string>,
@@ -444,6 +480,12 @@ export async function* runAgent<T, AgentType extends string>(
   const startTime = Date.now();
   const tools = options.tools ?? [];
   const subagents = options.subagents ?? [];
+  const skillFiles = options.skillFiles ?? {};
+  const hasSkillFiles = Object.keys(skillFiles).length > 0;
+  const allowedBuiltinToolNames = [
+    ...(hasSkillFiles ? ["read_file"] : []),
+    ...(subagents.length ? ["task"] : []),
+  ];
   const visibleToolNames = new Set(tools.map((tool) => tool.name));
   const summaryRecorder = createAgentRunSummaryRecorder({
     agentLabel: options.agentLabel,
@@ -456,7 +498,7 @@ export async function* runAgent<T, AgentType extends string>(
       subagents: compactSubagentDefinitions(subagents),
       systemPrompt: options.systemPrompt,
       tools: compactToolDefinitions(tools),
-      allowedBuiltinToolNames: subagents.length ? ["task"] : [],
+      allowedBuiltinToolNames,
     },
   });
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
@@ -474,7 +516,7 @@ export async function* runAgent<T, AgentType extends string>(
           agentName: options.name,
           allowedToolNames: [
             ...tools.map((tool) => tool.name),
-            ...(subagents.length ? ["task"] : []),
+            ...allowedBuiltinToolNames,
           ],
         }),
         ...createDefaultAgentMiddleware(),
@@ -485,6 +527,7 @@ export async function* runAgent<T, AgentType extends string>(
     const run = await agent.stream(
       {
         messages: [new HumanMessage(JSON.stringify(options.payload))],
+        ...(hasSkillFiles ? { files: skillFiles } : {}),
       },
       {
         streamMode: "messages",
@@ -541,6 +584,13 @@ export async function* runAgent<T, AgentType extends string>(
           });
         }
         tokenUsage = getTokenUsage(message) ?? tokenUsage;
+        continue;
+      }
+
+      if (
+        hasSkillFiles &&
+        recordSkillReadForSummary(message, summaryRecorder)
+      ) {
         continue;
       }
 

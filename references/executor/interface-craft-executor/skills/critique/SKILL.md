@@ -1,3 +1,8 @@
+---
+name: critique
+description: "Evaluate an implemented interface against its design intent and produce actionable critique. Use for design review, regression analysis, or iterative quality tracking."
+---
+
 ### Purpose
 
 Resolve one stable target, run two independent assessments, synthesize a design critique, persist a snapshot, and ask the user what to improve next. The chat response is the primary deliverable; the snapshot is an archive/backlog for future commands.

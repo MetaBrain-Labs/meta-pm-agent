@@ -285,6 +285,14 @@ test("executor prompt preserves append-only graph writing semantics", () => {
   assert.match(prompt, /do not add an unsupported numeric target/);
   assert.match(prompt, /persist at least that many/);
   assert.match(prompt, /Search availability: disabled/);
+  assert.match(prompt, /silently select the minimum relevant set/);
+  assert.match(prompt, /use `read_file` to read each selected virtual SKILL\.md/);
+  assert.match(prompt, /Do not read unrelated skills merely because they are listed/);
+  assert.match(prompt, /Never mention them in user-visible reasoning or final output/);
+  assert.doesNotMatch(
+    prompt,
+    /Do not call or mention filesystem paths for skills or references/,
+  );
   assert.match(
     prompt,
     /Only explicit statements in user_input may be written as new Evidence/,

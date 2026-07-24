@@ -1,3 +1,8 @@
+---
+name: layout
+description: "Improve information hierarchy, spacing, responsive composition, and structural rhythm. Use when an interface layout feels repetitive, weak, crowded, or poorly organized."
+---
+
 Space is the most underused design tool. Find the layout's actual problem (monotone spacing, weak hierarchy, identical card grids) and fix the structure, not the surface.
 
 ---

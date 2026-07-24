@@ -1,3 +1,8 @@
+---
+name: quieter
+description: "Reduce visual intensity while preserving clarity, hierarchy, and personality. Use when an interface feels loud, aggressive, overstimulating, or unnecessarily decorated."
+---
+
 Quiet design is harder than bold design. Subtlety needs precision. Reduce visual intensity in designs that are too loud, aggressive, or overstimulating without losing personality or making the result generic.
 
 ---

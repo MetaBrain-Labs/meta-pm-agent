@@ -51,6 +51,7 @@ import {
   type ExecutorAgentType,
 } from "./definitions";
 import { createExecutorAgentPrompt } from "./prompt";
+import { createExecutorSkillBundle } from "./skills";
 
 /**
  * 强类型结构化工具名称集合，用于识别需要从中收集数据的工具调用。
@@ -146,6 +147,10 @@ export async function* streamExecutorAgent(
   const definition = getExecutorDefinition(
     assertExecutorAgentType(input.task.assigned_agent),
   );
+  const skillBundle = await createExecutorSkillBundle(
+    definition,
+    input.plan.status === "supplement",
+  );
 
   yield {
     type: "reasoning",
@@ -203,10 +208,8 @@ export async function* streamExecutorAgent(
         },
         systemPrompt: createExecutorAgentPrompt(definition),
         tools,
-        skills: getExecutorSkillSources(
-          definition,
-          input.plan.status === "supplement",
-        ),
+        skills: skillBundle.sources,
+        skillFiles: skillBundle.files,
         payload: {
           product_context:
             input.productContext?.slice(0, 800) ||
@@ -512,23 +515,6 @@ export function createNodeProvenanceRetryInstruction(
  */
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
-}
-
-/**
- * 将 Executor profile 中的技能名映射到 references 下的 DeepAgents skill source 目录。
- */
-function getExecutorSkillSources(definition: {
-  agentType: ExecutorAgentType;
-  referencePath: string;
-  skills: readonly string[];
-}, supplement = false): string[] {
-  const skillNames =
-    supplement && definition.agentType === "executor-product-strategy"
-      ? definition.skills.filter((skillName) => skillName === "product-strategy")
-      : definition.skills;
-  return skillNames.map(
-    (skillName) => `${definition.referencePath}/skills/${skillName}`,
-  );
 }
 
 /**

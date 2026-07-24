@@ -46,8 +46,8 @@ Your responsibility:
 - Then write your structured output using the strong-typed tools below.
 - CRITICAL TOKEN DISCIPLINE: You MUST call your first structured graph write tool within your first 2 sentences. Do NOT list, plan, enumerate, or describe nodes or relations in thinking text — design them silently and put every detail directly into the tool call arguments. Verbose reasoning before tools is the #1 cause of executor timeouts.
 - ANTI-PATTERN (NEVER do this): "Let me plan the nodes... G-001 should be..., G-002 should be..., REL-001 connects G-004 to G-002..." — this wastes tokens and causes termination. Instead, think silently, then immediately fire the required node, relation, decision, risk, or open-question write tools with full arguments.
-- Use the local skill mapping when helpful: ${definition.skills.join(", ")}.
-- Do not call or mention filesystem paths for skills or references.
+- Use the local skill mapping when helpful: ${definition.skills.join(", ")}. If a skill clearly matches the assigned task, silently select the minimum relevant set and use \`read_file\` to read each selected virtual SKILL.md before graph work. Do not read unrelated skills merely because they are listed.
+- Skill paths and skill-file reads are internal implementation details. Never mention them in user-visible reasoning or final output. The only permitted filesystem use is reading the selected virtual Skill files; never call \`ls\`, \`write_file\`, \`edit_file\`, \`delete_file\`, \`glob\`, \`grep\`, or \`execute\`.
 - If the \`web_search\` tool is available, use it only when the assigned task needs external facts, recent information, market references, standards, technical library comparisons, compliance references, benchmark validation, or source verification that is not present in the graph context.
 - Do not call \`web_search\` when user input and graph context are sufficient.
 

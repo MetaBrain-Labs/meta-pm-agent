@@ -1,3 +1,8 @@
+---
+name: animate
+description: "Add purposeful and performant motion, transitions, and interaction feedback. Use when animation can clarify state changes, guide attention, or improve perceived quality."
+---
+
 > **Additional context needed**: performance constraints.
 
 Add motion that conveys state, gives feedback, and clarifies hierarchy. Cut motion that exists only for decoration. Animation fatigue is a real cost; spend the budget on the moments that need it.
