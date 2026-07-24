@@ -20,6 +20,8 @@ import type {
   OrchestratorContextSource,
   ProductWorkflowResult,
   ProductKnowledgeGraph,
+  WorkflowRetryAction,
+  WorkflowRetryRequest,
 } from "@repo/shared";
 import type { HumanInTheLoopInterrupt } from "./graph/human-in-the-loop";
 
@@ -125,7 +127,13 @@ export type ConversationStreamEvent =
       durationMs: number;
       parallelAgents?: AgentMessageType[];
     }
-  | { type: "error"; error: string; agentType?: AgentMessageType }
+  | {
+      type: "error";
+      error: string;
+      agentType?: AgentMessageType;
+      retryAction?: WorkflowRetryAction;
+      terminal?: boolean;
+    }
   | { type: "complete"; result: ProductWorkflowResult }
   | { type: "knowledge-graph-update"; knowledgeGraph: ProductKnowledgeGraph };
 
@@ -141,6 +149,7 @@ export interface ConversationStreamOptions {
   contextSource?: OrchestratorContextSource;
   knowledgeGraph?: ProductKnowledgeGraph | null;
   workflowAnswerResolution?: WorkflowAnswerResolution | null;
+  workflowRetry?: WorkflowRetryRequest;
   signal?: AbortSignal;
   /** "chat" 模式使用纯闲聊提示词，不产生标记块或表单 */
   mode?: "project" | "chat";

@@ -207,6 +207,7 @@ export function applyStreamEvent(
           agentError: {
             agentType: failedAgentType,
             message: normalizeErrorMessage(event.error),
+            retryAction: event.retryAction,
           },
         };
       }

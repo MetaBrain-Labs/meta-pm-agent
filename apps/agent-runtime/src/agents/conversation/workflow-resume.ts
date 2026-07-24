@@ -75,6 +75,44 @@ export function createWorkflowContinuationResumeContextFromMessages({
 }
 
 /**
+ * 为 Executor 错误卡片的定点重试恢复最近 DAG，不重新解释上一条表单答案。
+ */
+export function createWorkflowExecutorRetryResumeContextFromMessages({
+  messages,
+  knowledgeGraph,
+  taskId,
+}: {
+  messages: ChatMessage[];
+  knowledgeGraph?: ProductKnowledgeGraph | null;
+  taskId: string;
+}): WorkflowResumeContext | null {
+  const context = createWorkflowResumeContext({
+    formId: null,
+    knowledgeGraph,
+    messages,
+  });
+  const task = context?.plan?.tasks.find((item) => item.task_id === taskId);
+  const alreadyCompleted = context?.executorResults?.some(
+    (result) => result.task_id === taskId,
+  );
+  if (!context?.requestAnalysis || !task || alreadyCompleted) return null;
+  const userInputBody = findLatestTaggedText(
+    messages,
+    "<user-input",
+    "</user-input>",
+  );
+
+  return {
+    ...context,
+    userInputBlock: userInputBody
+      ? `<user-input>\n${userInputBody}\n</user-input>`
+      : undefined,
+    rerunTaskIds: [taskId],
+    forceSupplementPlan: false,
+  };
+}
+
+/**
  * 统一构造表单恢复和继续恢复上下文，避免两条路径遗漏 Planner/Executor 历史产物。
  */
 function createWorkflowResumeContext({
@@ -517,6 +555,26 @@ function findLatestTaggedPayload<T>(
 
     const parsed = schema.safeParse(parseJsonBlock(block));
     if (parsed.success) return parsed.data;
+  }
+
+  return null;
+}
+
+/**
+ * 读取最新 tagged block 正文，供恢复原始用户输入。
+ */
+function findLatestTaggedText(
+  messages: ChatMessage[],
+  startMarker: string,
+  endMarker: string,
+): string | null {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const block = extractTaggedBlocks(
+      messages[index]?.content ?? "",
+      startMarker,
+      endMarker,
+    ).at(-1);
+    if (block) return block;
   }
 
   return null;

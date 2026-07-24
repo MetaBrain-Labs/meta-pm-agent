@@ -34,7 +34,12 @@ export type {
   ProductWorkflowInput,
   ProductWorkflowStreamEvent,
 } from "./agents/product-workflow/agent";
-export { createWorkflowThreadId, graph, runWorkflowGraph } from "./graph/workflow";
+export {
+  createWorkflowThreadId,
+  graph,
+  hasRetryableWorkflowTaskCheckpoint,
+  runWorkflowGraph,
+} from "./graph/workflow";
 export {
   createDocumentWorkflowThreadId,
   documentGraph,

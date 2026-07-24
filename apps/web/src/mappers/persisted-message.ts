@@ -59,6 +59,7 @@ export function mapPersistedMessageToMessage(
           })),
         }
       : {}),
+    ...(message.agentError ? { agentError: message.agentError } : {}),
     ...(message.userInput
       ? {
           userInput: {

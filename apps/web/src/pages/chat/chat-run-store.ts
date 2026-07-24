@@ -19,6 +19,7 @@ import type {
   HumanInTheLoopResume,
   Message,
   StreamEvent,
+  WorkflowRetryRequest,
 } from "../../types";
 import { applyStreamEvent } from "../../utils/apply-stream-event";
 import { mapErrorToChinese } from "../../utils/errors";
@@ -41,6 +42,7 @@ interface StartChatRunInput {
   userText: string;
   webSearchEnabled?: boolean;
   hitlResume?: HumanInTheLoopResume;
+  workflowRetry?: WorkflowRetryRequest;
   onThreadTitleChange: (threadId: string, title: string) => void;
 }
 
@@ -83,12 +85,14 @@ export async function startChatRun(input: StartChatRunInput): Promise<void> {
   if (existing?.isLoading) return;
 
   const state = ensureRunState(input.threadId);
-  const userMsg: Message = {
-    id: crypto.randomUUID(),
-    role: "user",
-    content: input.userText,
-    timestamp: Date.now(),
-  };
+  const userMsg: Message | null = input.workflowRetry
+    ? null
+    : {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: input.userText,
+        timestamp: Date.now(),
+      };
   const agentMsgId = crypto.randomUUID();
   const agentMsg: Message = {
     id: agentMsgId,
@@ -98,14 +102,21 @@ export async function startChatRun(input: StartChatRunInput): Promise<void> {
   };
   const controller = new AbortController();
 
-  state.messages = [...input.priorMessages, userMsg, agentMsg];
+  state.messages = [
+    ...input.priorMessages,
+    ...(userMsg ? [userMsg] : []),
+    agentMsg,
+  ];
   state.isLoading = true;
   state.error = null;
   state.controller = controller;
   emit(input.threadId);
 
   try {
-    const requestMessages = [...input.priorMessages, userMsg].map((message) => ({
+    const requestMessages = [
+      ...input.priorMessages,
+      ...(userMsg ? [userMsg] : []),
+    ].map((message) => ({
       id: message.id,
       role:
         message.role === "agent" ? ("assistant" as const) : ("user" as const),
@@ -123,6 +134,7 @@ export async function startChatRun(input: StartChatRunInput): Promise<void> {
         enabledTools: input.webSearchEnabled ? ["web_search"] : [],
         requestFormId: input.requestFormId,
         hitlResume: input.hitlResume,
+        workflowRetry: input.workflowRetry,
         messages: requestMessages,
       }),
       signal: controller.signal,

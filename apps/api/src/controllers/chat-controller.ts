@@ -223,6 +223,7 @@ export async function chatStreamHandler(c: Context) {
     let latestKnowledgeGraph: ProductKnowledgeGraph | null = null;
     let runtimeWorkspaceId: string | undefined;
     let autoFinalizedWorkflowRound = false;
+    let terminalStreamError = false;
     const shouldFinalizeWorkflowRound = isProductWorkflowFinalConfirmationAnswer(
       parsed.data.messages,
     );
@@ -234,14 +235,19 @@ export async function chatStreamHandler(c: Context) {
       }
 
       // 持久化用户发送的消息
-      const workflowAnswerResolution = await persistConversationStart(
-        parsed.data.chatId,
-        parsed.data.requestFormId,
-        parsed.data.messages,
+      const workflowAnswerResolution = parsed.data.workflowRetry
+        ? null
+        : await persistConversationStart(
+            parsed.data.chatId,
+            parsed.data.requestFormId,
+            parsed.data.messages,
+          );
+      await markStatus(
+        parsed.data.workflowRetry ? "workflow_running" : "received",
       );
-      await markStatus("received");
 
-      const pendingDecisionForm = shouldFinalizeWorkflowRound
+      const pendingDecisionForm =
+        shouldFinalizeWorkflowRound || parsed.data.workflowRetry
         ? null
         : await loadPendingDecisionQuestionForm(parsed.data.requestFormId);
       if (pendingDecisionForm) {
@@ -324,6 +330,7 @@ export async function chatStreamHandler(c: Context) {
           contextSource: runtimeContext.contextSource,
           knowledgeGraph: runtimeContext.knowledgeGraph,
           workflowAnswerResolution,
+          workflowRetry: parsed.data.workflowRetry,
           signal: runtimeController.signal,
         },
       )) {
@@ -350,6 +357,21 @@ export async function chatStreamHandler(c: Context) {
             advanceVersion: false,
           });
           continue;
+        }
+        if (event.type === "error") {
+          if (event.terminal) {
+            terminalStreamError = true;
+            const output = getAgentOutput(
+              agentOutputs,
+              getEventAgentType(event),
+            );
+            output.agentError = {
+              agentType: event.agentType,
+              message: event.error,
+              retryAction: event.retryAction,
+            };
+            await markStatus("failed");
+          }
         }
         const nextStatus = getRequestFormStatusForEvent(event);
         if (nextStatus) {
@@ -485,29 +507,31 @@ export async function chatStreamHandler(c: Context) {
           : null,
       });
 
-      await finalizeWorkspaceKnowledgeGraph({
-        workspaceId: runtimeContext.workspaceId,
-        conversationId: parsed.data.chatId,
-        requestFormId: parsed.data.requestFormId,
-        advanceVersion: true,
-        // 最终归档优先使用运行时累计快照，避免 Critique Agent 的模型汇总覆盖成局部图谱。
-        knowledgeGraph:
-          latestKnowledgeGraph ??
-          (isProductWorkflowResult(productWorkflowResult)
-            ? productWorkflowResult.knowledge_graph_update
-            : undefined),
-      });
-
-      if (titleUpdate) {
-        await writeSse(writer, {
-          type: "conversation-title",
-          chatId: titleUpdate.id,
-          title: titleUpdate.title,
+      if (!terminalStreamError) {
+        await finalizeWorkspaceKnowledgeGraph({
+          workspaceId: runtimeContext.workspaceId,
+          conversationId: parsed.data.chatId,
+          requestFormId: parsed.data.requestFormId,
+          advanceVersion: true,
+          // 最终归档优先使用运行时累计快照，避免 Critique Agent 的模型汇总覆盖成局部图谱。
+          knowledgeGraph:
+            latestKnowledgeGraph ??
+            (isProductWorkflowResult(productWorkflowResult)
+              ? productWorkflowResult.knowledge_graph_update
+              : undefined),
         });
-      }
 
-      if (requestFormStatus !== "pending_user_confirmation") {
-        await markStatus("completed");
+        if (titleUpdate) {
+          await writeSse(writer, {
+            type: "conversation-title",
+            chatId: titleUpdate.id,
+            title: titleUpdate.title,
+          });
+        }
+
+        if (requestFormStatus !== "pending_user_confirmation") {
+          await markStatus("completed");
+        }
       }
 
       console.log(

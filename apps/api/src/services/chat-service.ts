@@ -13,7 +13,11 @@
  * - 本文件不直接编排 LangGraph 节点，只处理 API 层业务持久化。
  */
 
-import type { ChatMessage, ProductWorkflowResult } from "@repo/shared";
+import type {
+  ChatMessage,
+  ProductWorkflowResult,
+  WorkflowRetryAction,
+} from "@repo/shared";
 import {
   createConversationWithInitialRequestForm,
   listActiveConversations,
@@ -73,6 +77,11 @@ export interface AgentConversationOutput {
     status?: "running" | "complete";
   }>;
   subagentTraces?: SubagentTraceDto[];
+  agentError?: {
+    agentType?: string;
+    message: string;
+    retryAction?: WorkflowRetryAction;
+  };
   /** 该 Agent 本次模型调用的 token 用量 */
   tokenUsage?: {
     inputTokens: number;
@@ -241,7 +250,8 @@ export async function persistConversationResult({
     if (
       output.content.trim().length === 0 &&
       !output.reasoningContent?.trim() &&
-      !output.subagentTraces?.length
+      !output.subagentTraces?.length &&
+      !output.agentError
     ) {
       continue;
     }
@@ -257,6 +267,7 @@ export async function persistConversationResult({
       reasoningContent: output.reasoningContent,
       toolCalls: sanitizeToolCallsForPersistence(output.toolCalls),
       subagentTraces: output.subagentTraces,
+      agentError: output.agentError,
       type: output.type,
     });
 

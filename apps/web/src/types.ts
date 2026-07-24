@@ -71,7 +71,23 @@ export interface StreamEvent {
   todos?: Array<{ index: number; content: string; status: string }>;
   analysis?: RequestAnalysis;
   interrupt?: HumanInTheLoopInterrupt;
+  retryAction?: WorkflowRetryAction;
+  terminal?: boolean;
 }
+
+/**
+ * Executor 错误卡片携带的定点重试动作。
+ */
+export interface WorkflowRetryAction {
+  type: "resume_executor_task";
+  taskId: string;
+  agentType: string;
+}
+
+/**
+ * 浏览器提交给 API 的工作流重试命令。
+ */
+export type WorkflowRetryRequest = Omit<WorkflowRetryAction, "agentType">;
 
 /**
  * LangChain HITL 中的一项待人工处理动作。
@@ -344,6 +360,7 @@ export interface Message {
   agentError?: {
     agentType?: string;
     message: string;
+    retryAction?: WorkflowRetryAction;
   };
   todos?: TodoItem[];
   toolCalls?: Array<{
@@ -432,6 +449,7 @@ export interface PersistedMessageInfo {
   reasoningContent?: string;
   toolCalls?: ToolCallInfo[];
   subagentTraces?: SubagentTrace[];
+  agentError?: Message["agentError"];
   userInput?: Array<{ index: number; content: string; type: string }> | null;
   requestAnalysis?: RequestAnalysis | null;
   taskExecutionPlan?: TaskExecutionPlan | null;

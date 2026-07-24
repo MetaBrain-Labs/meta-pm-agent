@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ProductWorkflowResult } from "@repo/shared";
 import { collectWorkflowAnswerResolution } from "../src/repositories/request-form-repository";
+import { ChatRequestSchema } from "../src/schemas/request.schema";
 import { shouldPersistProductWorkflowConfirmation } from "../src/services/chat-service";
 
 test("persists final handling confirmation only for pending results without proposals", () => {
@@ -99,6 +100,42 @@ test("keeps exact question sources and only marks submitted fields answered", ()
       { answered: true, openQuestionId: "OQ-roles" },
       { answered: false, openQuestionId: "OQ-deployment" },
     ],
+  );
+});
+
+test("accepts executor retry separately from HITL resume", () => {
+  const baseRequest = {
+    chatId: "11111111-1111-4111-8111-111111111111",
+    requestFormId: "22222222-2222-4222-8222-222222222222",
+    messages: [
+      {
+        id: "message-1",
+        role: "user" as const,
+        content: "Build MVP",
+        timestamp: "2026-07-24T00:00:00.000Z",
+        sessionId: "test",
+      },
+    ],
+  };
+  const workflowRetry = {
+    type: "resume_executor_task" as const,
+    taskId: "task-06",
+  };
+
+  assert.equal(
+    ChatRequestSchema.safeParse({ ...baseRequest, workflowRetry }).success,
+    true,
+  );
+  assert.equal(
+    ChatRequestSchema.safeParse({
+      ...baseRequest,
+      workflowRetry,
+      hitlResume: {
+        threadId: "hitl-thread",
+        response: { decisions: [{ type: "approve" as const }] },
+      },
+    }).success,
+    false,
   );
 });
 

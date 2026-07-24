@@ -15,6 +15,7 @@ import assert from "node:assert/strict";
 import type { ChatMessage, ProductWorkflowResult } from "@repo/shared";
 import {
   createWorkflowContinuationResumeContextFromMessages,
+  createWorkflowExecutorRetryResumeContextFromMessages,
   createWorkflowResumeContextFromMessages,
 } from "../src/agents/conversation/workflow-resume";
 import { createProductWorkflowKnowledgeGraph } from "../src/agents/product-workflow/common/knowledge-graph";
@@ -323,6 +324,34 @@ test("does not restore interrupted workflow by matching latest user text", () =>
   });
 
   assert.equal(context, null);
+});
+
+test("restores an executor retry without replaying the latest form answer", () => {
+  const messages = createMessages(
+    "[form answers - product-workflow-confirmation-proposal-decision]\n- Market scope?: enterprise",
+  ).filter(
+    (item) =>
+      !item.content.includes("<executor-result>") ||
+      !item.content.includes('"task_id":"task-02"'),
+  );
+  messages.splice(
+    1,
+    0,
+    message(
+      "a0",
+      "assistant",
+      '<user-input>\n{"user_input":[{"index":1,"content":"Build MVP","type":"请求"}]}\n</user-input>',
+    ),
+  );
+
+  const context = createWorkflowExecutorRetryResumeContextFromMessages({
+    messages,
+    taskId: "task-02",
+  });
+
+  assert.deepEqual(context?.rerunTaskIds, ["task-02"]);
+  assert.equal(context?.executorResults?.length, 1);
+  assert.match(context?.userInputBlock ?? "", /Build MVP/);
 });
 
 function createMessages(latestAnswer: string): ChatMessage[] {

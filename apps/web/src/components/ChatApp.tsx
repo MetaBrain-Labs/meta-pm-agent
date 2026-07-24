@@ -45,7 +45,12 @@ import {
   SendOutlined,
   StopOutlined,
 } from "@ant-design/icons";
-import type { HumanInTheLoopResume, Message, TokenUsageInfo } from "../types";
+import type {
+  HumanInTheLoopResume,
+  Message,
+  TokenUsageInfo,
+  WorkflowRetryRequest,
+} from "../types";
 import {
   fetchProductKnowledgeGraph,
   type WorkspaceKnowledgeGraphData,
@@ -89,6 +94,7 @@ interface Props {
     options?: {
       webSearchEnabled?: boolean;
       hitlResume?: HumanInTheLoopResume;
+      workflowRetry?: WorkflowRetryRequest;
     },
   ) => void;
   onStop: () => void;
@@ -358,6 +364,19 @@ export function ChatApp({
       if (isLoading || disabledReason) return;
       const index = messages.findIndex((message) => message.id === messageId);
       if (index === -1) return;
+      const retryAction = messages[index]?.agentError?.retryAction;
+      if (retryAction) {
+        onSend("", {
+          webSearchEnabled,
+          workflowRetry: {
+            type: retryAction.type,
+            taskId: retryAction.taskId,
+          },
+        });
+        setUserScrolled(false);
+        setProcessUserScrolled(false);
+        return;
+      }
 
       for (let cursor = index - 1; cursor >= 0; cursor--) {
         const previous = messages[cursor];

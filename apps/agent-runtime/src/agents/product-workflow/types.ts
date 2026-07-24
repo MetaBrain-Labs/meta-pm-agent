@@ -37,6 +37,7 @@ export interface ProductWorkflowInput {
 }
 
 export interface WorkflowResumeContext {
+  userInputBlock?: string;
   requestAnalysis?: RequestAnalysis | null;
   orchestratorDecision?: OrchestratorAgentResult | null;
   plan?: TaskExecutionPlan | null;

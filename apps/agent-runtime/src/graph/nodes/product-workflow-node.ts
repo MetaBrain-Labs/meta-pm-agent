@@ -105,6 +105,8 @@ export async function orchestratorAgentNode(
   if (state.plan && arePlanTasksFinished(state)) {
     return executeCritiqueAgentReview(state, config);
   }
+  // 恢复运行时沿用已有 DAG；只有缺少计划时才重新调用 Orchestrator。
+  if (state.plan) return {};
   if (state.orchestratorDecision) {
     return { orchestratorDecision: state.orchestratorDecision };
   }

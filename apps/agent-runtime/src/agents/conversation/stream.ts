@@ -50,9 +50,13 @@ import {
 } from "../product-workflow/executor-agent/agent";
 import {
   createWorkflowContinuationResumeContextFromMessages,
+  createWorkflowExecutorRetryResumeContextFromMessages,
   createWorkflowResumeContextFromMessages,
 } from "./workflow-resume";
-import { streamWorkflowGraph } from "../../graph/workflow";
+import {
+  hasRetryableWorkflowTaskCheckpoint,
+  streamWorkflowGraph,
+} from "../../graph/workflow";
 import {
   createHumanInTheLoopThreadId,
   extractQuestionFormId,
@@ -249,6 +253,11 @@ export async function* streamConversation(
   const lastMessage = messages.at(-1);
   if (!lastMessage) {
     throw new Error("At least one chat message is required.");
+  }
+
+  if (options.workflowRetry) {
+    yield* streamWorkflowExecutorRetry(messages, options);
+    return;
   }
 
   // 处理表单答案
@@ -793,6 +802,12 @@ async function* streamPlanningAfterUserInput(
           `关键详情：${error.details}`,
         ].join("\n"),
         agentType: error.agentType,
+        retryAction: {
+          type: "resume_executor_task",
+          taskId: error.taskId,
+          agentType: error.agentType,
+        },
+        terminal: true,
       };
       return;
     }
@@ -828,8 +843,68 @@ async function* streamPlanningAfterUserInput(
       type: "error",
       error: getErrorMessage(error),
       agentType: "request",
+      terminal: true,
     };
   }
+}
+
+/**
+ * 从失败任务的 checkpoint 定点恢复；checkpoint 丢失时才使用消息中的已有 DAG 兜底。
+ */
+async function* streamWorkflowExecutorRetry(
+  messages: ChatMessage[],
+  options: ConversationStreamOptions,
+): AsyncGenerator<ConversationStreamEvent> {
+  const retry = options.workflowRetry;
+  if (!retry) return;
+
+  let canResumeCheckpoint = false;
+  if (options.workflowThreadId) {
+    try {
+      canResumeCheckpoint = await hasRetryableWorkflowTaskCheckpoint({
+        workflowThreadId: options.workflowThreadId,
+        taskId: retry.taskId,
+      });
+    } catch {
+      // checkpoint 查询失败时继续使用已持久化消息恢复，不要求用户重新填写表单。
+    }
+  }
+
+  if (canResumeCheckpoint) {
+    yield* streamPlanningAfterUserInput(
+      createEmptyUserInputBlock(),
+      options,
+      [],
+      { resumeFromCheckpoint: true },
+    );
+    return;
+  }
+
+  const resumeContext =
+    createWorkflowExecutorRetryResumeContextFromMessages({
+      messages,
+      knowledgeGraph: options.knowledgeGraph,
+      taskId: retry.taskId,
+    });
+  if (!resumeContext) {
+    yield {
+      type: "error",
+      error: `无法恢复 ${retry.taskId}：当前 checkpoint 与历史 DAG 中没有匹配的未完成任务。`,
+      agentType: "orchestrator",
+      terminal: true,
+    };
+    return;
+  }
+
+  yield* streamPlanningAfterUserInput(
+    resumeContext.userInputBlock ?? createEmptyUserInputBlock(),
+    options,
+    messages,
+    {
+      resumeContext,
+      suppressRestoredRequestAnalysis: true,
+    },
+  );
 }
 
 /**

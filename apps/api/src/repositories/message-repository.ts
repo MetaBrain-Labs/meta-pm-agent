@@ -21,6 +21,7 @@ import {
   type ProductWorkflowResult,
   type RequestAnalysis,
   type TaskExecutionPlan,
+  type WorkflowRetryAction,
 } from "@repo/shared";
 import {
   parseUserInputPayload,
@@ -62,6 +63,7 @@ export interface MessageDto {
   reasoningContent?: string;
   toolCalls?: ToolCallDto[];
   subagentTraces?: SubagentTraceDto[];
+  agentError?: AgentErrorDto;
   userInput?: UserInputRecord[] | null;
   requestAnalysis?: RequestAnalysis | null;
   taskExecutionPlan?: TaskExecutionPlan | null;
@@ -94,6 +96,15 @@ export interface SubagentTraceDto {
   thinking?: string;
   result?: unknown;
   status: "running" | "complete";
+}
+
+/**
+ * 持久化错误卡片及其可选定点重试动作。
+ */
+export interface AgentErrorDto {
+  agentType?: string;
+  message: string;
+  retryAction?: WorkflowRetryAction;
 }
 
 /**
@@ -235,6 +246,7 @@ function mapMessageRow(row: MessageRow): MessageDto {
   const subagentTraces = Array.isArray(meta?.subagentTraces)
     ? normalizeSubagentTraces(meta.subagentTraces)
     : [];
+  const agentError = normalizeAgentError(meta?.agentError);
   const timestamp =
     typeof meta?.timestamp === "string"
       ? meta.timestamp
@@ -253,6 +265,7 @@ function mapMessageRow(row: MessageRow): MessageDto {
       ? { toolCalls: [...metaToolCalls, ...extractedSearch.toolCalls] }
       : {}),
     ...(subagentTraces.length > 0 ? { subagentTraces } : {}),
+    ...(agentError ? { agentError } : {}),
     userInput: Array.isArray(userInput?.user_input)
       ? (userInput.user_input as UserInputRecord[])
       : inlineUserInput,
@@ -379,6 +392,7 @@ export async function persistAssistantMessage({
   reasoningContent,
   toolCalls,
   subagentTraces,
+  agentError,
   type,
 }: {
   conversationId: string;
@@ -387,6 +401,7 @@ export async function persistAssistantMessage({
   reasoningContent?: string;
   toolCalls?: ToolCallDto[];
   subagentTraces?: SubagentTraceDto[];
+  agentError?: AgentErrorDto;
   type: string;
 }): Promise<string> {
   const messageId = randomUUID();
@@ -399,6 +414,7 @@ export async function persistAssistantMessage({
       ...(subagentTraces && subagentTraces.length > 0
         ? { subagentTraces }
         : {}),
+      ...(agentError ? { agentError } : {}),
     });
 
     // 按 Agent 类型写入 message.type，前端据此恢复对应阶段的展示顺序。
@@ -514,6 +530,33 @@ function normalizeSubagentTraces(value: unknown[]): SubagentTraceDto[] {
       },
     ];
   });
+}
+
+/**
+ * 校验数据库 meta 中的错误卡片，避免将任意 JSON 直接暴露给前端。
+ */
+function normalizeAgentError(value: unknown): AgentErrorDto | undefined {
+  const error = parseRecord(value);
+  if (!error || typeof error.message !== "string") return undefined;
+  const retry = parseRecord(error.retryAction);
+  const retryAction =
+    retry?.type === "resume_executor_task" &&
+    typeof retry.taskId === "string" &&
+    typeof retry.agentType === "string"
+      ? {
+          type: "resume_executor_task" as const,
+          taskId: retry.taskId,
+          agentType: retry.agentType,
+        }
+      : undefined;
+
+  return {
+    ...(typeof error.agentType === "string"
+      ? { agentType: error.agentType }
+      : {}),
+    message: error.message,
+    ...(retryAction ? { retryAction } : {}),
+  };
 }
 
 /**
