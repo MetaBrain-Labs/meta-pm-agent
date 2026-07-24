@@ -1,8 +1,8 @@
 /**
  * Agent 运行汇总写入器测试
  *
- * 验证本地调试汇总在默认关闭时不会产生文件副作用，在开启后会按固定类别顺序
- * 写入 Markdown 文件，确保该能力可用于测试排查但不影响正常 Agent 流程。
+ * 验证本地调试日志在默认关闭时不会产生文件副作用，在开启后会按固定类别顺序
+ * 写入单份详细 Markdown 文件，确保该能力可用于测试排查但不影响正常 Agent 流程。
  *
  * Responsibilities:
  * - 覆盖未开启开关时的空实现行为
@@ -109,16 +109,41 @@ test("writes enabled summary sections as markdown after finish", async () => {
         recorder.recordToolCall({
           toolCallId: "call-1",
           toolName: "web_search",
-          toolArgs: { query: "test" },
+          toolArgs: { query: "test", apiKey: "must-not-leak" },
         });
         recorder.recordToolResult({
           toolCallId: "call-1",
           toolName: "web_search",
-          toolResult: { results: [] },
+          toolResult: JSON.stringify({
+            query: "test",
+            source: "test-index",
+            results: [
+              {
+                sourceId: "web-1",
+                title: "Evidence source",
+                url: "https://example.com/evidence",
+                snippet: "This full snippet should not be copied.",
+              },
+            ],
+          }),
         });
         recorder.recordOutput("streamed answer");
         await recorder.finish({
-          output: { done: true },
+          output: {
+            status: "completed",
+            validation_report: {
+              issues: [],
+              semantic_integrity: {
+                uncovered_user_input_indexes: [],
+              },
+            },
+            knowledge_graph_update: {
+              open_questions: [
+                { id: "OQ-001", text: "Choose scope?", blocking: true },
+                { id: "OQ-002", text: "Future option?", blocking: false },
+              ],
+            },
+          },
           status: "completed",
           tokenUsage: { totalTokens: 3 },
         });
@@ -127,9 +152,10 @@ test("writes enabled summary sections as markdown after finish", async () => {
         assert.equal(dateDirs.length, 1);
         const files = await readdir(path.join(outputDir, dateDirs[0]));
         assert.equal(files.length, 1);
-
+        const debugFile = files.find((file) => file.endsWith("-debug.md"));
+        assert.ok(debugFile);
         const markdown = await readFile(
-          path.join(outputDir, dateDirs[0], files[0]),
+          path.join(outputDir, dateDirs[0], debugFile),
           "utf8",
         );
         assert.match(markdown, /# Agent Run Summary/);
@@ -159,6 +185,9 @@ test("writes enabled summary sections as markdown after finish", async () => {
         assert.match(markdown, /reasoning chunk continued/);
         assert.match(markdown, /web_search/);
         assert.match(markdown, /streamed answer/);
+        assert.match(markdown, /OQ-001/);
+        assert.match(markdown, /OQ-002/);
+        assert.match(markdown, /"blocking": true/);
       },
     );
   } finally {
@@ -229,8 +258,10 @@ test("records subagent invocations when AGENT_SUMMARY_SUBAGENTS_ENABLED is on", 
 
         const dateDirs = await readdir(outputDir);
         const files = await readdir(path.join(outputDir, dateDirs[0]));
+        const debugFile = files.find((file) => file.endsWith("-debug.md"));
+        assert.ok(debugFile);
         const markdown = await readFile(
-          path.join(outputDir, dateDirs[0], files[0]),
+          path.join(outputDir, dateDirs[0], debugFile),
           "utf8",
         );
         assert.match(markdown, /## 5\. SubAgent 执行汇总/);
@@ -331,8 +362,10 @@ test("does not nest model supplied fenced output inside summary text block", asy
 
         const dateDirs = await readdir(outputDir);
         const files = await readdir(path.join(outputDir, dateDirs[0]));
+        const debugFile = files.find((file) => file.endsWith("-debug.md"));
+        assert.ok(debugFile);
         const markdown = await readFile(
-          path.join(outputDir, dateDirs[0], files[0]),
+          path.join(outputDir, dateDirs[0], debugFile),
           "utf8",
         );
 
@@ -395,13 +428,18 @@ test("extracts streamed raw task tool call arguments from additional kwargs", ()
  * 临时覆盖汇总环境变量，避免测试之间互相污染。
  */
 async function withSummaryEnv(
-  env: Record<(typeof SUMMARY_ENV_KEYS)[number], string>,
+  env: Partial<Record<(typeof SUMMARY_ENV_KEYS)[number], string>>,
   run: () => Promise<void>,
 ): Promise<void> {
   const previous = new Map<string, string | undefined>();
   for (const key of SUMMARY_ENV_KEYS) {
     previous.set(key, process.env[key]);
-    process.env[key] = env[key];
+    const value = env[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
   }
 
   try {

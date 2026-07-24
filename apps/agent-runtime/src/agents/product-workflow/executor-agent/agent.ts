@@ -39,6 +39,7 @@ import {
   getExecutorDefaultToolNames,
   getExecutorRetryToolNames,
 } from "../../common/tool-access";
+import { createWebSearchEvidenceRegistry } from "../../common/web-search-tool";
 import {
   createGraphContextSummary,
   createTaskRelevantGraphContext,
@@ -56,6 +57,7 @@ import { createExecutorAgentPrompt } from "./prompt";
  */
 const STRUCTURED_TOOL_NAMES = new Set([
   "kg_file_add_nodes",
+  "kg_file_deprecate_nodes",
   "kg_file_add_relations",
   "kg_file_add_decisions",
   "kg_file_add_risks",
@@ -100,6 +102,42 @@ export function isExecutorHumanInputRequiredError(
 }
 
 /**
+ * 表示 Executor 已完成一次本地修正，但仍存在只能由后续 Executor 重试解决的运行时错误。
+ */
+export class ExecutorRetryRequiredError extends Error {
+  readonly taskId: string;
+  readonly agentType: ExecutorAgentType;
+  readonly displayName: string;
+  readonly details: string;
+
+  /**
+   * 保留完整错误文本，由前端负责预览截断和详情展示。
+   */
+  constructor(input: {
+    taskId: string;
+    agentType: ExecutorAgentType;
+    displayName: string;
+    details: string;
+  }) {
+    super(input.details);
+    this.name = "ExecutorRetryRequiredError";
+    this.taskId = input.taskId;
+    this.agentType = input.agentType;
+    this.displayName = input.displayName;
+    this.details = input.details;
+  }
+}
+
+/**
+ * 判断异常是否应交由 Executor 重试，而不是请求用户补充信息。
+ */
+export function isExecutorRetryRequiredError(
+  error: unknown,
+): error is ExecutorRetryRequiredError {
+  return error instanceof ExecutorRetryRequiredError;
+}
+
+/**
  * Executor Agent：读取当前知识图谱结构化状态并产出本任务的图谱补丁。
  */
 export async function* streamExecutorAgent(
@@ -117,6 +155,7 @@ export async function* streamExecutorAgent(
   // 工具在本轮工作副本上写入，外层节点统一用 appendKnowledgeGraphPatch 合并一次。
   const baseKnowledgeGraph = cloneKnowledgeGraph(input.knowledgeGraph);
   const toolKnowledgeGraph = cloneKnowledgeGraph(input.knowledgeGraph);
+  const webSearchEvidenceRegistry = createWebSearchEvidenceRegistry();
   // 手动迭代生成器以在透传事件给上游的同时收集结构化数据。
   let patch = "";
   let retryInstruction = "";
@@ -136,14 +175,21 @@ export async function* streamExecutorAgent(
       const tools = createToolsForAgent(
         definition.agentType,
         attempt > 1
-          ? getExecutorRetryToolNames()
-          : getExecutorDefaultToolNames(definition.agentType),
+          ? getExecutorRetryToolNames(input.plan.status === "supplement")
+          : getExecutorDefaultToolNames(
+              definition.agentType,
+              input.plan.status === "supplement",
+            ),
         {
           knowledgeGraph: toolKnowledgeGraph,
           allowedEntityTypes: definition.allowedEntityTypes,
           allowedRelationTypes: definition.allowedRelationTypes,
           requiredBlockingOpenQuestionCount:
             input.task.required_open_question_count ?? 0,
+          allowNodeDeprecation: input.plan.status === "supplement",
+          sourceTaskId: input.task.task_id,
+          userInput: input.userInput,
+          webSearchEvidenceRegistry,
         },
       );
       const textGen = runAgent({
@@ -181,35 +227,54 @@ export async function* streamExecutorAgent(
         throwOnError: true,
       });
 
-      let genResult = await textGen.next();
-      while (!genResult.done) {
-        const event = genResult.value as AgentRunEvent<string>;
+      try {
+        let genResult = await textGen.next();
+        while (!genResult.done) {
+          const event = genResult.value as AgentRunEvent<string>;
 
-        yield event as ProductWorkflowStreamEvent;
-        if (
-          event.type === "tool-result" &&
-          event.toolName === BLOCKER_TOOL_NAME
-        ) {
-          throw createHumanInputRequiredError({
-            task: input.task,
-            agentType: definition.agentType,
-            displayName: definition.displayName,
-            toolResult: event.toolResult,
-          });
+          yield event as ProductWorkflowStreamEvent;
+          if (
+            event.type === "tool-result" &&
+            event.toolName === BLOCKER_TOOL_NAME
+          ) {
+            throw createHumanInputRequiredError({
+              task: input.task,
+              agentType: definition.agentType,
+              displayName: definition.displayName,
+              toolResult: event.toolResult,
+            });
+          }
+          if (
+            event.type === "tool-result" &&
+            STRUCTURED_TOOL_NAMES.has(event.toolName)
+          ) {
+            // 结构化写入工具完成后立即发出累计图谱快照，避免后续中断丢失已完成工具产物。
+            yield {
+              type: "knowledge-graph-update",
+              knowledgeGraph: cloneKnowledgeGraph(toolKnowledgeGraph),
+            };
+          }
+          genResult = await textGen.next();
         }
-        if (
-          event.type === "tool-result" &&
-          STRUCTURED_TOOL_NAMES.has(event.toolName)
-        ) {
-          // 结构化写入工具完成后立即发出累计图谱快照，避免后续中断丢失已完成工具产物。
+        patch = genResult.value;
+      } catch (error) {
+        if (isExecutorHumanInputRequiredError(error) || isAbortError(error)) {
+          throw error;
+        }
+        if (attempt === 1 && isNodeProvenanceValidationFailure(error)) {
+          retryInstruction = createNodeProvenanceRetryInstruction(
+            error,
+            webSearchEvidenceRegistry,
+          );
           yield {
-            type: "knowledge-graph-update",
-            knowledgeGraph: cloneKnowledgeGraph(toolKnowledgeGraph),
+            type: "reasoning",
+            agentType: definition.agentType,
+            content: `${definition.displayName} 的来源校验未通过，正在使用本轮真实来源原地修正一次。\n`,
           };
+          continue;
         }
-        genResult = await textGen.next();
+        throw error;
       }
-      patch = genResult.value;
 
       const attemptDelta = getKnowledgeGraphDelta(
         baseKnowledgeGraph,
@@ -256,18 +321,14 @@ export async function* streamExecutorAgent(
     if (isExecutorHumanInputRequiredError(error)) {
       throw error;
     }
-    if (isAbortError(error)) {
+    if (isAbortError(error) || isExecutorRetryRequiredError(error)) {
       throw error;
     }
-    throw new ExecutorHumanInputRequiredError({
+    throw new ExecutorRetryRequiredError({
       taskId: input.task.task_id,
       agentType: definition.agentType,
       displayName: definition.displayName,
-      category: "runtime_error",
-      title: "Executor runtime error",
-      details: compactErrorMessage(getErrorMessage(error)),
-      neededUserInput:
-        "请确认是否重试该 Executor，并补充任何可以帮助绕过当前程序错误或约束冲突的信息。",
+      details: getErrorMessage(error),
     });
   }
   const graphDelta = getKnowledgeGraphDelta(
@@ -420,6 +481,33 @@ function getErrorMessage(error: unknown): string {
 }
 
 /**
+ * 判断工具异常是否来自节点来源校验，避免把可自动修正的模型引用错误升级为 HITL。
+ */
+export function isNodeProvenanceValidationFailure(error: unknown): boolean {
+  return getErrorMessage(error).includes("Node provenance validation failed:");
+}
+
+/**
+ * 用本轮真实搜索来源构造唯一一次本地修正指令。
+ */
+export function createNodeProvenanceRetryInstruction(
+  error: unknown,
+  registry: ReturnType<typeof createWebSearchEvidenceRegistry>,
+): string {
+  const verifiedSources = [...registry.sources.values()].sort(
+    (left, right) =>
+      Number(left.sourceId) - Number(right.sourceId) ||
+      left.sourceId.localeCompare(right.sourceId),
+  );
+  return [
+    "The previous graph write failed node provenance validation. This is the only local correction attempt; do not repeat web research.",
+    `Validation error: ${getErrorMessage(error)}`,
+    `Verified web sources from this run: ${JSON.stringify(verifiedSources)}`,
+    "Rewrite invalid Evidence with an exact sourceId, title, and URL from this list. If no listed source supports a claim, omit that Evidence and record the uncertainty as a Risk or unverified assumption.",
+  ].join(" ");
+}
+
+/**
  * 保留用户主动停止的 AbortError 语义，避免被包装为 HITL。
  */
 function isAbortError(error: unknown): boolean {
@@ -496,11 +584,18 @@ function cloneKnowledgeGraph(
   knowledgeGraph: ProductKnowledgeGraph,
 ): ProductKnowledgeGraph {
   return {
-    entities: [...knowledgeGraph.entities],
+    ...knowledgeGraph,
+    entities: knowledgeGraph.entities.map((entity) => ({
+      ...entity,
+      provenance: entity.provenance?.map((source) => ({ ...source })),
+    })),
     relations: [...knowledgeGraph.relations],
     decisions: [...knowledgeGraph.decisions],
     risks: [...knowledgeGraph.risks],
     open_questions: [...knowledgeGraph.open_questions],
+    resolved_open_question_ids: [
+      ...(knowledgeGraph.resolved_open_question_ids ?? []),
+    ],
     summary: [...knowledgeGraph.summary],
     markdown: knowledgeGraph.markdown,
     notes: [...knowledgeGraph.notes],
@@ -523,13 +618,32 @@ function getKnowledgeGraphDelta(
   | "summary"
 > {
   return {
-    entities: current.entities.slice(base.entities.length),
+    entities: current.entities.filter((entity, index) => {
+      const original = base.entities[index];
+      return !original || !areEntitySnapshotsEqual(original, entity);
+    }),
     relations: current.relations.slice(base.relations.length),
     decisions: current.decisions.slice(base.decisions.length),
     risks: current.risks.slice(base.risks.length),
     open_questions: current.open_questions.slice(base.open_questions.length),
     summary: current.summary.slice(base.summary.length),
   };
+}
+
+/**
+ * 比较节点快照，确保受控废弃状态会作为 Executor 增量传播。
+ */
+function areEntitySnapshotsEqual(
+  left: ProductKnowledgeGraph["entities"][number],
+  right: ProductKnowledgeGraph["entities"][number],
+): boolean {
+  return (
+    left.id === right.id &&
+    left.status === right.status &&
+    left.deprecated_by_task_id === right.deprecated_by_task_id &&
+    left.deprecation_reason === right.deprecation_reason &&
+    left.replacement_node_id === right.replacement_node_id
+  );
 }
 
 /**

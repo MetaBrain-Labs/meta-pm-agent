@@ -45,6 +45,7 @@ import {
 } from "../product-workflow/agent";
 import {
   isExecutorHumanInputRequiredError,
+  isExecutorRetryRequiredError,
   type ExecutorHumanInputRequired,
 } from "../product-workflow/executor-agent/agent";
 import {
@@ -783,6 +784,18 @@ async function* streamPlanningAfterUserInput(
       }
     }
   } catch (error) {
+    if (isExecutorRetryRequiredError(error)) {
+      yield {
+        type: "error",
+        error: [
+          `来源：${error.displayName} / ${error.taskId}`,
+          "原因：requires_executor_retry（Executor 当前运行未能完成）",
+          `关键详情：${error.details}`,
+        ].join("\n"),
+        agentType: error.agentType,
+      };
+      return;
+    }
     if (isExecutorHumanInputRequiredError(error)) {
       const questionForm = formatExecutorHumanInputQuestionForm(
         error.interrupt,

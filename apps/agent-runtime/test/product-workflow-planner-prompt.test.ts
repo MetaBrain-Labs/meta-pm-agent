@@ -196,7 +196,7 @@ test("orchestrator planner subagent prompt satisfies json response format", () =
 test("critique agent prompt stays compact and does not request full graph copies", () => {
   assert.match(
     CRITIQUE_AGENT_PROMPT,
-    /The JSON object must include only: status, confirmation_id, request_summary, review, product_context_update, knowledge_graph_review, proposal_questions, confirmation_message/,
+    /The JSON object must include only: status, confirmation_id, request_summary, review, prior_issue_resolutions, product_context_update, knowledge_graph_review, proposal_questions, confirmation_message/,
   );
   assert.match(
     CRITIQUE_AGENT_PROMPT,

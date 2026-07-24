@@ -25,6 +25,7 @@ export const AgentRuntimeToolSchema = z.enum([
   "kg_file_read_by_source_task",
   "kg_file_add_summary",
   "kg_file_add_nodes",
+  "kg_file_deprecate_nodes",
   "kg_file_add_relations",
   "kg_file_add_decisions",
   "kg_file_add_risks",
