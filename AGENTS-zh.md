@@ -1,282 +1,184 @@
-﻿# AGENTS-zh.md
+# AGENTS-zh.md
 
-## 角色（Role）
+## 职责与目标
 
-作为 `meta-pm-agent` monorepo 中的务实软件工程 Agent 运行。
+作为 `meta-pm-agent` monorepo 的务实软件工程 Agent：修改前理解真实调用链，遵循现有模式，控制变更范围，并在环境允许时完成实现与适度验证。
 
-在进行任何修改前，需要先理解现有架构，遵循已有模式，并确保修改集中在目标范围内。
+## 行为原则
 
----
+- 不虚构缺失需求或架构。歧义会实质改变结果时先提问；无人值守时采用最安全、合理的解释并记录假设。
+- 选择最简单且正确的方案，优先复用已有代码、标准库和平台能力，避免预设抽象与依赖变更。
+- 不修改无关代码；发现邻近问题时说明，但未经要求不顺手修复。
+- 明示不确定性。若小型低风险实验可快速验证，则执行并报告假设与结果。
+- 若替代方案能明显避免严重风险或返工，先说明权衡；否则继续完成用户要求的合理方案。
 
-## 目标（Goal）
+## 仓库不变量
 
-交付正确、可维护的代码变更，使其能够与以下系统正确集成：
+- 使用 pnpm `11.3.0`；workspace 为 `apps/*`、`packages/*`。
+- Turbo 管理构建图；`pnpm build` 通过 `dependsOn: ["^build"]` 先构建依赖。
+- `@repo/shared`、`@repo/database` 从 `dist/` 导出。应用开发前先生成 Prisma Client 并构建共享包；不得提交 `dist/` 或 `tsconfig.tsbuildinfo`。
+- 根目录与 Node 包使用 TypeScript `6.0.3`，保留 `ignoreDeprecations: "6.0"`；`apps/web` 固定 TypeScript `5.8.3`，保留独立 `baseUrl`、paths 和 `noEmit`。
+- 保持 `packages/shared`、`packages/database`、`apps/agent-runtime` 的 project references 与 `composite: true`；保留 `packages/database/tsconfig.json` 的 `"types": ["node"]`。
+- `apps/web` 使用 React 19、Vite 6、Tailwind 4、Ant Design 6；保持 Ant Design 6 API 与导入方式。
+- Prisma 命令从 `packages/database` 执行：`pnpm db:generate`、`pnpm db:push`、`pnpm db:migrate`。
+- 从 `.env.example` 创建 `.env`。PostgreSQL 可用 `POSTGRES_*` 或 `DATABASE_URL`；配置 Redis、`OPENAI_API_KEY`、`LLM_MODEL`、`LLM_BASE_URL`。配置 `TAVILY_API_KEY` 时使用 Tavily，否则搜索降级到公开索引。
+- 保持 `/workplace`、`/chat/:workspaceId`、`/chat/:workspaceId/:threadId`、`/documents/:workspaceId` 路由。
+- 浏览器目录选择不保证提供绝对路径；保留可编辑路径和宿主环境 `file.path` 处理。
+- 除任务必要外，不改依赖版本、生成文件、无关模块或仓库级配置。
+- Web ESLint 可能因 Next 编译 parser 缺失失败；根 Turbo `lint`/`typecheck` 当前没有实质共享任务。必须如实说明验证边界。
 
-- pnpm workspace
-- Turbo 构建图
-- TypeScript 配置
-- 数据库持久化模型
-- SSE 通信协议
-- 应用边界结构
+## 应用边界
 
-在本地环境允许的情况下，尽可能完成实现与验证。
+```text
+apps/
+  agent-runtime/  LangGraph/DeepAgents 运行时与测试
+  api/            Hono API、SSE、持久化、后台文档任务
+  web/            Vite/React/Ant Design 前端
+  worker/         BullMQ/Redis worker 骨架
+packages/
+  shared/         Zod schema、DTO、事件和运行时契约
+  database/       Prisma client 与 schema
+references/       Executor profile、prompt 与 skill
+resources/        运行时产品上下文快照；不得提交生成 JSON
+```
 
----
+共享契约放在 `packages/shared`；数据库访问放在 `packages/database` 或 API repository；编排放在 `apps/agent-runtime`；HTTP 与持久化协调放在 `apps/api`；浏览器行为放在 `apps/web`。
 
-## Agent 行为原则（Agent Operating Principles）
+## LLM 语言规则
 
-### 1. 明确优先（Clarification First）
+所有面向模型的指令文本必须使用英文，包括 system/Agent prompt、路由/规划/执行指令、工具名称与描述、`parameters.description`、模型消费的 schema metadata。
 
-- 不得对缺失信息做任何假设（需求 / 架构 / 意图）。
-- 如果信息不清晰，必须先提问再实现。
-- 在无人值守（autonomous mode）时：
-  - 选择最合理解释
-  - 继续执行
-  - 明确记录所有假设，而不是阻塞流程
+用户界面和最终回复可本地化；内部注释可用中文，除非会拼接进 prompt。产品契约中的固定本地化字面量可保留，但其周围指令、工具/schema 描述和校验说明必须使用英文。违反本规则应视为 prompt 校验错误。
 
----
+## Web 结构
 
-### 2. 简洁优先（Simplicity Principle）
+- `apps/web/src/App.tsx` 只负责 Provider 和页面组合；顶层状态/导航放在 `hooks/useAppShell.ts`。不得把页面 JSX、API client 或 SSE reader 堆回 `App.tsx`。
+- 浏览器 API 放 `src/api/`，共享常量放 `src/constants/`，DTO 恢复放 `src/mappers/`，路由页放 `src/pages/`，路径/history 放 `src/router/`，复用 hook 放 `src/hooks/`，流、Markdown、表单工具放 `src/utils/`。
+- 通用组件放 `src/components/`，复用弹窗壳放 `src/components/modals/`，页面编排留在页面目录。
+- 助手 Markdown 统一由 `src/utils/markdown.tsx` 使用 `react-markdown` + `remark-gfm` 渲染；保留表格、链接、列表、代码、强调和引用，不得使用 `dangerouslySetInnerHTML`。
+- `KnowledgeGraphView.tsx` 是聊天弹窗和文档页共享的 G6 数据转换与生命周期实现；筛选、详情和操作由调用方负责。
 
-- 优先选择最简单且正确的解决方案。
-- 避免过度抽象与过早工程化。
-- 只有在确实需要时才增加扩展性。
+## Chat 与 Agent 契约
 
----
+### 运行拓扑
 
-### 3. 修改范围控制（Scope Protection）
-
-- 不得修改无关代码。
-- 如果发现代码异味或设计问题：
-  - 必须明确指出
-  - 不得自行修复（除非被要求）
-  - 可提出后续任务建议
-
----
-
-### 4. 不确定性处理（Uncertainty Handling）
-
-- 必须显式标注不确定性。
-- 若可通过安全的小实验降低不确定性：
-  - 执行局部、低风险实验
-  - 总结假设与结果
-  - 提交给用户确认
-
-- 不允许表现出“虚假的确定性”。
-
----
-
-### 5. 主动优化建议（Proactive Improvement Suggestions）
-
-- 在合适情况下主动提出更优方案。
-- 不仅限于当前任务，也应包含长期改进建议。
-
----
-
-### 5.1 替代方案规则（新增）
-
-- 如果发现明显更优方案，必须在实现前提出。
-- 用 2–4 个要点解释权衡（tradeoff）。
-- 如果当前方案仍然合理：
-  - 可以继续执行当前方案
-  - 除非替代方案可以避免严重风险、浪费或重大返工
-
----
-
-## 重要规则（Important Rules）
-
-- 使用 `pnpm v11.3.0`（由 packageManager 强制）。
-- monorepo 结构：
-  - `apps/*`
-  - `packages/*`
-
-- 使用 Turbo 进行构建编排：
-  - `pnpm build` 等价于 `turbo run build`
-
-- 构建依赖顺序：shared packages → apps
-- `dist/` 是构建产物，不可提交到 git
-- Node/Root 使用 TypeScript 6.0.3（保留 ignoreDeprecations="6.0"）
-- `apps/web` 使用 TypeScript 5.8.3（不可升级）
-- React + Vite + Ant Design 6（必须保持 API 兼容）
-- `packages/*` 使用 TypeScript project references（composite: true）
-- Prisma 必须在 `packages/database` 中执行
-- `.env` 包含数据库、Redis、LLM、Tavily 等配置
-- web_search 默认可用，但依赖配置
-- build 前必须先构建 shared packages
-- 不允许随意升级依赖版本
-- 保持路由拆分：`/workplace`、`/chat/:workspaceId`、`/chat/:workspaceId/:threadId`、`/documents/:workspaceId`
-
----
-
-## 系统边界（Boundaries）
-
-### 项目结构
-
-- `apps/agent-runtime`：LangGraph / DeepAgents 运行时
-- `apps/api`：Hono API + SSE
-- `apps/web`：React 前端
-- `apps/worker`：BullMQ worker
-- `packages/shared`：共享 schema / types
-- `packages/database`：Prisma client
-
----
-
-## Prompt 语言规则（严格）
-
-所有面向 LLM 的 prompt 内容必须使用英文，包括但不限于：
-
-- 工具定义中的 `name`、`description`、`parameters.description`
-- system prompts
-- Agent prompts
-- 用于路由、规划、执行的指令 prompt
-- 任何会被模型消费的 schema metadata 或字段说明
-
-例外：
-
-- 面向用户展示的 UI 文案、表单 label、表单选项、最终回复文本可以跟随用户语言。
-- 内部代码注释不受此规则影响，除非注释内容被拼接进 prompt。
-- 作为用户可见产品协议的一部分且必须本地化的固定输出字面量可以保留本地化文本，但其周围的指令说明、schema 描述、工具描述和校验规则必须使用英文。
-
-违反此规则应视为 Agent 构建或运行时 prompt 注入阶段的校验错误。
-
----
-
-## Web 结构规则（Frontend Architecture）
-
-### app 结构约束
-
-- `App.tsx` 仅作为应用入口（路由 + provider）
-- API 调用必须在 `src/api/`
-- UI 常量在 `src/constants/`
-- DTO 转换在 `src/mappers/`
-- 页面在 `src/pages/`
-- 路由工具在 `src/router/`
-- 通用工具在 `src/utils/`
-- 组件在 `src/components/`
-
----
-
-## Chat & Agent 协议
-
-- 保持 `/api/chat` SSE 流协议
-- 支持事件类型：
-  - start / agent-status / text / thinking / tool-call / tool-result / token-usage / finish 等
-
-- 必须保持 `agentType` 字段贯穿
-- `agent-status` 是前端 active Agent 状态的权威来源。`user-input-complete` 后必须把 `conversation` 从 `activeAgents` 中移除，避免后续 Request / Planner / Executor 运行时右上角仍显示已结束的 Conversation Agent。
-- Conversation / Request Agent 分离执行
-- Workflow 由 LangGraph 管理（禁止手动串联 agent）
-- Product workflow 顺序固定：
-
-  ```
-  parse_user_input → request_agent → planner → executor → planner → END
-  ```
-- 文档生成由 Document Agent 和独立的文档 LangGraph 负责，不得复用用户对话产出知识图谱的主 LangGraph。
-- 文档 LangGraph 目前的主状态机为：
+- Pre-Orchestrator 在产品主图外运行，由 Orchestrator 的 `pre-orchestrator` SubAgent 实现，在 Conversation Agent 路由前处理意图分类、澄清/冲突表单和中断恢复识别。
+- Conversation Agent 负责用户对话与结构化 `<user-input>`。发出 `user-input-complete` 后必须进入 `apps/agent-runtime/src/graph/workflow.ts`，不得从 Conversation Agent 手工串联后续 Agent。
+- 产品主图为：
 
   ```text
-  parseKg → normalizeGraph → buildSectionDossiers → draftSection → crossCheck → scoreDraft → aggregateScore → humanReview → exportPrd
+  parse_user_input
+    -> request_agent
+    -> orchestrator_agent
+    -> planner_agent（计划展示/恢复兼容节点）
+    -> executor_router
+    -> executor-*（依赖允许时并行）
+    -> executor_aggregator
+    -> executor_router
+    -> orchestrator_agent（Critique）
+    -> END
   ```
 
-- Document Agent 的实现与 prompt 放在 `apps/agent-runtime/src/agents/document-agent/`，文档工作流编排放在 `apps/agent-runtime/src/graph/document-workflow.ts`。
-- Document Agent 拥有多条按文档类型区分的工作流。PRD、MRD、BRD 应一一对应不同的文档生成工作流；当前前端只启用 PRD，MRD/BRD 按钮保持禁用直到后续接入。
-- Document Agent 必须使用 Deep Agents 内置 `write_todos` 展示 Task planning；重型临时任务可以通过内置 `task` 工具拆给临时子代理。DeepAgents 内部 helper 工具默认不得进入普通 SSE 和持久化。
-- PRD 质量门禁先由三个独立评分 Agent 按“中国高考语文作文阅卷模式”对同一份 PRD 草稿分别评分。若三次评分分差超过 `8` 分，则重新生成 PRD，再对下一版 PRD 评分。最多生成三轮；如果三轮分差都超过 `8` 分，则选择分差最小的一轮，再交给加权评分 Agent 选择最终产出。被暂时抛弃的 PRD 草稿和评分结果也必须持久化到评分历史中留作备用。可靠草稿还应满足加权质量阈值 `85/100`。
-- 文档生成任务启动后在 API 后台运行。用户离开页面不应中断任务；中断方式仅包括用户手动停止和服务端/运行时失败。
-- LangGraph typed state 中节点名不能与 state channel 重名；新增文档节点时需避免类似 `crossCheck` channel 与 `crossCheck` node 冲突。
-- Conversation Agent 产出 `user-input-complete` 后，后续 Request Agent、Planner、Executor 必须继续由 LangGraph 主图编排，不要在 Conversation Agent 中直接串联这些 Agent。
-- 用户主动中断和后续继续产品工作流必须基于 checkpoint。手动中断时，LangGraph 应在当前执行位置通过已配置的 `PostgresSaver` 保存 checkpoint；Conversation Agent 识别到继续中断工作流的意图后，应恢复该 checkpoint 继续执行，而不是通过正则匹配用户文本或把“继续”消息重新送入 Request Agent 分析。
-- Planner 使用 `apps/agent-runtime/src/agents/common/run-json-agent.ts`；Executor 使用 `apps/agent-runtime/src/agents/common/run-text-agent.ts`。
-- 产品工作流确认表单或 proposal 决策表单的回复属于工作流恢复，不是新的产品请求。必须通过 `apps/agent-runtime/src/agents/conversation/workflow-resume.ts` 恢复前一轮 Request Analysis、Planner DAG、Executor 结果和知识图谱，再交给 LangGraph 让 Planner 生成 `status: "supplement"` 的补充 DAG，只规划必要的图谱修正/补充。
-- `TaskExecutionPlan.status` 是工作流协议的一部分：首次根据 Request Agent 分析生成的 DAG 使用 `"initial"`，根据 Planner 问题表单或 proposal 确认回复生成的补充 DAG 使用 `"supplement"`。
-- Executor 必须通过授权的 `kg_file_*` 结构化工具维护当前工作流的 `ProductKnowledgeGraph`，不要把完整图谱作为最终 JSON 或 markdown 正文直接塞回 message。
-- Executor 的领域 skill 存放在 `references/executor/<executor-domain>/skills/<skill-name>/SKILL.md`。Executor definition 只声明需要的 skill 名称，运行时解析为目录并通过 DeepAgents 的 `skills` 参数传入 `run-text-agent.ts`；不要改成手工拼接 prompt，也不要把任意文件系统工具暴露给 Agent。
-- 硬性矛盾、程序错误或重试恢复时，已经完成的 Executor 结果必须保持已完成展示；恢复已有 plan 时要回放已完成的 Executor 输出，避免 DAG 节点退回等待状态。
-- 用户可见错误信息必须精简，只展示关键 blocker、受影响 Agent/task 和下一步动作；不要把 provider stack trace、大段 JSON 或重复重试细节输出到聊天界面。
-- 只允许显式授权、用户可见的工具进入 `tool-call` / `tool-result` SSE。DeepAgents 内置的任务/todo 工具、未授权文件读取等内部工具事件必须过滤，避免在前端出现长期加载卡片或内部文件错误。
+- Orchestrator 负责路由、上下文来源、生命周期、Planner SubAgent 委派和最终 Critique 调度。Planner SubAgent 在 Orchestrator 内生成 DAG；图中的 `planner_agent` 只展示/回放计划及恢复的 Executor 结果。所有 DAG 任务结束后由 `orchestrator_agent` 调用 Critique；Critique 不是独立图节点。
+- 新产品阶段应增加图节点/边，不得在单个 Agent 中临时串联。`product-workflow/agent.ts` 只保留格式化和导出。
+- DeepAgent 公共执行入口是 `agents/common/run-agent.ts`。Agent 模块传入 prompt、schema/resolver、工具、SubAgent、模型选项和确定性 fallback，不得另造 runner。
+- 稳定产品 Agent 类型包括 `orchestrator`、`planner`、`critique` 和十个 Executor；`agentType` 必须贯穿运行时事件、API 持久化和前端渲染。
 
----
+### 规划、执行与恢复
 
-## 产品知识图谱（Product Knowledge Graph）
+- `TaskExecutionPlan.status` 首轮为 `"initial"`，表单回答后的修正/补充轮为 `"supplement"`。
+- 十个 Executor 领域为产品策略、市场研究、GTM、产品发现、产品执行、营销增长、数据分析、AI Shipping、工具箱和界面设计。定义位于 `executor-agent/definitions.ts`；领域 skill 位于 `references/executor/<domain>/skills/<skill>/SKILL.md`，通过 DeepAgents `skills` 传入。
+- Executor 使用图谱工作副本，通过受控 `kg_file_*` 工具写入并返回结构化结果；结果只经 LangGraph state 合并一次，不得重复工具副作用。
+- 重试/恢复时保持已完成 Executor 结果。重跑任务必须同时使其下游依赖失效，不受影响的结果继续显示完成。
+- 手动停止与继续必须基于 checkpoint。使用稳定线程 `workflow:{conversationId}:{requestFormId}`；配置可用时使用 `PostgresSaver`，仅在持久存储不可用时降级 `MemorySaver`。
+- 确认/proposal 表单回答必须通过 `conversation/workflow-resume.ts` 恢复 Request 分析、Orchestrator 决策、DAG、Executor 结果、Critique 问题和图谱；它不是新请求，Planner SubAgent 只生成必要的 supplement DAG。
+- 合并重复用户问题时，保留全部来源 task、Agent 和 OpenQuestion ID；一次回答可关闭所有引用来源。
+- 用户可见错误只说明 blocker、受影响 Agent/task 和下一步；不得输出 provider stack、大段 JSON 或重复重试细节。
 
-- 运行时知识图谱是工作流内共享的结构化 `ProductKnowledgeGraph` 对象，不再依赖工作区 markdown 文件作为主状态。
-- Executor Agent 和 Planner Agent 只能通过 `apps/agent-runtime/src/agents/common/knowledge-graph-file-tool.ts` 中的受控结构化工具读写当前图谱，不得直接接入任意文件系统工具。
-- 单个 Executor 执行工具时应使用当前图谱的工作副本；Executor 结束后，由 LangGraph 状态通过一次结构化 merge 写回累计图谱，避免节点、关系、决策、风险、开放问题和摘要被重复追加。
-- 每个 Executor 完成后，API 必须将累计图谱快照写入 `product_knowledge_graph` 表；这样即使流程中断，已完成 Executor 的图谱结果也不会丢失。中间快照不得递增 `version`，完整流程结束或手动中断收口时才将本轮 `version` 最多递增一次。
-- 产品工作流结束后，最终归档优先使用运行时累计图谱快照，而不是 Planner Review 模型输出的 `knowledge_graph_update`，因为模型汇总可能省略字段或只包含局部结果。
-- `product_knowledge_graph` 以 `workspace_id` 唯一约束保证一个工作区只有一份当前图谱，并保留可选 `conversation_id`、`request_form_id` 来源信息。
-- `product_knowledge_graph` 数据库层只应保存结构化 `nodes` 和 `relations`。运行时 `ProductKnowledgeGraph` 可以继续携带 summary、decisions、risks、open_questions 供规划和表单交互使用，但数据库交互层不要读写 `summary`、`decisions`、`risks`、`open_questions` 字段。
-- Executor 的 `knowledge_graph_patch`、完整 `knowledge_graph_markdown` 和大块知识图谱工具结果不要写入 `message` 或 `request_form_item.payload`；这些重内容只应进入 `product_knowledge_graph`，message 中只保留轻量摘要。
-- 补充 DAG 完成后，必须把最终累计图谱归档到 `product_knowledge_graph`，并把本轮 request_form 更新为完成状态；恢复历史聊天时应显示本轮已正式结束，而不是重新进入 Request Agent 分析。
+### 知识图谱与工具
 
----
+- 运行时状态是结构化 `ProductKnowledgeGraph`。Executor 只能创建其 definition 授权的实体/关系类型，并保留 task/source provenance。
+- 受控工具实现在 `common/knowledge-graph-file-tool.ts`；历史文件名不代表文件访问，这些工具只修改当前内存图谱。
+- 工具授权集中在 `common/tool-access.ts`。Conversation 可获得用户启用的 `web_search`；Executor 的图谱工具由 runtime 注入。市场研究、GTM、营销增长、数据分析、AI Shipping、工具箱、界面设计 Executor 还会获得 runtime 管理的 `web_search`。
+- Planner SubAgent 只接收精简图谱上下文，不获得任意图谱/文件工具。Harness profile 与 allowlist middleware 必须继续排除 DeepAgents 默认文件系统工具。
+- Document Agent 是允许使用内置 `write_todos`、`task` 的明确例外；其他 DeepAgents 内部 helper 不得进入普通 SSE 或持久化。
+- 外部搜索失败返回 `{ results: [], error }`，不能抛错中止 SSE。搜索生成的 Evidence 必须引用已验证结果，用户输入和既有图谱来源必须可追溯。
+- 授权的 `tool-call`/`tool-result` 必须保留 `agentType`；内部 helper、非授权读取、图谱 patch 和完整图谱 payload 不得进入用户 SSE 或 message 持久化。
 
-## 持久化规则（Persistence）
+### SSE 与停止
 
-- 聊天、workspace、message 使用 Prisma 持久化
-- 文档生成 run/artifact 表目前通过 `packages/database/sql/document-generation.sql` 手动建表；使用 PRD 生成功能前必须先执行该 SQL，不要假设 Prisma migration 已自动创建。
-- 文档生成 run 行必须持久化 `task_planning`、`reasoning_log` 和 `scoring_attempts`，以便策划产出文档页面在任务运行中和完成后展示 Task planning、思考过程、评分状态和被抛弃候选 PRD。
-- conversation / request message 分类型存储
-- reasoning 必须存入 meta.reasoningContent
-- 产品工作流的完整 tagged payload 不应长期保存在 `message.content`；结构化结果落到对应业务表后，message 中保留短摘要即可。
-- `message.meta.toolCalls` 中的知识图谱工具结果必须裁剪为可展示摘要，避免重复保存完整图谱。
-- request_form 必须跟踪状态流转
-- proposal 问题展示可以合并重复或近似重复问题，但必须在 `sources` 中保留所有来源信息；用户一次确认可以关闭所有关联 proposal，不能因为合并或数量上限丢失来源。
-- 修改持久化协议时，必须同步更新 API schema、repository、service、controller、前端 type、历史消息恢复和渲染逻辑。
-- PRD 生成完成后必须把 markdown 和结构化内容写入文档产物表，并关联 workspace 与 document generation run。完整生成文档不要写入聊天 message 历史。
+- 保持 `POST /api/chat` 为 `text/event-stream`：先发送 `start`，随后发送 `agent-status`、`text`、`thinking`、问题/用户输入/Request 分析/workflow resume 生命周期、`human-interrupt`、SubAgent、工具、token、`conversation-title`、`abort`、`error` 等事件，最后发送 `data: [DONE]`。
+- runtime 的 `reasoning` 在 API 层映射为 `thinking`；转发时保留 `agentType`、`parallelAgents`、tool call ID 和 SubAgent 标识。
+- `agent-status` 是 active Agent 权威来源；`user-input-complete` 后先移除 `conversation`，再展示后续 Agent。
+- 前端停止必须先调用 `/api/chat/stop`，再 abort 浏览器 fetch，确保服务端把 `AbortSignal` 传给模型请求。
 
----
+## 文档与 HITL 工作流
 
-## 前端展示规则（Frontend Display Rules）
+- Document Agent 及其 LangGraph 与聊天/产品图独立。实现与 prompt 位于 `agents/document-agent/`，编排位于 `graph/document-workflow.ts`。
+- 当前 PRD 流程：
 
-- reasoning 显示在对应 agent 阶段附近
-- tool-call 使用 `ToolCallsCard` 折叠卡片展示，并且必须按 `agentType` 放在对应 Agent 阶段附近
-- 不要把所有 Executor 的工具调用合并为一个总卡片；每个 Executor Agent 应在自己的推理/进度区域下方显示自己的知识图谱工具卡片
-- `web_search` 属于 Conversation Agent；知识图谱文件工具属于 Planner 和十个 Executor Agent
-- Executor 输出通过 DAG 展示
-- supplement 恢复或错误重试时，已完成 Executor 节点必须继续显示完成，只让新增、失败或未完成的补充任务进入运行态。
-- Planner Agent Review 的加载/完成卡片应展示在 Executor Agent 区域之后，而不是直接放在 Planner DAG 卡片下面。
-- 产品工作流最终确认或补充 DAG 完成后，前端应输出完成状态卡片，告知用户本轮流程正式结束，可以查看完整知识图谱。
-- 右上角运行状态在并行 Executor 场景下可以同时展示多个 Agent；每个 Agent 标签都必须能跳转到对应的推理或加载卡片。聊天区位于底部时，跳转前应先退出自动贴底状态，避免滚动被自动贴底逻辑抵消。
-- 每个 Executor 结果到达前端后，应重新查询当前工作区知识图谱，让“查看知识图谱”按钮在单个 Executor 完成后即可变为可用。
-- 知识图谱弹窗必须稳健管理 G6 实例生命周期：Modal 容器尺寸为 0 时重试初始化；关闭后再次打开不得永久停留在“正在渲染知识图谱”；节点和边较多时应减少冗余标签以保持布局可读。
-- 策划产出文档页面只在进入 `/documents/:workspaceId` 时加载知识图谱和文档任务数据；进入工作区或聊天页不应触发文档页加载。页面加载期间必须有明确 loading 动画。
-- 策划产出文档页面的嵌入式 AntV G6 图谱效果应与“查看知识图谱”Modal 保持一致，以 `KnowledgeGraphModal` 的节点、Combo、边、tooltip、minimap、密集图和生命周期处理为准。
-- 在策划产出文档页面点击图谱节点时，右侧节点详情框必须显示对应节点信息。
-- PRD 产物存在时，页面必须提供“查看完整 MD”和“下载 MD”操作。策划产出文档页面不要直接内嵌展示 PRD 正文；页面展示状态、思考过程、Task planning 和评分结果，完整 markdown 只通过 Modal 和下载入口提供。
-- UI 默认使用 Tailwind
-- 禁止新增全局 CSS
+  ```text
+  parseKg -> normalizeGraph -> buildSectionDossiers -> draftSection
+    -> crossCheck -> scoreDraft -> rejectScore|aggregateScore
+    -> draftSection|humanReview -> exportPrd
+  ```
 
----
+- 当前只启用 PRD；MRD/BRD 在拥有独立工作流前保持禁用。
+- 每版草稿由三个独立评分 Agent 评分：分差大于 `8` 则拒绝，可靠草稿还需达到 `85/100`；最多三版。必须保留所有草稿与评分历史，重试耗尽后沿用现有“最小分差/加权”选择逻辑。
+- `humanReview` 当前自动通过；未真正接入 `interrupt()` 前不得宣称等待人工审核。
+- 文档任务在 API 后台运行，页面跳转不得取消；只有停止接口或服务端/运行时失败可中断。
+- `human-in-the-loop.ts` 的独立轻量 HITL 图只负责 Question Form 的 `interrupt()`/resume，不属于产品图或文档图。
 
-## 代码注释规则（Code Comment Rules）
+## 持久化
 
-- 后端 & 前端核心逻辑必须加注释
-- 使用中文注释
-- JSDoc 用于 public API / service / agent / workflow
-- 注释强调业务意图，不解释语法
+- Prisma/PostgreSQL 是用户、工作区、会话、消息、请求表单/条目、任务/执行、token 用量和当前工作区图谱的权威来源。
+- 部分 repository 使用 Prisma schema 未建模的 raw SQL 表，包括 `token_usage`、文档 run/artifact 和可选 `product_context_snapshot`。使用相关功能前必须确认表已创建，不能假设 `db:push` 会创建。
+- Agent 执行前先保存用户消息。Conversation 输出使用 `message.type = "conversation"`，Request 输出使用 `"request"`；reasoning 存 `message.meta.reasoningContent`，结构化用户输入存 `message.user_input`，Request 分析写入 message/request-form。
+- 禁止用浏览器 `localStorage` 保存聊天历史；历史从 API 恢复。localStorage 仅用于非权威 UI 偏好。
+- 每个 workspace 只保留一行 `product_knowledge_graph`，可记录 conversation/request-form 来源。数据库图谱事实只保存结构化 `nodes`、`relations`；decision、risk、open question 规范化成 node。运行时 summary/生命周期放 resources 快照和可选 context-snapshot 表，不得新增旧式图谱列。
+- 每个 Executor 完成后归档累计图谱但不增加 `version`；正常完成或手动停止时本轮最多递增一次。最终归档优先使用最新 runtime 快照，不使用 Critique 文案或模型摘要覆盖。
+- `resources/product-contexts/` 下生成的 JSON 是运行时状态，不得提交，也不得作为 Agent 文件系统工具暴露。
+- Executor patch、完整图谱 Markdown、大型工具结果和完整 workflow block 不得进入 message/request-form；其中只保留展示元数据，重数据进入图谱存储。
+- 文档 run 保存 Task planning、reasoning、评分、错误和状态；artifact 单独保存完整 Markdown/结构化内容，不写入聊天历史。
+- 保持 request-form 状态：`received`、`conversation_consumed`、`request_agent_running`、`request_analyzed`、`workflow_running`、`pending_user_confirmation`、`completed`、`stopped`、`failed`。表单决策必须完成所有被引用 proposal 条目并保存答案 metadata。
+- 修改持久化契约时，必须同步 shared schema/type、API repository/service/controller、前端类型、恢复和渲染。
 
----
+## 前端展示
 
-## 工作流（Workflow）
+- 保持阶段顺序：Conversation reasoning/工具、可见文本/表单、用户输入整理、Request reasoning/工具、Request 分析、Orchestrator/Planner DAG、各 Executor reasoning/工具/结果、Critique，最后确认或完成；Executor 提交后显示图谱已更新状态。
+- reasoning 和工具卡必须靠近所属 Agent。Orchestrator/Planner/Executor/Critique 进度通过 Planner DAG 区域展示；每个 Executor 保留独立折叠 `ToolCallsCard`。
+- 恢复 supplement DAG 时保持已完成节点，仅让新增、失败或失效任务进入运行态。
+- 右上角可同时显示并行 Executor；每个标签必须跳到可见 reasoning/loading 位置，跳转前关闭自动贴底。
+- 每个 Executor 结果到达后刷新图谱可用性，不等待整轮结束。
+- `UserInputCard`、`RequestAnalysisCard`、工具详情默认折叠。
+- 图谱弹窗需正确处理零尺寸初始化与关闭后重开；弹窗和文档页都复用 `KnowledgeGraphView`，包括密集图标签降噪。
+- 仅进入 `/documents/:workspaceId` 时加载图谱/文档数据；展示 loading，节点点击更新右侧详情，完整 PRD 只通过弹窗/下载提供，不内嵌正文。
+- 新样式优先 Tailwind。除非任务明确要求，不新增 CSS/SCSS/Less/CSS Module、全局规则或内联 `<style>`。
 
-1. 阅读相关代码与配置
-2. 保持未修改部分不变
-3. 找最小修改集
-4. 先更新 schema 再更新 consumer
-5. 优先 build shared packages
-6. 先做最小验证，再扩展验证范围
-7. 注意已知 TS 报错
-8. review diff 避免污染
+## 文件与代码注释
 
----
+每个 `.ts`、`.tsx` 文件必须以 JSDoc 文件头开头并说明职责与边界。生成的函数、业务类型、类、service、repository、controller、hook、Agent、图节点和工作流步骤使用简体中文 JSDoc；关键分支和状态转换使用简短中文注释。注释解释业务意图，不解释语法；面向模型的 prompt 内不得出现中文说明。
 
-## 输出要求（Output）
+```ts
+/**
+ * <模块名称 / 文件职责简述>
+ *
+ * <详细职责说明>
+ *
+ * Responsibilities:
+ * - <职责>
+ *
+ * Notes:
+ * - <边界说明>
+ */
+```
 
-必须包含：
+## 工作与交付
 
-- 修改摘要
-- 执行的验证命令及结果
-- 未执行测试及原因
-- 风险与假设
-- 变更文件列表
+1. 阅读相关源码、配置、脚本以及被修改代码的全部调用方。
+2. 检查工作树并保留用户的无关改动。
+3. 选择最小完整修改集；先更新共享契约，再更新消费者。
+4. 先运行最小有效检查，再按风险扩大；应用验证前先构建共享包。
+5. 审查 diff，排除误改、secret、生成物、依赖漂移、prompt 语言和契约回归。
+
+交付时简要说明：修改及原因、验证命令与结果、未运行检查及 blocker、剩余假设/风险/环境步骤、变更文件链接。

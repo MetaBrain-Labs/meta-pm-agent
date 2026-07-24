@@ -1,27 +1,21 @@
-# meta-pm-agent Project Structure
+# meta-pm-agent Structure
 
 ## Overview
 
-`meta-pm-agent` is a pnpm + Turborepo monorepo for an AI-assisted product-management workspace. It contains a LangGraph/DeepAgents runtime, a Hono API with SSE streaming, abortable model execution and PostgreSQL persistence, a Vite + React + Ant Design frontend, a BullMQ worker scaffold, and shared TypeScript/database packages.
+`meta-pm-agent` is a pnpm/Turborepo monorepo for an AI-assisted product-management workspace. It combines a LangGraph/DeepAgents runtime, a Hono API with SSE and PostgreSQL persistence, a Vite/React frontend, and a BullMQ worker scaffold.
 
-## Tech Stack
-
-| Layer | Technology | Notes |
+| Layer | Main technology | Responsibility |
 | --- | --- | --- |
-| Agent runtime | LangGraph, LangChain, DeepAgents | Conversation Agent, Request Agent, JSON Planner Agent, 10 markdown knowledge-graph Executor Agents, and Document Agent |
-| API | Hono | HTTP API on port 3001, SSE `/api/chat` stream, `/api/chat/stop`, document-generation endpoints, Prisma repositories |
-| Web | Vite, React, Ant Design 6 | Workspace, chat, knowledge-graph, and document-planning UI, TypeScript 5.8.3 |
-| Web search | LangChain tool + Tavily/free public indexes | Optional `web_search` runtime tool, centrally authorized per Agent |
-| Worker | BullMQ, Redis | Background queue worker scaffold |
-| Database | PostgreSQL, Prisma | Account, workspace, conversation, message, request-form, task, product knowledge graph data |
-| Build | Turborepo | Workspace task graph |
-| Package manager | pnpm 11.3.0 | Enforced by root `packageManager` |
+| Agent runtime | LangGraph, LangChain, DeepAgents | Conversation, Request, Orchestrator, Planner SubAgent, ten Executors, Critique, Document Agent |
+| API | Hono (port 3001) | HTTP/SSE, abort propagation, persistence, background document runs |
+| Web | React 19, Vite 6 (port 3000), Ant Design 6, Tailwind 4, G6 | Workspace, chat, workflow, graph, and document UI |
+| Database | PostgreSQL, Prisma, raw SQL repositories | Durable application, graph, token, and document data |
+| Worker | BullMQ, Redis | Queue-worker scaffold |
+| Build | pnpm 11.3.0, Turbo, TypeScript | Node packages use TS 6.0.3; web uses TS 5.8.3 |
 
-## Prompt Language Rule
+All LLM-facing instructions, tool descriptions, and schema descriptions are English. User-facing UI may be localized.
 
-All LLM-facing prompt instruction prose must be English. This includes system prompts, Agent prompts, routing/planning/execution instructions, model-facing tool descriptions, and schema metadata consumed by the model. User-facing UI copy, form labels, form options, and final assistant prose may follow the user's language.
-
-## Directory Layout
+## Repository Layout
 
 ```text
 meta-pm-agent/
@@ -30,32 +24,35 @@ meta-pm-agent/
 │  │  ├─ src/
 │  │  │  ├─ agents/
 │  │  │  │  ├─ common/
+│  │  │  │  │  ├─ run-agent.ts
+│  │  │  │  │  ├─ tool-access.ts
+│  │  │  │  │  ├─ knowledge-graph-file-tool.ts
+│  │  │  │  │  ├─ web-search-tool.ts
+│  │  │  │  │  └─ middleware and run-summary helpers
 │  │  │  │  ├─ conversation/
+│  │  │  │  ├─ request/
 │  │  │  │  ├─ document-agent/
-│  │  │  │  ├─ product-workflow/
-│  │  │  │  │  ├─ common/
-│  │  │  │  │  ├─ executor-agent/
-│  │  │  │  │  │  ├─ agent.ts
-│  │  │  │  │  │  ├─ definitions.ts
-│  │  │  │  │  │  └─ prompt.ts
-│  │  │  │  │  ├─ planner-agent/
-│  │  │  │  │  │  ├─ agent.ts
-│  │  │  │  │  │  └─ prompt.ts
-│  │  │  │  │  ├─ agent.ts
-│  │  │  │  │  └─ types.ts
-│  │  │  │  └─ request/
+│  │  │  │  └─ product-workflow/
+│  │  │  │     ├─ common/
+│  │  │  │     ├─ orchestrator-agent/
+│  │  │  │     │  ├─ pre-orchestrator-subagent/
+│  │  │  │     │  └─ planner-subagent/
+│  │  │  │     ├─ executor-agent/
+│  │  │  │     └─ critique-agent/
 │  │  │  ├─ graph/
+│  │  │  │  ├─ workflow.ts
+│  │  │  │  ├─ state.ts
+│  │  │  │  ├─ workflow-checkpointer.ts
+│  │  │  │  ├─ human-in-the-loop.ts
 │  │  │  │  ├─ document-workflow.ts
 │  │  │  │  ├─ document-workflow-state.ts
-│  │  │  │  ├─ nodes/
-│  │  │  │  └─ workflow-checkpointer.ts
-│  │  │  ├─ utils/
+│  │  │  │  └─ nodes/
 │  │  │  ├─ assets/
+│  │  │  ├─ utils/
 │  │  │  ├─ config.ts
 │  │  │  ├─ index.ts
 │  │  │  └─ types.ts
-│  │  ├─ docs/
-│  │  └─ package.json
+│  │  └─ test/
 │  ├─ api/
 │  │  ├─ src/
 │  │  │  ├─ controllers/
@@ -66,114 +63,59 @@ meta-pm-agent/
 │  │  │  ├─ app.ts
 │  │  │  ├─ env.ts
 │  │  │  └─ index.ts
-│  │  └─ package.json
+│  │  └─ test/
 │  ├─ web/
 │  │  ├─ src/
 │  │  │  ├─ api/
-│  │  │  │  ├─ chat-api.ts
-│  │  │  │  └─ document-api.ts
 │  │  │  ├─ components/
-│  │  │  │  ├─ chat/
-│  │  │  │  ├─ ui/
+│  │  │  │  ├─ modals/
 │  │  │  │  ├─ ChatApp.tsx
-│  │  │  │  ├─ MessageBubble.tsx
-│  │  │  │  ├─ ProseBlock.tsx
-│  │  │  │  ├─ QuestionForm.tsx
-│  │  │  │  ├─ RequestAnalysisCard.tsx
-│  │  │  │  ├─ Sidebar.tsx
-│  │  │  │  ├─ TodoCard.tsx
-│  │  │  │  ├─ ToolCallsCard.tsx
-│  │  │  │  └─ UserInputCard.tsx
+│  │  │  │  ├─ KnowledgeGraphView.tsx
+│  │  │  │  └─ PlannerExecutionCard.tsx
 │  │  │  ├─ constants/
-│  │  │  │  └─ app.ts
 │  │  │  ├─ hooks/
 │  │  │  ├─ mappers/
-│  │  │  │  └─ persisted-message.ts
+│  │  │  ├─ pages/
+│  │  │  │  ├─ chat/
+│  │  │  │  ├─ documents/
+│  │  │  │  └─ workplace/
 │  │  │  ├─ router/
-│  │  │  │  └─ app-route.ts
+│  │  │  ├─ theme/
 │  │  │  ├─ utils/
-│  │  │  │  ├─ apply-stream-event.ts
-│  │  │  │  ├─ markdown.tsx
-│  │  │  │  ├─ question-form.ts
-│  │  │  │  └─ user-input.ts
-│  │  │  ├─ pages/chat/chat-run-store.ts
-│  │  │  ├─ pages/documents/
 │  │  │  ├─ App.tsx
 │  │  │  ├─ main.tsx
-│  │  │  ├─ styles.css
 │  │  │  └─ types.ts
-│  │  ├─ package.json
-│  │  └─ vite.config.ts
+│  │  └─ package.json
 │  └─ worker/
 │     └─ src/index.ts
 ├─ packages/
-│  ├─ database/
-│  │  ├─ prisma/schema.prisma
-│  │  ├─ sql/
-│  │  └─ src/
-│  └─ shared/
-│     ├─ src/
-│     │  ├─ agent/
-│     │  └─ question-form.ts
+│  ├─ shared/
+│  │  └─ src/{agent,dto,events,schemas}/
+│  └─ database/
+│     ├─ prisma/schema.prisma
+│     ├─ scripts/with-database-url.mjs
+│     └─ src/
 ├─ references/
+│  └─ executor/<executor-domain>/{executor.json,prompts,skills}/
+├─ resources/
+│  └─ product-contexts/
 ├─ AGENTS.md
 ├─ AGENTS-zh.md
+├─ langgraph.json
+├─ langgraph.md
 ├─ package.json
 ├─ pnpm-workspace.yaml
 ├─ tsconfig.base.json
 └─ turbo.json
 ```
 
-Generated `dist/` directories are intentionally omitted and must not be committed.
+Generated `dist/`, `.turbo`, `tsconfig.tsbuildinfo`, runtime product-context JSON, and Agent summary output are omitted and must not be committed.
 
-Current product-workflow additions:
-
-| Path | Purpose |
-| --- | --- |
-| `apps/agent-runtime/src/agents/common/knowledge-graph-file-tool.ts` | Controlled DeepAgents knowledge-graph tools bound to the current in-memory workflow graph |
-| `apps/agent-runtime/src/agents/document-agent/` | Document Agent implementation and English prompt for PRD generation, Task planning, and DeepAgents subtask delegation |
-| `apps/agent-runtime/src/graph/document-workflow.ts` | Independent document-generation LangGraph separate from the chat/product-workflow graph |
-| `apps/agent-runtime/src/graph/document-workflow-state.ts` | Typed state/channels for document-generation graph execution |
-| `apps/agent-runtime/src/agents/common/run-text-agent.ts` | Shared text/markdown DeepAgent runner used by Executor Agents |
-| `apps/agent-runtime/src/graph/workflow-checkpointer.ts` | Optional LangGraph checkpoint saver factory using PostgresSaver when configured, with an in-memory fallback |
-| `apps/agent-runtime/docs/langgraph-postgres-checkpoint.sql` | PostgreSQL DDL for the LangGraph checkpoint tables |
-| `apps/agent-runtime/src/assets/deepseek-v3-tokenizer/` | DeepSeek V3 tokenizer assets used for local token usage estimation |
-| `apps/agent-runtime/src/agents/product-workflow/executor-agent/*-executor/` | Ten independent Executor Agent profile folders, one per executor domain |
-| `packages/shared/src/question-form.ts` | Shared Question Form field-type inference helpers for radio/select/checkbox/textarea display |
-| `packages/shared/src/agent/document.ts` | Shared document generation schemas and TypeScript types |
-| `packages/database/sql/document-generation.sql` | Manual PostgreSQL DDL for document-generation run and artifact tables |
-| `apps/web/src/pages/chat/chat-run-store.ts` | Browser-side chat run registry that keeps an active stream alive when the user switches conversations |
-| `apps/web/src/pages/documents/DocumentPlanningPage.tsx` | Route-level document planning page with G6 knowledge graph, Document Agent task state, PRD artifact preview, full markdown modal, and markdown download |
-| `apps/web/src/api/document-api.ts` | Browser-side API client for document-generation start/status/stop endpoints |
-| `references/executor/<executor-domain>/skills/<skill-name>/SKILL.md` | DeepAgents skill sources selected by Executor definitions and passed through the shared text runner |
-
-## Web Frontend Structure
-
-`apps/web/src/App.tsx` is the application composition layer. It owns top-level UI state and wires workspace, chat, modal, and route behavior together.
-
-Supporting responsibilities are split into focused modules:
-
-| Directory | Responsibility |
-| --- | --- |
-| `api/` | Browser-side API clients for account, workspace, chat, persisted messages, and document generation |
-| `constants/` | UI constants and local preference keys |
-| `mappers/` | Data restoration between API DTOs and frontend view models |
-| `pages/` | Route-level page folders such as `pages/workplace`, `pages/chat`, and `pages/documents` |
-| `router/` | Lightweight path parsing and history updates for `/workplace`, chat routes, and `/documents/:workspaceId` |
-| `utils/` | Stream-event reducers, markdown rendering, and structured-block parsers |
-| `components/` | Shared presentational components; page-specific orchestration belongs in `pages/` |
-| `components/modals/` | Reusable modal views such as project creation and configuration |
-| `hooks/` | Reusable React hooks kept separate from route-level app orchestration |
-
-The frontend does not persist chat history in browser `localStorage`. Chat messages are restored through `GET /api/chats/:id/messages`; browser storage is limited to non-authoritative UI preferences such as the active workspace id.
-
-Assistant markdown is rendered by `apps/web/src/utils/markdown.tsx`. It intentionally uses a small typed renderer instead of `dangerouslySetInnerHTML`, and supports common chat output including headings, lists, fenced code, links, inline emphasis, and standard pipe tables.
-
-## Dependency Graph
+## Package Dependencies
 
 ```text
 apps/web
-  └─ HTTP/SSE through Vite proxy `/api` -> apps/api
+  └─ HTTP/SSE via Vite `/api` proxy -> apps/api
 
 apps/api
   ├─ @repo/agent-runtime
@@ -184,186 +126,269 @@ apps/agent-runtime
   └─ @repo/shared
 
 apps/worker
-  ├─ Redis/BullMQ
-  ├─ @repo/agent-runtime
-  └─ @repo/shared
+  └─ BullMQ/Redis runtime
 
 packages/database
-  └─ Prisma Client / PostgreSQL
+  └─ Prisma Client/PostgreSQL
 ```
 
-Workspace package entry points reference `dist/`, so run `pnpm build` at least once before starting apps that import workspace packages.
+`packages/shared` and `packages/database` publish from `dist/`. Turbo builds dependency packages before apps, but a stale `tsconfig.tsbuildinfo` can still hide missing output; generate Prisma Client and ensure shared build output exists before app development.
 
-## Runtime Flow
+## Runtime Architecture
 
-### Conversation Agent
+The application has two business graphs, one lightweight HITL graph, and an outer conversation/router layer.
 
-`apps/agent-runtime/src/agents/conversation/stream.ts` is the primary streaming entry point. It adapts frontend chat messages into LangChain messages, streams Conversation Agent reasoning with `agentType: "conversation"`, streams visible answer content as `text`, extracts question-form and user-input tagged blocks, and filters internal DeepAgent environment noise such as `No files found in /`.
+### 1. Conversation and Pre-Orchestrator layer
 
-### Request Agent
-
-When a user submits a form answer, the Conversation Agent first emits a `user-input` block. The runtime then hands the block to `apps/agent-runtime/src/graph/workflow.ts`. LangGraph parses user input, runs the Request Agent, and conditionally enters the product workflow when the request analysis contains business-model items.
-
-The Request Agent output is persisted as a separate assistant message with `message.type = "request"`. Its reasoning is stored in `message.meta.reasoningContent`.
-
-### LangGraph Product Workflow
-
-The LangGraph main graph is:
+`apps/agent-runtime/src/agents/conversation/stream.ts` is the chat streaming entry point.
 
 ```text
-parse_user_input -> request_agent -> planner_agent -> executor-* -> planner_agent -> END
+user message
+  -> Orchestrator with Pre-Orchestrator SubAgent
+     -> casual chat: Conversation Agent response
+     -> clarification/conflict: Question Form + HITL interrupt
+     -> interrupted workflow: checkpoint/history resume
+     -> product request: Conversation Agent emits <user-input>
+  -> product workflow LangGraph
 ```
 
-The product workflow nodes are implemented in `apps/agent-runtime/src/graph/nodes/product-workflow-node.ts` and owned by `apps/agent-runtime/src/graph/workflow.ts`. The Planner Agent emits the Planner Agent DAG, LangGraph schedules ready tasks across the ten Executor Agent nodes, and the Planner Agent reviews the final product knowledge graph after executors finish. The SSE path uses `streamWorkflowGraph` so intermediate reasoning, Planner DAG cards, structured knowledge-graph updates, tool calls, and confirmation forms remain visible while the graph owns stage transitions.
+Pre-Orchestrator handles intent classification (`casual_chat`, `new_project`, `project_evolution`), project-context conflict detection, clarification forms, and resume intent. Conversation Agent no longer owns these routing decisions. Product execution starts only after structured `user-input-complete`.
 
-The workflow stage delegates model work to independent DeepAgents:
+### 2. Product workflow graph
 
-| Directory | Responsibility |
+The main graph is defined in `apps/agent-runtime/src/graph/workflow.ts` and exposed to LangGraph tooling as `meta_pm_agent` in `langgraph.json`.
+
+```text
+START
+  -> parse_user_input
+  -> request_agent
+  -> orchestrator_agent
+  -> planner_agent
+  -> executor_router
+  -> one or more ready executor-* nodes
+  -> executor_aggregator
+  -> executor_router
+  -> orchestrator_agent
+  -> END
+```
+
+| Stage | Responsibility |
 | --- | --- |
-| `apps/agent-runtime/src/agents/common/run-json-agent.ts` | Shared JSON DeepAgent runner for Planner; it validates schema output and forwards reasoning/tool events |
-| `apps/agent-runtime/src/agents/common/run-text-agent.ts` | Shared text DeepAgent runner for Executor Agents; it streams reasoning/tool events, attaches selected DeepAgents skills, and does not force final JSON validation |
-| `apps/agent-runtime/src/agents/conversation/workflow-resume.ts` | Restores prior Request Analysis, Planner DAG, Executor results, and workflow graph state when a product-workflow confirmation/proposal form answer resumes an existing round |
-| `apps/agent-runtime/src/agents/product-workflow/planner-agent/` | Planner Agent implementation and prompt; converts Request Agent analysis plus product context into a persisted Planner Agent DAG, creates supplement DAGs from Planner form answers, and performs final workflow review after Executor completion |
-| `apps/agent-runtime/src/agents/product-workflow/executor-agent/` | Executor Agent implementation, prompt, shared types, definitions, and ten domain profile folders; each Executor reads the current graph and writes structured updates through controlled tools |
-| `apps/agent-runtime/src/agents/product-workflow/agent.ts` | Product workflow orchestration, stream event forwarding, tagged block formatting, and question-form formatting only |
+| `parse_user_input` | Parse Conversation Agent's tagged block into indexed input records; no model call |
+| `request_agent` | Convert user input into structured Request analysis and business-model coverage |
+| `orchestrator_agent` | Select route/context, manage lifecycle, delegate planning, and dispatch final Critique |
+| Planner SubAgent | Generate the `initial` or `supplement` `TaskExecutionPlan` inside Orchestrator |
+| `planner_agent` | Compatibility/display node that emits the plan and replays restored Executor results |
+| `executor_router` | Select dependency-ready tasks and pack at most one task per Executor into a parallel batch |
+| `executor-*` | Execute one domain task against a working graph copy using controlled tools |
+| `executor_aggregator` | Barrier for a parallel batch; state reducers merge results and graph snapshots |
+| Critique Agent | Run from `orchestrator_agent` after all tasks finish; validate commits, graph integrity, semantic quality, retries, and user questions |
 
-Each product workflow Agent keeps its prompt beside its implementation in `prompt.ts`. Do not reintroduce a shared `product-workflow/prompts/` directory for agent-specific prompts.
+Critique is not a standalone LangGraph node. When the router sees that all tasks are complete, it routes back to Orchestrator, which invokes Critique and produces `ProductWorkflowResult`.
 
-Executor Agent domains are implemented as independent folders under `executor-agent/`: `product-strategy-executor`, `market-research-executor`, `gtm-executor`, `product-discovery-executor`, `product-execution-executor`, `marketing-growth-executor`, `data-analytics-executor`, `ai-shipping-executor`, `toolkit-executor`, and `interface-craft-executor`.
+The ten fixed Executor nodes are:
 
-Executor Agent skills are stored under `references/executor/<executor-domain>/skills/`. Each executor definition declares the skill names it needs; the runtime resolves those names to skill directories and passes them to DeepAgents through the shared `skills` option. Conversation and Request Agents do not receive these executor skills.
+- `executor-product-strategy`
+- `executor-market-research`
+- `executor-gtm`
+- `executor-product-discovery`
+- `executor-product-execution`
+- `executor-marketing-growth`
+- `executor-data-analytics`
+- `executor-ai-shipping`
+- `executor-toolkit`
+- `executor-interface-craft`
 
-Executor Agents maintain a shared `ProductKnowledgeGraph` state during a workflow run. Each Executor receives a working copy for tool execution; LangGraph merges the Executor result back into the cumulative graph once through `appendKnowledgeGraphPatch`, preventing tool side effects from duplicating graph entries. The API archives each cumulative graph snapshot after an Executor finishes so interrupted runs keep completed graph data.
+Executor profiles and allowed graph types are centralized in `executor-agent/definitions.ts`; skills are loaded from `references/executor/.../skills/`. All model execution uses `agents/common/run-agent.ts`.
 
-After each Executor finishes, the API archives the latest cumulative structured graph snapshot into `product_knowledge_graph`, keyed by `workspace_id`, so completed Executor output remains available if the workflow is interrupted. These intermediate snapshots do not increment `version`; the normal workflow finish or manual interruption finalizes the round and increments `version` at most once. The final archive prefers the runtime cumulative graph snapshot over Planner Review model output, because the model review may summarize or omit fields. Executor and Planner message/request-form persistence must not duplicate full graph markdown or graph patches; heavyweight graph contents belong in `product_knowledge_graph`.
+### Product graph state and merging
 
-Product-workflow form answers are handled as workflow resumes. A `[form answers - product-workflow-confirmation]` or proposal-decision payload should not be sent through a fresh Conversation -> Request Agent analysis cycle. The runtime restores the earlier request analysis, plan, executor results, and product knowledge graph, then asks Planner to create a `TaskExecutionPlan` with `status: "supplement"` for only the required corrections or additions. Supplement Executor tasks update the graph, the final archive marks the round complete, and the UI renders a completion card telling the user the complete knowledge graph can be viewed.
+`graph/state.ts` carries:
 
-Manual interruption and later continuation use LangGraph checkpointing. `apps/agent-runtime/src/graph/workflow-checkpointer.ts` creates a PostgresSaver-backed checkpointer when checkpoint database settings are available, and `apps/agent-runtime/docs/langgraph-postgres-checkpoint.sql` contains the required table DDL. When Conversation Agent recognizes a continue-interrupted-workflow intent, the API resumes the checkpointed graph thread instead of treating the new message as a fresh Request Agent input.
+- structured user input and Request analysis;
+- product-context source and Orchestrator decision;
+- current plan and supplement targeting;
+- completed Executor results;
+- cumulative `ProductKnowledgeGraph`;
+- prior Critique issues and final workflow result.
 
-When resuming or retrying after hard blockers, previously completed Executor results are replayed into the workflow output so DAG nodes remain completed while only unfinished or supplement tasks continue. User-visible errors should be compact: show the key blocker, affected Agent/task, and next action, not provider stack traces, large JSON payloads, or repeated retry internals.
+Parallel Executors start from the same batch snapshot. Each uses a private working graph, returns a delta/full result, and state reducers merge by stable IDs/task IDs. `executor_aggregator` emits the merged snapshot. This prevents concurrent branches from overwriting one another or duplicating tool side effects.
 
-The Planner workflow review may produce proposal slots from multiple executor tasks. Proposal slot aggregation may consolidate duplicate or near-duplicate visible questions, but it must preserve every `source_task_id` and `source_agent` in `sources`; a single answer can then close all referenced proposal items. Do not reintroduce hard caps that hide valid pending proposal sources.
+The graph lifecycle is `initial -> building -> refining -> stable`. Critique can keep the workflow in `refining` for Executor correction or user confirmation.
 
-### Document Generation Workflow
+### Checkpoint and workflow resume
 
-Document generation is intentionally separated from the chat/product-workflow LangGraph. The Document Agent lives in `apps/agent-runtime/src/agents/document-agent/`, and the independent document graph is implemented by `apps/agent-runtime/src/graph/document-workflow.ts` plus `document-workflow-state.ts`.
-
-The current PRD workflow stages are:
+Product graph threads use:
 
 ```text
-parseKg -> normalizeGraph -> buildSectionDossiers -> draftSection -> crossCheck -> scoreDraft -> aggregateScore -> humanReview -> exportPrd
+workflow:{conversationId}:{requestFormId}
 ```
 
-The workflow reads the current persisted workspace knowledge graph, normalizes it for document drafting, builds section dossiers, delegates heavy section work through DeepAgents subagents where appropriate, cross-checks consistency, applies the scoring quality gate, reserves a human-review interrupt stage, and exports a PRD markdown artifact. Document Agent uses Deep Agents `write_todos` so Task planning can be displayed to the user, and it may use the built-in `task` tool for temporary isolated subagents such as user-story drafting, API draft generation, or cross-section consistency checks.
+`workflow-checkpointer.ts` prefers PostgreSQL `PostgresSaver` and falls back to `MemorySaver`. Resume can:
 
-The PRD quality gate first scores the same PRD draft with three independent scoring agents modeled after China's Gaokao Chinese essay grading discipline. If the three scores differ by more than `8` points, the graph routes back to `draftSection` and scores the regenerated PRD. The graph tries at most three PRD drafts. If all three drafts exceed the spread limit, it selects the draft with the smallest score spread and then lets the weighted scoring agent choose the final export. Reliable drafts should also meet the weighted quality threshold of `85/100`. All discarded draft markdown and scoring structures are retained in scoring history for inspection.
+- continue the same checkpoint by streaming with a `null` input;
+- reconstruct Request analysis, Orchestrator decision, plan, completed results, graph, and Critique issues from persisted chat artifacts;
+- invalidate a requested task and every downstream dependent while retaining unaffected completed work;
+- create a `supplement` DAG from Question Form answers.
 
-Document-generation tasks are started by the API and continue in the background. Navigating away from the document page should not cancel the task; supported stop paths are the explicit stop endpoint or server/runtime failure. PRD is currently the enabled document kind. MRD and BRD are represented in the UI but remain disabled until their corresponding Document Agent workflows are added.
+Form answers are continuations, not fresh product requests.
 
-Generated document persistence is defined by `packages/database/sql/document-generation.sql`. Apply that manual SQL before using document generation in a database. Runs and artifacts are stored separately: the run tracks status/current stage/todos/reasoning/scoring/error metadata, and the artifact stores the generated markdown plus structured content.
+### 3. Human-in-the-loop graph
 
-### Runtime Tools
+`graph/human-in-the-loop.ts` is a separate minimal graph:
 
-Runtime tools are validated through the shared `enabledTools` schema. User-facing requests may enable `web_search`; product-workflow file tools are internally attached by the runtime only for authorized product-workflow agents.
+```text
+START -> release_interrupt -> interrupt() -> Command({ resume }) -> END
+```
 
-Tool visibility is managed centrally in `apps/agent-runtime/src/agents/common/tool-access.ts`:
+It suspends and resumes Question Forms. It does not contain product-planning logic and is not the document workflow's `humanReview` stage.
 
-| Tool family | Tool names | Authorized agents |
-| --- | --- | --- |
-| Web search | `web_search` | Conversation Agent only |
-| Knowledge graph tools | `kg_file_read`, `kg_file_add_summary`, `kg_file_add_nodes`, `kg_file_add_relations`, `kg_file_add_decisions`, `kg_file_add_risks`, `kg_file_add_open_questions` | Planner Agent and the ten Executor Agents only |
+### 4. Document workflow graph
 
-`apps/agent-runtime/src/agents/common/web-search-tool.ts` implements the `web_search` LangChain tool. It uses `TAVILY_API_KEY` when configured and falls back to free public indexes such as Hacker News Algolia and OpenAlex without extra search dependencies. Search backend failures are returned as structured tool results with `results: []` and `error` instead of throwing, so a network timeout does not terminate the chat stream.
+Document generation is independent of the product graph:
 
-`apps/agent-runtime/src/agents/common/knowledge-graph-file-tool.ts` implements the controlled knowledge-graph tools. Despite the historical file-tool name, these tools mutate only the current workflow `ProductKnowledgeGraph` object and must not expose arbitrary filesystem access.
+```text
+parseKg
+  -> normalizeGraph
+  -> buildSectionDossiers
+  -> draftSection
+  -> crossCheck
+  -> scoreDraft
+     -> rejectScore -> draftSection | humanReview
+     -> aggregateScore -> draftSection | humanReview
+  -> exportPrd
+  -> END
+```
 
-The shared DeepAgent runners only forward explicitly authorized user-visible tools into SSE. Internal DeepAgents tools such as generated task/todo helpers or unscoped file reads are kept out of `tool-call`/`tool-result`, so they do not appear as stuck UI cards or leak internal filesystem errors.
+Document Agent lives under `agents/document-agent/`; graph/state live in `graph/document-workflow*.ts`.
 
-Executor skills are not user-facing tools. They are local DeepAgents skill directories resolved from `references/executor/.../skills/...` and attached through `run-text-agent.ts`; keep tool authorization and skill loading separate.
+For each PRD draft, three independent reviewers score the same content. Spread must be at most `8`, weighted quality should reach `85/100`, and at most three drafts are attempted. All attempts remain in scoring history. `humanReview` currently auto-approves; it is a future extension point rather than a blocking human interrupt.
 
-## API
+The API starts document generation as a background task, persists progress, and keeps it running across frontend navigation. PRD is enabled; MRD and BRD remain UI placeholders.
 
-The API exposes account, workspace, chat, message, and SSE routes:
+## Agents and Tools
+
+### Shared runner
+
+`agents/common/run-agent.ts` wraps DeepAgents model execution, JSON resolution, reasoning/token/tool/SubAgent events, deterministic fallbacks, abort signals, and optional run-summary recording. Agent-specific modules own their prompts and output interpretation.
+
+DeepAgents default filesystem tools are excluded twice:
+
+1. `harness-profile.ts` removes them from the provider profile.
+2. `deep-agent-tool-policy.ts` applies a final allowlist before model/tool calls.
+
+Document Agent deliberately allows `write_todos` and `task`; normal chat/product Agents do not.
+
+### Runtime tool policy
+
+`agents/common/tool-access.ts` is the single authorization table.
+
+| Capability | Authorized Agents |
+| --- | --- |
+| User-enabled `web_search` | Conversation Agent |
+| Runtime-managed `web_search` | Market Research, GTM, Marketing Growth, Data Analytics, AI Shipping, Toolkit, Interface Craft Executors |
+| Controlled graph read/query/write/blocker tools | All ten Executors |
+| Arbitrary filesystem tools | None |
+
+The controlled graph tools in `knowledge-graph-file-tool.ts` modify an in-memory `ProductKnowledgeGraph`; their `kg_file_*` names are historical. They enforce allowed entity/relation types, source task IDs, required blocking questions, supplement-only deprecation, and Evidence provenance.
+
+`web-search-tool.ts` uses Tavily when configured and public indexes otherwise. Failures return structured empty results with an error so the SSE stream survives.
+
+## Product Context and Persistence
+
+### Context loading
+
+For a conversation, the API resolves the workspace and combines:
+
+1. selected workspace overview files such as `README.md` and `product-context.md`, capped to a compact context;
+2. `resources/product-contexts/<workspace>.json` when available;
+3. the optional `product_context_snapshot` database row;
+4. durable `product_knowledge_graph.nodes` and `.relations`.
+
+Resource snapshots have priority for runtime-only lifecycle/summary fields; durable graph nodes and relations remain the long-term graph source. Snapshot files are backend-managed runtime data, not Agent filesystem access.
+
+### Durable data
+
+Prisma models cover the core account/workspace/conversation/message/request/task/graph data. API repositories also access raw SQL tables that are not represented in `schema.prisma`, including:
+
+- `token_usage`;
+- `document_generation_run`;
+- `document_artifact`;
+- optional `product_context_snapshot`;
+- LangGraph checkpoint tables.
+
+These tables must be provisioned separately; `prisma db push` does not create them from the current schema.
+
+`product_knowledge_graph` keeps one current row per workspace. It stores normalized `nodes` and `relations`; runtime decisions, risks, and open questions are converted to node records. Every Executor completion archives a snapshot without advancing the version. Final completion or manual stop advances the workflow round at most once.
+
+Messages keep lightweight display/restoration data:
+
+- user messages are persisted before execution;
+- Conversation and Request output use distinct message types;
+- reasoning is stored in message metadata;
+- structured user input and Request analysis remain restorable;
+- full graph patches, graph Markdown, and generated PRD bodies stay out of chat messages.
+
+Document runs store status, stage, task planning, reasoning, scoring attempts, and errors. Document artifacts store the full generated Markdown and structured content.
+
+## API and SSE
+
+### HTTP routes
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/account` | Return the local/default account |
-| `GET` | `/api/workspaces` | List persisted workspaces |
-| `POST` | `/api/workspaces` | Create a workspace with `name` and optional `localPath` |
-| `GET` | `/api/chats?workspaceId=...` | List chats for a workspace |
-| `POST` | `/api/chats` | Create a chat and its request form |
-| `GET` | `/api/chats/:id/messages` | Load persisted chat messages |
-| `POST` | `/api/chat` | Stream an agent response with SSE and persist messages |
-| `POST` | `/api/chat/stop` | Abort the current running Agent stream for a chat |
-| `GET` | `/api/workspaces/:workspaceId/knowledge-graph` | Load the latest persisted product knowledge graph for a workspace |
-| `POST` | `/api/workspaces/:workspaceId/document-generation` | Start a background document-generation run for a document kind |
-| `GET` | `/api/workspaces/:workspaceId/document-generation/latest?kind=prd` | Load the latest document-generation run and artifact for a workspace/kind |
-| `GET` | `/api/document-generation/:runId` | Load a single document-generation run and its artifact |
-| `POST` | `/api/document-generation/:runId/stop` | Manually stop a queued/running document-generation task |
+| `GET` | `/api/health` | Health check |
+| `GET` | `/api/account` | Local/default account |
+| `GET/POST` | `/api/workspaces` | List/create workspaces |
+| `GET/POST` | `/api/chats` | List/create chats |
+| `GET` | `/api/chats/:id/messages` | Restore persisted messages and workflow state |
+| `POST` | `/api/chat` | Stream one chat/workflow turn |
+| `POST` | `/api/chat/stop` | Abort the server-side runtime for a chat |
+| `GET` | `/api/workspaces/:workspaceId/knowledge-graph` | Read the current workspace graph |
+| `POST` | `/api/workspaces/:workspaceId/document-generation` | Start a background document run |
+| `GET` | `/api/workspaces/:workspaceId/document-generation/latest` | Read latest run/artifact by kind |
+| `GET` | `/api/document-generation/:runId` | Read one run/artifact |
+| `POST` | `/api/document-generation/:runId/stop` | Stop a document run |
 
-`POST /api/chat` returns `text/event-stream` and uses typed events including `start`, `agent-status`, `thinking`, `text`, `question-form-start`, `question-form-complete`, `user-input-start`, `user-input-complete`, `request-analysis-start`, `request-analysis-complete`, `todo-update`, `tool-call`, `tool-result`, `token-usage`, `step-finish`, `finish`, `abort`, and `error`, followed by `[DONE]`.
+### Stream contract
 
-`POST /api/chat` may include `enabledTools: ["web_search"]`. The shared schema also knows the internal knowledge-graph file tool names, but runtime authorization still decides which agents may actually see each enabled or internally attached tool.
+`POST /api/chat` starts with:
 
-`thinking` events may include `agentType`. The frontend uses that field to place reasoning next to the corresponding stage.
+```text
+data: {"type":"start"}
+```
 
-Product-workflow confirmation/proposal form submissions must include enough tagged block history for the backend to restore the previous workflow context. The API should route those answers into LangGraph resume handling instead of creating a fresh Request Agent run; the next Planner DAG should be a `status: "supplement"` plan.
+Runtime `reasoning` becomes API `thinking`. Other forwarded events include Agent status, text, Question Form/user-input/Request-analysis/workflow-resume lifecycle events, human interrupt, SubAgent lifecycle, tool calls/results, token usage, title updates, abort, and errors. Authorized events preserve `agentType`; parallel Executor events may carry `parallelAgents`. The stream terminates with:
 
-`agent-status` events are the authoritative realtime source for `activeAgent` / `activeAgents`. The frontend must remove `conversation` from the active set after `user-input-complete`, and must not keep a completed Agent in the top-right "正在思考 / 并行思考" indicator while later workflow Agents run.
+```text
+data: [DONE]
+```
 
-`POST /api/chat/stop` aborts the server-side runtime `AbortController` for the current `chatId`. Frontend stop handling should call this endpoint before aborting the browser fetch so the model provider request is cancelled, not merely hidden in the UI.
+The stop endpoint must run before the browser abort so the API can propagate its `AbortSignal` into provider calls.
 
-## Message Persistence
+## Web Frontend
 
-- User messages are persisted before agent execution.
-- Conversation Agent output is persisted as an assistant message with `message.type = "conversation"`.
-- Request Agent output is persisted as an assistant message with `message.type = "request"`.
-- Agent reasoning is stored in `message.meta.reasoningContent`.
-- Conversation Agent structured user input is stored in `message.user_input`.
-- Request Agent analysis is written to the request message content and request-form items.
-- Product workflow completion content in `message.content` is reduced to a short archival summary; the structured workflow details are persisted through request-form/task/product-knowledge-graph tables.
-- Knowledge-graph tool results in `message.meta.toolCalls` are stored as lightweight summaries only. Full graph state must be read from `product_knowledge_graph`.
-- `request_form.status` tracks high-level processing state such as `received`, `conversation_consumed`, `request_agent_running`, `request_analyzed`, `workflow_running`, `pending_user_confirmation`, `completed`, `stopped`, and `failed`.
-- `request_form_item.status` tracks item-level progress. Proposal confirmation forms are represented by `decision` items; when a user submits a proposal decision, the corresponding `decision` and all referenced `proposal` items must be marked `finish` and record the answer in `payload`.
-- Pending proposal decision restoration must merge current pending `proposal` items into the visible question form, consolidate duplicate or near-duplicate visible questions, and preserve every distinct `source_task_id`/`source_agent` row in `sources`.
-- After a supplement DAG completes, request-form persistence should transition the round to `completed` and retain final completion metadata so restored chats show the workflow as finished.
-- `product_knowledge_graph` stores the latest structured graph for each workspace in database-level `nodes` and `relations` fields only. Runtime graph state may still carry summaries, decisions, risks, and open questions for planning, but repository/service code should not read or write `summary`, `decisions`, `risks`, or `open_questions` database columns. It has one current row per `workspace_id`, optional `conversation_id` / `request_form_id` provenance, and a `version` that increments once per workflow round.
-- `document_generation_run` tracks background document-generation status, kind, workflow thread id, current stage, Task planning todos, thinking log, scoring attempts, artifact id, errors, and timestamps.
-- `document_artifact` stores generated document output for a workspace/run/kind, including PRD markdown and structured content. Full generated documents should be read from this table, not from chat messages.
-- `GET /api/chats/:id/messages` returns message `type`, `reasoningContent`, `userInput`, `requestAnalysis`, Planner DAG data, executor completion results, and tool calls so the frontend can restore the correct display order.
+`App.tsx` is the shell. `hooks/useAppShell.ts` owns top-level workspace/chat routing and modal state. Route-level behavior lives in:
 
-## Frontend Rendering Order
+| Path | Responsibility |
+| --- | --- |
+| `pages/workplace/WorkspacePage.tsx` | Workspace selection and creation entry |
+| `pages/chat/ThreadChatPage.tsx` | Chat restoration and run ownership |
+| `pages/chat/chat-run-store.ts` | Keep an active stream alive across conversation navigation |
+| `pages/documents/DocumentPlanningPage.tsx` | Lazy graph/document loading, task status, scoring, PRD actions |
+| `components/ChatApp.tsx` | Chat layout, active Agents, process panel, graph refresh |
+| `components/PlannerExecutionCard.tsx` | Planner DAG, Executor progress, Critique status |
+| `components/KnowledgeGraphView.tsx` | Shared G6 data conversion, rendering, lifecycle, export |
+| `components/modals/KnowledgeGraphModal.tsx` | Filtering, details, fullscreen, PNG/Markdown actions |
+| `utils/apply-stream-event.ts` | Stream reducer |
+| `mappers/persisted-message.ts` | Restore API DTOs into frontend view models |
+| `utils/markdown.tsx` | GFM Markdown and search citations |
 
-Message rendering is staged:
+Chat history comes from the API, not `localStorage`. Local storage is limited to UI preferences such as active workspace.
 
-1. Conversation Agent reasoning.
-2. Todo updates.
-3. Conversation Agent tool calls, such as `web_search`, in a collapsed `ToolCallsCard`.
-4. Visible assistant prose.
-5. Question form.
-6. 用户输入整理 card.
-7. Request Agent reasoning and Request Agent tool calls.
-8. Request Agent 分析 card.
-9. Planner reasoning, Planner DAG progress, and Planner tool calls.
-10. Each Executor Agent reasoning block followed by that Executor's own knowledge-graph tool card.
-11. Planner Agent Review status card, shown after the Executor Agent sections once all Executors have finished and Planner is thinking about follow-up questions.
-12. Product-workflow completion card after the final confirmation/supplement archive completes.
-13. Future agent-specific reasoning blocks.
+The document page fetches only on `/documents/:workspaceId`, shares `KnowledgeGraphView` with the chat modal, updates node details on selection, and keeps full PRD Markdown in a modal/download instead of inline.
 
-`ToolCallsCard`, `UserInputCard`, and `RequestAnalysisCard` default to collapsed so detailed intermediate data stays available without pushing normal assistant prose out of view. Tool calls must preserve `agentType`; the frontend uses it to avoid merging all Executor tool calls into a single card.
-
-When a retry or supplement resume restores an existing Planner DAG, completed Executor nodes should stay visibly completed instead of reverting to waiting. Only new, failed, or pending supplement tasks should appear as active.
-
-`ChatApp` refreshes `GET /api/workspaces/:workspaceId/knowledge-graph` whenever a new Executor result appears in the active message. This makes the knowledge-graph viewer button available after each completed Executor, not only after the full workflow ends.
-
-The top-right active-Agent indicator may show multiple entries during parallel Executor execution. Each entry must scroll to the related visible reasoning/loading card. When the chat viewport is already at the bottom, the click handler should first disable auto-stick-to-bottom behavior and then scroll on the next animation frame so the automatic bottom lock does not cancel the jump.
-
-The knowledge-graph modal in `apps/web/src/components/modals/KnowledgeGraphModal.tsx` owns G6 graph lifecycle. It should retry initialization while the Ant Design modal container reports zero dimensions, avoid one-shot initialization latches that can leave the modal permanently in "正在渲染知识图谱", and hide edge labels for dense graphs to keep the layout readable.
-
-The document planning page at `/documents/:workspaceId` loads its data only when the user opens that page. It shows the current knowledge graph using the same AntV G6 visual language as `KnowledgeGraphModal`, displays selected-node details in the right panel, shows Document Agent run status, Task planning, thinking log, and scoring results, and exposes generated PRD artifacts. Completed PRD body content is not rendered inline on the page; users view it fully in a modal or download it as an `.md` file.
-
-## Development Workflow
+## Development
 
 ```bash
 pnpm install
@@ -374,28 +399,15 @@ pnpm build
 pnpm dev
 ```
 
-Useful commands:
+Useful focused commands:
 
 | Command | Purpose |
 | --- | --- |
-| `pnpm build` | Build all packages/apps through Turbo |
-| `pnpm dev` | Start all dev services through Turbo |
-| `pnpm --filter @repo/api dev` | Start only the API |
-| `pnpm --filter web dev` | Start only the frontend |
-| `pnpm --filter web build` | Type-check and build only the frontend |
-| `pnpm --filter @repo/database db:generate` | Generate Prisma Client |
+| `pnpm --filter @repo/agent-runtime test` | Runtime unit tests |
+| `pnpm --filter @repo/api test` | API tests |
+| `pnpm --filter web build` | Web type-check and production build |
+| `pnpm --filter @repo/agent-runtime build` | Runtime TypeScript build |
+| `pnpm --filter @repo/api build` | API TypeScript build |
+| `pnpm --filter @repo/database db:generate` | Generate Prisma Client only |
 
-## Current Notes
-
-1. Build shared packages before app dev scripts because package entry points reference `dist/`.
-2. Do not commit generated `dist/` output.
-3. Preserve the `/api/chat` SSE event names when changing streaming behavior.
-4. Persisted workspace/chat/message data lives in PostgreSQL through Prisma.
-5. Do not store chat message history in browser `localStorage`.
-6. Preserve `message.type` and SSE `agentType` when adding new agents so reasoning and results can be displayed in the right stage.
-7. Standard browser folder selection may not expose full absolute paths. Keep manual path entry and host-provided path handling intact.
-8. Keep runtime tool access centralized in `tool-access.ts`; do not grant tools directly inside individual agents unless the centralized policy is updated.
-9. Apply the `product_knowledge_graph` SQL before running workflows that need final knowledge-graph archival.
-10. Apply `packages/database/sql/document-generation.sql` before using PRD document generation.
-11. Keep `/documents/:workspaceId` data loading lazy; entering a workspace/chat should not load document-generation state.
-12. When updating an existing database, rerun `packages/database/sql/document-generation.sql` so `reasoning_log` and `scoring_attempts` are added to `document_generation_run`.
+Run the narrowest relevant check first, then `pnpm build` when contract or cross-package risk warrants it.
