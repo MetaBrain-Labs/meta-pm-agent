@@ -107,6 +107,28 @@ export interface AgentErrorDto {
   retryAction?: WorkflowRetryAction;
 }
 
+interface ExecutorRetryErrorRow {
+  error_message: string | null;
+}
+
+/**
+ * 读取指定任务最近一次由服务端持久化的可重试错误。
+ */
+export async function findLatestExecutorRetryError(
+  conversationId: string,
+  taskId: string,
+): Promise<string | null> {
+  const rows = await prisma.$queryRaw<ExecutorRetryErrorRow[]>`
+    SELECT "meta"->'agentError'->>'message' AS "error_message"
+    FROM "message"
+    WHERE "conversation_id" = ${conversationId}
+      AND "meta"->'agentError'->'retryAction'->>'taskId' = ${taskId}
+    ORDER BY "created_at" DESC, "id" DESC
+    LIMIT 1
+  `;
+  return rows[0]?.error_message ?? null;
+}
+
 /**
  * 查询指定会话的所有历史消息，按用户消息、Conversation Agent、Request Agent 的顺序恢复。
  */
@@ -279,33 +301,42 @@ function mapMessageRow(row: MessageRow): MessageDto {
 /**
  * 将后续 Executor 完成结果挂回同一轮 Planner 消息，供刷新后恢复 DAG 状态。
  */
-function attachExecutorResultsToPlannerMessages(
+export function attachExecutorResultsToPlannerMessages(
   messages: MessageDto[],
 ): MessageDto[] {
-  const productWorkflowResults = messages.flatMap((message) =>
-    message.productWorkflow?.executor_results ?? [],
-  );
+  const next = messages.map((message) => ({ ...message }));
 
-  return messages.map((message) => {
-    if (!message.taskExecutionPlan) return message;
+  for (let resultIndex = 0; resultIndex < next.length; resultIndex += 1) {
+    const message = next[resultIndex]!;
+    const results = [
+      ...(message.executorResult ? [message.executorResult] : []),
+      ...(message.productWorkflow?.executor_results ?? []),
+    ];
 
-    const taskIds = new Set(
-      message.taskExecutionPlan.tasks.map((task) => task.task_id),
-    );
-    const executorResults =
-      productWorkflowResults.length > 0
-        ? productWorkflowResults
-        : messages.flatMap((candidate) =>
-            candidate.executorResult ? [candidate.executorResult] : [],
-          );
+    for (const result of results) {
+      for (let planIndex = resultIndex; planIndex >= 0; planIndex -= 1) {
+        const plannerMessage = next[planIndex]!;
+        if (
+          !plannerMessage.taskExecutionPlan?.tasks.some(
+            (task) => task.task_id === result.task_id,
+          )
+        ) {
+          continue;
+        }
+        const existing = plannerMessage.executorResults ?? [];
+        next[planIndex] = {
+          ...plannerMessage,
+          executorResults: [
+            ...existing.filter((item) => item.task_id !== result.task_id),
+            result,
+          ],
+        };
+        break;
+      }
+    }
+  }
 
-    return {
-      ...message,
-      executorResults: executorResults.filter((result) =>
-        taskIds.has(result.task_id),
-      ),
-    };
-  });
+  return next;
 }
 
 /**

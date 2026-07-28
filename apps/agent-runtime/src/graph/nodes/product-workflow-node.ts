@@ -323,7 +323,18 @@ async function executeExecutorAgentTask(
     status: "started",
     phase: "execution",
     parallelAgents,
+    taskId: task.task_id,
   });
+  const retryTaskId = config?.configurable?.retry_task_id;
+  const retryError = config?.configurable?.retry_error;
+  const retryInstruction =
+    retryTaskId === task.task_id && typeof retryError === "string"
+      ? [
+          "This task is being manually retried after a previous validated failure.",
+          "Correct every previously reported issue before writing graph data.",
+          `Previous failure details:\n${retryError}`,
+        ].join("\n")
+      : undefined;
 
   const result = await consumeProductWorkflowStream(
     streamExecutorAgent({
@@ -335,6 +346,7 @@ async function executeExecutorAgentTask(
       requestAnalysis: state.requestAnalysis,
       userInput: state.userInput,
       previousResults: state.executorResults,
+      retryInstruction,
       signal: config?.signal,
     }),
     writer,
@@ -369,6 +381,7 @@ async function executeExecutorAgentTask(
     status: "completed",
     phase: "execution",
     parallelAgents,
+    taskId: result.task_id,
   });
 
   return { executorResults: [result], knowledgeGraph: nextKnowledgeGraph };

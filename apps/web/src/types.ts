@@ -47,6 +47,7 @@ export interface StreamEvent {
   status?: "started" | "completed";
   phase?: "planning" | "execution" | "review";
   parallelAgents?: string[];
+  taskId?: string;
   toolCallId?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;

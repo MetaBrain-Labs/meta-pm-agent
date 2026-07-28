@@ -20,6 +20,7 @@ import {
   createWorkflowThreadId,
   extractQuestionFormId,
   getFormAnswerId,
+  isProductWorkflowOptionalStopAnswer,
   isPreOrchGraphConflictFormId,
   parseGraphConflictAction,
   releaseQuestionFormHumanInterrupt,
@@ -40,6 +41,7 @@ import {
   createChat,
   listMessages,
   listChats,
+  loadExecutorRetryFailure,
   loadPendingDecisionQuestionForm,
   markRequestFormStatus,
   persistAgentTokenUsage,
@@ -242,6 +244,12 @@ export async function chatStreamHandler(c: Context) {
             parsed.data.requestFormId,
             parsed.data.messages,
           );
+      const workflowRetryFailure = parsed.data.workflowRetry
+        ? await loadExecutorRetryFailure(
+            parsed.data.chatId,
+            parsed.data.workflowRetry.taskId,
+          )
+        : undefined;
       await markStatus(
         parsed.data.workflowRetry ? "workflow_running" : "received",
       );
@@ -331,6 +339,7 @@ export async function chatStreamHandler(c: Context) {
           knowledgeGraph: runtimeContext.knowledgeGraph,
           workflowAnswerResolution,
           workflowRetry: parsed.data.workflowRetry,
+          workflowRetryFailure,
           signal: runtimeController.signal,
         },
       )) {
@@ -923,7 +932,8 @@ function isProductWorkflowFinalConfirmationAnswer(
     .at(-1);
   return (
     getFormAnswerId(latestUserMessage?.content ?? "") ===
-    "product-workflow-confirmation"
+      "product-workflow-confirmation" ||
+    isProductWorkflowOptionalStopAnswer(latestUserMessage?.content ?? "")
   );
 }
 

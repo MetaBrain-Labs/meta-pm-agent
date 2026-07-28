@@ -370,6 +370,13 @@ export function formatFormAction(form: QuestionForm, action: string): string {
 }
 
 /**
+ * 判断表单文本是否为“停止可选问题”的内部流程控制动作。
+ */
+export function isOptionalWorkflowStopAction(text: string): boolean {
+  return /^-\s*workflow_action:\s*stop_optional_questions\s*$/m.test(text);
+}
+
+/**
  * 将 Question Form 答案转换为 LangChain HITL 的 respond 决策。
  */
 export function formatHumanInTheLoopResume(

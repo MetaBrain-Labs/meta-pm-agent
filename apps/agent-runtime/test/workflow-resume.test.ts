@@ -18,6 +18,7 @@ import {
   createWorkflowExecutorRetryResumeContextFromMessages,
   createWorkflowResumeContextFromMessages,
 } from "../src/agents/conversation/workflow-resume";
+import { streamConversation } from "../src/agents/conversation/stream";
 import { createProductWorkflowKnowledgeGraph } from "../src/agents/product-workflow/common/knowledge-graph";
 
 test("restores direct executor blocker context from history", () => {
@@ -352,6 +353,53 @@ test("restores an executor retry without replaying the latest form answer", () =
   assert.deepEqual(context?.rerunTaskIds, ["task-02"]);
   assert.equal(context?.executorResults?.length, 1);
   assert.match(context?.userInputBlock ?? "", /Build MVP/);
+});
+
+test("stopping optional questions completes without another form or orchestrator", async () => {
+  const messages = createMessages(
+    "[form answers - critique-result-proposal-decision]\n- workflow_action: stop_optional_questions",
+  );
+  messages.splice(
+    messages.length - 1,
+    0,
+    message("a5", "assistant", createProductWorkflowBlock("critique-result")),
+  );
+  const events = [];
+
+  for await (const event of streamConversation(messages, { mode: "project" })) {
+    events.push(event);
+  }
+
+  const completed = events.find((event) => event.type === "complete");
+  assert.equal(completed?.type === "complete" && completed.result.status, "completed");
+  assert.deepEqual(
+    completed?.type === "complete" && completed.result.proposal_questions,
+    [],
+  );
+  assert.equal(
+    completed?.type === "complete" &&
+      completed.result.knowledge_graph_update.current_state,
+    "stable",
+  );
+  assert.equal(
+    events.some((event) => event.type === "question-form-complete"),
+    false,
+  );
+  assert.equal(
+    events.some(
+      (event) =>
+        event.type === "agent-status" && event.agentType === "orchestrator",
+    ),
+    false,
+  );
+  assert.equal(
+    events.some(
+      (event) =>
+        event.type === "text" &&
+        event.content.includes("本轮产品工作流已正式结束"),
+    ),
+    true,
+  );
 });
 
 function createMessages(latestAnswer: string): ChatMessage[] {

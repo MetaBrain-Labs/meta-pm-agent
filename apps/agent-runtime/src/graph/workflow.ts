@@ -58,6 +58,10 @@ export interface WorkflowGraphInput {
   workflowThreadId?: string;
   resumeFromCheckpoint?: boolean;
   resumeContext?: WorkflowResumeContext;
+  retryFailure?: {
+    taskId: string;
+    error: string;
+  };
   signal?: AbortSignal;
 }
 
@@ -299,6 +303,12 @@ function createWorkflowRunConfig(
       thread_id:
         input.workflowThreadId ??
         `workflow:local:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      ...(input.retryFailure
+        ? {
+            retry_task_id: input.retryFailure.taskId,
+            retry_error: input.retryFailure.error,
+          }
+        : {}),
     },
   };
 }

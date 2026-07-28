@@ -16,6 +16,7 @@ import test from "node:test";
 import { createWebSearchEvidenceRegistry } from "../src/agents/common/web-search-tool";
 import {
   createNodeProvenanceRetryInstruction,
+  formatExecutorAttemptErrors,
   isNodeProvenanceValidationFailure,
 } from "../src/agents/product-workflow/executor-agent/agent";
 
@@ -36,4 +37,14 @@ test("provenance validation failure produces a retry instruction with exact veri
   assert.match(instruction, /Verified collaboration source/);
   assert.match(instruction, /https:\/\/example\.com\/collaboration/);
   assert.match(instruction, /Risk or unverified assumption/);
+});
+
+test("terminal retry error preserves both executor attempts", () => {
+  const details = formatExecutorAttemptErrors(
+    ["first provenance failure", "second provenance failure"],
+    new Error("second provenance failure"),
+  );
+
+  assert.match(details, /Attempt 1: first provenance failure/);
+  assert.match(details, /Attempt 2: second provenance failure/);
 });

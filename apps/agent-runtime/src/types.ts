@@ -59,6 +59,7 @@ export type ConversationStreamEvent =
       status: "started" | "completed";
       phase?: "planning" | "execution" | "review";
       parallelAgents?: AgentMessageType[];
+      taskId?: string;
     }
   | {
       type: "tool-call";
@@ -150,6 +151,11 @@ export interface ConversationStreamOptions {
   knowledgeGraph?: ProductKnowledgeGraph | null;
   workflowAnswerResolution?: WorkflowAnswerResolution | null;
   workflowRetry?: WorkflowRetryRequest;
+  /** API 从持久化错误中恢复的可信重试上下文，不属于客户端请求契约。 */
+  workflowRetryFailure?: {
+    taskId: string;
+    error: string;
+  };
   signal?: AbortSignal;
   /** "chat" 模式使用纯闲聊提示词，不产生标记块或表单 */
   mode?: "project" | "chat";

@@ -40,9 +40,11 @@ import {
   isProductWorkflowOptionalStopAnswer,
 } from "../../utils/form-parser";
 import {
+  formatProductWorkflowBlock,
   formatProductWorkflowConfirmationQuestionForm,
   formatProductWorkflowProposalQuestionForm,
 } from "../product-workflow/agent";
+import { updateProductContextMetadata } from "../product-workflow/common/context-metadata";
 import {
   isExecutorHumanInputRequiredError,
   isExecutorRetryRequiredError,
@@ -637,34 +639,33 @@ async function* streamWorkflowResumeAfterFormAnswer(
     resumeContext.productWorkflow &&
     isProductWorkflowOptionalStopAnswer(latestUserMessage.content)
   ) {
+    const knowledgeGraph = updateProductContextMetadata({
+      knowledgeGraph: resumeContext.productWorkflow.knowledge_graph_update,
+      currentState: "stable",
+      descriptionEntry:
+        "User skipped optional follow-up questions and accepted the current result with its recorded review issues.",
+    });
     const result: ProductWorkflowResult = {
       ...resumeContext.productWorkflow,
-      status: "pending_user_confirmation",
+      status: "completed",
       proposal_questions: [],
+      knowledge_graph_update: knowledgeGraph,
       confirmation_message:
-        "用户已跳过可选优化问题，请确认是否接受当前已有设计成果。",
+        "用户已跳过可选优化问题，并接受当前已有成果及已记录的审查问题。",
     };
-    const questionForm = formatProductWorkflowConfirmationQuestionForm(result);
+    yield { type: "knowledge-graph-update", knowledgeGraph };
+    yield {
+      type: "text",
+      content: formatProductWorkflowBlock(result),
+      agentType: "critique",
+    };
     yield { type: "complete", result };
     yield {
       type: "text",
-      content: "已停止继续补充可选问题，请确认当前已有设计成果。",
+      content:
+        "本轮产品工作流已正式结束。你已选择不再继续补充可选优化问题，当前成果及已记录的审查问题均已归档。",
       agentType: "conversation_confirmation",
     };
-    yield {
-      type: "question-form-start",
-      agentType: "conversation_confirmation",
-    };
-    yield {
-      type: "question-form-complete",
-      content: questionForm,
-      agentType: "conversation_confirmation",
-    };
-    yield* streamHumanInterruptForQuestionForm(
-      questionForm,
-      "conversation_confirmation",
-      options,
-    );
     return;
   }
 
@@ -710,6 +711,7 @@ async function* streamPlanningAfterUserInput(
       workflowThreadId: options.workflowThreadId,
       resumeFromCheckpoint: resumeOptions.resumeFromCheckpoint,
       resumeContext,
+      retryFailure: options.workflowRetryFailure,
       signal: options.signal,
     })) {
       if (

@@ -18,12 +18,14 @@ import type {
   ProductWorkflowResult,
   WorkflowRetryAction,
 } from "@repo/shared";
+import { isProductWorkflowOptionalStopAnswer } from "@repo/agent-runtime";
 import {
   createConversationWithInitialRequestForm,
   listActiveConversations,
   updateFirstTurnConversationTitle,
 } from "../repositories/chat-repository";
 import {
+  findLatestExecutorRetryError,
   listConversationMessages,
   persistAssistantMessage,
   persistConversationMessages,
@@ -183,10 +185,26 @@ export async function persistConversationStart(
   // 只持久化用户消息，助手回复由 persistConversationResult 统一写入。
   await persistConversationMessages(
     conversationId,
-    messages.filter((message) => message.role === "user"),
+    messages.filter(
+      (message) =>
+        message.role === "user" &&
+        !isProductWorkflowOptionalStopAnswer(message.content),
+    ),
   );
 
   return workflowAnswerResolution;
+}
+
+/**
+ * 为定点重试加载服务端可信的上一轮错误，避免接受客户端可篡改文本。
+ */
+export async function loadExecutorRetryFailure(
+  conversationId: string | undefined,
+  taskId: string | undefined,
+): Promise<{ taskId: string; error: string } | undefined> {
+  if (!conversationId || !taskId) return undefined;
+  const error = await findLatestExecutorRetryError(conversationId, taskId);
+  return error ? { taskId, error } : undefined;
 }
 
 /**

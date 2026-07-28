@@ -75,6 +75,8 @@ export interface ExecutorAgentInput extends ProductWorkflowInput {
   plan: TaskExecutionPlan;
   knowledgeGraph: ProductKnowledgeGraph;
   previousResults: ExecutorAgentResult[];
+  /** 手动定点重试时，由服务端从可信错误记录恢复的修正指令。 */
+  retryInstruction?: string;
 }
 
 /**
@@ -114,6 +116,7 @@ export type ProductWorkflowStreamEvent =
       status: "started" | "completed";
       phase?: "planning" | "execution" | "review";
       parallelAgents?: ProductWorkflowAgentType[];
+      taskId?: string;
     }
   | {
       type: "reasoning";

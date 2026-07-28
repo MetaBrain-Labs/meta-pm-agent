@@ -163,7 +163,8 @@ export async function* streamExecutorAgent(
   const webSearchEvidenceRegistry = createWebSearchEvidenceRegistry();
   // 手动迭代生成器以在透传事件给上游的同时收集结构化数据。
   let patch = "";
-  let retryInstruction = "";
+  let retryInstruction = input.retryInstruction ?? "";
+  const attemptErrors: string[] = [];
   try {
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       // 重试时基于同一工作副本继续执行，保留首次已完成的工具写入。
@@ -218,7 +219,7 @@ export async function* streamExecutorAgent(
           task_relevant_context: taskRelevantContext,
           user_input: input.userInput,
           task: input.task,
-          ...(attempt > 1
+          ...(retryInstruction
             ? {
                 retry_instruction: retryInstruction,
               }
@@ -264,6 +265,7 @@ export async function* streamExecutorAgent(
         if (isExecutorHumanInputRequiredError(error) || isAbortError(error)) {
           throw error;
         }
+        attemptErrors.push(getErrorMessage(error));
         if (attempt === 1 && isNodeProvenanceValidationFailure(error)) {
           retryInstruction = createNodeProvenanceRetryInstruction(
             error,
@@ -313,6 +315,7 @@ export async function* streamExecutorAgent(
       ]
         .filter(Boolean)
         .join(" ");
+      attemptErrors.push(retryInstruction);
 
       yield {
         type: "reasoning",
@@ -331,7 +334,7 @@ export async function* streamExecutorAgent(
       taskId: input.task.task_id,
       agentType: definition.agentType,
       displayName: definition.displayName,
-      details: getErrorMessage(error),
+      details: formatExecutorAttemptErrors(attemptErrors, error),
     });
   }
   const graphDelta = getKnowledgeGraphDelta(
@@ -356,6 +359,23 @@ export async function* streamExecutorAgent(
     risks: graphDelta.risks,
     openQuestions: graphDelta.open_questions,
   });
+}
+
+/**
+ * 汇总一次 Executor 运行内的全部失败，供错误详情和后续手动重试复用。
+ */
+export function formatExecutorAttemptErrors(
+  attemptErrors: string[],
+  finalError: unknown,
+): string {
+  const finalMessage = getErrorMessage(finalError);
+  const errors =
+    attemptErrors.at(-1) === finalMessage
+      ? attemptErrors
+      : [...attemptErrors, finalMessage];
+  return errors
+    .map((message, index) => `Attempt ${index + 1}: ${message}`)
+    .join("\n");
 }
 
 /**
