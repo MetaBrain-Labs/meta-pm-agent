@@ -49,6 +49,7 @@ import {
 import { parseRequestAnalysisPayload } from "../utils/request-analysis";
 import { parseTaskExecutionPlanPayload } from "../utils/task-execution";
 import {
+  createProductWorkflowDisplaySnapshot,
   formatExecutorResultPayload,
   parseExecutorResultPayload,
   parseProductWorkflowPayload,
@@ -262,6 +263,9 @@ export async function persistConversationResult({
     sanitizedProductWorkflow?.status === "pending_user_confirmation"
       ? { ...sanitizedProductWorkflow, status: "completed" as const }
       : sanitizedProductWorkflow;
+  const displayProductWorkflow = finalProductWorkflow
+    ? createProductWorkflowDisplaySnapshot(finalProductWorkflow)
+    : null;
 
   // 每个 Agent 单独落库，message.type 用于前端恢复正确的展示位置。
   for (const output of agentOutputs) {
@@ -273,10 +277,17 @@ export async function persistConversationResult({
     ) {
       continue;
     }
-    const outputContent = sanitizeAgentOutputContent(
-      output,
-      finalProductWorkflow,
-    );
+    const outputProductWorkflow = parseProductWorkflowPayload(output.content);
+    const outputContent = sanitizeAgentOutputContent(output, finalProductWorkflow);
+    const ownsTaskExecutionPlan =
+      output.type === "planner" &&
+      parseTaskExecutionPlanPayload(output.content) !== null;
+    const ownsProductWorkflow = outputProductWorkflow !== null;
+    const outputDisplayProductWorkflow =
+      displayProductWorkflow ??
+      (outputProductWorkflow
+        ? createProductWorkflowDisplaySnapshot(outputProductWorkflow)
+        : null);
 
     const messageId = await persistAssistantMessage({
       conversationId,
@@ -286,6 +297,10 @@ export async function persistConversationResult({
       toolCalls: sanitizeToolCallsForPersistence(output.toolCalls),
       subagentTraces: output.subagentTraces,
       agentError: output.agentError,
+      taskExecutionPlan: ownsTaskExecutionPlan ? taskExecutionPlan : null,
+      productWorkflow: ownsProductWorkflow
+        ? outputDisplayProductWorkflow
+        : null,
       type: output.type,
     });
 
@@ -356,40 +371,37 @@ function sanitizeAgentOutputContent(
     );
   }
 
-  if (productWorkflow) {
-    return replaceProductWorkflowPayload(output.content, productWorkflow);
+  const outputProductWorkflow = parseProductWorkflowPayload(output.content);
+  const persistedProductWorkflow =
+    productWorkflow ??
+    (outputProductWorkflow
+      ? sanitizeProductWorkflowForPersistence(outputProductWorkflow)
+      : null);
+  if (persistedProductWorkflow) {
+    return removeProductWorkflowPayload(output.content);
   }
 
   return output.content;
 }
 
 /**
- * 将消息中的产品工作流结构块替换为已清洗的持久化版本。
+ * 从消息正文移除已写入结构化 meta 的产品工作流块。
  */
-function replaceProductWorkflowPayload(
-  content: string,
-  productWorkflow: ReturnType<typeof sanitizeProductWorkflowForPersistence>,
-): string {
+function removeProductWorkflowPayload(content: string): string {
   const startMarker = "<product-workflow";
   const endMarker = "</product-workflow>";
-  const startIndex = content.search(new RegExp(escapeRegExp(startMarker), "i"));
-  if (startIndex === -1) return content;
-
-  const openEnd = content.indexOf(">", startIndex);
-  const endIndex = content.indexOf(endMarker, openEnd + 1);
-  if (openEnd === -1 || endIndex === -1) return content;
-
-  const blockEnd = endIndex + endMarker.length;
-  const summary = [
-    "Planner SubAgent 已完成产品工作流汇总，结构化结果已归档。",
-    `确认 ID：${productWorkflow.confirmation_id}`,
-    `状态：${productWorkflow.status}`,
-    `Executor 结果数：${productWorkflow.executor_results.length}`,
-  ].join("\n");
-
-  return `${content.slice(0, startIndex)}${summary}${content.slice(
-    blockEnd,
-  )}`.trim();
+  let result = content;
+  while (true) {
+    const startIndex = result.search(
+      new RegExp(escapeRegExp(startMarker), "i"),
+    );
+    if (startIndex === -1) return result.trim();
+    const openEnd = result.indexOf(">", startIndex);
+    const endIndex = result.indexOf(endMarker, openEnd + 1);
+    if (openEnd === -1 || endIndex === -1) return result.trim();
+    const blockEnd = endIndex + endMarker.length;
+    result = `${result.slice(0, startIndex)}${result.slice(blockEnd)}`;
+  }
 }
 
 /**

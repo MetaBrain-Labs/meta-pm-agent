@@ -35,6 +35,9 @@ import {
 import { updateProductContextMetadata } from "../../agents/product-workflow/common/context-metadata";
 import type { WorkflowGraphStateValue } from "../state";
 
+const AUTOMATIC_CRITIQUE_CORRECTION_MARKER =
+  "[automatic critique correction]";
+
 /**
  * Planner 节点：显示 Orchestrator 的 Planner SubAgent 生成的 DAG，
  * 或在 checkpoint 恢复时重放已有的 Executor 结果。
@@ -100,7 +103,7 @@ export async function plannerAgentNode(
 export async function orchestratorAgentNode(
   state: WorkflowGraphStateValue,
   config?: LangGraphRunnableConfig,
-) {
+): Promise<Partial<WorkflowGraphStateValue>> {
   if (!state.requestAnalysis || state.productWorkflow) return {};
   if (state.plan && arePlanTasksFinished(state)) {
     return executeCritiqueAgentReview(state, config);
@@ -393,7 +396,7 @@ async function executeExecutorAgentTask(
 async function executeCritiqueAgentReview(
   state: WorkflowGraphStateValue,
   config?: LangGraphRunnableConfig,
-) {
+): Promise<Partial<WorkflowGraphStateValue>> {
   if (!state.requestAnalysis || !state.plan) return {};
 
   const writer = getWriter(config);
@@ -446,12 +449,94 @@ async function executeCritiqueAgentReview(
     type: "knowledge-graph-update",
     knowledgeGraph: reviewedKnowledgeGraph,
   });
+
+  if (shouldAutomaticallyPlanCorrection(nextWorkflowResult, state)) {
+    const correctionInput = [
+      {
+        index: 1,
+        type: "自动审查修正",
+        content: createAutomaticCorrectionInput(nextWorkflowResult),
+      },
+    ];
+    const priorCritiqueIssues = [
+      ...(nextWorkflowResult.review.issues ?? []),
+      ...(nextWorkflowResult.knowledge_graph_review?.issues ?? []),
+    ];
+    const planningResult = await orchestratorAgentNode(
+      {
+        ...state,
+        userInput: correctionInput,
+        plan: null,
+        orchestratorDecision: null,
+        executorResults: [],
+        knowledgeGraph: reviewedKnowledgeGraph,
+        priorCritiqueIssues,
+        productWorkflow: null,
+        supplementAgentTypes: EXECUTOR_DEFINITIONS.map(
+          (definition) => definition.agentType,
+        ),
+      },
+      config,
+    );
+
+    return {
+      ...planningResult,
+      userInput: correctionInput,
+      executorResults: [],
+      priorCritiqueIssues,
+      productWorkflow: null,
+      supplementAgentTypes: EXECUTOR_DEFINITIONS.map(
+        (definition) => definition.agentType,
+      ),
+    };
+  }
+
   writer?.({ type: "complete", result: nextWorkflowResult });
 
   return {
     productWorkflow: nextWorkflowResult,
     knowledgeGraph: reviewedKnowledgeGraph,
   };
+}
+
+/**
+ * 判断 Critique 缺口是否可在无需用户输入时自动进入一次补充规划。
+ */
+export function shouldAutomaticallyPlanCorrection(
+  workflowResult: ProductWorkflowResult,
+  state: Pick<WorkflowGraphStateValue, "userInput">,
+): boolean {
+  return (
+    (workflowResult.review.retry_task_ids?.length ?? 0) > 0 &&
+    workflowResult.proposal_questions.length === 0 &&
+    !workflowResult.knowledge_graph_update.open_questions.some(
+      (question) => question.blocking,
+    ) &&
+    !state.userInput.some((item) =>
+      item.content.includes(AUTOMATIC_CRITIQUE_CORRECTION_MARKER),
+    )
+  );
+}
+
+/**
+ * 将 Critique 的确定性缺口转换为 Planner 可消费的自动修正输入。
+ */
+function createAutomaticCorrectionInput(
+  workflowResult: ProductWorkflowResult,
+): string {
+  const issues = [
+    ...(workflowResult.review.issues ?? []),
+    ...(workflowResult.knowledge_graph_review?.issues ?? []),
+  ];
+  return [
+    AUTOMATIC_CRITIQUE_CORRECTION_MARKER,
+    "Create a supplement DAG that corrects the deterministic Critique issues below. Do not ask the user unless a genuinely blocking product decision is missing.",
+    `Retry tasks: ${workflowResult.review.retry_task_ids?.join(", ") || "none"}`,
+    ...issues.map(
+      (issue) =>
+        `- ${issue.code}${issue.task_id ? ` (${issue.task_id})` : ""}: ${issue.message}`,
+    ),
+  ].join("\n");
 }
 
 /**

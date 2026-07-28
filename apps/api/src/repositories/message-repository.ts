@@ -16,6 +16,8 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@repo/database";
 import {
+  ProductWorkflowResultSchema,
+  TaskExecutionPlanSchema,
   type ChatMessage,
   type ExecutorAgentResult,
   type ProductWorkflowResult,
@@ -30,6 +32,7 @@ import {
 import { parseRequestAnalysisPayload } from "../utils/request-analysis";
 import { parseTaskExecutionPlanPayload } from "../utils/task-execution";
 import {
+  createProductWorkflowDisplaySnapshot,
   parseExecutorResultPayload,
   parseProductWorkflowPayload,
 } from "../utils/product-workflow";
@@ -41,7 +44,7 @@ import {
 /**
  * 数据库 message 表原始行结构。
  */
-interface MessageRow {
+export interface MessageRow {
   id: string;
   role: string;
   type: string | null;
@@ -111,6 +114,10 @@ interface ExecutorRetryErrorRow {
   error_message: string | null;
 }
 
+interface ArchivedProductWorkflowRow {
+  workflow: unknown;
+}
+
 /**
  * 读取指定任务最近一次由服务端持久化的可重试错误。
  */
@@ -170,7 +177,13 @@ export async function listConversationMessages(
       "id" ASC
   `;
 
-  const messages = attachExecutorResultsToPlannerMessages(rows.map(mapMessageRow));
+  const archivedWorkflows =
+    await listArchivedProductWorkflowDisplays(conversationId);
+  const restoredMessages = attachArchivedProductWorkflowDisplays(
+    rows.map(mapMessageRow),
+    archivedWorkflows,
+  );
+  const messages = attachExecutorResultsToPlannerMessages(restoredMessages);
   const tokenUsages = await listTokenUsageByConversation(conversationId);
 
   return attachTokenUsagesToMessages(messages, tokenUsages);
@@ -232,7 +245,7 @@ export async function persistConversationMessages(
 /**
  * 将数据库行映射为消息 DTO，兼容旧消息中内联的 tagged block。
  */
-function mapMessageRow(row: MessageRow): MessageDto {
+export function mapMessageRow(row: MessageRow): MessageDto {
   const meta = parseRecord(row.meta);
   const userInput = parseRecord(row.user_input);
 
@@ -242,6 +255,12 @@ function mapMessageRow(row: MessageRow): MessageDto {
   const inlineTaskExecutionPlan = parseTaskExecutionPlanPayload(row.content);
   const inlineExecutorResult = parseExecutorResultPayload(row.content);
   const inlineProductWorkflow = parseProductWorkflowPayload(row.content);
+  const persistedTaskExecutionPlan = TaskExecutionPlanSchema.safeParse(
+    meta?.taskExecutionPlan,
+  );
+  const persistedProductWorkflow = ProductWorkflowResultSchema.safeParse(
+    meta?.productWorkflow,
+  );
 
   // 正文返回给前端展示时去掉结构化 block，避免 JSON 原文和卡片重复显示。
   const cleanedContent = removeTaggedBlock(
@@ -292,10 +311,62 @@ function mapMessageRow(row: MessageRow): MessageDto {
       ? (userInput.user_input as UserInputRecord[])
       : inlineUserInput,
     requestAnalysis: inlineRequestAnalysis,
-    taskExecutionPlan: inlineTaskExecutionPlan,
+    taskExecutionPlan: persistedTaskExecutionPlan.success
+      ? persistedTaskExecutionPlan.data
+      : inlineTaskExecutionPlan,
     executorResult: inlineExecutorResult,
-    productWorkflow: inlineProductWorkflow,
+    productWorkflow: persistedProductWorkflow.success
+      ? persistedProductWorkflow.data
+      : inlineProductWorkflow,
   };
+}
+
+/**
+ * 从既有 request_form_item 恢复旧消息被正文摘要替代前的 Critique 展示快照。
+ */
+async function listArchivedProductWorkflowDisplays(
+  conversationId: string,
+): Promise<ProductWorkflowResult[]> {
+  const rows = await prisma.$queryRaw<ArchivedProductWorkflowRow[]>`
+    SELECT "item"."payload"->'workflow' AS "workflow"
+    FROM "request_form_item" AS "item"
+    INNER JOIN "request_form" AS "form"
+      ON "form"."id" = "item"."form_id"
+    WHERE "form"."chat_id" = ${conversationId}
+      AND "item"."payload"->'workflow' IS NOT NULL
+    ORDER BY "item"."created_at" ASC, "item"."id" ASC
+  `;
+  return rows.flatMap((row) => {
+    const parsed = ProductWorkflowResultSchema.safeParse(row.workflow);
+    return parsed.success
+      ? [createProductWorkflowDisplaySnapshot(parsed.data)]
+      : [];
+  });
+}
+
+/**
+ * 将旧版归档摘要按 confirmation_id 还原为 Critique 卡片。
+ */
+export function attachArchivedProductWorkflowDisplays(
+  messages: MessageDto[],
+  workflows: ProductWorkflowResult[],
+): MessageDto[] {
+  const byConfirmationId = new Map(
+    workflows.map((workflow) => [workflow.confirmation_id, workflow]),
+  );
+  return messages.map((message) => {
+    if (message.productWorkflow) return message;
+    const confirmationId = /确认 ID：([^\r\n]+)/.exec(message.content)?.[1];
+    const productWorkflow = confirmationId
+      ? byConfirmationId.get(confirmationId.trim())
+      : undefined;
+    if (!productWorkflow) return message;
+    return {
+      ...message,
+      content: removeArchivedProductWorkflowSummary(message.content),
+      productWorkflow,
+    };
+  });
 }
 
 /**
@@ -424,6 +495,8 @@ export async function persistAssistantMessage({
   toolCalls,
   subagentTraces,
   agentError,
+  taskExecutionPlan,
+  productWorkflow,
   type,
 }: {
   conversationId: string;
@@ -433,6 +506,8 @@ export async function persistAssistantMessage({
   toolCalls?: ToolCallDto[];
   subagentTraces?: SubagentTraceDto[];
   agentError?: AgentErrorDto;
+  taskExecutionPlan?: TaskExecutionPlan | null;
+  productWorkflow?: ProductWorkflowResult | null;
   type: string;
 }): Promise<string> {
   const messageId = randomUUID();
@@ -446,6 +521,8 @@ export async function persistAssistantMessage({
         ? { subagentTraces }
         : {}),
       ...(agentError ? { agentError } : {}),
+      ...(taskExecutionPlan ? { taskExecutionPlan } : {}),
+      ...(productWorkflow ? { productWorkflow } : {}),
     });
 
     // 按 Agent 类型写入 message.type，前端据此恢复对应阶段的展示顺序。
@@ -488,14 +565,27 @@ function removeTaggedBlock(
   startMarker: string,
   endMarker: string,
 ): string {
-  const startIndex = content.indexOf(startMarker);
-  if (startIndex === -1) return content;
+  let result = content;
+  while (true) {
+    const startIndex = result.indexOf(startMarker);
+    if (startIndex === -1) return result.trim();
+    const endIndex = result.indexOf(endMarker, startIndex);
+    if (endIndex === -1) return result.trim();
+    const blockEnd = endIndex + endMarker.length;
+    result = `${result.slice(0, startIndex)}${result.slice(blockEnd)}`;
+  }
+}
 
-  const endIndex = content.indexOf(endMarker, startIndex);
-  if (endIndex === -1) return content;
-
-  const blockEnd = endIndex + endMarker.length;
-  return `${content.slice(0, startIndex)}${content.slice(blockEnd)}`.trim();
+/**
+ * 移除旧版产品工作流归档摘要，避免恢复卡片后重复显示。
+ */
+function removeArchivedProductWorkflowSummary(content: string): string {
+  return content
+    .replace(
+      /Planner SubAgent 已完成产品工作流汇总，结构化结果已归档。\s*确认 ID：[^\r\n]+\s*状态：[^\r\n]+\s*Executor 结果数：[^\r\n]+/g,
+      "",
+    )
+    .trim();
 }
 
 /**

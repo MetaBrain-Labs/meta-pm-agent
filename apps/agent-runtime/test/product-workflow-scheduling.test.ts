@@ -45,8 +45,34 @@ import { getMissingRequiredSubagentError } from "../src/agents/common/run-agent"
 import {
   isSupplementWorkflow,
   selectNextExecutorRouterTargets,
+  shouldAutomaticallyPlanCorrection,
 } from "../src/graph/nodes/product-workflow-node";
 import type { WorkflowGraphStateValue } from "../src/graph/state";
+
+test("automatically replans one retry-only Critique result", () => {
+  const result = {
+    review: { retry_task_ids: ["supplement-task-01"] },
+    proposal_questions: [],
+    knowledge_graph_update: { open_questions: [] },
+  } as ProductWorkflowResult;
+
+  assert.equal(
+    shouldAutomaticallyPlanCorrection(result, { userInput: [] }),
+    true,
+  );
+  assert.equal(
+    shouldAutomaticallyPlanCorrection(result, {
+      userInput: [
+        {
+          index: 1,
+          type: "自动审查修正",
+          content: "[automatic critique correction]",
+        },
+      ],
+    }),
+    false,
+  );
+});
 
 test("removes answered open questions from supplement tasks only", () => {
   const supplement = createPlan([
