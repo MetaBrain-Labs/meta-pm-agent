@@ -69,6 +69,7 @@ const MAX_GENERATED_TITLE_LENGTH = 36;
  */
 export interface AgentConversationOutput {
   type: string;
+  workflowRoundId?: string;
   content: string;
   reasoningContent?: string;
   toolCalls?: Array<{
@@ -232,26 +233,30 @@ export async function persistConversationResult({
     (output) => output.type === "conversation",
   );
   const requestOutput = agentOutputs.find((output) => output.type === "request");
-  const plannerOutput = agentOutputs.find((output) => output.type === "planner");
+  const plannerOutputs = agentOutputs.filter(
+    (output) => output.type === "planner",
+  );
   const items = conversationOutput
     ? parseUserInputPayload(conversationOutput.content)
     : null;
   const requestAnalysis = requestOutput
     ? parseRequestAnalysisPayload(requestOutput.content)
     : null;
-  const taskExecutionPlan = plannerOutput
-    ? parseTaskExecutionPlanPayload(plannerOutput.content)
-    : null;
+  const taskExecutionPlan =
+    plannerOutputs
+      .map((output) => parseTaskExecutionPlanPayload(output.content))
+      .filter((plan) => plan !== null)
+      .at(-1) ?? null;
   const executorResults = agentOutputs
     .map((output) => parseExecutorResultPayload(output.content))
     .filter((result) => result !== null);
   const productWorkflow =
     productWorkflowResult ??
-    parseProductWorkflowPayload(plannerOutput?.content ?? "") ??
-    parseProductWorkflowPayload(
-      agentOutputs.find((output) => output.type === "product_director")
-        ?.content ?? "",
-    );
+    agentOutputs
+      .map((output) => parseProductWorkflowPayload(output.content))
+      .filter((workflow) => workflow !== null)
+      .at(-1) ??
+    null;
   const sanitizedExecutorResults = executorResults.map(
     sanitizeExecutorResultForPersistence,
   );
@@ -263,10 +268,6 @@ export async function persistConversationResult({
     sanitizedProductWorkflow?.status === "pending_user_confirmation"
       ? { ...sanitizedProductWorkflow, status: "completed" as const }
       : sanitizedProductWorkflow;
-  const displayProductWorkflow = finalProductWorkflow
-    ? createProductWorkflowDisplaySnapshot(finalProductWorkflow)
-    : null;
-
   // 每个 Agent 单独落库，message.type 用于前端恢复正确的展示位置。
   for (const output of agentOutputs) {
     if (
@@ -278,29 +279,32 @@ export async function persistConversationResult({
       continue;
     }
     const outputProductWorkflow = parseProductWorkflowPayload(output.content);
-    const outputContent = sanitizeAgentOutputContent(output, finalProductWorkflow);
-    const ownsTaskExecutionPlan =
-      output.type === "planner" &&
-      parseTaskExecutionPlanPayload(output.content) !== null;
-    const ownsProductWorkflow = outputProductWorkflow !== null;
-    const outputDisplayProductWorkflow =
-      displayProductWorkflow ??
-      (outputProductWorkflow
-        ? createProductWorkflowDisplaySnapshot(outputProductWorkflow)
-        : null);
+    const outputTaskExecutionPlan =
+      output.type === "planner"
+        ? parseTaskExecutionPlanPayload(output.content)
+        : null;
+    const persistedOutputWorkflow = outputProductWorkflow
+      ? sanitizeProductWorkflowForPersistence(outputProductWorkflow)
+      : null;
+    const outputContent = sanitizeAgentOutputContent(
+      output,
+      persistedOutputWorkflow ?? finalProductWorkflow,
+    );
+    const outputDisplayProductWorkflow = persistedOutputWorkflow
+      ? createProductWorkflowDisplaySnapshot(persistedOutputWorkflow)
+      : null;
 
     const messageId = await persistAssistantMessage({
       conversationId,
+      workflowRoundId: output.workflowRoundId,
       content: outputContent,
       userInput: output.type === "conversation" ? items : null,
       reasoningContent: output.reasoningContent,
       toolCalls: sanitizeToolCallsForPersistence(output.toolCalls),
       subagentTraces: output.subagentTraces,
       agentError: output.agentError,
-      taskExecutionPlan: ownsTaskExecutionPlan ? taskExecutionPlan : null,
-      productWorkflow: ownsProductWorkflow
-        ? outputDisplayProductWorkflow
-        : null,
+      taskExecutionPlan: outputTaskExecutionPlan,
+      productWorkflow: outputDisplayProductWorkflow,
       type: output.type,
     });
 

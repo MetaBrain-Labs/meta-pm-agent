@@ -48,6 +48,38 @@ test("restores direct executor blocker context from history", () => {
   );
 });
 
+test("restores the original structured user input for resumed corrections", () => {
+  const messages = createMessages(
+    "[form answers - executor-blocker-task-01]\n- resolution: keep scope",
+  );
+  messages.splice(
+    1,
+    0,
+    message(
+      "a0",
+      "assistant",
+      `<user-input>\n${JSON.stringify({
+        user_input: [
+          { index: 1, type: "request", content: "Build MVP" },
+          {
+            index: 5,
+            type: "constraint",
+            content: "无特殊技术或平台约束",
+          },
+        ],
+      })}\n</user-input>`,
+    ),
+  );
+
+  const context = createWorkflowResumeContextFromMessages({ messages });
+
+  assert.equal(context?.originalUserInput?.[1]?.index, 5);
+  assert.equal(
+    context?.originalUserInput?.[1]?.content,
+    "无特殊技术或平台约束",
+  );
+});
+
 test("restores proposal context for executors with open questions", () => {
   const context = createWorkflowResumeContextFromMessages({
     messages: createMessages(

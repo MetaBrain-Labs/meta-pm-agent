@@ -221,6 +221,7 @@ export async function chatStreamHandler(c: Context) {
 
     let responseLength = 0;
     const agentOutputs = new Map<string, AgentOutputAccumulator>();
+    let currentWorkflowRoundId: string | undefined;
     let productWorkflowResult: unknown = null;
     let latestKnowledgeGraph: ProductKnowledgeGraph | null = null;
     let runtimeWorkspaceId: string | undefined;
@@ -343,6 +344,11 @@ export async function chatStreamHandler(c: Context) {
           signal: runtimeController.signal,
         },
       )) {
+        if (event.type === "workflow-round-start") {
+          currentWorkflowRoundId = event.roundId;
+          await writeSse(writer, toApiEvent(event));
+          continue;
+        }
         if (event.type === "complete") {
           // 捕获工作流完整结构化结果，供最终知识图谱归档使用
           productWorkflowResult = event.result;
@@ -373,6 +379,7 @@ export async function chatStreamHandler(c: Context) {
             const output = getAgentOutput(
               agentOutputs,
               getEventAgentType(event),
+              currentWorkflowRoundId,
             );
             output.agentError = {
               agentType: event.agentType,
@@ -388,11 +395,18 @@ export async function chatStreamHandler(c: Context) {
         }
 
         if ("content" in event && event.type === "reasoning") {
-          getAgentOutput(agentOutputs, getEventAgentType(event)).reasoningContent +=
-            event.content;
+          getAgentOutput(
+            agentOutputs,
+            getEventAgentType(event),
+            currentWorkflowRoundId,
+          ).reasoningContent += event.content;
         }
         if (event.type === "tool-call") {
-          const output = getAgentOutput(agentOutputs, getEventAgentType(event));
+          const output = getAgentOutput(
+            agentOutputs,
+            getEventAgentType(event),
+            currentWorkflowRoundId,
+          );
           upsertToolCall(output.toolCalls, {
             id: event.toolCallId,
             name: event.toolName,
@@ -402,7 +416,11 @@ export async function chatStreamHandler(c: Context) {
           });
         }
         if (event.type === "tool-result") {
-          const output = getAgentOutput(agentOutputs, getEventAgentType(event));
+          const output = getAgentOutput(
+            agentOutputs,
+            getEventAgentType(event),
+            currentWorkflowRoundId,
+          );
           attachToolResult(
             output.toolCalls,
             event.toolCallId,
@@ -412,7 +430,11 @@ export async function chatStreamHandler(c: Context) {
           );
         }
         if (event.type === "subagent-start") {
-          const output = getAgentOutput(agentOutputs, getEventAgentType(event));
+          const output = getAgentOutput(
+            agentOutputs,
+            getEventAgentType(event),
+            currentWorkflowRoundId,
+          );
           const traces = ensureSubagentTraces(output);
           upsertSubagentTrace(traces, {
             id: event.toolCallId,
@@ -423,7 +445,11 @@ export async function chatStreamHandler(c: Context) {
           });
         }
         if (event.type === "subagent-thinking") {
-          const output = getAgentOutput(agentOutputs, getEventAgentType(event));
+          const output = getAgentOutput(
+            agentOutputs,
+            getEventAgentType(event),
+            currentWorkflowRoundId,
+          );
           const traces = ensureSubagentTraces(output);
           appendSubagentThinking(traces, {
             id: event.toolCallId,
@@ -433,7 +459,11 @@ export async function chatStreamHandler(c: Context) {
           });
         }
         if (event.type === "subagent-result") {
-          const output = getAgentOutput(agentOutputs, getEventAgentType(event));
+          const output = getAgentOutput(
+            agentOutputs,
+            getEventAgentType(event),
+            currentWorkflowRoundId,
+          );
           const traces = ensureSubagentTraces(output);
           attachSubagentResult(traces, {
             id: event.toolCallId,
@@ -444,13 +474,21 @@ export async function chatStreamHandler(c: Context) {
         }
         if (event.type === "agent-status" && event.status === "completed") {
           markPendingToolCallsComplete(
-            getAgentOutput(agentOutputs, getEventAgentType(event)).toolCalls,
+            getAgentOutput(
+              agentOutputs,
+              getEventAgentType(event),
+              currentWorkflowRoundId,
+            ).toolCalls,
             getEventAgentType(event),
           );
         }
         if (event.type === "token-usage") {
           const agentType = getEventAgentType(event);
-          const output = getAgentOutput(agentOutputs, agentType);
+          const output = getAgentOutput(
+            agentOutputs,
+            agentType,
+            currentWorkflowRoundId,
+          );
           output.tokenUsage = {
             inputTokens: event.inputTokens,
             cacheHitInputTokens: event.cacheHitInputTokens,
@@ -497,8 +535,11 @@ export async function chatStreamHandler(c: Context) {
           event.type !== "subagent-thinking"
         ) {
           responseLength += event.content.length;
-          getAgentOutput(agentOutputs, getEventAgentType(event)).content +=
-            event.content;
+          getAgentOutput(
+            agentOutputs,
+            getEventAgentType(event),
+            currentWorkflowRoundId,
+          ).content += event.content;
         }
         await writeSse(writer, toApiEvent(event));
       }
@@ -656,12 +697,15 @@ function getEventAgentType(event: { type: string; agentType?: string }): string 
 function getAgentOutput(
   outputs: Map<string, AgentOutputAccumulator>,
   type: string,
+  workflowRoundId?: string,
 ): AgentOutputAccumulator {
-  const existing = outputs.get(type);
+  const key = `${workflowRoundId ?? "global"}:${type}`;
+  const existing = outputs.get(key);
   if (existing) return existing;
 
   const created = {
     type,
+    ...(workflowRoundId ? { workflowRoundId } : {}),
     content: "",
     reasoningContent: "",
     toolCalls: [],
@@ -679,7 +723,7 @@ function getAgentOutput(
     durationMs: 0,
     tokenUsageRecordIds: [],
   };
-  outputs.set(type, created);
+  outputs.set(key, created);
   return created;
 }
 

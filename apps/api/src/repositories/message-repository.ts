@@ -61,6 +61,7 @@ export interface MessageDto {
   id: string;
   role: "user" | "assistant";
   type?: string | null;
+  workflowRoundId?: string;
   content: string;
   timestamp: string;
   reasoningContent?: string;
@@ -297,6 +298,9 @@ export function mapMessageRow(row: MessageRow): MessageDto {
     id: row.id,
     role: row.role === "assistant" ? "assistant" : "user",
     type: row.type,
+    ...(typeof meta?.workflowRoundId === "string"
+      ? { workflowRoundId: meta.workflowRoundId }
+      : {}),
     content: extractedSearch.content,
     timestamp,
     ...(typeof meta?.reasoningContent === "string"
@@ -388,6 +392,9 @@ export function attachExecutorResultsToPlannerMessages(
       for (let planIndex = resultIndex; planIndex >= 0; planIndex -= 1) {
         const plannerMessage = next[planIndex]!;
         if (
+          (plannerMessage.workflowRoundId &&
+            message.workflowRoundId &&
+            plannerMessage.workflowRoundId !== message.workflowRoundId) ||
           !plannerMessage.taskExecutionPlan?.tasks.some(
             (task) => task.task_id === result.task_id,
           )
@@ -489,6 +496,7 @@ function parseRecord(value: unknown): Record<string, unknown> | null {
  */
 export async function persistAssistantMessage({
   conversationId,
+  workflowRoundId,
   content,
   userInput,
   reasoningContent,
@@ -500,6 +508,7 @@ export async function persistAssistantMessage({
   type,
 }: {
   conversationId: string;
+  workflowRoundId?: string;
   content: string;
   userInput: UserInputRecord[] | null;
   reasoningContent?: string;
@@ -515,6 +524,7 @@ export async function persistAssistantMessage({
   await prisma.$transaction(async (tx) => {
     const meta = JSON.stringify({
       source: `${type}-agent`,
+      ...(workflowRoundId ? { workflowRoundId } : {}),
       ...(reasoningContent ? { reasoningContent } : {}),
       ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
       ...(subagentTraces && subagentTraces.length > 0

@@ -38,6 +38,7 @@ export interface ProductWorkflowInput {
 
 export interface WorkflowResumeContext {
   userInputBlock?: string;
+  originalUserInput?: UserInputRecord[];
   requestAnalysis?: RequestAnalysis | null;
   orchestratorDecision?: OrchestratorAgentResult | null;
   plan?: TaskExecutionPlan | null;
@@ -110,6 +111,10 @@ export type PlannerWorkflowReviewInput = CritiqueAgentInput;
  * 产品工作流向 LangGraph/API/SSE 暴露的内部流事件。
  */
 export type ProductWorkflowStreamEvent =
+  | {
+      type: "workflow-round-start";
+      roundId: string;
+    }
   | {
       type: "agent-status";
       agentType: ProductWorkflowAgentType;

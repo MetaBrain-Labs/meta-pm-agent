@@ -26,6 +26,7 @@ import {
 import { getFormAnswerId } from "../../utils/form-parser";
 import type { WorkflowAnswerResolution } from "../../types";
 import type { WorkflowResumeContext } from "../product-workflow/types";
+import { parseUserInputBlock } from "../request/user-input";
 import {
   isExecutorAgentType,
   type ExecutorAgentType,
@@ -154,6 +155,7 @@ function createWorkflowResumeContext({
     productWorkflow?.planner ??
     null;
   const executorResults = collectExecutorResults(messages, productWorkflow);
+  const originalUserInput = findOriginalUserInput(messages);
 
   if (!requestAnalysis) {
     return knowledgeGraph ? { knowledgeGraph, rerunTaskIds: [] } : null;
@@ -163,6 +165,7 @@ function createWorkflowResumeContext({
   if (!plan) {
     return {
       requestAnalysis,
+      originalUserInput,
       executorResults,
       knowledgeGraph: knowledgeGraph ?? null,
       rerunTaskIds: [],
@@ -205,6 +208,7 @@ function createWorkflowResumeContext({
 
   return {
     requestAnalysis,
+    originalUserInput,
     plan,
     executorResults: resolvedExecutorResults,
     knowledgeGraph: resolvedKnowledgeGraph ?? null,
@@ -216,6 +220,26 @@ function createWorkflowResumeContext({
       ? inferSupplementAgentTypes(rerunTaskIds, plan)
       : [],
   };
+}
+
+/**
+ * 恢复当前工作流最初的结构化用户输入，供自动审查修正保留稳定输入索引。
+ */
+function findOriginalUserInput(
+  messages: ChatMessage[],
+): ReturnType<typeof parseUserInputBlock> {
+  const body = findLatestTaggedText(
+    messages,
+    "<user-input",
+    "</user-input>",
+  );
+  if (!body) return [];
+
+  try {
+    return parseUserInputBlock(body);
+  } catch {
+    return [];
+  }
 }
 
 /**

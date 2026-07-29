@@ -45,12 +45,17 @@ test("restores the latest plan and lightweight Critique snapshot from message me
     role: "assistant",
     type: "critique",
     content,
-    meta: { taskExecutionPlan: latestPlan, productWorkflow: snapshot },
+    meta: {
+      workflowRoundId: "round-2",
+      taskExecutionPlan: latestPlan,
+      productWorkflow: snapshot,
+    },
     user_input: null,
     created_at: new Date("2026-07-25T10:23:48.000Z"),
   });
 
   assert.equal(restored.taskExecutionPlan?.status, "supplement");
+  assert.equal(restored.workflowRoundId, "round-2");
   assert.equal(restored.productWorkflow?.confirmation_id, "critique-1");
   assert.equal(restored.productWorkflow?.knowledge_graph_update.entities.length, 0);
   assert.equal(restored.content.includes("<task-execution"), false);
@@ -126,6 +131,49 @@ test("attaches executor result to the nearest matching planner DAG", () => {
     restored[1]?.executorResults?.[0]?.task_id,
     "supplement-task-01",
   );
+});
+
+/**
+ * 构造带计划的持久化消息。
+ */
+test("keeps executor restoration inside its persisted workflow round", () => {
+  const plan = createPlan("task-01", "supplement");
+  const result: ExecutorAgentResult = {
+    task_id: "task-01",
+    agent_type: "executor-product-strategy",
+    focus_layer: "Goal",
+    summary: "round one result",
+    entities: [],
+    relations: [],
+    decisions: [],
+    risks: [],
+    open_questions: [],
+    quality_result: { passed: true, notes: "ok" },
+  };
+  const oldPlanner = {
+    ...plannerMessage("planner-old", plan),
+    workflowRoundId: "round-1",
+  };
+  const newPlanner = {
+    ...plannerMessage("planner-new", plan),
+    workflowRoundId: "round-2",
+  };
+
+  const restored = attachExecutorResultsToPlannerMessages([
+    oldPlanner,
+    newPlanner,
+    {
+      id: "executor-old",
+      role: "assistant",
+      workflowRoundId: "round-1",
+      content: "",
+      timestamp: "2026-07-24T12:53:55.000Z",
+      executorResult: result,
+    },
+  ]);
+
+  assert.equal(restored[0]?.executorResults?.[0]?.summary, "round one result");
+  assert.equal(restored[1]?.executorResults, undefined);
 });
 
 /**

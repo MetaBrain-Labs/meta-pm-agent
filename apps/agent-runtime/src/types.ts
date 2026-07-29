@@ -54,6 +54,10 @@ export interface StreamChunk {
 export type ConversationStreamEvent =
   | StreamChunk
   | {
+      type: "workflow-round-start";
+      roundId: string;
+    }
+  | {
       type: "agent-status";
       agentType: AgentMessageType;
       status: "started" | "completed";

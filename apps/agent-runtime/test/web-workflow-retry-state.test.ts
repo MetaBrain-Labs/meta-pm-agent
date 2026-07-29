@@ -15,6 +15,7 @@ import type { Message, ProductWorkflowResult } from "../../web/src/types";
 import {
   applyChatStreamEventToMessages,
   serializeMessageContentForRequest,
+  startWorkflowRound,
 } from "../../web/src/pages/chat/chat-run-store";
 import { mapPersistedMessageToMessage } from "../../web/src/mappers/persisted-message";
 
@@ -53,6 +54,57 @@ test("retry result updates only the nearest matching Planner DAG", () => {
     next[1]?.executorResults?.[0]?.task_id,
     "supplement-task-01",
   );
+});
+
+test("separates consecutive Planner DAG rounds into ordered messages", () => {
+  const initialMessages = [
+    {
+      id: "assistant-run",
+      role: "agent",
+      content: "",
+      timestamp: 1,
+    } satisfies Message,
+  ];
+  const firstRound = startWorkflowRound(
+    initialMessages,
+    "assistant-run",
+    "round-1",
+  );
+  const firstPlan = {
+    ...createWorkflowResult().planner,
+    status: "initial" as const,
+  };
+  const withFirstPlan = applyChatStreamEventToMessages(
+    firstRound.messages,
+    firstRound.activeAgentMsgId,
+    {
+      type: "text",
+      agentType: "planner",
+      content: `<task-execution>\n${JSON.stringify(firstPlan)}\n</task-execution>`,
+    },
+    false,
+  );
+  const secondRound = startWorkflowRound(
+    withFirstPlan,
+    firstRound.activeAgentMsgId,
+    "round-2",
+  );
+  const withSecondPlan = applyChatStreamEventToMessages(
+    secondRound.messages,
+    secondRound.activeAgentMsgId,
+    {
+      type: "text",
+      agentType: "planner",
+      content: `<task-execution>\n${JSON.stringify(createWorkflowResult().planner)}\n</task-execution>`,
+    },
+    false,
+  );
+
+  assert.equal(withSecondPlan.length, 2);
+  assert.equal(withSecondPlan[0]?.workflowRoundId, "round-1");
+  assert.equal(withSecondPlan[0]?.plannerExecution?.plan.status, "initial");
+  assert.equal(withSecondPlan[1]?.workflowRoundId, "round-2");
+  assert.equal(withSecondPlan[1]?.plannerExecution?.plan.status, "supplement");
 });
 
 test("serializes Critique result and restores completion card", () => {

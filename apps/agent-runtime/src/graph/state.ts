@@ -60,6 +60,12 @@ export const WorkflowGraphState = Annotation.Root({
     default: () => [],
   }),
 
+  // 当前产品请求首次整理出的输入，自动修正时必须保留原始索引和语义。
+  originalUserInput: Annotation<UserInputRecord[]>({
+    reducer: (_current, update) => update,
+    default: () => [],
+  }),
+
   // Request Agent 的结构化分类结果。
   requestAnalysis: Annotation<RequestAnalysis | null>({
     reducer: (_current, update) => update,

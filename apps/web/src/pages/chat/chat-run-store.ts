@@ -232,6 +232,7 @@ async function readChatStream(
 ) {
   const decoder = new TextDecoder();
   let buffer = "";
+  let activeAgentMsgId = agentMsgId;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -256,11 +257,23 @@ async function readChatStream(
           onThreadTitleChange(event.chatId, event.title);
           continue;
         }
+        if (event.type === "workflow-round-start" && event.roundId) {
+          updateMessages(threadId, (messages) => {
+            const startedRound = startWorkflowRound(
+              messages,
+              activeAgentMsgId,
+              event.roundId!,
+            );
+            activeAgentMsgId = startedRound.activeAgentMsgId;
+            return startedRound.messages;
+          });
+          continue;
+        }
 
         updateMessages(threadId, (messages) =>
           applyChatStreamEventToMessages(
             messages,
-            agentMsgId,
+            activeAgentMsgId,
             event,
             reconcilePriorDag,
           ),
@@ -270,6 +283,47 @@ async function readChatStream(
       }
     }
   }
+}
+
+/**
+ * 将新 Planner DAG 定位到独立的助手消息；首轮沿用当前消息，后续轮次按顺序追加。
+ */
+export function startWorkflowRound(
+  messages: Message[],
+  activeAgentMsgId: string,
+  roundId: string,
+): { messages: Message[]; activeAgentMsgId: string } {
+  const existingRound = messages.find(
+    (message) => message.workflowRoundId === roundId,
+  );
+  if (existingRound) {
+    return { messages, activeAgentMsgId: existingRound.id };
+  }
+
+  const activeIndex = messages.findIndex(
+    (message) => message.id === activeAgentMsgId,
+  );
+  const activeMessage = messages[activeIndex];
+  if (activeMessage && !activeMessage.workflowRoundId) {
+    const next = [...messages];
+    next[activeIndex] = { ...activeMessage, workflowRoundId: roundId };
+    return { messages: next, activeAgentMsgId };
+  }
+
+  const nextMessageId = `workflow-round-${roundId}`;
+  return {
+    messages: [
+      ...messages,
+      {
+        id: nextMessageId,
+        role: "agent",
+        workflowRoundId: roundId,
+        content: "",
+        timestamp: Date.now(),
+      },
+    ],
+    activeAgentMsgId: nextMessageId,
+  };
 }
 
 /**

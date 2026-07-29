@@ -44,7 +44,10 @@ import {
 } from "../src/agents/product-workflow/orchestrator-agent/agent";
 import { getMissingRequiredSubagentError } from "../src/agents/common/run-agent";
 import {
+  createAutomaticCorrectionUserInput,
+  createWorkflowRoundStartEvent,
   isSupplementWorkflow,
+  requireMissingInputConfirmation,
   selectNextExecutorRouterTargets,
   shouldAutomaticallyPlanCorrection,
 } from "../src/graph/nodes/product-workflow-node";
@@ -55,7 +58,7 @@ test("automatically replans one retry-only Critique result", () => {
     review: { retry_task_ids: ["supplement-task-01"] },
     proposal_questions: [],
     knowledge_graph_update: { open_questions: [] },
-  } as ProductWorkflowResult;
+  } as unknown as ProductWorkflowResult;
 
   assert.equal(
     shouldAutomaticallyPlanCorrection(result, { userInput: [] }),
@@ -71,6 +74,65 @@ test("automatically replans one retry-only Critique result", () => {
         },
       ],
     }),
+    false,
+  );
+});
+
+test("assigns a distinct round ID to each new Planner DAG", () => {
+  const first = createWorkflowRoundStartEvent();
+  const second = createWorkflowRoundStartEvent();
+
+  assert.equal(first.type, "workflow-round-start");
+  assert.notEqual(first.roundId, second.roundId);
+});
+
+test("automatic Critique correction preserves original input indexes and meaning", () => {
+  const workflow = createRetryWorkflowResult();
+  const correctedInput = createAutomaticCorrectionUserInput(
+    workflow,
+    [
+      { index: 1, type: "request", content: "设计文档协同工具" },
+      {
+        index: 5,
+        type: "constraint",
+        content: "无特殊技术或平台约束",
+      },
+    ],
+    [
+      {
+        index: 1,
+        type: "form",
+        content: "[form answers - proposal] 保持当前范围",
+      },
+    ],
+  );
+
+  assert.equal(correctedInput[1]?.index, 5);
+  assert.equal(correctedInput[1]?.content, "无特殊技术或平台约束");
+  assert.equal(correctedInput[2]?.index, 6);
+  assert.equal(correctedInput[3]?.index, 7);
+  assert.match(correctedInput[3]?.content ?? "", /automatic critique correction/);
+});
+
+test("missing referenced input asks for confirmation instead of automatic planning", () => {
+  const workflow = createRetryWorkflowResult();
+  workflow.review.issues = [
+    {
+      code: "UNCOVERED_USER_INPUT",
+      severity: "error",
+      task_id: "task-01",
+      message:
+        "Explicit user input 5 is not represented by an active Requirement.",
+    },
+  ];
+
+  const guarded = requireMissingInputConfirmation(workflow, []);
+
+  assert.equal(guarded.status, "pending_user_confirmation");
+  assert.equal(guarded.proposal_questions[0]?.source_task_id, "task-01");
+  assert.match(guarded.proposal_questions[0]?.label ?? "", /5/);
+  assert.equal(
+    shouldAutomaticallyPlanCorrection(guarded, { userInput: [] }),
     false,
   );
 });
@@ -114,7 +176,7 @@ test("recognizes form-answer workflows as supplements without agent hints", () =
         content: "[form answers - proposal-decision] confirmed",
       },
     ],
-  } as WorkflowGraphStateValue;
+  } as unknown as WorkflowGraphStateValue;
 
   assert.equal(isSupplementWorkflow(state), true);
 });
@@ -900,6 +962,40 @@ function assertNoDagCycle(plan: TaskExecutionPlan): void {
   }
 
   assert.equal(visited.length, plan.dag.nodes.length);
+}
+
+/**
+ * 构造会触发自动补充规划的最小 Critique 结果。
+ */
+function createRetryWorkflowResult(): ProductWorkflowResult {
+  const planner = createPlan([
+    createTask("task-01", 1, "executor-product-strategy", []),
+  ]);
+  return {
+    status: "pending_user_confirmation",
+    confirmation_id: "critique-retry",
+    request_summary: "Correct uncovered input.",
+    planner,
+    executor_results: [],
+    review: {
+      accepted_task_ids: [],
+      rejected_task_ids: ["task-01"],
+      retry_task_ids: ["task-01"],
+      issues: [],
+      notes: "Correction required.",
+    },
+    product_context_update: "Correction required.",
+    knowledge_graph_update: createEmptyKnowledgeGraph(),
+    knowledge_graph_review: {
+      accepted_task_ids: [],
+      rejected_task_ids: ["task-01"],
+      retry_task_ids: ["task-01"],
+      issues: [],
+      notes: ["Correction required."],
+    },
+    proposal_questions: [],
+    confirmation_message: "Correction required.",
+  };
 }
 
 function createTask(

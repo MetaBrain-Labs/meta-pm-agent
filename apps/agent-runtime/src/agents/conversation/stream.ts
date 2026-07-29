@@ -722,6 +722,7 @@ async function* streamPlanningAfterUserInput(
       }
 
       if (
+        event.type === "workflow-round-start" ||
         event.type === "agent-status" ||
         event.type === "reasoning" ||
         event.type === "request-analysis-start" ||

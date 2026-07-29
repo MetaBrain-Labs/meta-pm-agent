@@ -252,6 +252,7 @@ function createWorkflowInitialState(input: WorkflowGraphInput) {
     contextSource: input.contextSource ?? "none",
     workspaceId: input.workspaceId,
     userInputBlock: resume?.userInputBlock ?? input.userInputBlock,
+    originalUserInput: resume?.originalUserInput ?? [],
     requestAnalysis: resume?.requestAnalysis ?? null,
     orchestratorDecision: resume?.orchestratorDecision ?? null,
     plan,

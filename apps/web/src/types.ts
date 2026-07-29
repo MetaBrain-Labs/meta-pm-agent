@@ -26,6 +26,7 @@ export type StreamEventType =
   | "user-input-complete"
   | "request-analysis-start"
   | "request-analysis-complete"
+  | "workflow-round-start"
   | "todo-update"
   | "tool-call"
   | "tool-result"
@@ -41,6 +42,7 @@ export type StreamEventType =
 
 export interface StreamEvent {
   type: StreamEventType;
+  roundId?: string;
   id?: string;
   content?: string;
   agentType?: string;
@@ -327,6 +329,7 @@ export interface Message {
   id: string;
   role: "user" | "agent";
   type?: string | null;
+  workflowRoundId?: string;
   content: string;
   thinking?: string;
   reasoningBlocks?: ReasoningBlock[];
@@ -445,6 +448,7 @@ export interface PersistedMessageInfo {
   id: string;
   role: "user" | "assistant";
   type?: string | null;
+  workflowRoundId?: string;
   content: string;
   timestamp: string;
   reasoningContent?: string;

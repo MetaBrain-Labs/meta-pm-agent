@@ -33,6 +33,9 @@ export function mapPersistedMessageToMessage(
     id: message.id,
     role: message.role === "assistant" ? "agent" : "user",
     type: message.type,
+    ...(message.workflowRoundId
+      ? { workflowRoundId: message.workflowRoundId }
+      : {}),
     content: workflowCompletion ? "" : message.content,
     timestamp: new Date(message.timestamp).getTime(),
     ...(message.reasoningContent &&
