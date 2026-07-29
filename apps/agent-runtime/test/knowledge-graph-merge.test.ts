@@ -25,7 +25,10 @@ import {
   composeProductWorkflowResult,
   createCritiqueValidationReport,
 } from "../src/agents/product-workflow/critique-agent/agent";
-import { hasStructuredGraphItems } from "../src/agents/product-workflow/executor-agent/agent";
+import {
+  getExecutorOutputValidationError,
+  hasStructuredGraphItems,
+} from "../src/agents/product-workflow/executor-agent/agent";
 import { mergeKnowledgeGraphSnapshots } from "../src/graph/state";
 
 test("retries only when an executor wrote no structured graph items", () => {
@@ -35,6 +38,25 @@ test("retries only when an executor wrote no structured graph items", () => {
   assert.equal(hasStructuredGraphItems(emptyGraph), false);
   emptyGraph.entities.push(createGoal("G-001"));
   assert.equal(hasStructuredGraphItems(emptyGraph), true);
+});
+
+test("rejects a final executor attempt with no structured writes", () => {
+  assert.equal(
+    getExecutorOutputValidationError({
+      hasStructuredItems: false,
+      blockingQuestionCount: 0,
+      requiredBlockingCount: 0,
+    }),
+    "no structured graph items were committed",
+  );
+  assert.equal(
+    getExecutorOutputValidationError({
+      hasStructuredItems: true,
+      blockingQuestionCount: 0,
+      requiredBlockingCount: 0,
+    }),
+    null,
+  );
 });
 
 test("keeps compact semantic updates reviewable without copying the full graph", () => {

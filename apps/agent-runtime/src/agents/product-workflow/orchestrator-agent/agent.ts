@@ -41,7 +41,6 @@ import {
   buildPreOrchPayload,
   createFallbackPreOrchResult,
   extractPreOrchFromSubagentResult,
-  extractPreOrchReasoning,
 } from "./pre-orchestrator-subagent";
 
 export interface OrchestratorAgentOutput {
@@ -74,93 +73,113 @@ export async function* streamOrchestratorAgent(
     ? PreOrchResultSchema
     : OrchestratorAgentResultSchema;
 
-  const runner = runAgent({
-    agentType: "orchestrator" as any,
-    agentLabel: "Orchestrator Agent",
-    name: "orchestrator-agent",
-    // json_object 会导致模型跳过 task 工具调用直接生成 JSON 输出，
-    // 因此两种模式都不能使用 responseFormat: "json_object"。
-    modelOptions: { enableThinking: false, temperature: 0, maxTokens: 4096 },
-    systemPrompt: ORCHESTRATOR_AGENT_PROMPT,
-    // pre-check 模式只需 Pre-Orchestrator SubAgent；full 模式只需 Planner SubAgent。
-    // 不混用可避免 LLM 在同一轮次中调用不该出现的 SubAgent。
-    subagents: isPreCheck
-      ? [createPreOrchestratorSubagent()]
-      : [createPlannerSubagent()],
-    payload,
-    resolveOutput: (context) =>
-      resolveJsonOutput(context, outputSchema as any),
-    requiredSubagentType:
-      !isPreCheck && input.requestAnalysis.business_model.length > 0
-        ? "planner"
-        : undefined,
-    fallback: (reason: string) =>
-      isPreCheck
-        ? createFallbackPreOrchResult(input)
-        : createFallbackOrchestratorDecision(input, reason),
-    signal: input.signal,
-  });
+  let rawOutput: unknown;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const runner = runAgent({
+      agentType: "orchestrator" as any,
+      agentLabel: "Orchestrator Agent",
+      name: "orchestrator-agent",
+      // json_object 会导致模型跳过 task 工具调用直接生成 JSON 输出，
+      // 因此两种模式都不能使用 responseFormat: "json_object"。
+      modelOptions: { enableThinking: true, temperature: 0, maxTokens: 4096 },
+      systemPrompt: ORCHESTRATOR_AGENT_PROMPT,
+      // pre-check 模式只需 Pre-Orchestrator SubAgent；full 模式只需 Planner SubAgent。
+      // 不混用可避免 LLM 在同一轮次中调用不该出现的 SubAgent。
+      subagents: isPreCheck
+        ? [createPreOrchestratorSubagent()]
+        : [createPlannerSubagent()],
+      payload:
+        attempt === 1
+          ? payload
+          : {
+              ...payload,
+              retry_context: {
+                attempt,
+                error: "required-subagent-not-invoked: planner",
+                previous_raw_output:
+                  "No Planner task call was emitted by the previous attempt.",
+              },
+            },
+      resolveOutput: (context) =>
+        resolveJsonOutput(context, outputSchema as any),
+      requiredSubagentType:
+        !isPreCheck && input.requestAnalysis.business_model.length > 0
+          ? "planner"
+          : undefined,
+      fallback: (reason: string) =>
+        isPreCheck
+          ? createFallbackPreOrchResult(input)
+          : createFallbackOrchestratorDecision(input, reason),
+      signal: input.signal,
+    });
 
-  let next = await runner.next();
-  while (!next.done) {
-    const event = next.value;
+    try {
+      let next = await runner.next();
+      while (!next.done) {
+        const event = next.value;
 
-    if (event.type === "subagent-start") {
-      yield event;
-      if (isPreCheck && event.subagentType === "pre-orchestrator") {
-        yield {
-          type: "agent-status",
-          agentType: "orchestrator",
-          status: "started",
-          phase: "planning",
-        };
-      } else if (!isPreCheck && event.subagentType === "planner") {
-        plannerInvocationStarted = true;
-        yield {
-          type: "agent-status",
-          agentType: "planner",
-          status: "started",
-          phase: "planning",
-        };
+        if (event.type === "subagent-start") {
+          yield event;
+          if (isPreCheck && event.subagentType === "pre-orchestrator") {
+            yield {
+              type: "agent-status",
+              agentType: "orchestrator",
+              status: "started",
+              phase: "planning",
+            };
+          } else if (!isPreCheck && event.subagentType === "planner") {
+            plannerInvocationStarted = true;
+            yield {
+              type: "agent-status",
+              agentType: "planner",
+              status: "started",
+              phase: "planning",
+            };
+          }
+        } else if (event.type === "subagent-result") {
+          yield event;
+          // 始终捕获最后一次 SubAgent 结果：当 Orchestrator 因首次结果为空
+          // 而自主重试时，使用重试后的有效结果而非第一次的空结果。
+          if (isPreCheck && event.subagentType === "pre-orchestrator") {
+            preOrchSubagentResult = event.result;
+          }
+          if (!isPreCheck && event.subagentType === "planner") {
+            plannerSubagentResult = event.result;
+          }
+          if (!isPreCheck && event.subagentType === "planner") {
+            capturedPlan = extractPlanFromSubagentResult(
+              plannerSubagentResult,
+              input,
+            );
+            yield {
+              type: "agent-status",
+              agentType: "planner",
+              status: "completed",
+              phase: "planning",
+            };
+            yield {
+              type: "agent-output",
+              agentType: "planner",
+              content: formatTaskExecutionPlanBlock(capturedPlan),
+            };
+          }
+        } else {
+          yield event;
+        }
+
+        next = await runner.next();
       }
-    } else if (event.type === "subagent-result") {
-      yield event;
-      // 始终捕获最后一次 SubAgent 结果：当 Orchestrator 因首次结果为空
-      // 而自主重试时，使用重试后的有效结果而非第一次的空结果。
-      if (isPreCheck && event.subagentType === "pre-orchestrator") {
-        preOrchSubagentResult = event.result;
-      }
-      if (!isPreCheck && event.subagentType === "planner") {
-        plannerSubagentResult = event.result;
-      }
-      if (isPreCheck) {
-        yield {
-          type: "reasoning",
-          agentType: "orchestrator",
-          content: extractPreOrchReasoning(preOrchSubagentResult),
-        };
-      } else if (event.subagentType === "planner") {
-        capturedPlan = extractPlanFromSubagentResult(
-          plannerSubagentResult,
-          input,
-        );
-        yield {
-          type: "agent-status",
-          agentType: "planner",
-          status: "completed",
-          phase: "planning",
-        };
-        yield {
-          type: "agent-output",
-          agentType: "planner",
-          content: formatTaskExecutionPlanBlock(capturedPlan),
-        };
-      }
-    } else {
-      yield event;
+      rawOutput = next.value;
+      break;
+    } catch (error) {
+      if (!shouldRetryPlannerDelegation(error, attempt)) throw error;
+      yield {
+        type: "reasoning",
+        agentType: "orchestrator",
+        content:
+          "Planner SubAgent was not invoked; retrying delegation once.\n",
+      };
     }
-
-    next = await runner.next();
   }
 
   yield {
@@ -169,8 +188,6 @@ export async function* streamOrchestratorAgent(
     status: "completed",
     phase: "planning",
   };
-
-  const rawOutput = next.value;
 
   if (isPreCheck) {
     // 优先使用 task 工具返回值；若运行时未暴露 ToolMessage，则使用 Orchestrator 已解析的最终 JSON。
@@ -212,6 +229,20 @@ export async function* streamOrchestratorAgent(
       : normalizedDecision,
     plan,
   };
+}
+
+/**
+ * Planner 首次漏调时仅重试一次；第二次失败交给工作流错误处理。
+ */
+export function shouldRetryPlannerDelegation(
+  error: unknown,
+  attempt: number,
+): boolean {
+  return (
+    attempt === 1 &&
+    error instanceof Error &&
+    error.message === "required-subagent-not-invoked: planner"
+  );
 }
 
 /**

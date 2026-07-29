@@ -7,7 +7,6 @@
  * Responsibilities:
  * - createPreOrchestratorSubagent()：构造零工具权限的 Pre-Orchestrator SubAgent
  * - extractPreOrchFromSubagentResult()：从 SubAgent 输出中解析并校验 PreOrchResult
- * - extractPreOrchReasoning()：提取 SubAgent 推理摘要供前端展示
  * - resolveToolMessageContent()：归一化 DeepAgents ToolMessage 内容为可解析字符串
  */
 
@@ -40,7 +39,7 @@ export function createPreOrchestratorSubagent(): SubAgent {
       "Classifies user intent (casual_chat/new_project/project_evolution) based on product context and generates clarification questions when needed. Returns a JSON with intent, decision, reason, and optional questions.",
     systemPrompt: PRE_ORCHESTRATOR_SUBAGENT_PROMPT,
     model: createChatModel({
-      enableThinking: false,
+      enableThinking: true,
       responseFormat: "json_object",
       temperature: 0,
       maxTokens: 4096,
@@ -91,25 +90,6 @@ function resolvePreOrchResultCandidate(rawResult: unknown): unknown | null {
 
   const content = resolveToolMessageContent(rawResult);
   return content === null ? null : parseJsonObject(content);
-}
-
-/**
- * 提取 SubAgent reasoning 摘要，供前端展示推理过程。
- */
-export function extractPreOrchReasoning(rawResult: unknown): string {
-  const content = resolveToolMessageContent(rawResult);
-  if (!content) return "意图分类完成。";
-
-  const parsed = parseJsonObject(content);
-  if (!parsed || typeof parsed !== "object") return "意图分类完成。";
-
-  const record = parsed as Record<string, unknown>;
-  const reason = typeof record.reason === "string" ? record.reason : "";
-  const intent = typeof record.intent === "string" ? record.intent : "";
-  const decision = typeof record.decision === "string" ? record.decision : "";
-
-  if (reason) return reason;
-  return `意图：${intent}，决策：${decision}`;
 }
 
 /**

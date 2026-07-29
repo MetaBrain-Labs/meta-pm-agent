@@ -16,6 +16,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PLANNER_SUBAGENT_PROMPT } from "../src/agents/product-workflow/orchestrator-agent/planner-subagent/prompt";
+import { ORCHESTRATOR_AGENT_PROMPT } from "../src/agents/product-workflow/orchestrator-agent/prompt";
 import { CRITIQUE_AGENT_PROMPT } from "../src/agents/product-workflow/critique-agent/prompt";
 import { createExecutorAgentPrompt } from "../src/agents/product-workflow/executor-agent/prompt";
 import { getExecutorDefinition } from "../src/agents/product-workflow/executor-agent/definitions";
@@ -190,6 +191,21 @@ test("orchestrator planner subagent prompt satisfies json response format", () =
   assert.match(
     ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
     /do not create placeholder capacity metrics, numeric targets/,
+  );
+});
+
+test("orchestrator retry requires an immediate Planner task call", () => {
+  assert.match(
+    ORCHESTRATOR_AGENT_PROMPT,
+    /When payload\.mode is "pre-check" and the payload includes retry_context/,
+  );
+  assert.match(
+    ORCHESTRATOR_AGENT_PROMPT,
+    /If retry_context is present, the previous attempt did not invoke Planner/,
+  );
+  assert.match(
+    ORCHESTRATOR_AGENT_PROMPT,
+    /Call the planner task immediately before emitting any text/,
   );
 });
 

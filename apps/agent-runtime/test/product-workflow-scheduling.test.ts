@@ -40,6 +40,7 @@ import {
   compactGraphForPlanner,
   createPlannerDelegationSummary,
   requireDelegatedPlannerPlan,
+  shouldRetryPlannerDelegation,
 } from "../src/agents/product-workflow/orchestrator-agent/agent";
 import { getMissingRequiredSubagentError } from "../src/agents/common/run-agent";
 import {
@@ -169,6 +170,24 @@ test("fails when Orchestrator does not actually delegate to Planner", () => {
   assert.equal(
     requireDelegatedPlannerPlan("conversation", undefined, false),
     undefined,
+  );
+  assert.equal(
+    shouldRetryPlannerDelegation(
+      new Error("required-subagent-not-invoked: planner"),
+      1,
+    ),
+    true,
+  );
+  assert.equal(
+    shouldRetryPlannerDelegation(
+      new Error("required-subagent-not-invoked: planner"),
+      2,
+    ),
+    false,
+  );
+  assert.equal(
+    shouldRetryPlannerDelegation(new Error("provider unavailable"), 1),
+    false,
   );
 });
 

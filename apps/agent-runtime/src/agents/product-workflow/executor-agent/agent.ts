@@ -226,9 +226,15 @@ export async function* streamExecutorAgent(
             : {}),
         },
         resolveOutput: resolveTextOutput,
-        fallback: () => createFallbackKnowledgeGraphPatch(input.task),
+        fallback: () => "",
+        suppressFallbackReasoning: true,
         signal: input.signal,
         throwOnError: true,
+        getToolResultError: (toolName, toolResult) =>
+          STRUCTURED_TOOL_NAMES.has(toolName) &&
+          isNodeProvenanceValidationFailure(toolResult)
+            ? new Error(getErrorMessage(toolResult))
+            : null,
       });
 
       try {
@@ -291,17 +297,16 @@ export async function* streamExecutorAgent(
         (question) => question.blocking,
       ).length;
       const hasStructuredItems = hasStructuredGraphItems(attemptDelta);
-      if (
-        (hasStructuredItems &&
-          blockingQuestionCount >= requiredBlockingCount) ||
-        attempt === 2
-      ) {
-        if (blockingQuestionCount < requiredBlockingCount) {
-          throw new Error(
-            `Executor output validation failed after retry: required ${requiredBlockingCount} blocking open questions, committed ${blockingQuestionCount}.`,
-          );
-        }
-        break;
+      const validationError = getExecutorOutputValidationError({
+        hasStructuredItems,
+        blockingQuestionCount,
+        requiredBlockingCount,
+      });
+      if (!validationError) break;
+      if (attempt === 2) {
+        throw new Error(
+          `Executor output validation failed after retry: ${validationError}`,
+        );
       }
 
       retryInstruction = [
@@ -500,6 +505,9 @@ function getStringField(
  * 提取运行时异常的可展示文本。
  */
 function getErrorMessage(error: unknown): string {
+  if (error && typeof error === "object" && "error" in error) {
+    return getErrorMessage((error as { error: unknown }).error);
+  }
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -527,6 +535,7 @@ export function createNodeProvenanceRetryInstruction(
     `Validation error: ${getErrorMessage(error)}`,
     `Verified web sources from this run: ${JSON.stringify(verifiedSources)}`,
     "Rewrite invalid Evidence with an exact sourceId, title, and URL from this list. If no listed source supports a claim, omit that Evidence and record the uncertainty as a Risk or unverified assumption.",
+    "For unsupported_infrastructure_scope, omit the rejected infrastructure detail and record it as a Risk or open question unless the exact scope appears in user input.",
   ].join(" ");
 }
 
@@ -671,41 +680,24 @@ export function hasStructuredGraphItems(
 }
 
 /**
- * 在模型不可用时生成最小可追踪的结构化图谱补丁。
+ * 校验 Executor 是否提交了可供下游 DAG 消费的最小结构化结果。
  */
-function createFallbackKnowledgeGraphPatch(task: TaskExecutionNode): string {
-  return JSON.stringify(
-    {
-      summary: [task.title],
-      nodes: [
-        {
-          id: `${task.task_id}-placeholder`,
-          type: "Custom",
-          name: task.title,
-          description: task.description,
-          source_task_id: task.task_id,
-          status: "proposed",
-        },
-      ],
-      relations: [],
-      decisions: [],
-      risks: [
-        {
-          id: `${task.task_id}-risk-01`,
-          text: "模型不可用，本任务只写入最小占位节点。",
-        },
-      ],
-      open_questions: [
-        {
-          id: `${task.task_id}-oq-01`,
-          text: "是否接受该任务的图谱建模方向？",
-          blocking: true,
-        },
-      ],
-    },
-    null,
-    2,
-  );
+export function getExecutorOutputValidationError({
+  hasStructuredItems,
+  blockingQuestionCount,
+  requiredBlockingCount,
+}: {
+  hasStructuredItems: boolean;
+  blockingQuestionCount: number;
+  requiredBlockingCount: number;
+}): string | null {
+  if (!hasStructuredItems) {
+    return "no structured graph items were committed";
+  }
+  if (blockingQuestionCount < requiredBlockingCount) {
+    return `required ${requiredBlockingCount} blocking open questions, committed ${blockingQuestionCount}`;
+  }
+  return null;
 }
 
 /**

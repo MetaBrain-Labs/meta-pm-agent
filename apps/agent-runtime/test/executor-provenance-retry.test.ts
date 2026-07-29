@@ -32,11 +32,16 @@ test("provenance validation failure produces a retry instruction with exact veri
   );
 
   assert.equal(isNodeProvenanceValidationFailure(error), true);
+  assert.equal(
+    isNodeProvenanceValidationFailure({ error: error.message }),
+    true,
+  );
   const instruction = createNodeProvenanceRetryInstruction(error, registry);
   assert.match(instruction, /"sourceId":"9"/);
   assert.match(instruction, /Verified collaboration source/);
   assert.match(instruction, /https:\/\/example\.com\/collaboration/);
   assert.match(instruction, /Risk or unverified assumption/);
+  assert.match(instruction, /unsupported_infrastructure_scope/);
 });
 
 test("terminal retry error preserves both executor attempts", () => {
