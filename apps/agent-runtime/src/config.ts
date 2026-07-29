@@ -60,7 +60,7 @@ export function getLlmConfig(): LlmConfig {
     apiKey,
     baseURL: process.env.LLM_BASE_URL ?? "https://api.deepseek.com",
     enableThinking: process.env.LLM_ENABLE_THINKING === "true",
-    maxTokens: 3072,
+    maxTokens: 4096,
     model: process.env.LLM_MODEL ?? "deepseek-chat",
     reasoningEffort: process.env.LLM_REASONING_EFFORT ?? "high",
     temperature: 0.3,
