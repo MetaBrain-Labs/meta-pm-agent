@@ -28,6 +28,22 @@ interface WebSearchResult {
   snippet: string;
 }
 
+/**
+ * 本轮 Executor 已真实取得的网页来源，用于约束 Evidence 写入。
+ */
+export interface VerifiedWebSource {
+  sourceId: string;
+  title: string;
+  url: string;
+}
+
+/**
+ * 单次 Agent 运行共享的搜索来源注册表。
+ */
+export interface WebSearchEvidenceRegistry {
+  sources: Map<string, VerifiedWebSource>;
+}
+
 interface WebSearchResponse {
   results: WebSearchResult[];
   source?: string;
@@ -41,9 +57,18 @@ const WEB_SEARCH_TIMEOUT_MS = parseInt(
 );
 
 /**
+ * 创建单次 Agent 运行使用的搜索来源注册表。
+ */
+export function createWebSearchEvidenceRegistry(): WebSearchEvidenceRegistry {
+  return { sources: new Map() };
+}
+
+/**
  * 创建联网搜索工具，供被授权的 Agent 查询外部事实和近期信息。
  */
-export function createWebSearchTool() {
+export function createWebSearchTool(
+  evidenceRegistry?: WebSearchEvidenceRegistry,
+) {
   const runtimeContext = getRuntimeDateContext();
   let nextCitationSourceId = 1;
 
@@ -55,6 +80,14 @@ export function createWebSearchTool() {
         nextCitationSourceId,
       );
       nextCitationSourceId += results.length;
+      for (const result of results) {
+        if (!result.sourceId) continue;
+        evidenceRegistry?.sources.set(result.sourceId, {
+          sourceId: result.sourceId,
+          title: result.title,
+          url: result.url,
+        });
+      }
 
       return JSON.stringify(
         {

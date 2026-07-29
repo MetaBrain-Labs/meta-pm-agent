@@ -19,9 +19,11 @@ import type {
   HumanInTheLoopResume,
   Message,
   StreamEvent,
+  WorkflowRetryRequest,
 } from "../../types";
 import { applyStreamEvent } from "../../utils/apply-stream-event";
 import { mapErrorToChinese } from "../../utils/errors";
+import { isOptionalWorkflowStopAction } from "../../utils/question-form";
 
 interface ChatRunSnapshot {
   messages: Message[];
@@ -41,6 +43,7 @@ interface StartChatRunInput {
   userText: string;
   webSearchEnabled?: boolean;
   hitlResume?: HumanInTheLoopResume;
+  workflowRetry?: WorkflowRetryRequest;
   onThreadTitleChange: (threadId: string, title: string) => void;
 }
 
@@ -83,12 +86,16 @@ export async function startChatRun(input: StartChatRunInput): Promise<void> {
   if (existing?.isLoading) return;
 
   const state = ensureRunState(input.threadId);
-  const userMsg: Message = {
-    id: crypto.randomUUID(),
-    role: "user",
-    content: input.userText,
-    timestamp: Date.now(),
-  };
+  const userMsg: Message | null = input.workflowRetry
+    ? null
+    : {
+        id: crypto.randomUUID(),
+        role: "user",
+        content: input.userText,
+        timestamp: Date.now(),
+      };
+  const visibleUserMsg =
+    userMsg && !isOptionalWorkflowStopAction(userMsg.content) ? userMsg : null;
   const agentMsgId = crypto.randomUUID();
   const agentMsg: Message = {
     id: agentMsgId,
@@ -98,14 +105,21 @@ export async function startChatRun(input: StartChatRunInput): Promise<void> {
   };
   const controller = new AbortController();
 
-  state.messages = [...input.priorMessages, userMsg, agentMsg];
+  state.messages = [
+    ...input.priorMessages,
+    ...(visibleUserMsg ? [visibleUserMsg] : []),
+    agentMsg,
+  ];
   state.isLoading = true;
   state.error = null;
   state.controller = controller;
   emit(input.threadId);
 
   try {
-    const requestMessages = [...input.priorMessages, userMsg].map((message) => ({
+    const requestMessages = [
+      ...input.priorMessages,
+      ...(userMsg ? [userMsg] : []),
+    ].map((message) => ({
       id: message.id,
       role:
         message.role === "agent" ? ("assistant" as const) : ("user" as const),
@@ -123,6 +137,7 @@ export async function startChatRun(input: StartChatRunInput): Promise<void> {
         enabledTools: input.webSearchEnabled ? ["web_search"] : [],
         requestFormId: input.requestFormId,
         hitlResume: input.hitlResume,
+        workflowRetry: input.workflowRetry,
         messages: requestMessages,
       }),
       signal: controller.signal,
@@ -142,6 +157,7 @@ export async function startChatRun(input: StartChatRunInput): Promise<void> {
       input.threadId,
       agentMsgId,
       input.onThreadTitleChange,
+      Boolean(input.workflowRetry),
     );
   } catch (error: unknown) {
     if (!(error instanceof Error && error.name === "AbortError")) {
@@ -212,9 +228,11 @@ async function readChatStream(
   threadId: string,
   agentMsgId: string,
   onThreadTitleChange: (threadId: string, title: string) => void,
+  reconcilePriorDag: boolean,
 ) {
   const decoder = new TextDecoder();
   let buffer = "";
+  let activeAgentMsgId = agentMsgId;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -239,12 +257,26 @@ async function readChatStream(
           onThreadTitleChange(event.chatId, event.title);
           continue;
         }
+        if (event.type === "workflow-round-start" && event.roundId) {
+          updateMessages(threadId, (messages) => {
+            const startedRound = startWorkflowRound(
+              messages,
+              activeAgentMsgId,
+              event.roundId!,
+            );
+            activeAgentMsgId = startedRound.activeAgentMsgId;
+            return startedRound.messages;
+          });
+          continue;
+        }
 
         updateMessages(threadId, (messages) =>
-          messages.map((message) => {
-            if (message.id !== agentMsgId) return message;
-            return applyStreamEvent(message, event);
-          }),
+          applyChatStreamEventToMessages(
+            messages,
+            activeAgentMsgId,
+            event,
+            reconcilePriorDag,
+          ),
         );
       } catch {
         // 忽略格式异常的流片段，继续消费后续 SSE。
@@ -254,15 +286,154 @@ async function readChatStream(
 }
 
 /**
+ * 将新 Planner DAG 定位到独立的助手消息；首轮沿用当前消息，后续轮次按顺序追加。
+ */
+export function startWorkflowRound(
+  messages: Message[],
+  activeAgentMsgId: string,
+  roundId: string,
+): { messages: Message[]; activeAgentMsgId: string } {
+  const existingRound = messages.find(
+    (message) => message.workflowRoundId === roundId,
+  );
+  if (existingRound) {
+    return { messages, activeAgentMsgId: existingRound.id };
+  }
+
+  const activeIndex = messages.findIndex(
+    (message) => message.id === activeAgentMsgId,
+  );
+  const activeMessage = messages[activeIndex];
+  if (activeMessage && !activeMessage.workflowRoundId) {
+    const next = [...messages];
+    next[activeIndex] = { ...activeMessage, workflowRoundId: roundId };
+    return { messages: next, activeAgentMsgId };
+  }
+
+  const nextMessageId = `workflow-round-${roundId}`;
+  return {
+    messages: [
+      ...messages,
+      {
+        id: nextMessageId,
+        role: "agent",
+        workflowRoundId: roundId,
+        content: "",
+        timestamp: Date.now(),
+      },
+    ],
+    activeAgentMsgId: nextMessageId,
+  };
+}
+
+/**
+ * 将 SSE 事件应用到当前运行消息，并在定点重试时同步最近的原始 Planner DAG。
+ */
+export function applyChatStreamEventToMessages(
+  messages: Message[],
+  agentMsgId: string,
+  event: StreamEvent,
+  reconcilePriorDag: boolean,
+): Message[] {
+  const next = messages.map((message) =>
+    message.id === agentMsgId ? applyStreamEvent(message, event) : message,
+  );
+  if (!reconcilePriorDag) return next;
+
+  const runIndex = next.findIndex((message) => message.id === agentMsgId);
+  const runMessage = next[runIndex];
+  if (runIndex < 0 || !runMessage) return next;
+
+  const results = runMessage.executorResults ?? [];
+  const taskIds = new Set<string>();
+  if (event.taskId) taskIds.add(event.taskId);
+  if (event.retryAction?.taskId) taskIds.add(event.retryAction.taskId);
+  for (const result of results) taskIds.add(result.task_id);
+
+  for (const taskId of taskIds) {
+    const plannerIndex = findNearestPlannerMessageIndex(next, runIndex, taskId);
+    if (plannerIndex < 0) continue;
+    const plannerMessage = next[plannerIndex]!;
+    const result = results.find((item) => item.task_id === taskId);
+    const agentType = result?.agent_type ?? event.agentType;
+    const completed =
+      Boolean(result) ||
+      event.type === "error" ||
+      (event.type === "agent-status" && event.status === "completed");
+    const activeAgents = completed
+      ? (plannerMessage.activeAgents ?? []).filter(
+          (item) => item !== agentType,
+        )
+      : event.type === "agent-status" &&
+          event.status === "started" &&
+          agentType
+        ? [...new Set([...(plannerMessage.activeAgents ?? []), agentType])]
+        : plannerMessage.activeAgents;
+
+    next[plannerIndex] = {
+      ...plannerMessage,
+      ...(result
+        ? {
+            executorResults: upsertExecutorResult(
+              plannerMessage.executorResults ?? [],
+              result,
+            ),
+          }
+        : {}),
+      activeAgents,
+      activeAgent: activeAgents?.at(-1),
+    };
+  }
+  return next;
+}
+
+/**
+ * 查找重试运行之前最近一条包含目标任务的 Planner 消息。
+ */
+function findNearestPlannerMessageIndex(
+  messages: Message[],
+  beforeIndex: number,
+  taskId: string,
+): number {
+  for (let index = beforeIndex - 1; index >= 0; index -= 1) {
+    if (
+      messages[index]?.plannerExecution?.plan.tasks.some(
+        (task) => task.task_id === taskId,
+      )
+    ) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+/**
+ * 按任务 ID 更新 Executor 结果。
+ */
+function upsertExecutorResult(
+  results: NonNullable<Message["executorResults"]>,
+  next: NonNullable<Message["executorResults"]>[number],
+): NonNullable<Message["executorResults"]> {
+  const index = results.findIndex((item) => item.task_id === next.task_id);
+  if (index < 0) return [...results, next];
+  return results.map((item, itemIndex) => (itemIndex === index ? next : item));
+}
+
+/**
  * 将前端拆分展示的结构化卡片还原为后端恢复工作流所需的 tagged block 历史。
  */
-function serializeMessageContentForRequest(message: Message): string {
+export function serializeMessageContentForRequest(message: Message): string {
   if (message.role === "user") return message.content;
 
   const parts = [message.content.trim()].filter(Boolean);
   appendTaggedContent(parts, "user-input", message.userInput?.content);
   appendTaggedContent(parts, "request-analysis", message.requestAnalysis?.content);
   appendTaggedContent(parts, "task-execution", message.plannerExecution?.content);
+  if (message.plannerReview?.result) {
+    parts.push(
+      `<product-workflow>\n${JSON.stringify(message.plannerReview.result, null, 2)}\n</product-workflow>`,
+    );
+  }
 
   for (const result of message.executorResults ?? []) {
     parts.push(

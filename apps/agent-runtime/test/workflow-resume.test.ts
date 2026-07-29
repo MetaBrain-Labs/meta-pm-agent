@@ -15,8 +15,10 @@ import assert from "node:assert/strict";
 import type { ChatMessage, ProductWorkflowResult } from "@repo/shared";
 import {
   createWorkflowContinuationResumeContextFromMessages,
+  createWorkflowExecutorRetryResumeContextFromMessages,
   createWorkflowResumeContextFromMessages,
 } from "../src/agents/conversation/workflow-resume";
+import { streamConversation } from "../src/agents/conversation/stream";
 import { createProductWorkflowKnowledgeGraph } from "../src/agents/product-workflow/common/knowledge-graph";
 
 test("restores direct executor blocker context from history", () => {
@@ -43,6 +45,38 @@ test("restores direct executor blocker context from history", () => {
   assert.deepEqual(
     context?.knowledgeGraph?.open_questions.map((question) => question.id),
     ["task-01-oq", "task-02-oq"],
+  );
+});
+
+test("restores the original structured user input for resumed corrections", () => {
+  const messages = createMessages(
+    "[form answers - executor-blocker-task-01]\n- resolution: keep scope",
+  );
+  messages.splice(
+    1,
+    0,
+    message(
+      "a0",
+      "assistant",
+      `<user-input>\n${JSON.stringify({
+        user_input: [
+          { index: 1, type: "request", content: "Build MVP" },
+          {
+            index: 5,
+            type: "constraint",
+            content: "无特殊技术或平台约束",
+          },
+        ],
+      })}\n</user-input>`,
+    ),
+  );
+
+  const context = createWorkflowResumeContextFromMessages({ messages });
+
+  assert.equal(context?.originalUserInput?.[1]?.index, 5);
+  assert.equal(
+    context?.originalUserInput?.[1]?.content,
+    "无特殊技术或平台约束",
   );
 });
 
@@ -323,6 +357,81 @@ test("does not restore interrupted workflow by matching latest user text", () =>
   });
 
   assert.equal(context, null);
+});
+
+test("restores an executor retry without replaying the latest form answer", () => {
+  const messages = createMessages(
+    "[form answers - product-workflow-confirmation-proposal-decision]\n- Market scope?: enterprise",
+  ).filter(
+    (item) =>
+      !item.content.includes("<executor-result>") ||
+      !item.content.includes('"task_id":"task-02"'),
+  );
+  messages.splice(
+    1,
+    0,
+    message(
+      "a0",
+      "assistant",
+      '<user-input>\n{"user_input":[{"index":1,"content":"Build MVP","type":"请求"}]}\n</user-input>',
+    ),
+  );
+
+  const context = createWorkflowExecutorRetryResumeContextFromMessages({
+    messages,
+    taskId: "task-02",
+  });
+
+  assert.deepEqual(context?.rerunTaskIds, ["task-02"]);
+  assert.equal(context?.executorResults?.length, 1);
+  assert.match(context?.userInputBlock ?? "", /Build MVP/);
+});
+
+test("stopping optional questions completes without another form or orchestrator", async () => {
+  const messages = createMessages(
+    "[form answers - critique-result-proposal-decision]\n- workflow_action: stop_optional_questions",
+  );
+  messages.splice(
+    messages.length - 1,
+    0,
+    message("a5", "assistant", createProductWorkflowBlock("critique-result")),
+  );
+  const events = [];
+
+  for await (const event of streamConversation(messages, { mode: "project" })) {
+    events.push(event);
+  }
+
+  const completed = events.find((event) => event.type === "complete");
+  assert.equal(completed?.type === "complete" && completed.result.status, "completed");
+  assert.deepEqual(
+    completed?.type === "complete" && completed.result.proposal_questions,
+    [],
+  );
+  assert.equal(
+    completed?.type === "complete" &&
+      completed.result.knowledge_graph_update.current_state,
+    "stable",
+  );
+  assert.equal(
+    events.some((event) => event.type === "question-form-complete"),
+    false,
+  );
+  assert.equal(
+    events.some(
+      (event) =>
+        event.type === "agent-status" && event.agentType === "orchestrator",
+    ),
+    false,
+  );
+  assert.equal(
+    events.some(
+      (event) =>
+        event.type === "text" &&
+        event.content.includes("本轮产品工作流已正式结束"),
+    ),
+    true,
+  );
 });
 
 function createMessages(latestAnswer: string): ChatMessage[] {

@@ -187,7 +187,21 @@ function mergeGraphItems<T extends { id: string }>({
         kind,
       )
     ) {
-      // 相似内容只保留既有图谱项，后续关系端点继续指向保留下来的 ID。
+      // 受控退役必须压过并行分支中的旧活跃快照，避免补充修正被 reducer 丢失。
+      if (
+        kind === "entity" &&
+        (item as unknown as KnowledgeGraphEntity).status === "deprecated" &&
+        (existing as unknown as KnowledgeGraphEntity).status !== "deprecated"
+      ) {
+        const existingIndex = merged.findIndex(
+          (candidate) => candidate.id === existing.id,
+        );
+        if (existingIndex >= 0) {
+          merged[existingIndex] = item;
+          byId.set(item.id, item);
+        }
+      }
+      // 其余相似内容保留既有图谱项，后续关系端点继续指向保留下来的 ID。
       idMap.set(item.id, existing.id);
       continue;
     }

@@ -207,6 +207,7 @@ export function applyStreamEvent(
           agentError: {
             agentType: failedAgentType,
             message: normalizeErrorMessage(event.error),
+            retryAction: event.retryAction,
           },
         };
       }
@@ -689,6 +690,10 @@ function applyTextChunk(
       content: taskExecution.remainingText,
       ...(plan
         ? {
+            executorResults: (message.executorResults ?? []).filter(
+              (result) =>
+                !plan.tasks.some((task) => task.task_id === result.task_id),
+            ),
             plannerExecution: {
               state: "complete" as const,
               content: taskExecution.block,

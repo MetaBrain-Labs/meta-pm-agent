@@ -25,6 +25,7 @@ import type {
   HumanInTheLoopResume,
   Message,
   ThreadInfo,
+  WorkflowRetryRequest,
 } from "../../types";
 import { mapErrorToChinese } from "../../utils/errors";
 import {
@@ -162,9 +163,10 @@ export function ThreadChatPage({
       options?: {
         webSearchEnabled?: boolean;
         hitlResume?: HumanInTheLoopResume;
+        workflowRetry?: WorkflowRetryRequest;
       },
     ) => {
-      if (!text.trim() || isLoading) return;
+      if ((!text.trim() && !options?.workflowRetry) || isLoading) return;
 
       const currentWorkspaceId = workspaceIdRef.current;
       if (!currentWorkspaceId) {
@@ -200,6 +202,7 @@ export function ThreadChatPage({
         userText: text,
         webSearchEnabled: options?.webSearchEnabled,
         hitlResume: options?.hitlResume,
+        workflowRetry: options?.workflowRetry,
         onThreadTitleChange,
       });
     },

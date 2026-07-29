@@ -20,6 +20,7 @@ import {
   createWorkflowThreadId,
   extractQuestionFormId,
   getFormAnswerId,
+  isProductWorkflowOptionalStopAnswer,
   isPreOrchGraphConflictFormId,
   parseGraphConflictAction,
   releaseQuestionFormHumanInterrupt,
@@ -40,6 +41,7 @@ import {
   createChat,
   listMessages,
   listChats,
+  loadExecutorRetryFailure,
   loadPendingDecisionQuestionForm,
   markRequestFormStatus,
   persistAgentTokenUsage,
@@ -219,10 +221,12 @@ export async function chatStreamHandler(c: Context) {
 
     let responseLength = 0;
     const agentOutputs = new Map<string, AgentOutputAccumulator>();
+    let currentWorkflowRoundId: string | undefined;
     let productWorkflowResult: unknown = null;
     let latestKnowledgeGraph: ProductKnowledgeGraph | null = null;
     let runtimeWorkspaceId: string | undefined;
     let autoFinalizedWorkflowRound = false;
+    let terminalStreamError = false;
     const shouldFinalizeWorkflowRound = isProductWorkflowFinalConfirmationAnswer(
       parsed.data.messages,
     );
@@ -234,14 +238,25 @@ export async function chatStreamHandler(c: Context) {
       }
 
       // 持久化用户发送的消息
-      const workflowAnswerResolution = await persistConversationStart(
-        parsed.data.chatId,
-        parsed.data.requestFormId,
-        parsed.data.messages,
+      const workflowAnswerResolution = parsed.data.workflowRetry
+        ? null
+        : await persistConversationStart(
+            parsed.data.chatId,
+            parsed.data.requestFormId,
+            parsed.data.messages,
+          );
+      const workflowRetryFailure = parsed.data.workflowRetry
+        ? await loadExecutorRetryFailure(
+            parsed.data.chatId,
+            parsed.data.workflowRetry.taskId,
+          )
+        : undefined;
+      await markStatus(
+        parsed.data.workflowRetry ? "workflow_running" : "received",
       );
-      await markStatus("received");
 
-      const pendingDecisionForm = shouldFinalizeWorkflowRound
+      const pendingDecisionForm =
+        shouldFinalizeWorkflowRound || parsed.data.workflowRetry
         ? null
         : await loadPendingDecisionQuestionForm(parsed.data.requestFormId);
       if (pendingDecisionForm) {
@@ -324,9 +339,16 @@ export async function chatStreamHandler(c: Context) {
           contextSource: runtimeContext.contextSource,
           knowledgeGraph: runtimeContext.knowledgeGraph,
           workflowAnswerResolution,
+          workflowRetry: parsed.data.workflowRetry,
+          workflowRetryFailure,
           signal: runtimeController.signal,
         },
       )) {
+        if (event.type === "workflow-round-start") {
+          currentWorkflowRoundId = event.roundId;
+          await writeSse(writer, toApiEvent(event));
+          continue;
+        }
         if (event.type === "complete") {
           // 捕获工作流完整结构化结果，供最终知识图谱归档使用
           productWorkflowResult = event.result;
@@ -351,17 +373,40 @@ export async function chatStreamHandler(c: Context) {
           });
           continue;
         }
+        if (event.type === "error") {
+          if (event.terminal) {
+            terminalStreamError = true;
+            const output = getAgentOutput(
+              agentOutputs,
+              getEventAgentType(event),
+              currentWorkflowRoundId,
+            );
+            output.agentError = {
+              agentType: event.agentType,
+              message: event.error,
+              retryAction: event.retryAction,
+            };
+            await markStatus("failed");
+          }
+        }
         const nextStatus = getRequestFormStatusForEvent(event);
         if (nextStatus) {
           await markStatus(nextStatus);
         }
 
         if ("content" in event && event.type === "reasoning") {
-          getAgentOutput(agentOutputs, getEventAgentType(event)).reasoningContent +=
-            event.content;
+          getAgentOutput(
+            agentOutputs,
+            getEventAgentType(event),
+            currentWorkflowRoundId,
+          ).reasoningContent += event.content;
         }
         if (event.type === "tool-call") {
-          const output = getAgentOutput(agentOutputs, getEventAgentType(event));
+          const output = getAgentOutput(
+            agentOutputs,
+            getEventAgentType(event),
+            currentWorkflowRoundId,
+          );
           upsertToolCall(output.toolCalls, {
             id: event.toolCallId,
             name: event.toolName,
@@ -371,7 +416,11 @@ export async function chatStreamHandler(c: Context) {
           });
         }
         if (event.type === "tool-result") {
-          const output = getAgentOutput(agentOutputs, getEventAgentType(event));
+          const output = getAgentOutput(
+            agentOutputs,
+            getEventAgentType(event),
+            currentWorkflowRoundId,
+          );
           attachToolResult(
             output.toolCalls,
             event.toolCallId,
@@ -381,7 +430,11 @@ export async function chatStreamHandler(c: Context) {
           );
         }
         if (event.type === "subagent-start") {
-          const output = getAgentOutput(agentOutputs, getEventAgentType(event));
+          const output = getAgentOutput(
+            agentOutputs,
+            getEventAgentType(event),
+            currentWorkflowRoundId,
+          );
           const traces = ensureSubagentTraces(output);
           upsertSubagentTrace(traces, {
             id: event.toolCallId,
@@ -392,7 +445,11 @@ export async function chatStreamHandler(c: Context) {
           });
         }
         if (event.type === "subagent-thinking") {
-          const output = getAgentOutput(agentOutputs, getEventAgentType(event));
+          const output = getAgentOutput(
+            agentOutputs,
+            getEventAgentType(event),
+            currentWorkflowRoundId,
+          );
           const traces = ensureSubagentTraces(output);
           appendSubagentThinking(traces, {
             id: event.toolCallId,
@@ -402,7 +459,11 @@ export async function chatStreamHandler(c: Context) {
           });
         }
         if (event.type === "subagent-result") {
-          const output = getAgentOutput(agentOutputs, getEventAgentType(event));
+          const output = getAgentOutput(
+            agentOutputs,
+            getEventAgentType(event),
+            currentWorkflowRoundId,
+          );
           const traces = ensureSubagentTraces(output);
           attachSubagentResult(traces, {
             id: event.toolCallId,
@@ -413,13 +474,21 @@ export async function chatStreamHandler(c: Context) {
         }
         if (event.type === "agent-status" && event.status === "completed") {
           markPendingToolCallsComplete(
-            getAgentOutput(agentOutputs, getEventAgentType(event)).toolCalls,
+            getAgentOutput(
+              agentOutputs,
+              getEventAgentType(event),
+              currentWorkflowRoundId,
+            ).toolCalls,
             getEventAgentType(event),
           );
         }
         if (event.type === "token-usage") {
           const agentType = getEventAgentType(event);
-          const output = getAgentOutput(agentOutputs, agentType);
+          const output = getAgentOutput(
+            agentOutputs,
+            agentType,
+            currentWorkflowRoundId,
+          );
           output.tokenUsage = {
             inputTokens: event.inputTokens,
             cacheHitInputTokens: event.cacheHitInputTokens,
@@ -466,8 +535,11 @@ export async function chatStreamHandler(c: Context) {
           event.type !== "subagent-thinking"
         ) {
           responseLength += event.content.length;
-          getAgentOutput(agentOutputs, getEventAgentType(event)).content +=
-            event.content;
+          getAgentOutput(
+            agentOutputs,
+            getEventAgentType(event),
+            currentWorkflowRoundId,
+          ).content += event.content;
         }
         await writeSse(writer, toApiEvent(event));
       }
@@ -485,29 +557,31 @@ export async function chatStreamHandler(c: Context) {
           : null,
       });
 
-      await finalizeWorkspaceKnowledgeGraph({
-        workspaceId: runtimeContext.workspaceId,
-        conversationId: parsed.data.chatId,
-        requestFormId: parsed.data.requestFormId,
-        advanceVersion: true,
-        // 最终归档优先使用运行时累计快照，避免 Critique Agent 的模型汇总覆盖成局部图谱。
-        knowledgeGraph:
-          latestKnowledgeGraph ??
-          (isProductWorkflowResult(productWorkflowResult)
-            ? productWorkflowResult.knowledge_graph_update
-            : undefined),
-      });
-
-      if (titleUpdate) {
-        await writeSse(writer, {
-          type: "conversation-title",
-          chatId: titleUpdate.id,
-          title: titleUpdate.title,
+      if (!terminalStreamError) {
+        await finalizeWorkspaceKnowledgeGraph({
+          workspaceId: runtimeContext.workspaceId,
+          conversationId: parsed.data.chatId,
+          requestFormId: parsed.data.requestFormId,
+          advanceVersion: true,
+          // 最终归档优先使用运行时累计快照，避免 Critique Agent 的模型汇总覆盖成局部图谱。
+          knowledgeGraph:
+            latestKnowledgeGraph ??
+            (isProductWorkflowResult(productWorkflowResult)
+              ? productWorkflowResult.knowledge_graph_update
+              : undefined),
         });
-      }
 
-      if (requestFormStatus !== "pending_user_confirmation") {
-        await markStatus("completed");
+        if (titleUpdate) {
+          await writeSse(writer, {
+            type: "conversation-title",
+            chatId: titleUpdate.id,
+            title: titleUpdate.title,
+          });
+        }
+
+        if (requestFormStatus !== "pending_user_confirmation") {
+          await markStatus("completed");
+        }
       }
 
       console.log(
@@ -623,12 +697,15 @@ function getEventAgentType(event: { type: string; agentType?: string }): string 
 function getAgentOutput(
   outputs: Map<string, AgentOutputAccumulator>,
   type: string,
+  workflowRoundId?: string,
 ): AgentOutputAccumulator {
-  const existing = outputs.get(type);
+  const key = `${workflowRoundId ?? "global"}:${type}`;
+  const existing = outputs.get(key);
   if (existing) return existing;
 
   const created = {
     type,
+    ...(workflowRoundId ? { workflowRoundId } : {}),
     content: "",
     reasoningContent: "",
     toolCalls: [],
@@ -646,7 +723,7 @@ function getAgentOutput(
     durationMs: 0,
     tokenUsageRecordIds: [],
   };
-  outputs.set(type, created);
+  outputs.set(key, created);
   return created;
 }
 
@@ -899,7 +976,8 @@ function isProductWorkflowFinalConfirmationAnswer(
     .at(-1);
   return (
     getFormAnswerId(latestUserMessage?.content ?? "") ===
-    "product-workflow-confirmation"
+      "product-workflow-confirmation" ||
+    isProductWorkflowOptionalStopAnswer(latestUserMessage?.content ?? "")
   );
 }
 

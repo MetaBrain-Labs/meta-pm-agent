@@ -26,6 +26,7 @@ import {
 import { getFormAnswerId } from "../../utils/form-parser";
 import type { WorkflowAnswerResolution } from "../../types";
 import type { WorkflowResumeContext } from "../product-workflow/types";
+import { parseUserInputBlock } from "../request/user-input";
 import {
   isExecutorAgentType,
   type ExecutorAgentType,
@@ -75,6 +76,44 @@ export function createWorkflowContinuationResumeContextFromMessages({
 }
 
 /**
+ * 为 Executor 错误卡片的定点重试恢复最近 DAG，不重新解释上一条表单答案。
+ */
+export function createWorkflowExecutorRetryResumeContextFromMessages({
+  messages,
+  knowledgeGraph,
+  taskId,
+}: {
+  messages: ChatMessage[];
+  knowledgeGraph?: ProductKnowledgeGraph | null;
+  taskId: string;
+}): WorkflowResumeContext | null {
+  const context = createWorkflowResumeContext({
+    formId: null,
+    knowledgeGraph,
+    messages,
+  });
+  const task = context?.plan?.tasks.find((item) => item.task_id === taskId);
+  const alreadyCompleted = context?.executorResults?.some(
+    (result) => result.task_id === taskId,
+  );
+  if (!context?.requestAnalysis || !task || alreadyCompleted) return null;
+  const userInputBody = findLatestTaggedText(
+    messages,
+    "<user-input",
+    "</user-input>",
+  );
+
+  return {
+    ...context,
+    userInputBlock: userInputBody
+      ? `<user-input>\n${userInputBody}\n</user-input>`
+      : undefined,
+    rerunTaskIds: [taskId],
+    forceSupplementPlan: false,
+  };
+}
+
+/**
  * 统一构造表单恢复和继续恢复上下文，避免两条路径遗漏 Planner/Executor 历史产物。
  */
 function createWorkflowResumeContext({
@@ -116,6 +155,7 @@ function createWorkflowResumeContext({
     productWorkflow?.planner ??
     null;
   const executorResults = collectExecutorResults(messages, productWorkflow);
+  const originalUserInput = findOriginalUserInput(messages);
 
   if (!requestAnalysis) {
     return knowledgeGraph ? { knowledgeGraph, rerunTaskIds: [] } : null;
@@ -125,6 +165,7 @@ function createWorkflowResumeContext({
   if (!plan) {
     return {
       requestAnalysis,
+      originalUserInput,
       executorResults,
       knowledgeGraph: knowledgeGraph ?? null,
       rerunTaskIds: [],
@@ -167,6 +208,7 @@ function createWorkflowResumeContext({
 
   return {
     requestAnalysis,
+    originalUserInput,
     plan,
     executorResults: resolvedExecutorResults,
     knowledgeGraph: resolvedKnowledgeGraph ?? null,
@@ -178,6 +220,26 @@ function createWorkflowResumeContext({
       ? inferSupplementAgentTypes(rerunTaskIds, plan)
       : [],
   };
+}
+
+/**
+ * 恢复当前工作流最初的结构化用户输入，供自动审查修正保留稳定输入索引。
+ */
+function findOriginalUserInput(
+  messages: ChatMessage[],
+): ReturnType<typeof parseUserInputBlock> {
+  const body = findLatestTaggedText(
+    messages,
+    "<user-input",
+    "</user-input>",
+  );
+  if (!body) return [];
+
+  try {
+    return parseUserInputBlock(body);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -517,6 +579,26 @@ function findLatestTaggedPayload<T>(
 
     const parsed = schema.safeParse(parseJsonBlock(block));
     if (parsed.success) return parsed.data;
+  }
+
+  return null;
+}
+
+/**
+ * 读取最新 tagged block 正文，供恢复原始用户输入。
+ */
+function findLatestTaggedText(
+  messages: ChatMessage[],
+  startMarker: string,
+  endMarker: string,
+): string | null {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const block = extractTaggedBlocks(
+      messages[index]?.content ?? "",
+      startMarker,
+      endMarker,
+    ).at(-1);
+    if (block) return block;
   }
 
   return null;

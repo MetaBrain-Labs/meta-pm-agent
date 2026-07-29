@@ -724,7 +724,7 @@ function createFallbackQualityCriteria(
   if (definition.agentType === "executor-market-research") {
     return [
       "Use verifiable sources or explicitly record a research gap.",
-      "Link Evidence to concrete Requirements or decision candidates.",
+      "Link Evidence to concrete Requirements or decision candidates using approved explicit relation directions.",
       "Do not present model memory as verified fact.",
       "Preserve source traceability.",
     ];
@@ -732,7 +732,7 @@ function createFallbackQualityCriteria(
   if (definition.agentType === "executor-product-execution") {
     return [
       "Keep the breakdown to the minimum viable product scope.",
-      "Link each essential Component to a selected Feature.",
+      "Link each essential Component to a selected Feature using approved explicit relation directions.",
       "Add traceable acceptance Requirements or Metrics.",
       "Avoid speculative architecture and count-filler Components.",
     ];

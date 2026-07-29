@@ -13,13 +13,19 @@
  * - 本文件不直接编排 LangGraph 节点，只处理 API 层业务持久化。
  */
 
-import type { ChatMessage, ProductWorkflowResult } from "@repo/shared";
+import type {
+  ChatMessage,
+  ProductWorkflowResult,
+  WorkflowRetryAction,
+} from "@repo/shared";
+import { isProductWorkflowOptionalStopAnswer } from "@repo/agent-runtime";
 import {
   createConversationWithInitialRequestForm,
   listActiveConversations,
   updateFirstTurnConversationTitle,
 } from "../repositories/chat-repository";
 import {
+  findLatestExecutorRetryError,
   listConversationMessages,
   persistAssistantMessage,
   persistConversationMessages,
@@ -43,6 +49,7 @@ import {
 import { parseRequestAnalysisPayload } from "../utils/request-analysis";
 import { parseTaskExecutionPlanPayload } from "../utils/task-execution";
 import {
+  createProductWorkflowDisplaySnapshot,
   formatExecutorResultPayload,
   parseExecutorResultPayload,
   parseProductWorkflowPayload,
@@ -62,6 +69,7 @@ const MAX_GENERATED_TITLE_LENGTH = 36;
  */
 export interface AgentConversationOutput {
   type: string;
+  workflowRoundId?: string;
   content: string;
   reasoningContent?: string;
   toolCalls?: Array<{
@@ -73,6 +81,11 @@ export interface AgentConversationOutput {
     status?: "running" | "complete";
   }>;
   subagentTraces?: SubagentTraceDto[];
+  agentError?: {
+    agentType?: string;
+    message: string;
+    retryAction?: WorkflowRetryAction;
+  };
   /** 该 Agent 本次模型调用的 token 用量 */
   tokenUsage?: {
     inputTokens: number;
@@ -174,10 +187,26 @@ export async function persistConversationStart(
   // 只持久化用户消息，助手回复由 persistConversationResult 统一写入。
   await persistConversationMessages(
     conversationId,
-    messages.filter((message) => message.role === "user"),
+    messages.filter(
+      (message) =>
+        message.role === "user" &&
+        !isProductWorkflowOptionalStopAnswer(message.content),
+    ),
   );
 
   return workflowAnswerResolution;
+}
+
+/**
+ * 为定点重试加载服务端可信的上一轮错误，避免接受客户端可篡改文本。
+ */
+export async function loadExecutorRetryFailure(
+  conversationId: string | undefined,
+  taskId: string | undefined,
+): Promise<{ taskId: string; error: string } | undefined> {
+  if (!conversationId || !taskId) return undefined;
+  const error = await findLatestExecutorRetryError(conversationId, taskId);
+  return error ? { taskId, error } : undefined;
 }
 
 /**
@@ -204,26 +233,30 @@ export async function persistConversationResult({
     (output) => output.type === "conversation",
   );
   const requestOutput = agentOutputs.find((output) => output.type === "request");
-  const plannerOutput = agentOutputs.find((output) => output.type === "planner");
+  const plannerOutputs = agentOutputs.filter(
+    (output) => output.type === "planner",
+  );
   const items = conversationOutput
     ? parseUserInputPayload(conversationOutput.content)
     : null;
   const requestAnalysis = requestOutput
     ? parseRequestAnalysisPayload(requestOutput.content)
     : null;
-  const taskExecutionPlan = plannerOutput
-    ? parseTaskExecutionPlanPayload(plannerOutput.content)
-    : null;
+  const taskExecutionPlan =
+    plannerOutputs
+      .map((output) => parseTaskExecutionPlanPayload(output.content))
+      .filter((plan) => plan !== null)
+      .at(-1) ?? null;
   const executorResults = agentOutputs
     .map((output) => parseExecutorResultPayload(output.content))
     .filter((result) => result !== null);
   const productWorkflow =
     productWorkflowResult ??
-    parseProductWorkflowPayload(plannerOutput?.content ?? "") ??
-    parseProductWorkflowPayload(
-      agentOutputs.find((output) => output.type === "product_director")
-        ?.content ?? "",
-    );
+    agentOutputs
+      .map((output) => parseProductWorkflowPayload(output.content))
+      .filter((workflow) => workflow !== null)
+      .at(-1) ??
+    null;
   const sanitizedExecutorResults = executorResults.map(
     sanitizeExecutorResultForPersistence,
   );
@@ -235,28 +268,43 @@ export async function persistConversationResult({
     sanitizedProductWorkflow?.status === "pending_user_confirmation"
       ? { ...sanitizedProductWorkflow, status: "completed" as const }
       : sanitizedProductWorkflow;
-
   // 每个 Agent 单独落库，message.type 用于前端恢复正确的展示位置。
   for (const output of agentOutputs) {
     if (
       output.content.trim().length === 0 &&
       !output.reasoningContent?.trim() &&
-      !output.subagentTraces?.length
+      !output.subagentTraces?.length &&
+      !output.agentError
     ) {
       continue;
     }
+    const outputProductWorkflow = parseProductWorkflowPayload(output.content);
+    const outputTaskExecutionPlan =
+      output.type === "planner"
+        ? parseTaskExecutionPlanPayload(output.content)
+        : null;
+    const persistedOutputWorkflow = outputProductWorkflow
+      ? sanitizeProductWorkflowForPersistence(outputProductWorkflow)
+      : null;
     const outputContent = sanitizeAgentOutputContent(
       output,
-      finalProductWorkflow,
+      persistedOutputWorkflow ?? finalProductWorkflow,
     );
+    const outputDisplayProductWorkflow = persistedOutputWorkflow
+      ? createProductWorkflowDisplaySnapshot(persistedOutputWorkflow)
+      : null;
 
     const messageId = await persistAssistantMessage({
       conversationId,
+      workflowRoundId: output.workflowRoundId,
       content: outputContent,
       userInput: output.type === "conversation" ? items : null,
       reasoningContent: output.reasoningContent,
       toolCalls: sanitizeToolCallsForPersistence(output.toolCalls),
       subagentTraces: output.subagentTraces,
+      agentError: output.agentError,
+      taskExecutionPlan: outputTaskExecutionPlan,
+      productWorkflow: outputDisplayProductWorkflow,
       type: output.type,
     });
 
@@ -327,40 +375,37 @@ function sanitizeAgentOutputContent(
     );
   }
 
-  if (productWorkflow) {
-    return replaceProductWorkflowPayload(output.content, productWorkflow);
+  const outputProductWorkflow = parseProductWorkflowPayload(output.content);
+  const persistedProductWorkflow =
+    productWorkflow ??
+    (outputProductWorkflow
+      ? sanitizeProductWorkflowForPersistence(outputProductWorkflow)
+      : null);
+  if (persistedProductWorkflow) {
+    return removeProductWorkflowPayload(output.content);
   }
 
   return output.content;
 }
 
 /**
- * 将消息中的产品工作流结构块替换为已清洗的持久化版本。
+ * 从消息正文移除已写入结构化 meta 的产品工作流块。
  */
-function replaceProductWorkflowPayload(
-  content: string,
-  productWorkflow: ReturnType<typeof sanitizeProductWorkflowForPersistence>,
-): string {
+function removeProductWorkflowPayload(content: string): string {
   const startMarker = "<product-workflow";
   const endMarker = "</product-workflow>";
-  const startIndex = content.search(new RegExp(escapeRegExp(startMarker), "i"));
-  if (startIndex === -1) return content;
-
-  const openEnd = content.indexOf(">", startIndex);
-  const endIndex = content.indexOf(endMarker, openEnd + 1);
-  if (openEnd === -1 || endIndex === -1) return content;
-
-  const blockEnd = endIndex + endMarker.length;
-  const summary = [
-    "Planner SubAgent 已完成产品工作流汇总，结构化结果已归档。",
-    `确认 ID：${productWorkflow.confirmation_id}`,
-    `状态：${productWorkflow.status}`,
-    `Executor 结果数：${productWorkflow.executor_results.length}`,
-  ].join("\n");
-
-  return `${content.slice(0, startIndex)}${summary}${content.slice(
-    blockEnd,
-  )}`.trim();
+  let result = content;
+  while (true) {
+    const startIndex = result.search(
+      new RegExp(escapeRegExp(startMarker), "i"),
+    );
+    if (startIndex === -1) return result.trim();
+    const openEnd = result.indexOf(">", startIndex);
+    const endIndex = result.indexOf(endMarker, openEnd + 1);
+    if (openEnd === -1 || endIndex === -1) return result.trim();
+    const blockEnd = endIndex + endMarker.length;
+    result = `${result.slice(0, startIndex)}${result.slice(blockEnd)}`;
+  }
 }
 
 /**

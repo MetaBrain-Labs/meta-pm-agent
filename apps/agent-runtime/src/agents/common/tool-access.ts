@@ -25,7 +25,10 @@ import {
   createKnowledgeGraphTools,
   type StructuredToolCallResult,
 } from "./knowledge-graph-file-tool";
-import { createWebSearchTool } from "./web-search-tool";
+import {
+  createWebSearchTool,
+  type WebSearchEvidenceRegistry,
+} from "./web-search-tool";
 
 type ToolOwningAgent = AgentMessageType;
 
@@ -36,6 +39,7 @@ const KNOWLEDGE_GRAPH_FILE_TOOLS: AgentRuntimeTool[] = [
   "kg_file_read_by_source_task",
   "kg_file_add_summary",
   "kg_file_add_nodes",
+  "kg_file_deprecate_nodes",
   "kg_file_add_relations",
   "kg_file_add_decisions",
   "kg_file_add_risks",
@@ -95,6 +99,14 @@ interface CreateToolsForAgentOptions {
   allowedRelationTypes?: readonly ProductKnowledgeGraph["relations"][number]["type"][];
   /** 当前任务必须新增的阻塞问题数量。 */
   requiredBlockingOpenQuestionCount?: number;
+  /** 是否允许补充任务通过受控工具退役旧节点。 */
+  allowNodeDeprecation?: boolean;
+  /** 当前任务 ID，用于阻止模型伪造来源任务。 */
+  sourceTaskId?: string;
+  /** 本轮用户输入，供节点来源校验。 */
+  userInput?: ReadonlyArray<{ index: number; content: string }>;
+  /** 本轮真实搜索结果注册表，供 Evidence 来源校验。 */
+  webSearchEvidenceRegistry?: WebSearchEvidenceRegistry;
 }
 
 /**
@@ -110,7 +122,7 @@ export function createToolsForAgent(
   const tools: StructuredTool[] = [];
 
   if (enabledToolSet.has("web_search") && allowedTools.has("web_search")) {
-    tools.push(createWebSearchTool());
+    tools.push(createWebSearchTool(options.webSearchEvidenceRegistry));
   }
 
   if (
@@ -125,6 +137,10 @@ export function createToolsForAgent(
         allowedRelationTypes: options.allowedRelationTypes,
         requiredBlockingOpenQuestionCount:
           options.requiredBlockingOpenQuestionCount,
+        allowNodeDeprecation: options.allowNodeDeprecation,
+        sourceTaskId: options.sourceTaskId,
+        userInput: options.userInput,
+        verifiedWebSources: options.webSearchEvidenceRegistry?.sources,
       }).filter(
         (toolItem) =>
           enabledToolSet.has(toolItem.name as AgentRuntimeTool) &&
@@ -144,10 +160,13 @@ export function createToolsForAgent(
  */
 export function getExecutorDefaultToolNames(
   agentType: ToolOwningAgent,
+  supplement = false,
 ): AgentRuntimeTool[] {
   return [
     ...KNOWLEDGE_GRAPH_FILE_TOOLS.filter(
-      (toolName) => toolName !== "kg_file_add_summary",
+      (toolName) =>
+        toolName !== "kg_file_add_summary" &&
+        (supplement || toolName !== "kg_file_deprecate_nodes"),
     ),
     ...EXECUTOR_BLOCKER_TOOLS,
     ...(EXECUTOR_WEB_SEARCH_AGENT_TYPES.has(agentType)
@@ -159,9 +178,12 @@ export function getExecutorDefaultToolNames(
 /**
  * 返回 Executor 结构化重试阶段的写入工具，避免重复读取和外部研究。
  */
-export function getExecutorRetryToolNames(): AgentRuntimeTool[] {
+export function getExecutorRetryToolNames(supplement = false): AgentRuntimeTool[] {
   return [
     "kg_file_add_nodes",
+    ...(supplement
+      ? (["kg_file_deprecate_nodes"] satisfies AgentRuntimeTool[])
+      : []),
     "kg_file_add_relations",
     "kg_file_add_decisions",
     "kg_file_add_risks",

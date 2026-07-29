@@ -25,6 +25,7 @@ export const AgentRuntimeToolSchema = z.enum([
   "kg_file_read_by_source_task",
   "kg_file_add_summary",
   "kg_file_add_nodes",
+  "kg_file_deprecate_nodes",
   "kg_file_add_relations",
   "kg_file_add_decisions",
   "kg_file_add_risks",
@@ -36,6 +37,26 @@ export const AgentRuntimeToolSchema = z.enum([
  * Agent 可按需启用的运行时工具名称类型。
  */
 export type AgentRuntimeTool = z.infer<typeof AgentRuntimeToolSchema>;
+
+/**
+ * Executor 失败后由 SSE 暴露的定点恢复动作。
+ */
+export const WorkflowRetryActionSchema = z.object({
+  type: z.literal("resume_executor_task"),
+  taskId: z.string().min(1),
+  agentType: z.string().min(1),
+});
+
+export type WorkflowRetryAction = z.infer<typeof WorkflowRetryActionSchema>;
+
+/**
+ * 浏览器提交给 API 的定点恢复命令；Agent 类型由服务端工作流状态校验。
+ */
+export const WorkflowRetryRequestSchema = WorkflowRetryActionSchema.omit({
+  agentType: true,
+});
+
+export type WorkflowRetryRequest = z.infer<typeof WorkflowRetryRequestSchema>;
 
 export const ChatMessageSchema = z.object({
   id: z.string(),

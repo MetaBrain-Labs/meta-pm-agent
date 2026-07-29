@@ -51,7 +51,7 @@ export function createPlannerSubagent(): SubAgent {
       "Generates executable TaskExecutionPlan DAG from product request analysis and knowledge graph context. Returns JSON matching TaskExecutionPlanSchema.",
     systemPrompt: PLANNER_SUBAGENT_PROMPT,
     model: createChatModel({
-      enableThinking: false,
+      enableThinking: true,
       responseFormat: "json_object",
       temperature: 0,
       maxTokens: 16_384,

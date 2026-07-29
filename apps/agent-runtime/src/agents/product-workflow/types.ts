@@ -37,6 +37,8 @@ export interface ProductWorkflowInput {
 }
 
 export interface WorkflowResumeContext {
+  userInputBlock?: string;
+  originalUserInput?: UserInputRecord[];
   requestAnalysis?: RequestAnalysis | null;
   orchestratorDecision?: OrchestratorAgentResult | null;
   plan?: TaskExecutionPlan | null;
@@ -74,6 +76,8 @@ export interface ExecutorAgentInput extends ProductWorkflowInput {
   plan: TaskExecutionPlan;
   knowledgeGraph: ProductKnowledgeGraph;
   previousResults: ExecutorAgentResult[];
+  /** 手动定点重试时，由服务端从可信错误记录恢复的修正指令。 */
+  retryInstruction?: string;
 }
 
 /**
@@ -108,11 +112,16 @@ export type PlannerWorkflowReviewInput = CritiqueAgentInput;
  */
 export type ProductWorkflowStreamEvent =
   | {
+      type: "workflow-round-start";
+      roundId: string;
+    }
+  | {
       type: "agent-status";
       agentType: ProductWorkflowAgentType;
       status: "started" | "completed";
       phase?: "planning" | "execution" | "review";
       parallelAgents?: ProductWorkflowAgentType[];
+      taskId?: string;
     }
   | {
       type: "reasoning";

@@ -16,11 +16,14 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@repo/database";
 import {
+  ProductWorkflowResultSchema,
+  TaskExecutionPlanSchema,
   type ChatMessage,
   type ExecutorAgentResult,
   type ProductWorkflowResult,
   type RequestAnalysis,
   type TaskExecutionPlan,
+  type WorkflowRetryAction,
 } from "@repo/shared";
 import {
   parseUserInputPayload,
@@ -29,6 +32,7 @@ import {
 import { parseRequestAnalysisPayload } from "../utils/request-analysis";
 import { parseTaskExecutionPlanPayload } from "../utils/task-execution";
 import {
+  createProductWorkflowDisplaySnapshot,
   parseExecutorResultPayload,
   parseProductWorkflowPayload,
 } from "../utils/product-workflow";
@@ -40,7 +44,7 @@ import {
 /**
  * 数据库 message 表原始行结构。
  */
-interface MessageRow {
+export interface MessageRow {
   id: string;
   role: string;
   type: string | null;
@@ -57,11 +61,13 @@ export interface MessageDto {
   id: string;
   role: "user" | "assistant";
   type?: string | null;
+  workflowRoundId?: string;
   content: string;
   timestamp: string;
   reasoningContent?: string;
   toolCalls?: ToolCallDto[];
   subagentTraces?: SubagentTraceDto[];
+  agentError?: AgentErrorDto;
   userInput?: UserInputRecord[] | null;
   requestAnalysis?: RequestAnalysis | null;
   taskExecutionPlan?: TaskExecutionPlan | null;
@@ -94,6 +100,41 @@ export interface SubagentTraceDto {
   thinking?: string;
   result?: unknown;
   status: "running" | "complete";
+}
+
+/**
+ * 持久化错误卡片及其可选定点重试动作。
+ */
+export interface AgentErrorDto {
+  agentType?: string;
+  message: string;
+  retryAction?: WorkflowRetryAction;
+}
+
+interface ExecutorRetryErrorRow {
+  error_message: string | null;
+}
+
+interface ArchivedProductWorkflowRow {
+  workflow: unknown;
+}
+
+/**
+ * 读取指定任务最近一次由服务端持久化的可重试错误。
+ */
+export async function findLatestExecutorRetryError(
+  conversationId: string,
+  taskId: string,
+): Promise<string | null> {
+  const rows = await prisma.$queryRaw<ExecutorRetryErrorRow[]>`
+    SELECT "meta"->'agentError'->>'message' AS "error_message"
+    FROM "message"
+    WHERE "conversation_id" = ${conversationId}
+      AND "meta"->'agentError'->'retryAction'->>'taskId' = ${taskId}
+    ORDER BY "created_at" DESC, "id" DESC
+    LIMIT 1
+  `;
+  return rows[0]?.error_message ?? null;
 }
 
 /**
@@ -137,7 +178,13 @@ export async function listConversationMessages(
       "id" ASC
   `;
 
-  const messages = attachExecutorResultsToPlannerMessages(rows.map(mapMessageRow));
+  const archivedWorkflows =
+    await listArchivedProductWorkflowDisplays(conversationId);
+  const restoredMessages = attachArchivedProductWorkflowDisplays(
+    rows.map(mapMessageRow),
+    archivedWorkflows,
+  );
+  const messages = attachExecutorResultsToPlannerMessages(restoredMessages);
   const tokenUsages = await listTokenUsageByConversation(conversationId);
 
   return attachTokenUsagesToMessages(messages, tokenUsages);
@@ -199,7 +246,7 @@ export async function persistConversationMessages(
 /**
  * 将数据库行映射为消息 DTO，兼容旧消息中内联的 tagged block。
  */
-function mapMessageRow(row: MessageRow): MessageDto {
+export function mapMessageRow(row: MessageRow): MessageDto {
   const meta = parseRecord(row.meta);
   const userInput = parseRecord(row.user_input);
 
@@ -209,6 +256,12 @@ function mapMessageRow(row: MessageRow): MessageDto {
   const inlineTaskExecutionPlan = parseTaskExecutionPlanPayload(row.content);
   const inlineExecutorResult = parseExecutorResultPayload(row.content);
   const inlineProductWorkflow = parseProductWorkflowPayload(row.content);
+  const persistedTaskExecutionPlan = TaskExecutionPlanSchema.safeParse(
+    meta?.taskExecutionPlan,
+  );
+  const persistedProductWorkflow = ProductWorkflowResultSchema.safeParse(
+    meta?.productWorkflow,
+  );
 
   // 正文返回给前端展示时去掉结构化 block，避免 JSON 原文和卡片重复显示。
   const cleanedContent = removeTaggedBlock(
@@ -235,6 +288,7 @@ function mapMessageRow(row: MessageRow): MessageDto {
   const subagentTraces = Array.isArray(meta?.subagentTraces)
     ? normalizeSubagentTraces(meta.subagentTraces)
     : [];
+  const agentError = normalizeAgentError(meta?.agentError);
   const timestamp =
     typeof meta?.timestamp === "string"
       ? meta.timestamp
@@ -244,6 +298,9 @@ function mapMessageRow(row: MessageRow): MessageDto {
     id: row.id,
     role: row.role === "assistant" ? "assistant" : "user",
     type: row.type,
+    ...(typeof meta?.workflowRoundId === "string"
+      ? { workflowRoundId: meta.workflowRoundId }
+      : {}),
     content: extractedSearch.content,
     timestamp,
     ...(typeof meta?.reasoningContent === "string"
@@ -253,46 +310,111 @@ function mapMessageRow(row: MessageRow): MessageDto {
       ? { toolCalls: [...metaToolCalls, ...extractedSearch.toolCalls] }
       : {}),
     ...(subagentTraces.length > 0 ? { subagentTraces } : {}),
+    ...(agentError ? { agentError } : {}),
     userInput: Array.isArray(userInput?.user_input)
       ? (userInput.user_input as UserInputRecord[])
       : inlineUserInput,
     requestAnalysis: inlineRequestAnalysis,
-    taskExecutionPlan: inlineTaskExecutionPlan,
+    taskExecutionPlan: persistedTaskExecutionPlan.success
+      ? persistedTaskExecutionPlan.data
+      : inlineTaskExecutionPlan,
     executorResult: inlineExecutorResult,
-    productWorkflow: inlineProductWorkflow,
+    productWorkflow: persistedProductWorkflow.success
+      ? persistedProductWorkflow.data
+      : inlineProductWorkflow,
   };
+}
+
+/**
+ * 从既有 request_form_item 恢复旧消息被正文摘要替代前的 Critique 展示快照。
+ */
+async function listArchivedProductWorkflowDisplays(
+  conversationId: string,
+): Promise<ProductWorkflowResult[]> {
+  const rows = await prisma.$queryRaw<ArchivedProductWorkflowRow[]>`
+    SELECT "item"."payload"->'workflow' AS "workflow"
+    FROM "request_form_item" AS "item"
+    INNER JOIN "request_form" AS "form"
+      ON "form"."id" = "item"."form_id"
+    WHERE "form"."chat_id" = ${conversationId}
+      AND "item"."payload"->'workflow' IS NOT NULL
+    ORDER BY "item"."created_at" ASC, "item"."id" ASC
+  `;
+  return rows.flatMap((row) => {
+    const parsed = ProductWorkflowResultSchema.safeParse(row.workflow);
+    return parsed.success
+      ? [createProductWorkflowDisplaySnapshot(parsed.data)]
+      : [];
+  });
+}
+
+/**
+ * 将旧版归档摘要按 confirmation_id 还原为 Critique 卡片。
+ */
+export function attachArchivedProductWorkflowDisplays(
+  messages: MessageDto[],
+  workflows: ProductWorkflowResult[],
+): MessageDto[] {
+  const byConfirmationId = new Map(
+    workflows.map((workflow) => [workflow.confirmation_id, workflow]),
+  );
+  return messages.map((message) => {
+    if (message.productWorkflow) return message;
+    const confirmationId = /确认 ID：([^\r\n]+)/.exec(message.content)?.[1];
+    const productWorkflow = confirmationId
+      ? byConfirmationId.get(confirmationId.trim())
+      : undefined;
+    if (!productWorkflow) return message;
+    return {
+      ...message,
+      content: removeArchivedProductWorkflowSummary(message.content),
+      productWorkflow,
+    };
+  });
 }
 
 /**
  * 将后续 Executor 完成结果挂回同一轮 Planner 消息，供刷新后恢复 DAG 状态。
  */
-function attachExecutorResultsToPlannerMessages(
+export function attachExecutorResultsToPlannerMessages(
   messages: MessageDto[],
 ): MessageDto[] {
-  const productWorkflowResults = messages.flatMap((message) =>
-    message.productWorkflow?.executor_results ?? [],
-  );
+  const next = messages.map((message) => ({ ...message }));
 
-  return messages.map((message) => {
-    if (!message.taskExecutionPlan) return message;
+  for (let resultIndex = 0; resultIndex < next.length; resultIndex += 1) {
+    const message = next[resultIndex]!;
+    const results = [
+      ...(message.executorResult ? [message.executorResult] : []),
+      ...(message.productWorkflow?.executor_results ?? []),
+    ];
 
-    const taskIds = new Set(
-      message.taskExecutionPlan.tasks.map((task) => task.task_id),
-    );
-    const executorResults =
-      productWorkflowResults.length > 0
-        ? productWorkflowResults
-        : messages.flatMap((candidate) =>
-            candidate.executorResult ? [candidate.executorResult] : [],
-          );
+    for (const result of results) {
+      for (let planIndex = resultIndex; planIndex >= 0; planIndex -= 1) {
+        const plannerMessage = next[planIndex]!;
+        if (
+          (plannerMessage.workflowRoundId &&
+            message.workflowRoundId &&
+            plannerMessage.workflowRoundId !== message.workflowRoundId) ||
+          !plannerMessage.taskExecutionPlan?.tasks.some(
+            (task) => task.task_id === result.task_id,
+          )
+        ) {
+          continue;
+        }
+        const existing = plannerMessage.executorResults ?? [];
+        next[planIndex] = {
+          ...plannerMessage,
+          executorResults: [
+            ...existing.filter((item) => item.task_id !== result.task_id),
+            result,
+          ],
+        };
+        break;
+      }
+    }
+  }
 
-    return {
-      ...message,
-      executorResults: executorResults.filter((result) =>
-        taskIds.has(result.task_id),
-      ),
-    };
-  });
+  return next;
 }
 
 /**
@@ -374,19 +496,27 @@ function parseRecord(value: unknown): Record<string, unknown> | null {
  */
 export async function persistAssistantMessage({
   conversationId,
+  workflowRoundId,
   content,
   userInput,
   reasoningContent,
   toolCalls,
   subagentTraces,
+  agentError,
+  taskExecutionPlan,
+  productWorkflow,
   type,
 }: {
   conversationId: string;
+  workflowRoundId?: string;
   content: string;
   userInput: UserInputRecord[] | null;
   reasoningContent?: string;
   toolCalls?: ToolCallDto[];
   subagentTraces?: SubagentTraceDto[];
+  agentError?: AgentErrorDto;
+  taskExecutionPlan?: TaskExecutionPlan | null;
+  productWorkflow?: ProductWorkflowResult | null;
   type: string;
 }): Promise<string> {
   const messageId = randomUUID();
@@ -394,11 +524,15 @@ export async function persistAssistantMessage({
   await prisma.$transaction(async (tx) => {
     const meta = JSON.stringify({
       source: `${type}-agent`,
+      ...(workflowRoundId ? { workflowRoundId } : {}),
       ...(reasoningContent ? { reasoningContent } : {}),
       ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
       ...(subagentTraces && subagentTraces.length > 0
         ? { subagentTraces }
         : {}),
+      ...(agentError ? { agentError } : {}),
+      ...(taskExecutionPlan ? { taskExecutionPlan } : {}),
+      ...(productWorkflow ? { productWorkflow } : {}),
     });
 
     // 按 Agent 类型写入 message.type，前端据此恢复对应阶段的展示顺序。
@@ -441,14 +575,27 @@ function removeTaggedBlock(
   startMarker: string,
   endMarker: string,
 ): string {
-  const startIndex = content.indexOf(startMarker);
-  if (startIndex === -1) return content;
+  let result = content;
+  while (true) {
+    const startIndex = result.indexOf(startMarker);
+    if (startIndex === -1) return result.trim();
+    const endIndex = result.indexOf(endMarker, startIndex);
+    if (endIndex === -1) return result.trim();
+    const blockEnd = endIndex + endMarker.length;
+    result = `${result.slice(0, startIndex)}${result.slice(blockEnd)}`;
+  }
+}
 
-  const endIndex = content.indexOf(endMarker, startIndex);
-  if (endIndex === -1) return content;
-
-  const blockEnd = endIndex + endMarker.length;
-  return `${content.slice(0, startIndex)}${content.slice(blockEnd)}`.trim();
+/**
+ * 移除旧版产品工作流归档摘要，避免恢复卡片后重复显示。
+ */
+function removeArchivedProductWorkflowSummary(content: string): string {
+  return content
+    .replace(
+      /Planner SubAgent 已完成产品工作流汇总，结构化结果已归档。\s*确认 ID：[^\r\n]+\s*状态：[^\r\n]+\s*Executor 结果数：[^\r\n]+/g,
+      "",
+    )
+    .trim();
 }
 
 /**
@@ -514,6 +661,33 @@ function normalizeSubagentTraces(value: unknown[]): SubagentTraceDto[] {
       },
     ];
   });
+}
+
+/**
+ * 校验数据库 meta 中的错误卡片，避免将任意 JSON 直接暴露给前端。
+ */
+function normalizeAgentError(value: unknown): AgentErrorDto | undefined {
+  const error = parseRecord(value);
+  if (!error || typeof error.message !== "string") return undefined;
+  const retry = parseRecord(error.retryAction);
+  const retryAction =
+    retry?.type === "resume_executor_task" &&
+    typeof retry.taskId === "string" &&
+    typeof retry.agentType === "string"
+      ? {
+          type: "resume_executor_task" as const,
+          taskId: retry.taskId,
+          agentType: retry.agentType,
+        }
+      : undefined;
+
+  return {
+    ...(typeof error.agentType === "string"
+      ? { agentType: error.agentType }
+      : {}),
+    message: error.message,
+    ...(retryAction ? { retryAction } : {}),
+  };
 }
 
 /**

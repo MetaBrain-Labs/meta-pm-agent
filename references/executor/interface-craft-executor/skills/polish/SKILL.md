@@ -1,3 +1,8 @@
+---
+name: polish
+description: "Perform a final visual and interaction quality pass against a defined quality bar. Use after implementation to resolve inconsistencies and improve finish."
+---
+
 > **Additional context needed**: quality bar (MVP vs flagship).
 
 Perform a meticulous final pass to catch all the small details that separate good work from great work. The difference between shipped and polished.

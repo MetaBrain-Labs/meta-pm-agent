@@ -13,8 +13,10 @@
  * - 管理 executorResults 累积和执行计划状态
  */
 
+import { randomUUID } from "node:crypto";
 import { getWriter, type LangGraphRunnableConfig } from "@langchain/langgraph";
 import type { ProductWorkflowResult, TaskExecutionNode } from "@repo/shared";
+import type { UserInputRecord } from "../../agents/request/user-input";
 import type { ProductWorkflowStreamEvent } from "../../agents/product-workflow/agent";
 import {
   EXECUTOR_DEFINITIONS,
@@ -34,6 +36,9 @@ import {
 } from "../../agents/product-workflow/agent";
 import { updateProductContextMetadata } from "../../agents/product-workflow/common/context-metadata";
 import type { WorkflowGraphStateValue } from "../state";
+
+const AUTOMATIC_CRITIQUE_CORRECTION_MARKER =
+  "[automatic critique correction]";
 
 /**
  * Planner 节点：显示 Orchestrator 的 Planner SubAgent 生成的 DAG，
@@ -100,11 +105,13 @@ export async function plannerAgentNode(
 export async function orchestratorAgentNode(
   state: WorkflowGraphStateValue,
   config?: LangGraphRunnableConfig,
-) {
+): Promise<Partial<WorkflowGraphStateValue>> {
   if (!state.requestAnalysis || state.productWorkflow) return {};
   if (state.plan && arePlanTasksFinished(state)) {
     return executeCritiqueAgentReview(state, config);
   }
+  // 恢复运行时沿用已有 DAG；只有缺少计划时才重新调用 Orchestrator。
+  if (state.plan) return {};
   if (state.orchestratorDecision) {
     return { orchestratorDecision: state.orchestratorDecision };
   }
@@ -114,6 +121,7 @@ export async function orchestratorAgentNode(
     state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
 
   if (state.requestAnalysis.business_model.length > 0) {
+    writer?.(createWorkflowRoundStartEvent());
     const isSupplement = isSupplementWorkflow(state);
     knowledgeGraph = updateProductContextMetadata({
       knowledgeGraph,
@@ -181,7 +189,20 @@ export async function orchestratorAgentNode(
 }
 
 /**
- * 为 LangGraph 注册 10 个独立 Executor Agent 节点名称。
+ * 为一次真正的新 DAG 规划生成独立且稳定的流式轮次标识。
+ */
+export function createWorkflowRoundStartEvent(): Extract<
+  ProductWorkflowStreamEvent,
+  { type: "workflow-round-start" }
+> {
+  return {
+    type: "workflow-round-start",
+    roundId: randomUUID(),
+  };
+}
+
+/**
+ * 注册到 LangGraph 的十个独立 Executor Agent 节点名称。
  */
 export const EXECUTOR_AGENT_NODE_NAMES = EXECUTOR_DEFINITIONS.map(
   (definition) => definition.agentType,
@@ -321,7 +342,18 @@ async function executeExecutorAgentTask(
     status: "started",
     phase: "execution",
     parallelAgents,
+    taskId: task.task_id,
   });
+  const retryTaskId = config?.configurable?.retry_task_id;
+  const retryError = config?.configurable?.retry_error;
+  const retryInstruction =
+    retryTaskId === task.task_id && typeof retryError === "string"
+      ? [
+          "This task is being manually retried after a previous validated failure.",
+          "Correct every previously reported issue before writing graph data.",
+          `Previous failure details:\n${retryError}`,
+        ].join("\n")
+      : undefined;
 
   const result = await consumeProductWorkflowStream(
     streamExecutorAgent({
@@ -333,6 +365,7 @@ async function executeExecutorAgentTask(
       requestAnalysis: state.requestAnalysis,
       userInput: state.userInput,
       previousResults: state.executorResults,
+      retryInstruction,
       signal: config?.signal,
     }),
     writer,
@@ -367,6 +400,7 @@ async function executeExecutorAgentTask(
     status: "completed",
     phase: "execution",
     parallelAgents,
+    taskId: result.task_id,
   });
 
   return { executorResults: [result], knowledgeGraph: nextKnowledgeGraph };
@@ -378,7 +412,7 @@ async function executeExecutorAgentTask(
 async function executeCritiqueAgentReview(
   state: WorkflowGraphStateValue,
   config?: LangGraphRunnableConfig,
-) {
+): Promise<Partial<WorkflowGraphStateValue>> {
   if (!state.requestAnalysis || !state.plan) return {};
 
   const writer = getWriter(config);
@@ -404,14 +438,18 @@ async function executeCritiqueAgentReview(
     }),
     writer,
   );
+  const reviewResult = requireMissingInputConfirmation(
+    workflowResult,
+    state.originalUserInput,
+  );
   const reviewedKnowledgeGraph = updateProductContextMetadata({
-    knowledgeGraph: workflowResult.knowledge_graph_update,
+    knowledgeGraph: reviewResult.knowledge_graph_update,
     currentState:
-      workflowResult.status === "completed" ? "stable" : "refining",
-    descriptionEntry: createCritiqueDescriptionEntry(workflowResult),
+      reviewResult.status === "completed" ? "stable" : "refining",
+    descriptionEntry: createCritiqueDescriptionEntry(reviewResult),
   });
   const nextWorkflowResult: ProductWorkflowResult = {
-    ...workflowResult,
+    ...reviewResult,
     knowledge_graph_update: reviewedKnowledgeGraph,
   };
 
@@ -431,11 +469,181 @@ async function executeCritiqueAgentReview(
     type: "knowledge-graph-update",
     knowledgeGraph: reviewedKnowledgeGraph,
   });
+
+  if (shouldAutomaticallyPlanCorrection(nextWorkflowResult, state)) {
+    const correctionInput = createAutomaticCorrectionUserInput(
+      nextWorkflowResult,
+      state.originalUserInput,
+      state.userInput,
+    );
+    const priorCritiqueIssues = [
+      ...(nextWorkflowResult.review.issues ?? []),
+      ...(nextWorkflowResult.knowledge_graph_review?.issues ?? []),
+    ];
+    const planningResult = await orchestratorAgentNode(
+      {
+        ...state,
+        userInput: correctionInput,
+        plan: null,
+        orchestratorDecision: null,
+        executorResults: [],
+        knowledgeGraph: reviewedKnowledgeGraph,
+        priorCritiqueIssues,
+        productWorkflow: null,
+        supplementAgentTypes: EXECUTOR_DEFINITIONS.map(
+          (definition) => definition.agentType,
+        ),
+      },
+      config,
+    );
+
+    return {
+      ...planningResult,
+      userInput: correctionInput,
+      executorResults: [],
+      priorCritiqueIssues,
+      productWorkflow: null,
+      supplementAgentTypes: EXECUTOR_DEFINITIONS.map(
+        (definition) => definition.agentType,
+      ),
+    };
+  }
+
   writer?.({ type: "complete", result: nextWorkflowResult });
 
   return {
     productWorkflow: nextWorkflowResult,
     knowledgeGraph: reviewedKnowledgeGraph,
+  };
+}
+
+/**
+ * 判断 Critique 缺口是否可在无需用户输入时自动进入一次补充规划。
+ */
+export function shouldAutomaticallyPlanCorrection(
+  workflowResult: ProductWorkflowResult,
+  state: Pick<WorkflowGraphStateValue, "userInput">,
+): boolean {
+  return (
+    (workflowResult.review.retry_task_ids?.length ?? 0) > 0 &&
+    workflowResult.proposal_questions.length === 0 &&
+    !workflowResult.knowledge_graph_update.open_questions.some(
+      (question) => question.blocking,
+    ) &&
+    !state.userInput.some((item) =>
+      item.content.includes(AUTOMATIC_CRITIQUE_CORRECTION_MARKER),
+    )
+  );
+}
+
+/**
+ * 将 Critique 的确定性缺口转换为 Planner 可消费的自动修正输入。
+ */
+function createAutomaticCorrectionInput(
+  workflowResult: ProductWorkflowResult,
+): string {
+  const issues = [
+    ...(workflowResult.review.issues ?? []),
+    ...(workflowResult.knowledge_graph_review?.issues ?? []),
+  ];
+  return [
+    AUTOMATIC_CRITIQUE_CORRECTION_MARKER,
+    "Create a supplement DAG that corrects the deterministic Critique issues below. Do not ask the user unless a genuinely blocking product decision is missing.",
+    `Retry tasks: ${workflowResult.review.retry_task_ids?.join(", ") || "none"}`,
+    ...issues.map(
+      (issue) =>
+        `- ${issue.code}${issue.task_id ? ` (${issue.task_id})` : ""}: ${issue.message}`,
+    ),
+  ].join("\n");
+}
+
+/**
+ * 合并原始输入、当前表单答案和自动修正指令，原始输入索引始终保持稳定。
+ */
+export function createAutomaticCorrectionUserInput(
+  workflowResult: ProductWorkflowResult,
+  originalUserInput: UserInputRecord[],
+  currentUserInput: UserInputRecord[],
+): UserInputRecord[] {
+  const records = originalUserInput.map((item) => ({ ...item }));
+  const seenContent = new Set(records.map((item) => item.content.trim()));
+  let nextIndex = Math.max(0, ...records.map((item) => item.index)) + 1;
+
+  for (const item of currentUserInput) {
+    const content = item.content.trim();
+    if (!content || seenContent.has(content)) continue;
+    records.push({ ...item, index: nextIndex++ });
+    seenContent.add(content);
+  }
+
+  records.push({
+    index: nextIndex,
+    type: "自动审查修正",
+    content: createAutomaticCorrectionInput(workflowResult),
+  });
+  return records;
+}
+
+/**
+ * Critique 只给出输入序号但历史中没有原文时，转为明确的用户确认而不是让 Planner 猜测。
+ */
+export function requireMissingInputConfirmation(
+  workflowResult: ProductWorkflowResult,
+  originalUserInput: UserInputRecord[],
+): ProductWorkflowResult {
+  const availableIndexes = new Set(
+    originalUserInput.map((item) => item.index),
+  );
+  const issues = [
+    ...(workflowResult.review.issues ?? []),
+    ...(workflowResult.knowledge_graph_review?.issues ?? []),
+  ];
+  const missingIndexes = [
+    ...new Set(
+      issues.flatMap((issue) => {
+        const match = issue.message.match(/user input\s+(\d+)/i);
+        const index = match ? Number(match[1]) : NaN;
+        return Number.isInteger(index) && !availableIndexes.has(index)
+          ? [index]
+          : [];
+      }),
+    ),
+  ];
+  if (missingIndexes.length === 0) return workflowResult;
+
+  return {
+    ...workflowResult,
+    status: "pending_user_confirmation",
+    proposal_questions: [
+      ...workflowResult.proposal_questions,
+      ...missingIndexes.map((index) => {
+        const referencedIssue = issues.find((issue) =>
+          new RegExp(`user input\\s+${index}\\b`, "i").test(issue.message),
+        );
+        const sourceTask =
+          workflowResult.planner.tasks.find(
+            (task) => task.task_id === referencedIssue?.task_id,
+          ) ?? workflowResult.planner.tasks[0]!;
+        return {
+          id: `missing-user-input-${index}`,
+          label: `无法恢复原始输入 ${index}，请重新提供该项约束的具体内容。`,
+          type: "textarea" as const,
+          required: true,
+          help: "缺少原文时系统不会自动推断需求。",
+          source_task_id: sourceTask.task_id,
+          source_agent: sourceTask.assigned_agent,
+          sources: [
+            {
+              source_task_id: sourceTask.task_id,
+              source_agent: sourceTask.assigned_agent,
+            },
+          ],
+          priority: 100,
+        };
+      }),
+    ],
+    confirmation_message:
+      "部分原始用户输入无法恢复，请重新提供具体内容后再继续自动修正。",
   };
 }
 

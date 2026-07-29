@@ -216,7 +216,15 @@ export function CritiqueAgentReviewCard({
               style={{ color: complete ? "var(--success)" : "var(--primary)" }}
             />
             <span>Critique Agent</span>
-            {result && <WorkflowStatusTag status={result.status} />}
+            {result && (
+              <WorkflowStatusTag
+                status={
+                  (result.review.retry_task_ids?.length ?? 0) > 0
+                    ? "requires_executor_retry"
+                    : result.status
+                }
+              />
+            )}
           </div>
           <div className="mt-1 text-[12px] font-bold text-[var(--ink-faint)]">
             {complete
@@ -579,6 +587,10 @@ function CritiqueReviewResult({ result }: { result: ProductWorkflowResult }) {
   const graphIssues = graphReview?.issues ?? [];
   const graphNotes = graphReview?.notes ?? [];
   const proposalQuestions = result.proposal_questions ?? [];
+  const graphRef = graphReview?.graph_ref;
+  const isLightweightSnapshot =
+    result.knowledge_graph_update.entities.length === 0 &&
+    (graphRef?.entity_count ?? 0) > 0;
 
   return (
     <div className="mt-4 space-y-3">
@@ -623,20 +635,29 @@ function CritiqueReviewResult({ result }: { result: ProductWorkflowResult }) {
             知识图谱更新
           </span>
           <Tag color="blue" className="m-0!">
-            实体 {result.knowledge_graph_update.entities.length}
+            实体{" "}
+            {graphRef?.entity_count ??
+              result.knowledge_graph_update.entities.length}
           </Tag>
           <Tag color="cyan" className="m-0!">
-            关系 {result.knowledge_graph_update.relations.length}
+            关系{" "}
+            {graphRef?.relation_count ??
+              result.knowledge_graph_update.relations.length}
           </Tag>
-          <Tag className="m-0!">
-            决策 {result.knowledge_graph_update.decisions?.length ?? 0}
-          </Tag>
-          <Tag className="m-0!">
-            风险 {result.knowledge_graph_update.risks?.length ?? 0}
-          </Tag>
-          <Tag className="m-0!">
-            开放问题 {result.knowledge_graph_update.open_questions?.length ?? 0}
-          </Tag>
+          {!isLightweightSnapshot && (
+            <>
+              <Tag className="m-0!">
+                决策 {result.knowledge_graph_update.decisions?.length ?? 0}
+              </Tag>
+              <Tag className="m-0!">
+                风险 {result.knowledge_graph_update.risks?.length ?? 0}
+              </Tag>
+              <Tag className="m-0!">
+                开放问题{" "}
+                {result.knowledge_graph_update.open_questions?.length ?? 0}
+              </Tag>
+            </>
+          )}
         </div>
         <TextList title="图谱备注" items={result.knowledge_graph_update.notes} />
         {graphReview && (
@@ -772,9 +793,16 @@ function ReviewIssueList({
 /**
  * 展示产品工作流状态标签。
  */
-function WorkflowStatusTag({ status }: { status: ProductWorkflowResult["status"] }) {
+function WorkflowStatusTag({
+  status,
+}: {
+  status: ProductWorkflowResult["status"] | "requires_executor_retry";
+}) {
   if (status === "completed") return <Tag color="green">已完成</Tag>;
   if (status === "discarded") return <Tag color="red">已放弃</Tag>;
+  if (status === "requires_executor_retry") {
+    return <Tag color="orange">待修正</Tag>;
+  }
   return <Tag color="orange">等待确认</Tag>;
 }
 

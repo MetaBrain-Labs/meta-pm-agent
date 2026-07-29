@@ -15,7 +15,9 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { getHarnessProfile } from "deepagents";
 import type { ProductKnowledgeGraph } from "@repo/shared";
+import "../src/agents/common/harness-profile";
 import {
   createToolsForAgent,
   getExecutorDefaultToolNames,
@@ -131,6 +133,51 @@ test("product workflow allowlist keeps only runtime-authorized tools", () => {
     ),
     ["web_search", "kg_file_read", "kg_file_add_nodes"],
   );
+});
+
+test("skill executor allowlist keeps virtual read access only", () => {
+  const deepAgentInjectedTools = createNamedTools([
+    "read_file",
+    "ls",
+    "write_file",
+    "edit_file",
+    "execute",
+    "kg_file_read",
+    "kg_file_add_nodes",
+  ]);
+  const allowedNames = new Set([
+    "read_file",
+    ...createToolsForAgent(
+      "executor-product-strategy",
+      getExecutorDefaultToolNames("executor-product-strategy"),
+      { knowledgeGraph: createEmptyKnowledgeGraph() },
+    ).map((tool) => tool.name),
+  ]);
+
+  assert.deepEqual(
+    filterToolsByAllowedNames(deepAgentInjectedTools, allowedNames)?.map(
+      (tool) => tool.name,
+    ),
+    ["read_file", "kg_file_read", "kg_file_add_nodes"],
+  );
+});
+
+test("harness leaves read_file to agent allowlists and excludes host mutations", () => {
+  const profile = getHarnessProfile("openai");
+
+  assert.ok(profile);
+  assert.equal(profile.excludedTools.has("read_file"), false);
+  for (const toolName of [
+    "ls",
+    "write_file",
+    "edit_file",
+    "delete",
+    "glob",
+    "grep",
+    "execute",
+  ]) {
+    assert.equal(profile.excludedTools.has(toolName), true, toolName);
+  }
 });
 
 test("document allowlist keeps only the explicitly required builtin tools", () => {

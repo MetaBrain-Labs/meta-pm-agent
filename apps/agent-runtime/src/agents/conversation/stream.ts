@@ -40,18 +40,25 @@ import {
   isProductWorkflowOptionalStopAnswer,
 } from "../../utils/form-parser";
 import {
+  formatProductWorkflowBlock,
   formatProductWorkflowConfirmationQuestionForm,
   formatProductWorkflowProposalQuestionForm,
 } from "../product-workflow/agent";
+import { updateProductContextMetadata } from "../product-workflow/common/context-metadata";
 import {
   isExecutorHumanInputRequiredError,
+  isExecutorRetryRequiredError,
   type ExecutorHumanInputRequired,
 } from "../product-workflow/executor-agent/agent";
 import {
   createWorkflowContinuationResumeContextFromMessages,
+  createWorkflowExecutorRetryResumeContextFromMessages,
   createWorkflowResumeContextFromMessages,
 } from "./workflow-resume";
-import { streamWorkflowGraph } from "../../graph/workflow";
+import {
+  hasRetryableWorkflowTaskCheckpoint,
+  streamWorkflowGraph,
+} from "../../graph/workflow";
 import {
   createHumanInTheLoopThreadId,
   extractQuestionFormId,
@@ -248,6 +255,11 @@ export async function* streamConversation(
   const lastMessage = messages.at(-1);
   if (!lastMessage) {
     throw new Error("At least one chat message is required.");
+  }
+
+  if (options.workflowRetry) {
+    yield* streamWorkflowExecutorRetry(messages, options);
+    return;
   }
 
   // 处理表单答案
@@ -627,34 +639,33 @@ async function* streamWorkflowResumeAfterFormAnswer(
     resumeContext.productWorkflow &&
     isProductWorkflowOptionalStopAnswer(latestUserMessage.content)
   ) {
+    const knowledgeGraph = updateProductContextMetadata({
+      knowledgeGraph: resumeContext.productWorkflow.knowledge_graph_update,
+      currentState: "stable",
+      descriptionEntry:
+        "User skipped optional follow-up questions and accepted the current result with its recorded review issues.",
+    });
     const result: ProductWorkflowResult = {
       ...resumeContext.productWorkflow,
-      status: "pending_user_confirmation",
+      status: "completed",
       proposal_questions: [],
+      knowledge_graph_update: knowledgeGraph,
       confirmation_message:
-        "用户已跳过可选优化问题，请确认是否接受当前已有设计成果。",
+        "用户已跳过可选优化问题，并接受当前已有成果及已记录的审查问题。",
     };
-    const questionForm = formatProductWorkflowConfirmationQuestionForm(result);
+    yield { type: "knowledge-graph-update", knowledgeGraph };
+    yield {
+      type: "text",
+      content: formatProductWorkflowBlock(result),
+      agentType: "critique",
+    };
     yield { type: "complete", result };
     yield {
       type: "text",
-      content: "已停止继续补充可选问题，请确认当前已有设计成果。",
+      content:
+        "本轮产品工作流已正式结束。你已选择不再继续补充可选优化问题，当前成果及已记录的审查问题均已归档。",
       agentType: "conversation_confirmation",
     };
-    yield {
-      type: "question-form-start",
-      agentType: "conversation_confirmation",
-    };
-    yield {
-      type: "question-form-complete",
-      content: questionForm,
-      agentType: "conversation_confirmation",
-    };
-    yield* streamHumanInterruptForQuestionForm(
-      questionForm,
-      "conversation_confirmation",
-      options,
-    );
     return;
   }
 
@@ -700,6 +711,7 @@ async function* streamPlanningAfterUserInput(
       workflowThreadId: options.workflowThreadId,
       resumeFromCheckpoint: resumeOptions.resumeFromCheckpoint,
       resumeContext,
+      retryFailure: options.workflowRetryFailure,
       signal: options.signal,
     })) {
       if (
@@ -710,6 +722,7 @@ async function* streamPlanningAfterUserInput(
       }
 
       if (
+        event.type === "workflow-round-start" ||
         event.type === "agent-status" ||
         event.type === "reasoning" ||
         event.type === "request-analysis-start" ||
@@ -783,6 +796,24 @@ async function* streamPlanningAfterUserInput(
       }
     }
   } catch (error) {
+    if (isExecutorRetryRequiredError(error)) {
+      yield {
+        type: "error",
+        error: [
+          `来源：${error.displayName} / ${error.taskId}`,
+          "原因：requires_executor_retry（Executor 当前运行未能完成）",
+          `关键详情：${error.details}`,
+        ].join("\n"),
+        agentType: error.agentType,
+        retryAction: {
+          type: "resume_executor_task",
+          taskId: error.taskId,
+          agentType: error.agentType,
+        },
+        terminal: true,
+      };
+      return;
+    }
     if (isExecutorHumanInputRequiredError(error)) {
       const questionForm = formatExecutorHumanInputQuestionForm(
         error.interrupt,
@@ -815,8 +846,68 @@ async function* streamPlanningAfterUserInput(
       type: "error",
       error: getErrorMessage(error),
       agentType: "request",
+      terminal: true,
     };
   }
+}
+
+/**
+ * 从失败任务的 checkpoint 定点恢复；checkpoint 丢失时才使用消息中的已有 DAG 兜底。
+ */
+async function* streamWorkflowExecutorRetry(
+  messages: ChatMessage[],
+  options: ConversationStreamOptions,
+): AsyncGenerator<ConversationStreamEvent> {
+  const retry = options.workflowRetry;
+  if (!retry) return;
+
+  let canResumeCheckpoint = false;
+  if (options.workflowThreadId) {
+    try {
+      canResumeCheckpoint = await hasRetryableWorkflowTaskCheckpoint({
+        workflowThreadId: options.workflowThreadId,
+        taskId: retry.taskId,
+      });
+    } catch {
+      // checkpoint 查询失败时继续使用已持久化消息恢复，不要求用户重新填写表单。
+    }
+  }
+
+  if (canResumeCheckpoint) {
+    yield* streamPlanningAfterUserInput(
+      createEmptyUserInputBlock(),
+      options,
+      [],
+      { resumeFromCheckpoint: true },
+    );
+    return;
+  }
+
+  const resumeContext =
+    createWorkflowExecutorRetryResumeContextFromMessages({
+      messages,
+      knowledgeGraph: options.knowledgeGraph,
+      taskId: retry.taskId,
+    });
+  if (!resumeContext) {
+    yield {
+      type: "error",
+      error: `无法恢复 ${retry.taskId}：当前 checkpoint 与历史 DAG 中没有匹配的未完成任务。`,
+      agentType: "orchestrator",
+      terminal: true,
+    };
+    return;
+  }
+
+  yield* streamPlanningAfterUserInput(
+    resumeContext.userInputBlock ?? createEmptyUserInputBlock(),
+    options,
+    messages,
+    {
+      resumeContext,
+      suppressRestoredRequestAnalysis: true,
+    },
+  );
 }
 
 /**

@@ -20,6 +20,8 @@ import type {
   OrchestratorContextSource,
   ProductWorkflowResult,
   ProductKnowledgeGraph,
+  WorkflowRetryAction,
+  WorkflowRetryRequest,
 } from "@repo/shared";
 import type { HumanInTheLoopInterrupt } from "./graph/human-in-the-loop";
 
@@ -52,11 +54,16 @@ export interface StreamChunk {
 export type ConversationStreamEvent =
   | StreamChunk
   | {
+      type: "workflow-round-start";
+      roundId: string;
+    }
+  | {
       type: "agent-status";
       agentType: AgentMessageType;
       status: "started" | "completed";
       phase?: "planning" | "execution" | "review";
       parallelAgents?: AgentMessageType[];
+      taskId?: string;
     }
   | {
       type: "tool-call";
@@ -125,7 +132,13 @@ export type ConversationStreamEvent =
       durationMs: number;
       parallelAgents?: AgentMessageType[];
     }
-  | { type: "error"; error: string; agentType?: AgentMessageType }
+  | {
+      type: "error";
+      error: string;
+      agentType?: AgentMessageType;
+      retryAction?: WorkflowRetryAction;
+      terminal?: boolean;
+    }
   | { type: "complete"; result: ProductWorkflowResult }
   | { type: "knowledge-graph-update"; knowledgeGraph: ProductKnowledgeGraph };
 
@@ -141,6 +154,12 @@ export interface ConversationStreamOptions {
   contextSource?: OrchestratorContextSource;
   knowledgeGraph?: ProductKnowledgeGraph | null;
   workflowAnswerResolution?: WorkflowAnswerResolution | null;
+  workflowRetry?: WorkflowRetryRequest;
+  /** API 从持久化错误中恢复的可信重试上下文，不属于客户端请求契约。 */
+  workflowRetryFailure?: {
+    taskId: string;
+    error: string;
+  };
   signal?: AbortSignal;
   /** "chat" 模式使用纯闲聊提示词，不产生标记块或表单 */
   mode?: "project" | "chat";

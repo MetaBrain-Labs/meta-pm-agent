@@ -1,3 +1,8 @@
+---
+name: colorize
+description: "Create a purposeful and accessible color system within existing brand constraints. Use when an interface is monochrome, visually weak, or lacks semantic color roles."
+---
+
 > **Additional context needed**: existing brand colors.
 
 Replace timid grayscale or single-accent designs with a strategic palette: pick a color strategy, choose a hue family that fits the brand, then apply color with intent. More color ≠ better. Strategic color beats rainbow vomit.

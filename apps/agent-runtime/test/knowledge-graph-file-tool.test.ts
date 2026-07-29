@@ -288,6 +288,167 @@ test("requires the configured number of blocking OpenQuestions", async () => {
   assert.equal(state.open_questions.length, 2);
 });
 
+test("requires auditable Evidence provenance and verified search sources", async () => {
+  const state = createKnowledgeGraph();
+  const verifiedWebSources = new Map([
+    [
+      "1",
+      {
+        sourceId: "1",
+        title: "Official collaboration benchmark",
+        url: "https://example.com/benchmark",
+      },
+    ],
+  ]);
+  const addNodes = getTool(
+    createKnowledgeGraphTools(state, {
+      allowedEntityTypes: ["Evidence"],
+      sourceTaskId: "task-02",
+      userInput: [
+        {
+          index: 1,
+          content: "The user requires support for 100 active users.",
+        },
+      ],
+      verifiedWebSources,
+    }),
+    "kg_file_add_nodes",
+  );
+
+  await assert.rejects(
+    addNodes.invoke({
+      nodes: [
+        {
+          ...createTypedNode("E-001", "Evidence"),
+          name: "Industry scale",
+          description: "The industry benchmark is 10,000 active users.",
+          provenance: [{ kind: "user_input", user_input_index: 1 }],
+        },
+      ],
+    }),
+    /unsupported_numeric_claims/i,
+  );
+  await assert.rejects(
+    addNodes.invoke({
+      nodes: [
+        {
+          ...createTypedNode("E-002", "Evidence"),
+          name: "External benchmark",
+          description: "A public benchmark supports the requirement.",
+          provenance: [
+            {
+              kind: "web_search",
+              source_id: "1",
+              title: "Invented source",
+              url: "https://example.com/benchmark",
+            },
+          ],
+        },
+      ],
+    }),
+    /web_source_title_mismatch/i,
+  );
+  await assert.rejects(
+    addNodes.invoke({
+      nodes: [
+        {
+          ...createTypedNode("E-005", "Evidence"),
+          name: "Deployment topology",
+          description: "The deployment region is Singapore.",
+          provenance: [{ kind: "user_input", user_input_index: 1 }],
+        },
+      ],
+    }),
+    /unsupported_infrastructure_scope/i,
+  );
+
+  await addNodes.invoke({
+    nodes: [
+      {
+        ...createTypedNode("E-003", "Evidence"),
+        name: "Confirmed user scale",
+        description: "The user requires support for 100 active users.",
+        provenance: [{ kind: "user_input", user_input_index: 1 }],
+      },
+      {
+        ...createTypedNode("E-004", "Evidence"),
+        name: "Verified external benchmark",
+        description: "The official benchmark provides external context.",
+        provenance: [
+          {
+            kind: "web_search",
+            source_id: "1",
+            title: "Official collaboration benchmark",
+            url: "https://example.com/benchmark",
+          },
+        ],
+      },
+    ],
+  });
+  assert.equal(state.entities.filter((item) => item.type === "Evidence").length, 2);
+});
+
+test("deprecates owned nodes only during supplement workflows", async () => {
+  const state = createKnowledgeGraph();
+  state.entities.push({
+    id: "F-001",
+    type: "Feature",
+    name: "Rich text editor",
+    description: "Provide a WYSIWYG rich text editor.",
+    source_task_id: "task-old",
+    status: "confirmed",
+  });
+  const deprecateNodes = getTool(
+    createKnowledgeGraphTools(state, {
+      allowedEntityTypes: ["Feature"],
+      allowNodeDeprecation: true,
+      sourceTaskId: "task-02",
+    }),
+    "kg_file_deprecate_nodes",
+  );
+  const addNodes = getTool(
+    createKnowledgeGraphTools(state, {
+      allowedEntityTypes: ["Feature"],
+      allowNodeDeprecation: true,
+      sourceTaskId: "task-02",
+    }),
+    "kg_file_add_nodes",
+  );
+
+  await assert.rejects(
+    addNodes.invoke({
+      nodes: [
+        {
+          ...createTypedNode("F-002", "Feature"),
+          status: "deprecated",
+        },
+      ],
+    }),
+    /new_nodes_cannot_start_deprecated/i,
+  );
+
+  const result = JSON.parse(
+    String(
+      await deprecateNodes.invoke({
+        deprecations: [
+          {
+            node_id: "F-001",
+            reason: "The user confirmed Markdown-only editing.",
+            source_task_id: "task-02",
+          },
+        ],
+      }),
+    ),
+  ) as ToolResult;
+
+  assert.equal(result.count, 1);
+  assert.equal(state.entities.find((item) => item.id === "F-001")?.status, "deprecated");
+  assert.equal(
+    state.entities.find((item) => item.id === "F-001")?.deprecated_by_task_id,
+    "task-02",
+  );
+});
+
 interface ToolResult {
   count: number;
   items: Array<{ id: string }>;
@@ -330,6 +491,7 @@ function createNode(id: string, sourceTaskId: string) {
     description: `Goal ${id} description.`,
     source_task_id: sourceTaskId,
     status: "proposed",
+    provenance: [{ kind: "existing_graph" as const, node_id: "G-001" }],
   };
 }
 
@@ -347,6 +509,7 @@ function createTypedNode(
     description: `${type} ${id} description.`,
     source_task_id: "task-02",
     status: "proposed" as const,
+    provenance: [{ kind: "existing_graph" as const, node_id: "G-001" }],
   };
 }
 

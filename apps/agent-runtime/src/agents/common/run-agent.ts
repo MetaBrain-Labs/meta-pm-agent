@@ -1,11 +1,11 @@
 /**
  * Agent 通用执行器
  *
- * 为 DeepAgent 提供统一的流式执行封装，负责模型创建、工具与推理事件、
- * token 统计、可选 SubAgent 追踪和最终结果解析。
+ * 为 DeepAgent 提供统一的 Event Streaming v3 执行封装，负责模型创建、
+ * 工具与推理事件、token 统计、可选 SubAgent 追踪和最终结果解析。
  *
  * Responsibilities:
- * - 创建并驱动普通或携带 SubAgent 的 DeepAgent
+ * - 创建并驱动普通或携带 SubAgent 的 DeepAgent Event Streaming projections
  * - 统一输出 reasoning、tool、subagent 和 token 事件
  * - 通过调用方解析回调生成最终结果
  *
@@ -13,14 +13,9 @@
  * - 结果解析与业务 fallback 由调用方提供，执行器不感知具体输出 schema。
  */
 
-import {
-  AIMessage,
-  HumanMessage,
-  ToolMessage,
-  type BaseMessage,
-  type StructuredTool,
-} from "langchain";
-import { createDeepAgent, type SubAgent } from "deepagents";
+import { randomUUID } from "node:crypto";
+import { HumanMessage, type BaseMessage, type StructuredTool } from "langchain";
+import { createDeepAgent, type FileData, type SubAgent } from "deepagents";
 import { calculateCost } from "../../config";
 import { parseJsonObject } from "../../utils/json";
 import {
@@ -31,14 +26,13 @@ import {
 import {
   createAgentRunSummaryMiddleware,
   createAgentRunSummaryRecorder,
-  createSubagentTaskCallExtractor,
-  extractSubagentTaskResult,
   type AgentRunSummaryRecorder,
-  type SubagentTaskCallRecord,
 } from "./agent-run-summary";
 import { createDeepAgentToolAllowlistMiddleware } from "./deep-agent-tool-policy";
 import { createDefaultAgentMiddleware } from "./middleware";
 import { createChatModel, type ChatModelOptions } from "./model";
+
+const SKILL_READ_TOOL_NAME = "read_file";
 
 /**
  * 带 SubAgent Agent 的推理事件。
@@ -125,6 +119,7 @@ export interface RunAgentOptions<T, AgentType extends string> {
   systemPrompt: string;
   tools?: StructuredTool[];
   skills?: string[];
+  skillFiles?: Record<string, FileData>;
   subagents?: SubAgent[];
   payload: unknown;
   resolveOutput: AgentOutputResolver<T>;
@@ -133,19 +128,24 @@ export interface RunAgentOptions<T, AgentType extends string> {
   requiredSubagentType?: string;
   suppressFallbackReasoning?: boolean;
   throwOnError?: boolean;
+  /** 将调用方指定的工具失败结果提升为运行异常。 */
+  getToolResultError?: (
+    toolName: string,
+    toolResult: unknown,
+  ) => Error | null;
   signal?: AbortSignal;
 }
 
 /** 结构化 JSON Agent 的默认模型参数。 */
 export const JSON_AGENT_MODEL_OPTIONS = {
-  enableThinking: false,
+  enableThinking: true,
   responseFormat: "json_object",
   temperature: 0,
 } satisfies Omit<ChatModelOptions, "maxTokens">;
 
 /** 自由文本 Agent 的默认模型参数。 */
 export const TEXT_AGENT_MODEL_OPTIONS = {
-  enableThinking: false,
+  enableThinking: true,
   temperature: 0,
 } satisfies Omit<ChatModelOptions, "maxTokens" | "timeout">;
 
@@ -210,229 +210,336 @@ export function getMissingRequiredSubagentError(
     : null;
 }
 
-/**
- * 判断当前 namespace 是否属于 SubAgent 内部工具执行上下文。
- */
-function isSubagentNamespace(namespace: string[]): boolean {
-  return namespace.some((segment) => segment.startsWith("tools:"));
+/** Event Streaming v3 的模型消息投影最小契约。 */
+export interface AgentMessageProjection {
+  text: AsyncIterable<string>;
+  reasoning: AsyncIterable<string>;
+  output: PromiseLike<BaseMessage>;
+}
+
+/** Event Streaming v3 的工具调用投影最小契约。 */
+export interface AgentToolCallProjection {
+  name: string;
+  callId: string;
+  input: unknown;
+  output: PromiseLike<unknown>;
+  status: PromiseLike<"running" | "finished" | "error">;
+  error: PromiseLike<string | undefined>;
+}
+
+/** Event Streaming v3 的 SubAgent 投影最小契约。 */
+export interface AgentSubagentProjection {
+  name: string;
+  taskInput: PromiseLike<string>;
+  output: PromiseLike<unknown>;
+  messages: AsyncIterable<AgentMessageProjection>;
+}
+
+/** 公共运行器消费的 Event Streaming v3 投影集合。 */
+export interface AgentEventStreamProjection {
+  messages: AsyncIterable<AgentMessageProjection>;
+  toolCalls: AsyncIterable<AgentToolCallProjection>;
+  subagents: AsyncIterable<AgentSubagentProjection>;
+  output: PromiseLike<unknown>;
+}
+
+/** Event Streaming 汇流完成后交给结果解析器的状态。 */
+export interface AgentEventStreamResult {
+  responseText: string;
+  tokenUsage: ReturnType<typeof getTokenUsage>;
+  invokedSubagentTypes: Set<string>;
+}
+
+interface AgentEventStreamAdapterOptions<AgentType extends string> {
+  agentType: AgentType;
+  visibleToolNames: ReadonlySet<string>;
+  summaryRecorder: AgentRunSummaryRecorder;
+  getToolResultError?: (
+    toolName: string,
+    toolResult: unknown,
+  ) => Error | null;
 }
 
 /**
- * 从当前消息中提取 task 工具调用，注册到映射并产出 subagent-start 事件。
- */
-async function* handleSubagentTaskCalls<AgentType extends string>(
-  taskCalls: SubagentTaskCallRecord[],
-  options: { agentType: AgentType },
-  summaryRecorder: AgentRunSummaryRecorder,
-  taskCallToSubagent: Map<string, string>,
-  openSubagentCalls: Array<{ toolCallId?: string; subagentType: string }>,
-): AsyncGenerator<AgentRunEvent<AgentType>, void, void> {
-  for (const taskCall of taskCalls) {
-    if (taskCall.toolCallId) {
-      taskCallToSubagent.set(taskCall.toolCallId, taskCall.subagentType);
-    }
-    openSubagentCalls.push({
-      toolCallId: taskCall.toolCallId,
-      subagentType: taskCall.subagentType,
-    });
-    summaryRecorder.recordSubagentCall({
-      toolCallId: taskCall.toolCallId,
-      subagentType: taskCall.subagentType,
-      input: taskCall.input,
-    });
-    yield {
-      type: "subagent-start",
-      agentType: options.agentType,
-      subagentType: taskCall.subagentType,
-      toolCallId: taskCall.toolCallId,
-    };
-  }
-}
-
-/**
- * 处理主 Agent 层面的可见工具调用和工具结果事件。
- */
-async function* handleVisibleToolEvents<AgentType extends string>(
-  message: BaseMessage,
-  visibleToolNames: ReadonlySet<string>,
-  options: { agentType: AgentType },
-  summaryRecorder: AgentRunSummaryRecorder,
-): AsyncGenerator<AgentRunEvent<AgentType>, void, void> {
-  for (const toolCall of getToolCalls(message, visibleToolNames)) {
-    summaryRecorder.recordToolCall({
-      toolCallId: toolCall.id,
-      toolName: toolCall.name,
-      toolArgs: toolCall.args,
-    });
-    yield {
-      type: "tool-call",
-      toolCallId: toolCall.id,
-      toolName: toolCall.name,
-      toolArgs: toolCall.args,
-      agentType: options.agentType,
-    };
-  }
-
-  const toolResult = getToolResult(message, visibleToolNames);
-  if (toolResult) {
-    summaryRecorder.recordToolResult({
-      toolCallId: toolResult.id,
-      toolName: toolResult.name,
-      toolResult: toolResult.content,
-    });
-    yield {
-      type: "tool-result",
-      toolCallId: toolResult.id,
-      toolName: toolResult.name,
-      toolResult: toolResult.content,
-      agentType: options.agentType,
-    };
-  }
-}
-
-/**
- * 当消息是可见工具结果时，后续无需再处理文本/推理。
- */
-function shouldSkipTextAfterToolResult(
-  message: BaseMessage,
-  visibleToolNames: ReadonlySet<string>,
-): boolean {
-  return getToolResult(message, visibleToolNames) !== null;
-}
-
-/**
- * 处理 SubAgent task 工具返回结果（ToolMessage），产出 subagent-result 事件并关闭对应调用。
+ * 将 Event Streaming v3 的并发 projections 汇流为仓库稳定的 AgentRunEvent。
  *
- * @returns 是否已处理（true 表示消息已被消费，调用方应 continue）
+ * Notes:
+ * - 仅消费顶层 messages/toolCalls，SubAgent 内容通过专属 handle 归属。
+ * - 内部 Skill 读取只写脱敏调试摘要，不进入用户可见事件。
  */
-async function* handleSubagentTaskResult<AgentType extends string>(
-  message: BaseMessage,
-  options: { agentType: AgentType },
-  summaryRecorder: AgentRunSummaryRecorder,
-  taskCallToSubagent: Map<string, string>,
-  openSubagentCalls: Array<{ toolCallId?: string; subagentType: string }>,
-): AsyncGenerator<AgentRunEvent<AgentType>, boolean, void> {
-  if (!ToolMessage.isInstance(message)) {
-    return false;
-  }
+export async function* adaptAgentEventStream<AgentType extends string>(
+  run: AgentEventStreamProjection,
+  options: AgentEventStreamAdapterOptions<AgentType>,
+): AsyncGenerator<AgentRunEvent<AgentType>, AgentEventStreamResult, void> {
+  const events: AgentRunEvent<AgentType>[] = [];
+  let wakeConsumer: (() => void) | undefined;
+  let completed = false;
+  let failure: unknown;
+  let responseText = "";
+  let tokenUsage: ReturnType<typeof getTokenUsage> = null;
+  const invokedSubagentTypes = new Set<string>();
 
-  const structuredResult = extractSubagentTaskResult(
-    message,
-    taskCallToSubagent,
-  );
-  if (structuredResult) {
-    summaryRecorder.recordSubagentResult({
-      toolCallId: structuredResult.toolCallId,
-      subagentType: structuredResult.subagentType,
-      output: structuredResult.output,
-    });
-    yield {
-      type: "subagent-result",
-      agentType: options.agentType,
-      subagentType: structuredResult.subagentType,
-      toolCallId: structuredResult.toolCallId,
-      result: structuredResult.output,
-    };
-    closeSubagentCall(openSubagentCalls, structuredResult);
-    return true;
-  }
-
-  if (message.name === "task") {
-    const toolCallId = (message as { tool_call_id?: string }).tool_call_id;
-    const subagentType =
-      (toolCallId ? taskCallToSubagent.get(toolCallId) : undefined) ??
-      "unknown";
-    summaryRecorder.recordSubagentResult({
-      toolCallId,
-      subagentType,
-      output: message.content,
-    });
-    yield {
-      type: "subagent-result",
-      agentType: options.agentType,
-      subagentType,
-      toolCallId,
-      result: message.content,
-    };
-    closeSubagentCall(openSubagentCalls, { toolCallId, subagentType });
-    return true;
-  }
-
-  return false;
-}
-
-/**
- * 处理主 Agent 层面的推理内容。
- *
- * 当本消息中刚产出了 task 调用（hasNewTaskCallInThisMessage=true）时，推理归属于主 Agent；
- * 否则若存在未关闭的 SubAgent 调用，推理归属于最近的 SubAgent。
- */
-async function* handleMainAgentReasoning<AgentType extends string>(
-  message: BaseMessage,
-  openSubagentCalls: Array<{ toolCallId?: string; subagentType: string }>,
-  hasNewTaskCallInThisMessage: boolean,
-  options: { agentType: AgentType },
-  summaryRecorder: AgentRunSummaryRecorder,
-): AsyncGenerator<AgentRunEvent<AgentType>, void, void> {
-  const reasoning = getReasoningContent(message);
-  if (!reasoning) return;
-
-  // 如果本消息中刚刚产出了 task 调用（main agent 正在做委派决策），
-  // 推理内容属于主 Agent 自身，不应归属给之前打开的 SubAgent。
-  const activeSubagent = hasNewTaskCallInThisMessage
-    ? undefined
-    : openSubagentCalls[openSubagentCalls.length - 1];
-
-  if (activeSubagent) {
-    summaryRecorder.recordSubagentThinking({
-      toolCallId: activeSubagent.toolCallId,
-      subagentType: activeSubagent.subagentType,
-      content: reasoning,
-    });
-    yield {
-      type: "subagent-thinking",
-      agentType: options.agentType,
-      subagentType: activeSubagent.subagentType,
-      toolCallId: activeSubagent.toolCallId,
-      content: reasoning,
-    };
-  } else {
-    summaryRecorder.recordThinking(reasoning);
-    yield {
-      type: "reasoning",
-      agentType: options.agentType,
-      content: reasoning,
-    };
-  }
-}
-
-/**
- * 处理 SubAgent 内部的推理内容，始终归属给最近打开的 SubAgent。
- */
-async function* handleSubagentReasoning<AgentType extends string>(
-  message: BaseMessage,
-  openSubagentCalls: Array<{ toolCallId?: string; subagentType: string }>,
-  options: { agentType: AgentType },
-  summaryRecorder: AgentRunSummaryRecorder,
-): AsyncGenerator<AgentRunEvent<AgentType>, void, void> {
-  const reasoning = getReasoningContent(message);
-  if (!reasoning) return;
-
-  const activeSubagent = openSubagentCalls[openSubagentCalls.length - 1];
-  if (!activeSubagent) return;
-
-  summaryRecorder.recordSubagentThinking({
-    toolCallId: activeSubagent.toolCallId,
-    subagentType: activeSubagent.subagentType,
-    content: reasoning,
-  });
-  yield {
-    type: "subagent-thinking",
-    agentType: options.agentType,
-    subagentType: activeSubagent.subagentType,
-    toolCallId: activeSubagent.toolCallId,
-    content: reasoning,
+  const push = (event: AgentRunEvent<AgentType>) => {
+    events.push(event);
+    wakeConsumer?.();
+    wakeConsumer = undefined;
   };
+
+  const consumeMessages = async () => {
+    for await (const message of run.messages) {
+      await Promise.all([
+        consumeTextChunks(message.text, (content) => {
+          responseText += content;
+          options.summaryRecorder.recordOutput(content);
+        }),
+        consumeTextChunks(message.reasoning, (content) => {
+          options.summaryRecorder.recordThinking(content);
+          push({
+            type: "reasoning",
+            agentType: options.agentType,
+            content,
+          });
+        }),
+      ]);
+      tokenUsage = getTokenUsage(await message.output) ?? tokenUsage;
+    }
+  };
+
+  const consumeToolCalls = async () => {
+    for await (const call of run.toolCalls) {
+      // 工具失败时 output 会 reject；立即观测全部 projection，避免未处理 Promise 杀死 API 进程。
+      const settledCall = Promise.allSettled([
+        call.status,
+        call.output,
+        call.error,
+      ] as const);
+      if (
+        call.name !== SKILL_READ_TOOL_NAME &&
+        !options.visibleToolNames.has(call.name)
+      ) {
+        continue;
+      }
+
+      const toolArgs = normalizeToolInput(call.input);
+      options.summaryRecorder.recordToolCall({
+        toolCallId: call.callId,
+        toolName: call.name,
+        toolArgs,
+      });
+
+      if (call.name !== SKILL_READ_TOOL_NAME) {
+        push({
+          type: "tool-call",
+          toolCallId: call.callId,
+          toolName: call.name,
+          toolArgs,
+          agentType: options.agentType,
+        });
+      }
+
+      const [statusResult, outputResult, errorResult] = await settledCall;
+      if (statusResult.status === "rejected") throw statusResult.reason;
+      const status = statusResult.value;
+      if (call.name === SKILL_READ_TOOL_NAME) {
+        options.summaryRecorder.recordToolResult({
+          toolCallId: call.callId,
+          toolName: call.name,
+          toolResult: {
+            status,
+            content: "Skill file content omitted.",
+          },
+        });
+        continue;
+      }
+
+      let toolResult: unknown;
+      if (status === "finished") {
+        if (outputResult.status === "rejected") throw outputResult.reason;
+        toolResult = outputResult.value;
+      } else {
+        const error =
+          errorResult.status === "fulfilled"
+            ? errorResult.value
+            : errorResult.reason;
+        const outputError =
+          outputResult.status === "rejected" ? outputResult.reason : undefined;
+        toolResult = {
+          error: getErrorMessage(
+            error ?? outputError ?? "Tool execution failed.",
+          ),
+        };
+      }
+      options.summaryRecorder.recordToolResult({
+        toolCallId: call.callId,
+        toolName: call.name,
+        toolResult,
+      });
+      push({
+        type: "tool-result",
+        toolCallId: call.callId,
+        toolName: call.name,
+        toolResult,
+        agentType: options.agentType,
+      });
+      const toolError = options.getToolResultError?.(call.name, toolResult);
+      if (toolError) throw toolError;
+    }
+  };
+
+  const consumeSubagents = async () => {
+    const watchers: Promise<void>[] = [];
+    for await (const subagent of run.subagents) {
+      const toolCallId = `subagent:${randomUUID()}`;
+      const subagentType = subagent.name;
+      const taskInput = await subagent.taskInput;
+      invokedSubagentTypes.add(subagentType);
+      options.summaryRecorder.recordSubagentCall({
+        toolCallId,
+        subagentType,
+        input: { description: taskInput },
+      });
+      push({
+        type: "subagent-start",
+        agentType: options.agentType,
+        subagentType,
+        toolCallId,
+      });
+
+      watchers.push(
+        consumeSubagentProjection(
+          subagent,
+          toolCallId,
+          options,
+          push,
+        ),
+      );
+    }
+    await Promise.all(watchers);
+  };
+
+  const producer = Promise.all([
+    consumeMessages(),
+    consumeToolCalls(),
+    consumeSubagents(),
+    Promise.resolve(run.output).then(() => undefined),
+  ])
+    .then(() => {
+      completed = true;
+      wakeConsumer?.();
+    })
+    .catch((error: unknown) => {
+      failure = error;
+      completed = true;
+      wakeConsumer?.();
+    });
+
+  while (!completed || events.length > 0) {
+    if (events.length === 0) {
+      await new Promise<void>((resolve) => {
+        wakeConsumer = resolve;
+      });
+      continue;
+    }
+    yield events.shift()!;
+  }
+
+  await producer;
+  if (failure !== undefined) throw failure;
+
+  return {
+    responseText,
+    tokenUsage,
+    invokedSubagentTypes,
+  };
+}
+
+/** 消费单个 SubAgent handle，并保持其 reasoning、文本和结果归属稳定。 */
+async function consumeSubagentProjection<AgentType extends string>(
+  subagent: AgentSubagentProjection,
+  toolCallId: string,
+  options: AgentEventStreamAdapterOptions<AgentType>,
+  push: (event: AgentRunEvent<AgentType>) => void,
+): Promise<void> {
+  let streamedText = "";
+  const messages = (async () => {
+    for await (const message of subagent.messages) {
+      await Promise.all([
+        consumeTextChunks(message.text, (content) => {
+          streamedText += content;
+          options.summaryRecorder.recordSubagentRawOutput({
+            toolCallId,
+            subagentType: subagent.name,
+            content,
+          });
+        }),
+        consumeTextChunks(message.reasoning, (content) => {
+          options.summaryRecorder.recordSubagentThinking({
+            toolCallId,
+            subagentType: subagent.name,
+            content,
+          });
+          push({
+            type: "subagent-thinking",
+            agentType: options.agentType,
+            subagentType: subagent.name,
+            toolCallId,
+            content,
+          });
+        }),
+      ]);
+      await message.output;
+    }
+  })();
+
+  const [output] = await Promise.all([subagent.output, messages]);
+  const result = extractSubagentOutput(output, streamedText);
+  options.summaryRecorder.recordSubagentResult({
+    toolCallId,
+    subagentType: subagent.name,
+    output: result,
+  });
+  push({
+    type: "subagent-result",
+    agentType: options.agentType,
+    subagentType: subagent.name,
+    toolCallId,
+    result,
+  });
+}
+
+/** 消费可回放的文本 projection。 */
+async function consumeTextChunks(
+  stream: AsyncIterable<string>,
+  consume: (content: string) => void,
+): Promise<void> {
+  for await (const content of stream) {
+    if (content) consume(content);
+  }
+}
+
+/** 工具 schema 以对象为边界，非对象输入不进入现有 toolArgs 契约。 */
+function normalizeToolInput(
+  input: unknown,
+): Record<string, unknown> | undefined {
+  return typeof input === "object" && input !== null && !Array.isArray(input)
+    ? (input as Record<string, unknown>)
+    : undefined;
+}
+
+/** 从 SubAgent 最终状态提取与旧 task ToolMessage 等价的紧凑文本。 */
+function extractSubagentOutput(output: unknown, streamedText: string): unknown {
+  if (output && typeof output === "object" && !Array.isArray(output)) {
+    const messages = (output as { messages?: unknown }).messages;
+    if (Array.isArray(messages)) {
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage && typeof lastMessage === "object") {
+        const text = getTextContent(lastMessage as BaseMessage);
+        if (text) return text;
+      }
+    }
+  }
+
+  return streamedText || output;
 }
 
 /**
@@ -444,6 +551,12 @@ export async function* runAgent<T, AgentType extends string>(
   const startTime = Date.now();
   const tools = options.tools ?? [];
   const subagents = options.subagents ?? [];
+  const skillFiles = options.skillFiles ?? {};
+  const hasSkillFiles = Object.keys(skillFiles).length > 0;
+  const allowedBuiltinToolNames = [
+    ...(hasSkillFiles ? ["read_file"] : []),
+    ...(subagents.length ? ["task"] : []),
+  ];
   const visibleToolNames = new Set(tools.map((tool) => tool.name));
   const summaryRecorder = createAgentRunSummaryRecorder({
     agentLabel: options.agentLabel,
@@ -456,10 +569,14 @@ export async function* runAgent<T, AgentType extends string>(
       subagents: compactSubagentDefinitions(subagents),
       systemPrompt: options.systemPrompt,
       tools: compactToolDefinitions(tools),
-      allowedBuiltinToolNames: subagents.length ? ["task"] : [],
+      allowedBuiltinToolNames,
     },
   });
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
+  const runAbortController = new AbortController();
+  const runSignal = options.signal
+    ? AbortSignal.any([options.signal, runAbortController.signal])
+    : runAbortController.signal;
 
   try {
     const agent = createDeepAgent({
@@ -474,7 +591,7 @@ export async function* runAgent<T, AgentType extends string>(
           agentName: options.name,
           allowedToolNames: [
             ...tools.map((tool) => tool.name),
-            ...(subagents.length ? ["task"] : []),
+            ...allowedBuiltinToolNames,
           ],
         }),
         ...createDefaultAgentMiddleware(),
@@ -482,119 +599,28 @@ export async function* runAgent<T, AgentType extends string>(
       ] as any,
     });
 
-    const run = await agent.stream(
+    const run = await agent.streamEvents(
       {
         messages: [new HumanMessage(JSON.stringify(options.payload))],
+        ...(hasSkillFiles ? { files: skillFiles } : {}),
       },
       {
-        streamMode: "messages",
-        signal: options.signal,
-        subgraphs: true,
+        version: "v3",
+        signal: runSignal,
       },
     );
 
-    let responseText = "";
-    const invokedSubagentTypes = new Set<string>();
-    const taskCallToSubagent = new Map<string, string>();
-    const openSubagentCalls: Array<{
-      toolCallId?: string;
-      subagentType: string;
-    }> = [];
-    const pendingSubagentOutputs = new Map<string, string>();
-    const subagentTaskCallExtractor = createSubagentTaskCallExtractor();
-
-    for await (const item of run as AsyncIterable<
-      [string[], [BaseMessage, Record<string, unknown>]]
-    >) {
-      const [namespace, [message]] = item;
-      const isSubagentMessage = isSubagentNamespace(namespace);
-      const subagentResultHandled = yield* handleSubagentTaskResult(
-        message,
-        options,
-        summaryRecorder,
-        taskCallToSubagent,
-        openSubagentCalls,
-      );
-      if (subagentResultHandled) continue;
-
-      if (isSubagentMessage) {
-        yield* handleSubagentReasoning(
-          message,
-          openSubagentCalls,
-          options,
-          summaryRecorder,
-        );
-        const text = getTextContent(message);
-        const activeSubagent =
-          openSubagentCalls[openSubagentCalls.length - 1];
-        if (text && activeSubagent) {
-          const key =
-            activeSubagent.toolCallId ?? activeSubagent.subagentType;
-          pendingSubagentOutputs.set(
-            key,
-            `${pendingSubagentOutputs.get(key) ?? ""}${text}`,
-          );
-          summaryRecorder.recordSubagentRawOutput({
-            toolCallId: activeSubagent.toolCallId,
-            subagentType: activeSubagent.subagentType,
-            content: text,
-          });
-        }
-        tokenUsage = getTokenUsage(message) ?? tokenUsage;
-        continue;
-      }
-
-      const taskCalls = subagentTaskCallExtractor.extract(message);
-      taskCalls.forEach((call) =>
-        invokedSubagentTypes.add(call.subagentType),
-      );
-      yield* handleSubagentTaskCalls(
-        taskCalls,
-        options,
-        summaryRecorder,
-        taskCallToSubagent,
-        openSubagentCalls,
-      );
-      yield* handleVisibleToolEvents(
-        message,
-        visibleToolNames,
-        options,
-        summaryRecorder,
-      );
-      if (shouldSkipTextAfterToolResult(message, visibleToolNames)) continue;
-
-      yield* handleMainAgentReasoning(
-        message,
-        openSubagentCalls,
-        taskCalls.length > 0,
-        options,
-        summaryRecorder,
-      );
-      const text = getTextContent(message);
-      responseText += text;
-      summaryRecorder.recordOutput(text);
-      tokenUsage = getTokenUsage(message) ?? tokenUsage;
-    }
-
-    // 某些 provider 不产生 task ToolMessage，使用子图最终文本补齐结果事件。
-    for (const activeSubagent of [...openSubagentCalls]) {
-      const key = activeSubagent.toolCallId ?? activeSubagent.subagentType;
-      const output = pendingSubagentOutputs.get(key);
-      if (!output) continue;
-      summaryRecorder.recordSubagentResult({
-        toolCallId: activeSubagent.toolCallId,
-        subagentType: activeSubagent.subagentType,
-        output,
-      });
-      yield {
-        type: "subagent-result",
+    const streamResult = yield* adaptAgentEventStream(
+      run as AgentEventStreamProjection,
+      {
         agentType: options.agentType,
-        subagentType: activeSubagent.subagentType,
-        toolCallId: activeSubagent.toolCallId,
-        result: output,
-      };
-      closeSubagentCall(openSubagentCalls, activeSubagent);
-    }
+        visibleToolNames,
+        summaryRecorder,
+        getToolResultError: options.getToolResultError,
+      },
+    );
+    const { responseText, invokedSubagentTypes } = streamResult;
+    tokenUsage = streamResult.tokenUsage;
 
     const tokenUsageSummary = tokenUsage
       ? { ...tokenUsage, durationMs: Date.now() - startTime }
@@ -614,25 +640,25 @@ export async function* runAgent<T, AgentType extends string>(
       };
     }
 
+    const missingSubagent = getMissingRequiredSubagentError(
+      options.requiredSubagentType,
+      invokedSubagentTypes,
+    );
+    if (missingSubagent) {
+      await summaryRecorder.finish({
+        error: missingSubagent,
+        status: "failed",
+        tokenUsage: tokenUsageSummary,
+      });
+      throw new Error(missingSubagent);
+    }
+
     const resolution = options.resolveOutput({
       text: responseText,
       tokenUsage,
       maxTokens: options.modelOptions?.maxTokens,
     });
     if (resolution.success) {
-      const missingSubagent = getMissingRequiredSubagentError(
-        options.requiredSubagentType,
-        invokedSubagentTypes,
-      );
-      if (missingSubagent) {
-        await summaryRecorder.finish({
-          error: missingSubagent,
-          output: resolution.data,
-          status: "failed",
-          tokenUsage: tokenUsageSummary,
-        });
-        throw new Error(missingSubagent);
-      }
       await summaryRecorder.finish({
         output: resolution.data,
         status: "completed",
@@ -662,10 +688,10 @@ export async function* runAgent<T, AgentType extends string>(
     return fallback;
   } catch (error) {
     const errorMessage = getErrorMessage(error);
-    if (
-      options.throwOnError ||
-      errorMessage.startsWith("required-subagent-not-invoked:")
-    ) {
+    if (errorMessage.startsWith("required-subagent-not-invoked:")) {
+      throw error;
+    }
+    if (options.throwOnError) {
       await summaryRecorder.finish({
         error: errorMessage,
         status: "failed",
@@ -687,6 +713,8 @@ export async function* runAgent<T, AgentType extends string>(
       status: "fallback",
     });
     return fallback;
+  } finally {
+    runAbortController.abort();
   }
 }
 
@@ -711,43 +739,6 @@ function formatFallbackReasoning(agentLabel: string, reason: string): string {
  */
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/**
- * 关闭已返回结果的 SubAgent 调用，避免后续主 Agent reasoning 被错误归属。
- */
-function closeSubagentCall(
-  openSubagentCalls: Array<{ toolCallId?: string; subagentType: string }>,
-  completed: { toolCallId?: string; subagentType?: string },
-): void {
-  const index = completed.toolCallId
-    ? openSubagentCalls.findIndex(
-        (item) => item.toolCallId === completed.toolCallId,
-      )
-    : findLastSubagentCallIndex(openSubagentCalls, completed.subagentType);
-
-  if (index !== -1) {
-    openSubagentCalls.splice(index, 1);
-  }
-}
-
-/**
- * 按 SubAgent 类型从后向前匹配最近一次未完成调用。
- */
-function findLastSubagentCallIndex(
-  openSubagentCalls: Array<{ toolCallId?: string; subagentType: string }>,
-  subagentType: string | undefined,
-): number {
-  for (let index = openSubagentCalls.length - 1; index >= 0; index -= 1) {
-    if (
-      !subagentType ||
-      openSubagentCalls[index]?.subagentType === subagentType
-    ) {
-      return index;
-    }
-  }
-
-  return -1;
 }
 
 /**
@@ -896,42 +887,4 @@ function compactSubagentDefinitions(subagents: SubAgent[]): Array<{
     name: subagent.name,
     description: subagent.description,
   }));
-}
-
-/**
- * 从模型消息中提取业务可见工具调用。
- */
-function getToolCalls(
-  message: BaseMessage,
-  visibleToolNames: ReadonlySet<string>,
-): Array<{ id?: string; name: string; args?: Record<string, unknown> }> {
-  if (!AIMessage.isInstance(message)) return [];
-
-  return (message.tool_calls ?? [])
-    .filter((toolCall) => toolCall.name && visibleToolNames.has(toolCall.name))
-    .map((toolCall) => ({
-      id: toolCall.id,
-      name: toolCall.name,
-      args:
-        typeof toolCall.args === "object" && toolCall.args !== null
-          ? (toolCall.args as Record<string, unknown>)
-          : undefined,
-    }));
-}
-
-/**
- * 从工具响应消息中提取业务可见工具结果。
- */
-function getToolResult(
-  message: BaseMessage,
-  visibleToolNames: ReadonlySet<string>,
-): { id?: string; name: string; content: unknown } | null {
-  if (!ToolMessage.isInstance(message)) return null;
-  if (!visibleToolNames.has(message.name ?? "unknown")) return null;
-
-  return {
-    id: (message as { tool_call_id?: string }).tool_call_id,
-    name: message.name ?? "unknown",
-    content: message.content,
-  };
 }

@@ -23,8 +23,12 @@ import type { WorkflowGraphStateValue } from "../state";
  * 将 Conversation Agent 的 <user-input> block 解析成结构化独立语句。
  */
 export function parseUserInputNode(state: WorkflowGraphStateValue) {
+  const userInput = parseUserInputBlock(state.userInputBlock);
   return {
-    userInput: parseUserInputBlock(state.userInputBlock),
+    userInput,
+    ...(state.originalUserInput.length === 0
+      ? { originalUserInput: userInput }
+      : {}),
   };
 }
 

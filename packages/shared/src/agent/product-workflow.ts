@@ -51,6 +51,28 @@ const LooseProductWorkflowAgentTypeSchema = z.preprocess(
 );
 
 /**
+ * 图谱节点的可审计来源。
+ *
+ * 旧图谱节点允许缺省；Executor 新增节点必须至少声明一项来源。
+ */
+export const KnowledgeGraphNodeProvenanceSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("user_input"),
+    user_input_index: z.number().int().positive(),
+  }),
+  z.object({
+    kind: z.literal("web_search"),
+    source_id: z.string().min(1),
+    title: z.string().min(1),
+    url: z.string().url(),
+  }),
+  z.object({
+    kind: z.literal("existing_graph"),
+    node_id: z.string().min(1),
+  }),
+]);
+
+/**
  * 产品知识图谱节点的最小 MVP 表达，后续可替换为正式图谱存储。
  */
 export const KnowledgeGraphEntitySchema = z.object({
@@ -72,6 +94,13 @@ export const KnowledgeGraphEntitySchema = z.object({
   source_task_id: z.string().optional(),
   status: z.enum(["proposed", "confirmed", "deprecated"]).optional(),
   blocking: z.boolean().optional(),
+  provenance: z
+    .array(KnowledgeGraphNodeProvenanceSchema)
+    .min(1)
+    .optional(),
+  deprecated_by_task_id: z.string().min(1).optional(),
+  deprecation_reason: z.string().min(1).optional(),
+  replacement_node_id: z.string().min(1).optional(),
 });
 
 /**
@@ -95,6 +124,10 @@ export const KnowledgeGraphNodeInputSchema = z.object({
   description: z.string().min(1).describe("Node description explaining its business meaning"),
   source_task_id: z.string().min(1).describe("Executor task ID that produced this node"),
   status: z.enum(["proposed", "confirmed", "deprecated"]).default("proposed").describe("Node status"),
+  provenance: z
+    .array(KnowledgeGraphNodeProvenanceSchema)
+    .min(1)
+    .describe("Auditable sources for this node"),
 });
 
 /**
@@ -787,6 +820,9 @@ export type ProductWorkflowResult = z.infer<typeof ProductWorkflowResultSchema>;
 export type CritiqueAgentOutput = z.infer<typeof CritiqueAgentOutputSchema>;
 export type PlannerWorkflowReviewOutput = CritiqueAgentOutput;
 export type KnowledgeGraphEntity = z.infer<typeof KnowledgeGraphEntitySchema>;
+export type KnowledgeGraphNodeProvenance = z.infer<
+  typeof KnowledgeGraphNodeProvenanceSchema
+>;
 export type KnowledgeGraphRelation = z.infer<
   typeof KnowledgeGraphRelationSchema
 >;

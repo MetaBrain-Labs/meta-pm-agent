@@ -1,3 +1,8 @@
+---
+name: craft
+description: "Implement a polished interface from confirmed requirements or a design brief. Use when creating or substantially refining production UI code."
+---
+
 # Craft Flow
 
 Build a feature with impeccable UX and UI quality: shape the design, land the visual direction, build real production code, inspect and improve in-browser until it meets a high-end studio bar.

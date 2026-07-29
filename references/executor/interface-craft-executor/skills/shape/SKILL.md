@@ -1,3 +1,8 @@
+---
+name: shape
+description: "Create a structured UX and UI design brief through discovery before implementation. Use when shaping a new feature, clarifying user needs, or defining visual and interaction direction."
+---
+
 Shape the UX and UI for a feature before any code is written. This command produces a **design brief**: a structured artifact that guides implementation through discovery, not guesswork.
 
 **Scope**: Design planning only. This command does NOT write code. It produces the thinking that makes code good.

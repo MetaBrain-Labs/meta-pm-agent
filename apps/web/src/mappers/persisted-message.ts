@@ -21,11 +21,22 @@ import type { Message, PersistedMessageInfo } from "../types";
 export function mapPersistedMessageToMessage(
   message: PersistedMessageInfo,
 ): Message {
+  const workflowCompletion =
+    message.type === "conversation_confirmation" &&
+    message.content.includes("本轮产品工作流已正式结束")
+      ? {
+          state: "complete" as const,
+          content: message.content,
+        }
+      : undefined;
   return {
     id: message.id,
     role: message.role === "assistant" ? "agent" : "user",
     type: message.type,
-    content: message.content,
+    ...(message.workflowRoundId
+      ? { workflowRoundId: message.workflowRoundId }
+      : {}),
+    content: workflowCompletion ? "" : message.content,
     timestamp: new Date(message.timestamp).getTime(),
     ...(message.reasoningContent &&
     message.type &&
@@ -59,6 +70,8 @@ export function mapPersistedMessageToMessage(
           })),
         }
       : {}),
+    ...(message.agentError ? { agentError: message.agentError } : {}),
+    ...(workflowCompletion ? { workflowCompletion } : {}),
     ...(message.userInput
       ? {
           userInput: {

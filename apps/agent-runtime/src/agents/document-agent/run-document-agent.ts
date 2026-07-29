@@ -129,7 +129,7 @@ export async function* runDocumentAgent(
   try {
     const agent = createDeepAgent({
       model: createChatModel({
-        enableThinking: false,
+        enableThinking: true,
         temperature: 0.2,
         maxTokens: 24000,
       }) as any,

@@ -212,7 +212,11 @@ export function createAgentRunSummaryRecorder(
         const dateDir = startedAt.toISOString().slice(0, 10);
         const outputDir = path.join(config.outputDir, dateDir);
         await mkdir(outputDir, { recursive: true });
-        await writeFile(path.join(outputDir, `${runId}.md`), markdown, "utf8");
+        await writeFile(
+          path.join(outputDir, `${runId}-debug.md`),
+          markdown,
+          "utf8",
+        );
       } catch (error) {
         // 汇总文件仅用于本地测试诊断，写入失败不应打断线上/本地 Agent 流程。
         console.warn(
@@ -561,7 +565,7 @@ function sanitizeFilePart(value: string): string {
 }
 
 /**
- * 渲染单次 Agent 运行的 Markdown 汇总。
+ * 渲染单次 Agent 运行的完整 debug 日志。
  */
 function renderAgentRunMarkdown({
   actualSystemPrompt,

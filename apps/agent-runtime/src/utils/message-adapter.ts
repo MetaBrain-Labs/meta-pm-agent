@@ -56,7 +56,29 @@ export function toLangChainMessages(
  */
 export function getReasoningContent(message: BaseMessage): string {
   const reasoning = message.additional_kwargs?.reasoning_content;
-  return typeof reasoning === "string" ? reasoning : "";
+  if (typeof reasoning === "string") return reasoning;
+  if (typeof message.content === "string") return "";
+
+  return message.content
+    .filter(
+      (
+        block,
+      ): block is
+        | { type: "reasoning"; reasoning: string }
+        | { type: "thinking"; thinking: string } =>
+        typeof block === "object" &&
+        block !== null &&
+        ((block.type === "reasoning" &&
+          "reasoning" in block &&
+          typeof block.reasoning === "string") ||
+          (block.type === "thinking" &&
+            "thinking" in block &&
+            typeof block.thinking === "string")),
+    )
+    .map((block) =>
+      block.type === "reasoning" ? block.reasoning : block.thinking,
+    )
+    .join("");
 }
 
 /**

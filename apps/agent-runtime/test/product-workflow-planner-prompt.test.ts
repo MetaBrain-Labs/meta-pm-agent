@@ -16,6 +16,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PLANNER_SUBAGENT_PROMPT } from "../src/agents/product-workflow/orchestrator-agent/planner-subagent/prompt";
+import { ORCHESTRATOR_AGENT_PROMPT } from "../src/agents/product-workflow/orchestrator-agent/prompt";
 import { CRITIQUE_AGENT_PROMPT } from "../src/agents/product-workflow/critique-agent/prompt";
 import { createExecutorAgentPrompt } from "../src/agents/product-workflow/executor-agent/prompt";
 import { getExecutorDefinition } from "../src/agents/product-workflow/executor-agent/definitions";
@@ -193,10 +194,25 @@ test("orchestrator planner subagent prompt satisfies json response format", () =
   );
 });
 
+test("orchestrator retry requires an immediate Planner task call", () => {
+  assert.match(
+    ORCHESTRATOR_AGENT_PROMPT,
+    /When payload\.mode is "pre-check" and the payload includes retry_context/,
+  );
+  assert.match(
+    ORCHESTRATOR_AGENT_PROMPT,
+    /If retry_context is present, the previous attempt did not invoke Planner/,
+  );
+  assert.match(
+    ORCHESTRATOR_AGENT_PROMPT,
+    /Call the planner task immediately before emitting any text/,
+  );
+});
+
 test("critique agent prompt stays compact and does not request full graph copies", () => {
   assert.match(
     CRITIQUE_AGENT_PROMPT,
-    /The JSON object must include only: status, confirmation_id, request_summary, review, product_context_update, knowledge_graph_review, proposal_questions, confirmation_message/,
+    /The JSON object must include only: status, confirmation_id, request_summary, review, prior_issue_resolutions, product_context_update, knowledge_graph_review, proposal_questions, confirmation_message/,
   );
   assert.match(
     CRITIQUE_AGENT_PROMPT,
@@ -285,6 +301,14 @@ test("executor prompt preserves append-only graph writing semantics", () => {
   assert.match(prompt, /do not add an unsupported numeric target/);
   assert.match(prompt, /persist at least that many/);
   assert.match(prompt, /Search availability: disabled/);
+  assert.match(prompt, /silently select the minimum relevant set/);
+  assert.match(prompt, /use `read_file` to read each selected virtual SKILL\.md/);
+  assert.match(prompt, /Do not read unrelated skills merely because they are listed/);
+  assert.match(prompt, /Never mention them in user-visible reasoning or final output/);
+  assert.doesNotMatch(
+    prompt,
+    /Do not call or mention filesystem paths for skills or references/,
+  );
   assert.match(
     prompt,
     /Only explicit statements in user_input may be written as new Evidence/,

@@ -1,3 +1,8 @@
+---
+name: codex
+description: "Explore visual directions and produce reference assets for interface work. Use when a product needs a committed visual direction, mood exploration, or supporting asset plan."
+---
+
 # Codex: Visual Direction & Asset Production
 
 This file is loaded by `$impeccable craft` when the harness has native image generation (currently Codex via `image_gen`). Other harnesses skip it. It covers the two craft steps that depend on real image generation: landing the visual direction, and producing the raster assets the implementation will compose.

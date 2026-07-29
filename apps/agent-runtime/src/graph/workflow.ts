@@ -58,6 +58,10 @@ export interface WorkflowGraphInput {
   workflowThreadId?: string;
   resumeFromCheckpoint?: boolean;
   resumeContext?: WorkflowResumeContext;
+  retryFailure?: {
+    taskId: string;
+    error: string;
+  };
   signal?: AbortSignal;
 }
 
@@ -221,6 +225,7 @@ export async function* streamWorkflowGraph(
  */
 function selectNextNodeAfterOrchestrator(state: WorkflowGraphStateValue) {
   if (state.productWorkflow) return "end";
+  if (state.plan) return "planner_agent";
 
   return state.orchestratorDecision?.route === "product_workflow"
     ? "planner_agent"
@@ -246,7 +251,8 @@ function createWorkflowInitialState(input: WorkflowGraphInput) {
     productContext: input.productContext ?? "",
     contextSource: input.contextSource ?? "none",
     workspaceId: input.workspaceId,
-    userInputBlock: input.userInputBlock,
+    userInputBlock: resume?.userInputBlock ?? input.userInputBlock,
+    originalUserInput: resume?.originalUserInput ?? [],
     requestAnalysis: resume?.requestAnalysis ?? null,
     orchestratorDecision: resume?.orchestratorDecision ?? null,
     plan,
@@ -298,6 +304,12 @@ function createWorkflowRunConfig(
       thread_id:
         input.workflowThreadId ??
         `workflow:local:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      ...(input.retryFailure
+        ? {
+            retry_task_id: input.retryFailure.taskId,
+            retry_error: input.retryFailure.error,
+          }
+        : {}),
     },
   };
 }
@@ -313,6 +325,29 @@ export function createWorkflowThreadId({
   requestFormId?: string;
 }): string {
   return `workflow:${conversationId ?? "local"}:${requestFormId ?? "default"}`;
+}
+
+/**
+ * 判断持久化 checkpoint 是否仍停留在指定未完成任务，避免客户端恢复错误的工作流。
+ */
+export async function hasRetryableWorkflowTaskCheckpoint({
+  workflowThreadId,
+  taskId,
+}: {
+  workflowThreadId: string;
+  taskId: string;
+}): Promise<boolean> {
+  const workflowGraph = await getDurableWorkflowGraph();
+  const snapshot = await workflowGraph.getState({
+    configurable: { thread_id: workflowThreadId },
+  });
+  const state = snapshot.values as WorkflowGraphStateValue;
+  const taskExists = state.plan?.tasks.some((task) => task.task_id === taskId);
+  const taskCompleted = state.executorResults?.some(
+    (result) => result.task_id === taskId,
+  );
+
+  return Boolean(taskExists && !taskCompleted && snapshot.next.length > 0);
 }
 
 /**

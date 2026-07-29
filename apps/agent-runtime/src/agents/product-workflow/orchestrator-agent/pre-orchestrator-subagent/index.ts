@@ -9,7 +9,6 @@ export { PRE_ORCHESTRATOR_SUBAGENT_PROMPT } from "./prompt";
 export {
   createPreOrchestratorSubagent,
   extractPreOrchFromSubagentResult,
-  extractPreOrchReasoning,
   resolveToolMessageContent,
 } from "./agent";
 export {

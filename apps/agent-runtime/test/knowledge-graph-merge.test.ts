@@ -25,7 +25,10 @@ import {
   composeProductWorkflowResult,
   createCritiqueValidationReport,
 } from "../src/agents/product-workflow/critique-agent/agent";
-import { hasStructuredGraphItems } from "../src/agents/product-workflow/executor-agent/agent";
+import {
+  getExecutorOutputValidationError,
+  hasStructuredGraphItems,
+} from "../src/agents/product-workflow/executor-agent/agent";
 import { mergeKnowledgeGraphSnapshots } from "../src/graph/state";
 
 test("retries only when an executor wrote no structured graph items", () => {
@@ -35,6 +38,25 @@ test("retries only when an executor wrote no structured graph items", () => {
   assert.equal(hasStructuredGraphItems(emptyGraph), false);
   emptyGraph.entities.push(createGoal("G-001"));
   assert.equal(hasStructuredGraphItems(emptyGraph), true);
+});
+
+test("rejects a final executor attempt with no structured writes", () => {
+  assert.equal(
+    getExecutorOutputValidationError({
+      hasStructuredItems: false,
+      blockingQuestionCount: 0,
+      requiredBlockingCount: 0,
+    }),
+    "no structured graph items were committed",
+  );
+  assert.equal(
+    getExecutorOutputValidationError({
+      hasStructuredItems: true,
+      blockingQuestionCount: 0,
+      requiredBlockingCount: 0,
+    }),
+    null,
+  );
 });
 
 test("keeps compact semantic updates reviewable without copying the full graph", () => {
@@ -70,6 +92,7 @@ test("critique validation rejects executor boundary violations", () => {
     type: "Feature",
     name: "Shared editing",
     description: "Allow users to edit one document together.",
+    provenance: createUserInputProvenance(),
     source_task_id: "task-00",
     status: "proposed",
   };
@@ -78,6 +101,7 @@ test("critique validation rejects executor boundary violations", () => {
     type: "Component",
     name: "Collaboration gateway",
     description: "Coordinates shared editing sessions.",
+    provenance: createUserInputProvenance(),
     source_task_id: "task-01",
     status: "proposed",
   };
@@ -157,6 +181,7 @@ test("critique validation rejects a task that omits its required blocking questi
     type: "Feature",
     name: "Shared editing",
     description: "Allow users to edit one document together.",
+    provenance: createUserInputProvenance(),
     source_task_id: task.task_id,
     status: "proposed",
   };
@@ -559,6 +584,7 @@ test("rejects the metric-capable task when explicit success targets are missing"
     type: "Metric",
     name: "文档迁移率与用户满意度",
     description: "至少 80% 的文档协作完成迁移，用户满意度达到 4.5。",
+    provenance: createUserInputProvenance(),
     source_task_id: task.task_id,
     status: "proposed",
   };
@@ -627,6 +653,7 @@ test("critique validation warns about duplicate metrics", () => {
       type: "Metric",
       name: "Offline sync success rate",
       description: "Measure the successful completion rate of offline synchronization.",
+      provenance: createUserInputProvenance(),
       source_task_id: task.task_id,
       status: "proposed",
     },
@@ -635,6 +662,7 @@ test("critique validation warns about duplicate metrics", () => {
       type: "Metric",
       name: "Offline synchronization success rate",
       description: "Measure successful completion of offline document synchronization.",
+      provenance: createUserInputProvenance(),
       source_task_id: task.task_id,
       status: "proposed",
     },
@@ -692,6 +720,7 @@ test("critique validation retries a metric task until Measures relations are com
     type: "Metric",
     name: "Collaboration efficiency improvement",
     description: "Measures the target 30% collaboration efficiency improvement.",
+    provenance: createUserInputProvenance(),
     source_task_id: task.task_id,
     status: "proposed",
   };
@@ -751,6 +780,522 @@ test("critique validation retries a metric task until Measures relations are com
     }),
   });
   assert.deepEqual(completed.retry_task_ids, []);
+});
+
+test("critique rejects research gaps when expected_output requires verified Evidence", () => {
+  const task = {
+    ...createTask("task-evidence", 1, "executor-market-research"),
+    expected_output:
+      "Source-verifiable Evidence and benchmark gaps linked to Requirements or decision candidates.",
+  };
+  const requirement = createRequirement(
+    "R-evidence",
+    "task-upstream",
+    "Realtime collaboration",
+    "Support realtime collaborative editing.",
+  );
+  const researchGap: ProductKnowledgeGraph["entities"][number] = {
+    id: "CUS-evidence-gap",
+    type: "Custom",
+    name: "Research Gap: collaboration benchmark",
+    description: "No verified collaboration benchmark was available.",
+    provenance: [{ kind: "existing_graph", node_id: requirement.id }],
+    source_task_id: task.task_id,
+    status: "proposed",
+  };
+  const gapRelation: ProductKnowledgeGraph["relations"][number] = {
+    id: "REL-evidence-gap",
+    type: "References",
+    source: researchGap.id,
+    target: requirement.id,
+    source_task_id: task.task_id,
+  };
+  const plan: TaskExecutionPlan = {
+    status: "initial",
+    request_summary: "Research collaboration evidence.",
+    dag: { nodes: [task.task_id], edges: [] },
+    tasks: [task],
+    assumptions: [],
+  };
+  const executorResult: ExecutorAgentResult = {
+    task_id: task.task_id,
+    agent_type: task.assigned_agent,
+    focus_layer: "Evidence",
+    summary: "Recorded a research gap.",
+    entities: [researchGap],
+    relations: [gapRelation],
+    decisions: [],
+    risks: [],
+    open_questions: [],
+    quality_result: { passed: true, notes: "ok" },
+  };
+  const input = {
+    requestAnalysis: createRequestAnalysis(),
+    plan,
+    executorResults: [executorResult],
+  };
+
+  const missingEvidence = createCritiqueValidationReport({
+    ...input,
+    knowledgeGraph: createGraph({
+      entities: [requirement, researchGap],
+      relations: [gapRelation],
+    }),
+  });
+  assert.equal(
+    missingEvidence.issues.some(
+      (issue) =>
+        issue.code === "EXPECTED_OUTPUT_ENTITY_MISSING" &&
+        issue.task_id === task.task_id,
+    ),
+    true,
+  );
+  assert.deepEqual(missingEvidence.retry_task_ids, [task.task_id]);
+
+  const evidence: ProductKnowledgeGraph["entities"][number] = {
+    id: "E-evidence",
+    type: "Evidence",
+    name: "Verified collaboration benchmark",
+    description: "A verified source describes collaboration behavior.",
+    provenance: [
+      {
+        kind: "web_search",
+        source_id: "source-1",
+        title: "Verified source",
+        url: "https://example.com/source",
+      },
+    ],
+    source_task_id: task.task_id,
+    status: "proposed",
+  };
+  const evidenceRelation: ProductKnowledgeGraph["relations"][number] = {
+    id: "REL-evidence",
+    type: "Validates",
+    source: evidence.id,
+    target: requirement.id,
+    source_task_id: task.task_id,
+  };
+  const completed = createCritiqueValidationReport({
+    ...input,
+    executorResults: [
+      {
+        ...executorResult,
+        summary: "Added verified evidence.",
+        entities: [evidence],
+        relations: [evidenceRelation],
+      },
+    ],
+    knowledgeGraph: createGraph({
+      entities: [requirement, evidence],
+      relations: [evidenceRelation],
+    }),
+  });
+  assert.equal(
+    completed.issues.some((issue) =>
+      issue.code.startsWith("EXPECTED_OUTPUT_"),
+    ),
+    false,
+  );
+});
+
+test("supplement critique rejects active scope conflicts until the old node is deprecated", () => {
+  const task = createTask("task-10", 1, "executor-product-execution");
+  const oldFeature: ProductKnowledgeGraph["entities"][number] = {
+    id: "F-001",
+    type: "Feature",
+    name: "Rich text editor",
+    description: "Provide a WYSIWYG rich text editor.",
+    provenance: createUserInputProvenance(),
+    source_task_id: "task-old",
+    status: "proposed",
+  };
+  const oldComponent: ProductKnowledgeGraph["entities"][number] = {
+    id: "C-001",
+    type: "Component",
+    name: "WYSIWYG editor component",
+    description: "Implements the rich text editing surface.",
+    provenance: createUserInputProvenance(),
+    source_task_id: "task-old",
+    status: "proposed",
+  };
+  const oldMetric: ProductKnowledgeGraph["entities"][number] = {
+    id: "M-001",
+    type: "Metric",
+    name: "Rich text formatting success",
+    description: "Measures successful rich text formatting.",
+    provenance: createUserInputProvenance(),
+    source_task_id: "task-old",
+    status: "proposed",
+  };
+  const historicalRelations: ProductKnowledgeGraph["relations"] = [
+    {
+      id: "REL-001",
+      type: "Implements",
+      source: oldComponent.id,
+      target: oldFeature.id,
+      source_task_id: "task-old",
+    },
+    {
+      id: "REL-002",
+      type: "Measures",
+      source: oldMetric.id,
+      target: oldFeature.id,
+      source_task_id: "task-old",
+    },
+  ];
+  const markdownDecision: ProductKnowledgeGraph["entities"][number] = {
+    id: "D-001",
+    type: "Decision",
+    name: "Markdown-only editing",
+    description: "Markdown syntax is the only editing mode.",
+    provenance: createUserInputProvenance(),
+    source_task_id: task.task_id,
+    status: "confirmed",
+  };
+  const plan: TaskExecutionPlan = {
+    status: "supplement",
+    request_summary: "Apply the confirmed Markdown-only scope.",
+    dag: { nodes: [task.task_id], edges: [] },
+    tasks: [task],
+    assumptions: [],
+  };
+  const executorResult: ExecutorAgentResult = {
+    task_id: task.task_id,
+    agent_type: task.assigned_agent,
+    focus_layer: "Decision",
+    summary: "Applied the Markdown-only scope.",
+    entities: [markdownDecision],
+    relations: [],
+    decisions: [],
+    risks: [],
+    open_questions: [],
+    quality_result: { passed: true, notes: "ok" },
+  };
+  const baseInput = {
+    requestAnalysis: createRequestAnalysis(),
+    plan,
+    executorResults: [executorResult],
+    userInput: [
+      {
+        index: 1,
+        content: "Use Markdown only and do not support rich text editor.",
+        type: "requirement",
+      },
+    ],
+  };
+
+  const conflicting = createCritiqueValidationReport({
+    ...baseInput,
+    knowledgeGraph: createGraph({
+      entities: [oldFeature, oldComponent, oldMetric, markdownDecision],
+      relations: historicalRelations,
+    }),
+  });
+  assert.equal(
+    conflicting.issues.some(
+      (issue) =>
+        issue.code === "ACTIVE_SCOPE_CONFLICT" &&
+        issue.task_id === task.task_id,
+    ),
+    true,
+  );
+  assert.deepEqual(conflicting.retry_task_ids, [task.task_id]);
+
+  const deprecatedFeature = {
+    ...oldFeature,
+    status: "deprecated" as const,
+    deprecated_by_task_id: task.task_id,
+    deprecation_reason: "The user confirmed Markdown-only editing.",
+    replacement_node_id: markdownDecision.id,
+  };
+  const partiallyCorrected = createCritiqueValidationReport({
+    ...baseInput,
+    executorResults: [
+      {
+        ...executorResult,
+        entities: [deprecatedFeature, markdownDecision],
+      },
+    ],
+    knowledgeGraph: createGraph({
+      entities: [
+        deprecatedFeature,
+        oldComponent,
+        oldMetric,
+        markdownDecision,
+      ],
+      relations: historicalRelations,
+    }),
+  });
+  assert.deepEqual(
+    partiallyCorrected.semantic_integrity.stale_deprecated_downstream_node_ids,
+    [oldComponent.id, oldMetric.id],
+  );
+
+  const deprecatedComponent = {
+    ...oldComponent,
+    status: "deprecated" as const,
+    deprecated_by_task_id: task.task_id,
+    deprecation_reason: "The rich text editing branch was retired.",
+  };
+  const deprecatedMetric = {
+    ...oldMetric,
+    status: "deprecated" as const,
+    deprecated_by_task_id: task.task_id,
+    deprecation_reason: "The rich text editing branch was retired.",
+  };
+  const corrected = createCritiqueValidationReport({
+    ...baseInput,
+    executorResults: [
+      {
+        ...executorResult,
+        entities: [
+          deprecatedFeature,
+          deprecatedComponent,
+          deprecatedMetric,
+          markdownDecision,
+        ],
+      },
+    ],
+    knowledgeGraph: createGraph({
+      entities: [
+        deprecatedFeature,
+        deprecatedComponent,
+        deprecatedMetric,
+        markdownDecision,
+      ],
+      relations: historicalRelations,
+    }),
+  });
+  assert.equal(
+    corrected.issues.some(
+      (issue) => issue.code === "ACTIVE_SCOPE_CONFLICT",
+    ),
+    false,
+  );
+  assert.deepEqual(
+    corrected.semantic_integrity.stale_deprecated_downstream_node_ids,
+    [],
+  );
+});
+
+test("critique reports explicit user inputs not consumed by a decision contract", () => {
+  const task = createTask("task-10b", 1, "executor-product-strategy");
+  const requirement = createRequirement(
+    "R-010",
+    task.task_id,
+    "Workspace authoring",
+    "Provide collaborative workspace authoring.",
+  );
+  const executorResult: ExecutorAgentResult = {
+    task_id: task.task_id,
+    agent_type: task.assigned_agent,
+    focus_layer: "Requirement",
+    summary: "Captured the authoring requirement.",
+    entities: [requirement],
+    relations: [],
+    decisions: [],
+    risks: [],
+    open_questions: [],
+    quality_result: { passed: true, notes: "ok" },
+  };
+  const baseInput = {
+    requestAnalysis: createRequestAnalysis(),
+    plan: {
+      status: "initial" as const,
+      request_summary: "Design a collaborative workspace.",
+      dag: { nodes: [task.task_id], edges: [] },
+      tasks: [task],
+      assumptions: [],
+    },
+    executorResults: [executorResult],
+    userInput: [
+      { index: 1, content: "Collaborative authoring is required.", type: "requirement" },
+      { index: 2, content: "Role-based permissions are required.", type: "requirement" },
+    ],
+  };
+
+  const missing = createCritiqueValidationReport({
+    ...baseInput,
+    knowledgeGraph: createGraph({ entities: [requirement] }),
+  });
+  assert.deepEqual(
+    missing.semantic_integrity.uncovered_user_input_indexes,
+    [2],
+  );
+  assert.equal(
+    missing.issues.some((issue) => issue.code === "UNCOVERED_USER_INPUT"),
+    true,
+  );
+
+  const permissionDecision: ProductKnowledgeGraph["entities"][number] = {
+    id: "D-010",
+    type: "Decision",
+    name: "Role-based permissions",
+    description: "Use role-based permissions for workspace access.",
+    provenance: [{ kind: "user_input", user_input_index: 2 }],
+    source_task_id: task.task_id,
+    status: "confirmed",
+  };
+  const covered = createCritiqueValidationReport({
+    ...baseInput,
+    executorResults: [
+      {
+        ...executorResult,
+        entities: [requirement, permissionDecision],
+      },
+    ],
+    knowledgeGraph: createGraph({
+      entities: [requirement, permissionDecision],
+    }),
+  });
+  assert.deepEqual(
+    covered.semantic_integrity.uncovered_user_input_indexes,
+    [],
+  );
+});
+
+test("supplement critique requires Requirement to Feature to Component and Metric propagation", () => {
+  const task = createTask("task-11", 1, "executor-product-execution");
+  const requirement = createRequirement(
+    "R-011",
+    task.task_id,
+    "Markdown-only editing",
+    "The editor must support Markdown-only authoring.",
+  );
+  const feature: ProductKnowledgeGraph["entities"][number] = {
+    id: "F-011",
+    type: "Feature",
+    name: "Markdown editor",
+    description: "Offer Markdown authoring and preview.",
+    provenance: createUserInputProvenance(),
+    source_task_id: task.task_id,
+    status: "proposed",
+  };
+  const component: ProductKnowledgeGraph["entities"][number] = {
+    id: "C-011",
+    type: "Component",
+    name: "Markdown rendering component",
+    description: "Render and preview Markdown content.",
+    provenance: createUserInputProvenance(),
+    source_task_id: task.task_id,
+    status: "proposed",
+  };
+  const metric: ProductKnowledgeGraph["entities"][number] = {
+    id: "M-011",
+    type: "Metric",
+    name: "Markdown task completion",
+    description: "Measure successful Markdown authoring task completion.",
+    provenance: createUserInputProvenance(),
+    source_task_id: "task-old",
+    status: "proposed",
+  };
+  const plan: TaskExecutionPlan = {
+    status: "supplement",
+    request_summary: "Propagate the Markdown-only scope.",
+    dag: { nodes: [task.task_id], edges: [] },
+    tasks: [task],
+    assumptions: [],
+  };
+  const executorResult: ExecutorAgentResult = {
+    task_id: task.task_id,
+    agent_type: task.assigned_agent,
+    focus_layer: "Requirement",
+    summary: "Updated the delivery scope.",
+    entities: [requirement, feature, component],
+    relations: [],
+    decisions: [],
+    risks: [],
+    open_questions: [],
+    quality_result: { passed: true, notes: "ok" },
+  };
+  const input = {
+    requestAnalysis: createRequestAnalysis(),
+    plan,
+    executorResults: [executorResult],
+  };
+
+  const missing = createCritiqueValidationReport({
+    ...input,
+    knowledgeGraph: createGraph({
+      entities: [requirement, feature, component, metric],
+    }),
+  });
+  assert.equal(
+    missing.issues.some(
+      (issue) => issue.code === "BROKEN_REQUIREMENT_DELIVERY_CHAIN",
+    ),
+    true,
+  );
+  assert.equal(
+    missing.issues.some(
+      (issue) => issue.code === "MISSING_SUPPLEMENT_METRIC_PROPAGATION",
+    ),
+    true,
+  );
+
+  const relations: ProductKnowledgeGraph["relations"] = [
+    {
+      id: "REL-011",
+      type: "Satisfies",
+      source: feature.id,
+      target: requirement.id,
+      source_task_id: task.task_id,
+    },
+    {
+      id: "REL-012",
+      type: "Implements",
+      source: component.id,
+      target: feature.id,
+      source_task_id: task.task_id,
+    },
+    {
+      id: "REL-013",
+      type: "Measures",
+      source: metric.id,
+      target: feature.id,
+      source_task_id: task.task_id,
+    },
+  ];
+  const completed = createCritiqueValidationReport({
+    ...input,
+    executorResults: [{ ...executorResult, relations }],
+    knowledgeGraph: createGraph({
+      entities: [requirement, feature, component, metric],
+      relations,
+    }),
+  });
+  assert.equal(
+    completed.issues.some(
+      (issue) =>
+        issue.code === "BROKEN_REQUIREMENT_DELIVERY_CHAIN" ||
+        issue.code === "MISSING_SUPPLEMENT_METRIC_PROPAGATION",
+    ),
+    false,
+  );
+});
+
+test("parallel graph merge preserves a controlled deprecation update", () => {
+  const active = createRequirement(
+    "R-001",
+    "task-old",
+    "Rich text editing",
+    "The product includes rich text editing.",
+  );
+  const deprecated = {
+    ...active,
+    status: "deprecated" as const,
+    deprecated_by_task_id: "task-12",
+    deprecation_reason: "The user selected Markdown-only editing.",
+  };
+
+  const merged = mergeKnowledgeGraphSnapshots(
+    createGraph({ entities: [active] }),
+    createGraph({ entities: [deprecated] }),
+  );
+
+  assert.ok(merged);
+  assert.equal(merged.entities[0]?.status, "deprecated");
+  assert.equal(merged.entities[0]?.deprecated_by_task_id, "task-12");
 });
 
 test("renames non-similar duplicate IDs and remaps relation endpoints", () => {
@@ -988,6 +1533,7 @@ test("critique validation does not duplicate chained relation renames", () => {
     type: "Feature" as const,
     name: `Discovery feature ${index + 1}`,
     description: `Discovery feature hypothesis ${index + 1}.`,
+    provenance: createUserInputProvenance(),
     source_task_id: "task-04",
     status: "proposed" as const,
   }));
@@ -1079,6 +1625,7 @@ test("critique validation reports pre-existing integrity failures as legacy warn
         type: "Feature",
         name: "Orphan feature",
         description: "This feature has no relation.",
+        provenance: createUserInputProvenance(),
         source_task_id: "task-01",
         status: "proposed",
       },
@@ -1269,6 +1816,7 @@ function createGoal(id: string): ProductKnowledgeGraph["entities"][number] {
     type: "Goal",
     name: "Workspace automation goal",
     description: "Improve workspace automation for product teams.",
+    provenance: createUserInputProvenance(),
     source_task_id: "task-01",
     status: "proposed",
   };
@@ -1288,9 +1836,22 @@ function createRequirement(
     type: "Requirement",
     name,
     description,
+    provenance: createUserInputProvenance(),
     source_task_id: sourceTaskId,
     status: "proposed",
   };
+}
+
+/**
+ * 为测试中新写入的节点提供最小、可审计的用户输入来源。
+ */
+function createUserInputProvenance() {
+  return [
+    {
+      kind: "user_input" as const,
+      user_input_index: 1,
+    },
+  ];
 }
 
 /**

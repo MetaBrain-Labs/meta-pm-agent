@@ -34,7 +34,12 @@ export type {
   ProductWorkflowInput,
   ProductWorkflowStreamEvent,
 } from "./agents/product-workflow/agent";
-export { createWorkflowThreadId, graph, runWorkflowGraph } from "./graph/workflow";
+export {
+  createWorkflowThreadId,
+  graph,
+  hasRetryableWorkflowTaskCheckpoint,
+  runWorkflowGraph,
+} from "./graph/workflow";
 export {
   createDocumentWorkflowThreadId,
   documentGraph,
@@ -62,5 +67,9 @@ export type {
   StreamChunk,
   WorkflowAnswerResolution,
 } from "./types";
-export { getFormAnswerId, isFormAnswer } from "./utils/form-parser";
+export {
+  getFormAnswerId,
+  isFormAnswer,
+  isProductWorkflowOptionalStopAnswer,
+} from "./utils/form-parser";
 export { parseGraphConflictAction, isPreOrchGraphConflictFormId } from "./agents/product-workflow/orchestrator-agent/pre-orchestrator-subagent";

@@ -26,6 +26,7 @@ export type StreamEventType =
   | "user-input-complete"
   | "request-analysis-start"
   | "request-analysis-complete"
+  | "workflow-round-start"
   | "todo-update"
   | "tool-call"
   | "tool-result"
@@ -41,12 +42,14 @@ export type StreamEventType =
 
 export interface StreamEvent {
   type: StreamEventType;
+  roundId?: string;
   id?: string;
   content?: string;
   agentType?: string;
   status?: "started" | "completed";
   phase?: "planning" | "execution" | "review";
   parallelAgents?: string[];
+  taskId?: string;
   toolCallId?: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
@@ -71,7 +74,23 @@ export interface StreamEvent {
   todos?: Array<{ index: number; content: string; status: string }>;
   analysis?: RequestAnalysis;
   interrupt?: HumanInTheLoopInterrupt;
+  retryAction?: WorkflowRetryAction;
+  terminal?: boolean;
 }
+
+/**
+ * Executor 错误卡片携带的定点重试动作。
+ */
+export interface WorkflowRetryAction {
+  type: "resume_executor_task";
+  taskId: string;
+  agentType: string;
+}
+
+/**
+ * 浏览器提交给 API 的工作流重试命令。
+ */
+export type WorkflowRetryRequest = Omit<WorkflowRetryAction, "agentType">;
 
 /**
  * LangChain HITL 中的一项待人工处理动作。
@@ -310,6 +329,7 @@ export interface Message {
   id: string;
   role: "user" | "agent";
   type?: string | null;
+  workflowRoundId?: string;
   content: string;
   thinking?: string;
   reasoningBlocks?: ReasoningBlock[];
@@ -344,6 +364,7 @@ export interface Message {
   agentError?: {
     agentType?: string;
     message: string;
+    retryAction?: WorkflowRetryAction;
   };
   todos?: TodoItem[];
   toolCalls?: Array<{
@@ -427,11 +448,13 @@ export interface PersistedMessageInfo {
   id: string;
   role: "user" | "assistant";
   type?: string | null;
+  workflowRoundId?: string;
   content: string;
   timestamp: string;
   reasoningContent?: string;
   toolCalls?: ToolCallInfo[];
   subagentTraces?: SubagentTrace[];
+  agentError?: Message["agentError"];
   userInput?: Array<{ index: number; content: string; type: string }> | null;
   requestAnalysis?: RequestAnalysis | null;
   taskExecutionPlan?: TaskExecutionPlan | null;

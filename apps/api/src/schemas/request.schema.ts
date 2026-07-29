@@ -14,7 +14,11 @@
  */
 
 import { z } from "zod";
-import { AgentRuntimeToolSchema, ChatMessageSchema } from "@repo/shared";
+import {
+  AgentRuntimeToolSchema,
+  ChatMessageSchema,
+  WorkflowRetryRequestSchema,
+} from "@repo/shared";
 
 const HitlDecisionSchema = z.union([
   z.object({ type: z.literal("approve") }),
@@ -39,13 +43,31 @@ const HitlResumeSchema = z.object({
 /**
  * 向 Agent 发送聊天消息的请求体校验规则。
  */
-export const ChatRequestSchema = z.object({
-  chatId: z.string().uuid().optional(),
-  requestFormId: z.string().uuid().optional(),
-  messages: z.array(ChatMessageSchema).min(1),
-  enabledTools: z.array(AgentRuntimeToolSchema).optional(),
-  hitlResume: HitlResumeSchema.optional(),
-});
+export const ChatRequestSchema = z
+  .object({
+    chatId: z.string().uuid().optional(),
+    requestFormId: z.string().uuid().optional(),
+    messages: z.array(ChatMessageSchema).min(1),
+    enabledTools: z.array(AgentRuntimeToolSchema).optional(),
+    hitlResume: HitlResumeSchema.optional(),
+    workflowRetry: WorkflowRetryRequestSchema.optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.hitlResume && value.workflowRetry) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "hitlResume and workflowRetry cannot be used together.",
+        path: ["workflowRetry"],
+      });
+    }
+    if (value.workflowRetry && (!value.chatId || !value.requestFormId)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "workflowRetry requires chatId and requestFormId.",
+        path: ["workflowRetry"],
+      });
+    }
+  });
 
 /**
  * 停止指定会话当前 Agent 运行的请求体校验规则。

@@ -6,7 +6,8 @@
  * DeepAgentToolAllowlistMiddleware（allowlist 模式）互补，形成双重防护。
  *
  * Responsibilities:
- * - 通过 registerHarnessProfile 全局排除 ls/read_file/write_file/edit_file/delete/glob/grep
+ * - 通过 registerHarnessProfile 全局排除文件枚举、变更和执行工具
+ * - 保留 read_file，由业务 Agent allowlist 决定是否读取隔离的 StateBackend 文件
  * - 在应用启动早期执行，优先于所有 Agent 实例创建
  *
  * Notes:
@@ -16,15 +17,15 @@
 
 import { registerHarnessProfile } from "deepagents";
 
-/** DeepAgents 默认注入的文件系统工具名，本项目所有 Agent 均不使用。 */
+/** DeepAgents 默认注入但本项目不允许模型使用的文件系统工具名。 */
 const EXCLUDED_FILESYSTEM_TOOLS = [
   "ls",
-  "read_file",
   "write_file",
   "edit_file",
   "delete",
   "glob",
   "grep",
+  "execute",
 ] as const;
 
 registerHarnessProfile("openai", {

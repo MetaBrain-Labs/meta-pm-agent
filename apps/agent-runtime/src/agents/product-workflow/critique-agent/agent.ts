@@ -108,6 +108,16 @@ type CritiqueValidationReport = {
     orphan_requirement_ids: string[];
     orphan_feature_ids: string[];
   };
+  semantic_integrity: {
+    active_semantic_conflict_node_ids: string[];
+    stale_deprecated_downstream_node_ids: string[];
+    uncovered_user_input_indexes: number[];
+    untraceable_node_ids: string[];
+    unverified_evidence_ids: string[];
+    broken_delivery_chain_requirement_ids: string[];
+    missing_supplement_metric_requirement_ids: string[];
+    unresolved_blocking_question_ids: string[];
+  };
 };
 
 /**
@@ -213,6 +223,12 @@ export function compactTaskSemanticUpdates(
         ? truncateText(entity.description, 280)
         : undefined,
       status: entity.status,
+      provenance: entity.provenance,
+      deprecated_by_task_id: entity.deprecated_by_task_id,
+      deprecation_reason: entity.deprecation_reason
+        ? truncateText(entity.deprecation_reason, 220)
+        : undefined,
+      replacement_node_id: entity.replacement_node_id,
     })),
     relations: result.relations.map((relation) => ({
       id: relation.id,
@@ -238,15 +254,33 @@ export function compactTaskSemanticUpdates(
  * 生成最终图谱的统计摘要和来源索引，避免模型读取完整节点描述。
  */
 function createFinalGraphSummary(knowledgeGraph: ProductKnowledgeGraph) {
+  const activeEntities = knowledgeGraph.entities.filter(
+    (item) => item.status !== "deprecated",
+  );
+  const activeEntityIds = new Set(activeEntities.map((item) => item.id));
+  const activeRelations = knowledgeGraph.relations.filter(
+    (item) =>
+      activeEntityIds.has(item.source) && activeEntityIds.has(item.target),
+  );
   return {
     graph_ref: createKnowledgeGraphReviewRef(knowledgeGraph),
-    entity_counts: countBy(knowledgeGraph.entities.map((item) => item.type)),
-    relation_counts: countBy(knowledgeGraph.relations.map((item) => item.type)),
+    entity_counts: countBy(activeEntities.map((item) => item.type)),
+    deprecated_entity_count:
+      knowledgeGraph.entities.length - activeEntities.length,
+    relation_counts: countBy(activeRelations.map((item) => item.type)),
     decision_count: knowledgeGraph.decisions.length,
     risk_count: knowledgeGraph.risks.length,
     open_question_count: knowledgeGraph.open_questions.length,
-    entity_ids_by_task: groupIdsBySourceTask(knowledgeGraph.entities),
-    relation_ids_by_task: groupIdsBySourceTask(knowledgeGraph.relations),
+    blocking_open_question_count: knowledgeGraph.open_questions.filter(
+      (item) => item.blocking,
+    ).length,
+    entity_ids_by_task: groupIdsBySourceTask(activeEntities),
+    deprecated_entity_ids_by_task: groupIdsBySourceTask(
+      knowledgeGraph.entities.filter(
+        (entity) => entity.status === "deprecated",
+      ),
+    ),
+    relation_ids_by_task: groupIdsBySourceTask(activeRelations),
   };
 }
 
@@ -354,6 +388,7 @@ export function createCritiqueValidationReport(
   );
   const graphIndexes = createGraphIndexes(input.knowledgeGraph);
   const graphIntegrity = inspectGraphIntegrity(input.knowledgeGraph);
+  const semanticIntegrity = inspectSemanticIntegrity(input);
   const issues: CritiqueValidationIssue[] = [];
   const records: ExecutorUpdateRecord[] = [];
 
@@ -402,6 +437,9 @@ export function createCritiqueValidationReport(
         ...validateExecutorBoundaries(result, task.assigned_agent),
       );
     }
+    taskIssues.push(
+      ...validateExpectedOutputContract(task, result, input.knowledgeGraph),
+    );
 
     // Planner 的规模上限是软门禁：超出时保留结果，但要求 Critique 明确提示。
     if (result.entities.length > 8 || result.relations.length > 12) {
@@ -486,6 +524,17 @@ export function createCritiqueValidationReport(
       .find((record) => record.task_id === issue.task_id)
       ?.validation_errors.push(issue);
   }
+  const semanticIntegrityIssues = createSemanticIntegrityIssues(
+    input,
+    semanticIntegrity,
+  );
+  for (const issue of semanticIntegrityIssues) {
+    issues.push(issue);
+    if (!issue.task_id) continue;
+    records
+      .find((record) => record.task_id === issue.task_id)
+      ?.validation_errors.push(issue);
+  }
 
   const issueTaskIds = new Set(
     issues
@@ -504,11 +553,586 @@ export function createCritiqueValidationReport(
     issues,
     executor_update_records: records,
     graph_integrity: graphIntegrity,
+    semantic_integrity: semanticIntegrity,
   };
 }
 
 /**
- * 对适合程序判断的语义质量问题增加软门禁，不把启发式结果升级为重试错误。
+ * 检查活跃图谱的来源、用户输入覆盖和端到端交付链。
+ */
+function inspectSemanticIntegrity(
+  input: CritiqueAgentInput,
+): CritiqueValidationReport["semantic_integrity"] {
+  const currentTaskIds = new Set(input.plan.tasks.map((task) => task.task_id));
+  const activeEntities = input.knowledgeGraph.entities.filter(
+    (entity) => entity.status !== "deprecated",
+  );
+  const activeEntityById = new Map(
+    activeEntities.map((entity) => [entity.id, entity]),
+  );
+  const activeRelations = input.knowledgeGraph.relations.filter(
+    (relation) =>
+      activeEntityById.has(relation.source) &&
+      activeEntityById.has(relation.target),
+  );
+  const currentEntities = input.executorResults.flatMap((result) =>
+    result.entities.filter(
+      (entity) =>
+        currentTaskIds.has(entity.source_task_id ?? result.task_id) ||
+        entity.deprecated_by_task_id === result.task_id,
+    ),
+  );
+  const untraceableNodeIds = currentEntities
+    .filter(
+      (entity) =>
+        entity.status !== "deprecated" &&
+        (!entity.provenance || entity.provenance.length === 0),
+    )
+    .map((entity) => entity.id);
+  const unverifiedEvidenceIds = currentEntities
+    .filter(
+      (entity) =>
+        entity.status !== "deprecated" &&
+        entity.type === "Evidence" &&
+        !entity.provenance?.some(
+          (source) =>
+            source.kind === "user_input" || source.kind === "web_search",
+        ),
+    )
+    .map((entity) => entity.id);
+  const uncoveredUserInputIndexes = findUncoveredUserInputIndexes(
+    input,
+    activeEntities,
+  );
+  const deliveryRequirements = selectDeliveryChainRequirements(
+    input,
+    activeEntities,
+  );
+  const brokenDeliveryChainRequirementIds = deliveryRequirements
+    .filter(
+      (requirement) =>
+        !hasRequirementDeliveryChain(
+          requirement.id,
+          activeEntityById,
+          activeRelations,
+        ),
+    )
+    .map((requirement) => requirement.id);
+  const activeMetricsExist = activeEntities.some(
+    (entity) => entity.type === "Metric",
+  );
+  const missingSupplementMetricRequirementIds =
+    input.plan.status === "supplement" && activeMetricsExist
+      ? deliveryRequirements
+          .filter(
+            (requirement) =>
+              !hasRequirementMetricCoverage(
+                requirement.id,
+                activeEntityById,
+                activeRelations,
+              ),
+          )
+          .map((requirement) => requirement.id)
+      : [];
+
+  return {
+    active_semantic_conflict_node_ids: findActiveScopeConflictNodeIds(
+      input.userInput ?? [],
+      activeEntities,
+    ),
+    stale_deprecated_downstream_node_ids: findStaleDeprecatedDownstreamNodeIds(
+      input.knowledgeGraph.entities,
+      input.knowledgeGraph.relations,
+    ),
+    uncovered_user_input_indexes: uncoveredUserInputIndexes,
+    untraceable_node_ids: [...new Set(untraceableNodeIds)],
+    unverified_evidence_ids: [...new Set(unverifiedEvidenceIds)],
+    broken_delivery_chain_requirement_ids: [
+      ...new Set(brokenDeliveryChainRequirementIds),
+    ],
+    missing_supplement_metric_requirement_ids: [
+      ...new Set(missingSupplementMetricRequirementIds),
+    ],
+    unresolved_blocking_question_ids: input.knowledgeGraph.open_questions
+      .filter((question) => question.blocking)
+      .map((question) => question.id),
+  };
+}
+
+/**
+ * 将确定性语义缺口提升为工作流终止门禁。
+ */
+function createSemanticIntegrityIssues(
+  input: CritiqueAgentInput,
+  integrity: CritiqueValidationReport["semantic_integrity"],
+): CritiqueValidationIssue[] {
+  const entityById = new Map(
+    input.knowledgeGraph.entities.map((entity) => [entity.id, entity]),
+  );
+  const issues: CritiqueValidationIssue[] = [];
+
+  for (const nodeId of integrity.untraceable_node_ids) {
+    const entity = entityById.get(nodeId);
+    issues.push(
+      createReviewIssue({
+        code: "UNTRACEABLE_NODE_PROVENANCE",
+        severity: "error",
+        taskId: findCurrentOwnerTaskId(input, entity),
+        message: `New active node ${nodeId} has no auditable user-input, web-search, or existing-graph provenance.`,
+      }),
+    );
+  }
+  for (const evidenceId of integrity.unverified_evidence_ids) {
+    const entity = entityById.get(evidenceId);
+    issues.push(
+      createReviewIssue({
+        code: "UNVERIFIED_EVIDENCE_SOURCE",
+        severity: "error",
+        taskId: findCurrentOwnerTaskId(input, entity),
+        message: `Evidence ${evidenceId} is not backed by explicit user input or a verified web-search source.`,
+      }),
+    );
+  }
+  for (const inputIndex of integrity.uncovered_user_input_indexes) {
+    issues.push(
+      createReviewIssue({
+        code: "UNCOVERED_USER_INPUT",
+        severity: "error",
+        taskId: findUserInputOwnerTaskId(input, inputIndex),
+        message: `Explicit user input ${inputIndex} is not represented by an active Requirement, Decision, Risk, or OpenQuestion.`,
+      }),
+    );
+  }
+  for (const nodeId of integrity.active_semantic_conflict_node_ids) {
+    const entity = entityById.get(nodeId);
+    issues.push(
+      createReviewIssue({
+        code: "ACTIVE_SCOPE_CONFLICT",
+        severity: "error",
+        taskId: findCurrentOwnerTaskId(input, entity),
+        message: `Active node ${nodeId} conflicts with an explicit exclusion in the current user input and must be deprecated or corrected.`,
+      }),
+    );
+  }
+  for (const nodeId of integrity.stale_deprecated_downstream_node_ids) {
+    const entity = entityById.get(nodeId);
+    issues.push(
+      createReviewIssue({
+        code: "STALE_DEPRECATED_DOWNSTREAM",
+        severity: "error",
+        taskId: findCurrentOwnerTaskId(input, entity),
+        message: `Active downstream node ${nodeId} depends only on a deprecated Requirement or Feature branch and must be replaced, reconnected, or deprecated.`,
+      }),
+    );
+  }
+  for (const requirementId of integrity.broken_delivery_chain_requirement_ids) {
+    const entity = entityById.get(requirementId);
+    issues.push(
+      createReviewIssue({
+        code: "BROKEN_REQUIREMENT_DELIVERY_CHAIN",
+        severity: "error",
+        taskId: findCurrentOwnerTaskId(input, entity),
+        message: `Requirement ${requirementId} has no active Requirement <-Satisfies- Feature <-Implements- Component delivery chain.`,
+      }),
+    );
+  }
+  for (const requirementId of integrity.missing_supplement_metric_requirement_ids) {
+    const entity = entityById.get(requirementId);
+    issues.push(
+      createReviewIssue({
+        code: "MISSING_SUPPLEMENT_METRIC_PROPAGATION",
+        severity: "error",
+        taskId: findCurrentOwnerTaskId(input, entity),
+        message: `Supplement Requirement ${requirementId} is not covered by an active Metric relation after the scope change.`,
+      }),
+    );
+  }
+
+  return issues;
+}
+
+/**
+ * 只选择需要完整交付链的本轮 Requirement，避免把概念基础图误判为完整设计。
+ */
+function selectDeliveryChainRequirements(
+  input: CritiqueAgentInput,
+  activeEntities: KnowledgeGraphEntity[],
+): KnowledgeGraphEntity[] {
+  const currentTaskIds = new Set(input.plan.tasks.map((task) => task.task_id));
+  const isCompleteInitialDesign =
+    input.plan.status === "initial" &&
+    input.plan.tasks.some(
+      (task) => task.assigned_agent === "executor-product-execution",
+    ) &&
+    !/概念基础(?:图)?|concept foundation/i.test(
+      `${input.plan.request_summary} ${input.plan.assumptions.join(" ")}`,
+    );
+  if (!isCompleteInitialDesign && input.plan.status !== "supplement") return [];
+  if (
+    input.plan.status === "supplement" &&
+    !activeEntities.some(
+      (entity) => entity.type === "Feature" || entity.type === "Component",
+    )
+  ) {
+    return [];
+  }
+
+  return activeEntities.filter(
+    (entity) =>
+      entity.type === "Requirement" &&
+      currentTaskIds.has(entity.source_task_id ?? ""),
+  );
+}
+
+/**
+ * 校验 Requirement 是否能沿固定方向落到 Feature 和 Component。
+ */
+function hasRequirementDeliveryChain(
+  requirementId: string,
+  entityById: Map<string, KnowledgeGraphEntity>,
+  relations: KnowledgeGraphRelation[],
+): boolean {
+  const featureIds = relations
+    .filter(
+      (relation) =>
+        relation.type === "Satisfies" && relation.target === requirementId,
+    )
+    .map((relation) => relation.source)
+    .filter((id) => entityById.get(id)?.type === "Feature");
+  if (featureIds.length === 0) return false;
+
+  const featureIdSet = new Set(featureIds);
+  return relations.some(
+    (relation) =>
+      relation.type === "Implements" &&
+      featureIdSet.has(relation.target) &&
+      entityById.get(relation.source)?.type === "Component",
+  );
+}
+
+/**
+ * 补充需求在已有指标层存在时必须同步到 Requirement 或其 Feature。
+ */
+function hasRequirementMetricCoverage(
+  requirementId: string,
+  entityById: Map<string, KnowledgeGraphEntity>,
+  relations: KnowledgeGraphRelation[],
+): boolean {
+  const featureIds = new Set(
+    relations
+      .filter(
+        (relation) =>
+          relation.type === "Satisfies" && relation.target === requirementId,
+      )
+      .map((relation) => relation.source),
+  );
+
+  return relations.some(
+    (relation) =>
+      relation.type === "Measures" &&
+      entityById.get(relation.source)?.type === "Metric" &&
+      (relation.target === requirementId || featureIds.has(relation.target)),
+  );
+}
+
+/**
+ * 找出尚未进入业务图谱或风险/问题记录的明确用户输入。
+ */
+function findUncoveredUserInputIndexes(
+  input: CritiqueAgentInput,
+  activeEntities: KnowledgeGraphEntity[],
+): number[] {
+  const userInput = input.userInput ?? [];
+  if (userInput.length === 0) return [];
+  const directlyCovered = new Set(
+    activeEntities.flatMap((entity) =>
+      ["Requirement", "Decision", "Risk", "OpenQuestion"].includes(entity.type)
+        ? (entity.provenance ?? []).flatMap((source) =>
+            source.kind === "user_input" ? [source.user_input_index] : [],
+          )
+        : [],
+    ),
+  );
+  const artifactTexts = [
+    ...activeEntities
+      .filter(
+        (entity) =>
+          entity.type === "Requirement" || entity.type === "Decision",
+      )
+      .map((entity) => `${entity.name} ${entity.description ?? ""}`),
+    ...input.knowledgeGraph.risks.map((risk) => risk.text),
+    ...input.knowledgeGraph.open_questions.map((question) => question.text),
+  ];
+
+  return userInput
+    .filter(
+      (item) =>
+        !directlyCovered.has(item.index) &&
+        !artifactTexts.some((text) =>
+          hasMeaningfulTextOverlap(item.content, text),
+        ),
+    )
+    .map((item) => item.index);
+}
+
+/**
+ * 从用户否定或排除语句中找出仍被活跃节点肯定表达的范围。
+ */
+function findActiveScopeConflictNodeIds(
+  userInput: Array<{ content: string }>,
+  activeEntities: KnowledgeGraphEntity[],
+): string[] {
+  const deniedPhrases = userInput.flatMap((item) =>
+    extractDeniedPhrases(item.content),
+  );
+  if (deniedPhrases.length === 0) return [];
+
+  return activeEntities
+    .filter((entity) => {
+      const text = `${entity.name} ${entity.description ?? ""}`;
+      const normalized = normalizeSemanticText(text);
+      return deniedPhrases.some(
+        (phrase) =>
+          normalized.includes(phrase) &&
+          !isPhraseExplicitlyNegated(text, phrase),
+      );
+    })
+    .map((entity) => entity.id);
+}
+
+/**
+ * 找出只依赖已废弃 Requirement/Feature 分支的活跃 Feature、Component 与 Metric。
+ */
+function findStaleDeprecatedDownstreamNodeIds(
+  entities: KnowledgeGraphEntity[],
+  relations: KnowledgeGraphRelation[],
+): string[] {
+  const entityById = new Map(entities.map((entity) => [entity.id, entity]));
+  const activeIds = new Set(
+    entities
+      .filter((entity) => entity.status !== "deprecated")
+      .map((entity) => entity.id),
+  );
+  const deprecatedIds = new Set(
+    entities
+      .filter((entity) => entity.status === "deprecated")
+      .map((entity) => entity.id),
+  );
+  const staleIds = new Set<string>();
+
+  for (const feature of entities.filter(
+    (entity) => entity.type === "Feature" && activeIds.has(entity.id),
+  )) {
+    const satisfies = relations.filter(
+      (relation) =>
+        relation.type === "Satisfies" && relation.source === feature.id,
+    );
+    const dependsOnDeprecated = satisfies.some((relation) =>
+      deprecatedIds.has(relation.target),
+    );
+    const hasActiveRequirement = satisfies.some(
+      (relation) =>
+        activeIds.has(relation.target) &&
+        entityById.get(relation.target)?.type === "Requirement",
+    );
+    if (dependsOnDeprecated && !hasActiveRequirement) staleIds.add(feature.id);
+  }
+
+  for (const component of entities.filter(
+    (entity) => entity.type === "Component" && activeIds.has(entity.id),
+  )) {
+    const implementsRelations = relations.filter(
+      (relation) =>
+        relation.type === "Implements" && relation.source === component.id,
+    );
+    const dependsOnRetiredFeature = implementsRelations.some(
+      (relation) =>
+        deprecatedIds.has(relation.target) || staleIds.has(relation.target),
+    );
+    const hasActiveFeature = implementsRelations.some(
+      (relation) =>
+        activeIds.has(relation.target) &&
+        !staleIds.has(relation.target) &&
+        entityById.get(relation.target)?.type === "Feature",
+    );
+    if (dependsOnRetiredFeature && !hasActiveFeature) {
+      staleIds.add(component.id);
+    }
+  }
+
+  for (const metric of entities.filter(
+    (entity) => entity.type === "Metric" && activeIds.has(entity.id),
+  )) {
+    const measuresRelations = relations.filter(
+      (relation) =>
+        relation.type === "Measures" && relation.source === metric.id,
+    );
+    const dependsOnRetiredScope = measuresRelations.some(
+      (relation) =>
+        deprecatedIds.has(relation.target) || staleIds.has(relation.target),
+    );
+    const hasActiveMeasuredScope = measuresRelations.some((relation) => {
+      const target = entityById.get(relation.target);
+      return (
+        activeIds.has(relation.target) &&
+        !staleIds.has(relation.target) &&
+        (target?.type === "Requirement" || target?.type === "Feature")
+      );
+    });
+    if (dependsOnRetiredScope && !hasActiveMeasuredScope) {
+      staleIds.add(metric.id);
+    }
+  }
+
+  return [...staleIds];
+}
+
+/**
+ * 提取中英文否定短语，面向“无全文搜索”“不包含 WYSIWYG”等明确范围回答。
+ */
+function extractDeniedPhrases(value: string): string[] {
+  const phrases: string[] = [];
+  for (const clause of value.split(/[，。；;\n]/)) {
+    const chinese =
+      /(?:不包含|不支持|不需要|不考虑|禁止|排除|无)([^，。；;]{2,40})/i.exec(
+        clause,
+      )?.[1];
+    const english =
+      /(?:does\s+not\s+include|do\s+not\s+support|without|exclude|no)\s+([^,.;]{2,40})/i.exec(
+        clause,
+      )?.[1];
+    for (const phrase of [chinese, english]) {
+      if (!phrase) continue;
+      const normalized = normalizeSemanticText(
+        phrase.replace(/^(?:任何|相关|the|any|a|an)\s+/i, ""),
+      );
+      if (normalized.length >= 2) phrases.push(normalized);
+    }
+  }
+  return [...new Set(phrases)];
+}
+
+/**
+ * 判断节点自身是否也在明确表达否定，避免把“禁用全文搜索”当成冲突节点。
+ */
+function isPhraseExplicitlyNegated(text: string, normalizedPhrase: string): boolean {
+  const normalized = normalizeSemanticText(text);
+  return [
+    "不包含",
+    "不支持",
+    "不需要",
+    "不考虑",
+    "禁止",
+    "排除",
+    "无",
+    "without",
+    "exclude",
+    "no",
+  ].some((marker) =>
+    normalized.includes(`${normalizeSemanticText(marker)}${normalizedPhrase}`),
+  );
+}
+
+/**
+ * 使用轻量关键词交集兼容中英文表述，不引入额外相似度依赖。
+ */
+function hasMeaningfulTextOverlap(left: string, right: string): boolean {
+  const normalizedLeft = normalizeSemanticText(left);
+  const normalizedRight = normalizeSemanticText(right);
+  if (
+    normalizedLeft.length >= 4 &&
+    normalizedRight.includes(normalizedLeft)
+  ) {
+    return true;
+  }
+  const leftTokens = extractSemanticTokens(left);
+  const rightTokens = new Set(extractSemanticTokens(right));
+  const overlap = leftTokens.filter((token) => rightTokens.has(token)).length;
+  return overlap >= Math.min(2, Math.max(1, leftTokens.length));
+}
+
+/**
+ * 提取英文关键词和中文双字片段。
+ */
+function extractSemanticTokens(value: string): string[] {
+  const normalized = value.normalize("NFKC").toLowerCase();
+  const latin =
+    normalized
+      .match(/[a-z0-9][a-z0-9_-]{1,}/g)
+      ?.filter(
+        (token) =>
+          !["the", "and", "for", "with", "user", "用户", "需要"].includes(
+            token,
+          ),
+      ) ?? [];
+  const han = normalized.match(/[\p{Script=Han}]+/gu) ?? [];
+  const hanPairs = han.flatMap((sequence) => {
+    const pairs: string[] = [];
+    for (let index = 0; index < sequence.length - 1; index += 1) {
+      pairs.push(sequence.slice(index, index + 2));
+    }
+    return pairs;
+  });
+  return [...new Set([...latin, ...hanPairs])];
+}
+
+/**
+ * 统一语义比较文本。
+ */
+function normalizeSemanticText(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[\s"'`“”‘’()[\]{}<>《》【】:_-]+/g, "");
+}
+
+/**
+ * 为语义问题找到本轮可执行的领域所有者。
+ */
+function findCurrentOwnerTaskId(
+  input: CritiqueAgentInput,
+  entity: KnowledgeGraphEntity | undefined,
+): string | undefined {
+  if (entity?.source_task_id) {
+    const exact = input.plan.tasks.find(
+      (task) => task.task_id === entity.source_task_id,
+    );
+    if (exact) return exact.task_id;
+  }
+  if (entity) {
+    const domainOwner = input.plan.tasks.find(
+      (task) =>
+        isExecutorAgentType(task.assigned_agent) &&
+        getExecutorDefinition(task.assigned_agent).allowedEntityTypes.includes(
+          entity.type as never,
+        ),
+    );
+    if (domainOwner) return domainOwner.task_id;
+  }
+  return input.plan.tasks[0]?.task_id;
+}
+
+/**
+ * 根据 Request Agent 的业务覆盖映射找到遗漏输入的本轮任务。
+ */
+function findUserInputOwnerTaskId(
+  input: CritiqueAgentInput,
+  userInputIndex: number,
+): string | undefined {
+  const businessIndexes = input.requestAnalysis.business_model
+    .filter((item) => item.covered_user_input_indexes.includes(userInputIndex))
+    .map((item) => item.index);
+  return (
+    input.plan.tasks.find((task) =>
+      task.covered_business_model_indexes.some((index) =>
+        businessIndexes.includes(index),
+      ),
+    )?.task_id ?? input.plan.tasks[0]?.task_id
+  );
+}
+
+/**
+ * 对适合程序判断的语义质量问题增加门禁。
  */
 function createSemanticQualityIssues(
   input: CritiqueAgentInput,
@@ -600,6 +1224,190 @@ function createSemanticQualityIssues(
   }
 
   return issues;
+}
+
+/**
+ * 校验 Planner expected_output 中可确定判断的最小产物契约。
+ *
+ * 自由文本中的主观质量仍交给 Critique；这里只拦截明确要求的实体和关系完全缺失，
+ * 避免“研究缺口”之类的替代产物被当成已完成 Evidence 任务。
+ */
+function validateExpectedOutputContract(
+  task: TaskExecutionPlan["tasks"][number],
+  result: ExecutorAgentResult,
+  knowledgeGraph: ProductKnowledgeGraph,
+): CritiqueValidationIssue[] {
+  const expectation = task.expected_output.replace(
+    /Allowed entities only:[^.]+\.?/gi,
+    "",
+  );
+  const activeEntities = result.entities.filter(
+    (entity) => entity.status !== "deprecated",
+  );
+  const activeEntityTypes = new Set(activeEntities.map((entity) => entity.type));
+  const graphEntityById = new Map(
+    knowledgeGraph.entities
+      .filter((entity) => entity.status !== "deprecated")
+      .map((entity) => [entity.id, entity]),
+  );
+  const issues: CritiqueValidationIssue[] = [];
+
+  const requiredEntityTypes = [
+    {
+      type: "Evidence",
+      required: /\b(?:source-verifiable|verified)\s+Evidence\b/i.test(
+        expectation,
+      ),
+    },
+    {
+      type: "Component",
+      required: /\b(?:minimum\s+MVP\s+)?Component breakdown\b/i.test(
+        expectation,
+      ),
+    },
+    {
+      type: "Feature",
+      required: /\bFeature (?:hypotheses|nodes?|set)\b/i.test(expectation),
+    },
+    {
+      type: "Decision",
+      required: /^\s*(?:Technology\s+)?Decision\b/i.test(expectation),
+    },
+  ] as const;
+
+  for (const requirement of requiredEntityTypes) {
+    if (
+      requirement.required &&
+      !activeEntityTypes.has(requirement.type)
+    ) {
+      issues.push(
+        createReviewIssue({
+          code: "EXPECTED_OUTPUT_ENTITY_MISSING",
+          severity: "error",
+          taskId: task.task_id,
+          message: `Task expected_output requires ${requirement.type}, but the executor committed no active ${requirement.type} entity.`,
+        }),
+      );
+    }
+  }
+
+  const requiresAcceptanceArtifact =
+    /\bacceptance Requirements? or Metrics?\b/i.test(expectation);
+  if (
+    requiresAcceptanceArtifact &&
+    !hasExpectedArtifactReference(
+      result,
+      graphEntityById,
+      new Set(["Requirement", "Metric"]),
+    )
+  ) {
+    issues.push(
+      createReviewIssue({
+        code: "EXPECTED_OUTPUT_ACCEPTANCE_ARTIFACT_MISSING",
+        severity: "error",
+        taskId: task.task_id,
+        message:
+          "Task expected_output requires a traceable acceptance Requirement or Metric, but neither was created or referenced.",
+      }),
+    );
+  }
+
+  if (
+    /\btraceable relation updates?\b/i.test(expectation) &&
+    activeEntities.length > 0 &&
+    result.relations.length === 0
+  ) {
+    issues.push(
+      createReviewIssue({
+        code: "EXPECTED_OUTPUT_RELATION_MISSING",
+        severity: "error",
+        taskId: task.task_id,
+        message:
+          "Task expected_output requires traceable relation updates, but the executor committed no relation.",
+      }),
+    );
+  }
+
+  const evidenceIds = new Set(
+    activeEntities
+      .filter((entity) => entity.type === "Evidence")
+      .map((entity) => entity.id),
+  );
+  if (
+    evidenceIds.size > 0 &&
+    /\bEvidence\b.*\blinked to\b.*\bRequirements?\b/i.test(expectation) &&
+    !result.relations.some(
+      (relation) =>
+        evidenceIds.has(relation.source) &&
+        ["Validates", "References"].includes(relation.type) &&
+        ["Requirement", "Decision"].includes(
+          graphEntityById.get(relation.target)?.type ?? "",
+        ),
+    )
+  ) {
+    issues.push(
+      createReviewIssue({
+        code: "EXPECTED_OUTPUT_EVIDENCE_LINK_MISSING",
+        severity: "error",
+        taskId: task.task_id,
+        message:
+          "Task expected_output requires Evidence linked to a Requirement or decision candidate, but no such relation was committed.",
+      }),
+    );
+  }
+
+  const componentIds = new Set(
+    activeEntities
+      .filter((entity) => entity.type === "Component")
+      .map((entity) => entity.id),
+  );
+  if (
+    componentIds.size > 0 &&
+    /\bComponent breakdown linked to Features?\b/i.test(expectation) &&
+    !result.relations.some(
+      (relation) =>
+        componentIds.has(relation.source) &&
+        relation.type === "Implements" &&
+        graphEntityById.get(relation.target)?.type === "Feature",
+    )
+  ) {
+    issues.push(
+      createReviewIssue({
+        code: "EXPECTED_OUTPUT_COMPONENT_LINK_MISSING",
+        severity: "error",
+        taskId: task.task_id,
+        message:
+          "Task expected_output requires Components linked to Features, but no Component --Implements--> Feature relation was committed.",
+      }),
+    );
+  }
+
+  return issues;
+}
+
+/**
+ * 判断任务是否创建或通过本轮关系引用了指定验收实体。
+ */
+function hasExpectedArtifactReference(
+  result: ExecutorAgentResult,
+  graphEntityById: Map<string, KnowledgeGraphEntity>,
+  expectedTypes: Set<KnowledgeGraphEntity["type"]>,
+): boolean {
+  if (
+    result.entities.some(
+      (entity) =>
+        entity.status !== "deprecated" && expectedTypes.has(entity.type),
+    )
+  ) {
+    return true;
+  }
+
+  return result.relations.some((relation) =>
+    [relation.source, relation.target].some((id) => {
+      const entity = graphEntityById.get(id);
+      return Boolean(entity && expectedTypes.has(entity.type));
+    }),
+  );
 }
 
 /**
@@ -767,18 +1575,26 @@ function validateExecutorBoundaries(
 function inspectGraphIntegrity(
   knowledgeGraph: ProductKnowledgeGraph,
 ): CritiqueValidationReport["graph_integrity"] {
-  const entityById = new Map(
+  const allEntityById = new Map(
     knowledgeGraph.entities.map((entity) => [entity.id, entity]),
+  );
+  const activeEntityById = new Map(
+    knowledgeGraph.entities
+      .filter((entity) => entity.status !== "deprecated")
+      .map((entity) => [entity.id, entity]),
   );
   const connectedEntityIds = new Set<string>();
   const danglingRelationIds: string[] = [];
   const invalidDirectionRelationIds: string[] = [];
 
   for (const relation of knowledgeGraph.relations) {
-    const source = entityById.get(relation.source);
-    const target = entityById.get(relation.target);
+    const source = allEntityById.get(relation.source);
+    const target = allEntityById.get(relation.target);
     if (!source || !target) {
       danglingRelationIds.push(relation.id);
+      continue;
+    }
+    if (!activeEntityById.has(source.id) || !activeEntityById.has(target.id)) {
       continue;
     }
 
@@ -1022,7 +1838,13 @@ function findCommittedEntity(
   graphIndexes: ReturnType<typeof createGraphIndexes>,
 ): KnowledgeGraphEntity | null {
   const exact = graphIndexes.entityById.get(entity.id);
-  if (exact && areKnowledgeGraphItemsSimilar(entity, exact, "entity")) {
+  if (
+    exact &&
+    areKnowledgeGraphItemsSimilar(entity, exact, "entity") &&
+    exact.status === entity.status &&
+    exact.deprecated_by_task_id === entity.deprecated_by_task_id &&
+    exact.replacement_node_id === entity.replacement_node_id
+  ) {
     return exact;
   }
 
@@ -1032,6 +1854,9 @@ function findCommittedEntity(
       (candidate) =>
         candidate.id !== entity.id &&
         candidate.source_task_id === expectedSource &&
+        candidate.status === entity.status &&
+        candidate.deprecated_by_task_id === entity.deprecated_by_task_id &&
+        candidate.replacement_node_id === entity.replacement_node_id &&
         areKnowledgeGraphItemsSimilar(entity, candidate, "entity"),
     ) ?? null
   );
