@@ -19,10 +19,7 @@ import {
   type TaskExecutionPlan,
 } from "@repo/shared";
 
-import {
-  resolveJsonOutput,
-  runAgent,
-} from "../../common/run-agent";
+import { resolveJsonOutput, runAgent } from "../../common/run-agent";
 import type {
   OrchestratorAgentInput,
   ProductWorkflowStreamEvent,
@@ -81,7 +78,7 @@ export async function* streamOrchestratorAgent(
       name: "orchestrator-agent",
       // json_object 会导致模型跳过 task 工具调用直接生成 JSON 输出，
       // 因此两种模式都不能使用 responseFormat: "json_object"。
-      modelOptions: { enableThinking: true, temperature: 0, maxTokens: 4096 },
+      modelOptions: { enableThinking: true, temperature: 0, maxTokens: 8192 },
       systemPrompt: ORCHESTRATOR_AGENT_PROMPT,
       // pre-check 模式只需 Pre-Orchestrator SubAgent；full 模式只需 Planner SubAgent。
       // 不混用可避免 LLM 在同一轮次中调用不该出现的 SubAgent。
@@ -248,7 +245,9 @@ export function shouldRetryPlannerDelegation(
 /**
  * 基于运行时最终采用的 DAG 生成摘要，避免模型原始计划与裁剪后计划不一致。
  */
-export function createPlannerDelegationSummary(plan: TaskExecutionPlan): string {
+export function createPlannerDelegationSummary(
+  plan: TaskExecutionPlan,
+): string {
   const tasks = plan.tasks.map((task) => {
     const dependencies = task.depends_on.length
       ? ` after ${task.depends_on.join(", ")}`
@@ -389,9 +388,7 @@ export function compactGraphForPlanner(
     latest_summaries: knowledgeGraph.summary
       .slice(-4)
       .map((s) =>
-        s.length > MAX_SUMMARY_LEN
-          ? `${s.slice(0, MAX_SUMMARY_LEN)}...`
-          : s,
+        s.length > MAX_SUMMARY_LEN ? `${s.slice(0, MAX_SUMMARY_LEN)}...` : s,
       ),
     open_questions: knowledgeGraph.open_questions.slice(-8).map((question) => ({
       id: question.id,
