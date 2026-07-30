@@ -20,7 +20,11 @@ import {
   ToolMessage,
   type BaseMessage,
 } from "langchain";
-import { createDeepAgent, type SubAgent } from "deepagents";
+import {
+  createDeepAgent,
+  type FileData,
+  type SubAgent,
+} from "deepagents";
 import type { DocumentTodo } from "@repo/shared";
 import { calculateCost } from "../../config";
 import {
@@ -87,10 +91,31 @@ export type DocumentAgentStreamEvent =
 export interface RunDocumentAgentOptions {
   payload: unknown;
   subagents: SubAgent[];
+  skills?: string[];
+  skillFiles?: Record<string, FileData>;
   signal?: AbortSignal;
 }
 
-const VISIBLE_BUILTIN_TOOL_NAMES = new Set(["write_todos", "task"]);
+export const DOCUMENT_VISIBLE_BUILTIN_TOOL_NAMES = [
+  "write_todos",
+  "task",
+] as const;
+const VISIBLE_BUILTIN_TOOL_NAMES = new Set<string>(
+  DOCUMENT_VISIBLE_BUILTIN_TOOL_NAMES,
+);
+const SKILL_READER_TOOL_NAME = "read_file";
+
+/**
+ * 计算 Document Agent 内置工具白名单；Skill 读取保持内部可用但不进入可见工具集合。
+ */
+export function createDocumentAllowedBuiltinToolNames(
+  hasSkillFiles: boolean,
+): Set<string> {
+  return new Set([
+    ...DOCUMENT_VISIBLE_BUILTIN_TOOL_NAMES,
+    ...(hasSkillFiles ? [SKILL_READER_TOOL_NAME] : []),
+  ]);
+}
 const PRD_MARKDOWN_START_PATTERNS = [
   /^#{1,2}\s+.*Product Requirements Document\s*\(PRD\).*$/im,
   /^#{1,2}\s+.*产品需求文档.*PRD.*$/im,
@@ -106,10 +131,14 @@ export async function* runDocumentAgent(
   const startTime = Date.now();
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
   let responseText = "";
+  const skillFiles = options.skillFiles ?? {};
+  const hasSkillFiles = Object.keys(skillFiles).length > 0;
+  const allowedBuiltinToolNames =
+    createDocumentAllowedBuiltinToolNames(hasSkillFiles);
   const documentToolAllowlistMiddleware =
     createDeepAgentToolAllowlistMiddleware({
       agentName: "document-agent-prd",
-      allowedToolNames: VISIBLE_BUILTIN_TOOL_NAMES,
+      allowedToolNames: allowedBuiltinToolNames,
     });
   const summaryRecorder = createAgentRunSummaryRecorder({
     agentLabel: "PRD Document Agent",
@@ -120,7 +149,9 @@ export async function* runDocumentAgent(
       subagents: options.subagents.map((subagent) => ({
         name: subagent.name,
         description: subagent.description,
+        skills: subagent.skills ?? [],
       })),
+      skills: options.skills ?? [],
       systemPrompt: PRD_DOCUMENT_AGENT_PROMPT,
       visibleTools: [...VISIBLE_BUILTIN_TOOL_NAMES],
     },
@@ -135,6 +166,7 @@ export async function* runDocumentAgent(
       }) as any,
       systemPrompt: PRD_DOCUMENT_AGENT_PROMPT,
       name: "document-agent-prd",
+      skills: options.skills ?? [],
       subagents: options.subagents as any,
       middleware: [
         documentToolAllowlistMiddleware,
@@ -146,6 +178,7 @@ export async function* runDocumentAgent(
     const run = await agent.stream(
       {
         messages: [new HumanMessage(JSON.stringify(options.payload))],
+        ...(hasSkillFiles ? { files: skillFiles } : {}),
       },
       { streamMode: "messages", signal: options.signal },
     );

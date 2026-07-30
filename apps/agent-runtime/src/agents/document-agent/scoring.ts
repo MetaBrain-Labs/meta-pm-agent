@@ -137,19 +137,19 @@ const REVIEWERS: Array<{
     id: "gaokao-reviewer-a",
     name: "Gaokao Reviewer A",
     profile:
-      "Strict first reviewer. Prioritize requirement completeness, evidence grounding, and whether the PRD answers the core product problem.",
+      "Why-and-evidence reviewer. Prioritize why the work matters, the problem and target users, business value, source-node traceability, and whether facts or priorities were invented.",
   },
   {
     id: "gaokao-reviewer-b",
     name: "Gaokao Reviewer B",
     profile:
-      "Structure-focused second reviewer. Prioritize clear hierarchy, acceptance criteria, dependencies, and logical consistency across sections.",
+      "Cross-functional specification reviewer. Prioritize functional coverage, user experience, stable requirement IDs, P0 or high-risk Given/When/Then acceptance criteria, edge cases, and clarity for product, design, engineering, and QA.",
   },
   {
     id: "gaokao-reviewer-c",
     name: "Gaokao Reviewer C",
     profile:
-      "Practicality-focused third reviewer. Prioritize feasibility, implementation readiness, measurable metrics, and risk disclosure.",
+      "Scope-and-readiness reviewer. Prioritize scope and priority, measurable outcomes, dependencies, constraints, risks, validation, business usability, and whether the document defines the required degree of completion.",
   },
 ];
 
@@ -275,20 +275,56 @@ export async function runPrdWeightedScoringAgent({
   });
 
   const parsed = await consumeJsonAgentStream(stream, onEvent);
-  const score = clampScore(parsed.score);
+  const completionGate = applyPrdCompletionGate({
+    markdown,
+    score: clampScore(parsed.score),
+  });
+  const requiredRevisions = parsed.requiredRevisions.slice(0, 10);
+  if (completionGate.blocked) {
+    requiredRevisions.unshift(
+      "Resolve every TBD evidence gap before the PRD can pass quality review.",
+    );
+  }
 
   return {
-    score,
-    passed: varianceAccepted && score >= DOCUMENT_SCORE_THRESHOLD,
+    score: completionGate.score,
+    passed:
+      varianceAccepted &&
+      !completionGate.blocked &&
+      completionGate.score >= DOCUMENT_SCORE_THRESHOLD,
     confidence: Math.max(0, Math.min(1, parsed.confidence)),
-    rationale: parsed.rationale,
-    requiredRevisions: parsed.requiredRevisions.slice(0, 10),
+    rationale: completionGate.blocked
+      ? `${parsed.rationale} The deterministic completion gate found unresolved TBD evidence gaps.`
+      : parsed.rationale,
+    requiredRevisions: Array.from(new Set(requiredRevisions)).slice(0, 10),
     weights: {
       averageScore: clampScore(parsed.weights.averageScore),
       minimumScore: clampScore(parsed.weights.minimumScore),
       spreadPenalty: Math.max(0, parsed.weights.spreadPenalty),
       consistencyBonus: Math.max(0, parsed.weights.consistencyBonus),
     },
+  };
+}
+
+/**
+ * 对明确标记为 TBD 的未决事实执行确定性完成门禁。
+ */
+export function applyPrdCompletionGate({
+  markdown,
+  score,
+}: {
+  markdown: string;
+  score: number;
+}): {
+  score: number;
+  blocked: boolean;
+} {
+  const blocked = /\bTBD\b/i.test(markdown);
+  return {
+    score: blocked
+      ? Math.min(clampScore(score), DOCUMENT_SCORE_THRESHOLD - 1)
+      : clampScore(score),
+    blocked,
   };
 }
 

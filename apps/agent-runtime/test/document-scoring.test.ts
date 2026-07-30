@@ -16,12 +16,27 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  applyPrdCompletionGate,
   DOCUMENT_SCORE_MAX_SPREAD,
   createSkippedConsensusScore,
   selectFinalScoreAttempt,
   type DocumentScoreAttempt,
   type DocumentScoreReview,
 } from "../src/agents/document-agent/scoring";
+
+test("blocks PRDs with unresolved TBD evidence gaps from passing", () => {
+  const blocked = applyPrdCompletionGate({
+    markdown: "# PRD\n\nMetric target: [TBD — needs evidence]",
+    score: 93,
+  });
+  const complete = applyPrdCompletionGate({
+    markdown: "# PRD\n\nMetric target: 20%, source M-001",
+    score: 93,
+  });
+
+  assert.deepEqual(blocked, { score: 84, blocked: true });
+  assert.deepEqual(complete, { score: 93, blocked: false });
+});
 
 test("records high-spread attempts as failed without consensus pass", () => {
   const reviewerScores = [

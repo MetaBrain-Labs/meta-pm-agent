@@ -78,7 +78,7 @@ export async function* streamOrchestratorAgent(
       name: "orchestrator-agent",
       // json_object 会导致模型跳过 task 工具调用直接生成 JSON 输出，
       // 因此两种模式都不能使用 responseFormat: "json_object"。
-      modelOptions: { enableThinking: true, temperature: 0, maxTokens: 8192 },
+      modelOptions: { enableThinking: true, temperature: 0, maxTokens: 16384 },
       systemPrompt: ORCHESTRATOR_AGENT_PROMPT,
       // pre-check 模式只需 Pre-Orchestrator SubAgent；full 模式只需 Planner SubAgent。
       // 不混用可避免 LLM 在同一轮次中调用不该出现的 SubAgent。

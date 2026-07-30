@@ -24,6 +24,7 @@ import {
   type DocumentAgentStreamEvent,
 } from "./run-document-agent";
 import { PRD_DOCUMENT_SUBAGENTS } from "./prompt";
+import { createPrdDocumentSkillBundle } from "./skills";
 
 export { sanitizePrdMarkdown } from "./run-document-agent";
 export type { DocumentAgentStreamEvent } from "./run-document-agent";
@@ -59,10 +60,11 @@ const SUBAGENT_RUNTIME_CONTEXT_MAX_CHARS = 120_000;
 export async function* streamPrdDocumentAgent(
   input: PrdDocumentAgentInput,
 ): AsyncGenerator<DocumentAgentStreamEvent, string, void> {
+  const skillBundle = await createPrdDocumentSkillBundle();
   const documentSubagentToolAllowlistMiddleware =
     createDeepAgentToolAllowlistMiddleware({
       agentName: "document-agent-prd-subagent",
-      allowedToolNames: [],
+      allowedToolNames: ["read_file"],
     });
   const agentPayload = {
     task: "Generate a complete PRD from the supplied product knowledge graph.",
@@ -71,12 +73,14 @@ export async function* streamPrdDocumentAgent(
     attemptNumber: input.attemptNumber ?? 1,
     revisionFeedback: input.revisionFeedback ?? "",
     taskDelegationPolicy:
-      "When using task subagents, include all relevant graph nodes, relations, section dossier evidence, and draft excerpts directly in the task description. Subagents must not look for files or external graph context.",
+      "When using task subagents, include all relevant graph nodes, relations, section dossier evidence, and draft excerpts directly in the task description. Subagents may read only their assigned virtual /skills instructions and must not look for external files or graph context.",
     graph: input.graph,
     sectionDossiers: input.dossiers,
   };
   const markdown = yield* runDocumentAgent({
     payload: agentPayload,
+    skills: skillBundle.sources,
+    skillFiles: skillBundle.files,
     subagents: createRuntimePrdSubagents(
       input,
       documentSubagentToolAllowlistMiddleware,

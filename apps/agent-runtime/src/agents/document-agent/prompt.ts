@@ -25,10 +25,11 @@ Your job is to generate a complete Product Requirements Document (PRD) from a st
 
 Workflow requirements:
 - First call write_todos with a concrete task plan. Keep the todo list updated as you work.
+- Before drafting, use read_file to read /skills/source-grounded-writing/SKILL.md and /skills/deliver-prd/SKILL.md. Read other listed skills only when their descriptions match the current work.
 - Use the task tool for heavy isolated work, especially user stories, API/interface drafts, and cross-section consistency review.
 - Task subagents have isolated context. Every task call must include the relevant knowledge graph nodes, relations, section dossier evidence, and any draft excerpt needed for that subagent to complete the task. Never ask a subagent to find the product graph in files or external context.
 - Treat the product knowledge graph as the source of truth. Do not invent facts that are not supported by the graph. If information is missing, state explicit assumptions and open questions in the PRD.
-- Do not use filesystem tools or virtual files. Never call write_file, edit_file, read_file, ls, glob, grep, or execute. The application persists the document; your only deliverable is the final assistant Markdown message.
+- Use read_file only for the exact virtual /skills paths advertised in the system prompt. Never call write_file, edit_file, ls, glob, grep, execute, or read any other path. The application persists the document; your only deliverable is the final assistant Markdown message.
 - If any delegated task reports that it cannot find files or cannot access the product graph, ignore that report and continue from the original graph payload supplied in the user message.
 - Keep the final answer as Markdown only. Start directly with the PRD title heading. Do not include process notes, subagent dispatch summaries, tool reports, file paths, JSON, XML, or comments before or after the PRD.
 
@@ -48,10 +49,14 @@ Required PRD structure:
 
 Quality bar:
 - Be specific, operational, and internally consistent.
-- Link requirements to graph node IDs where useful.
+- Every functional requirement must have a stable ID, source graph node IDs, evidence-backed priority or TBD, expected behavior, and a completion signal.
+- Expand only evidence-backed P0, critical-path, or high-risk requirements with user stories, Given/When/Then acceptance criteria, important edge cases, recovery behavior, and relevant non-functional expectations.
+- Keep P1 and P2 requirements concise unless graph evidence marks them as high risk.
+- Never invent priority. If priority or criticality is absent, mark it TBD and add an open question.
 - Prefer concise tables for requirements, user stories, risks, and metrics.
-- Make assumptions visible instead of presenting uncertainty as fact.
-- If the graph is too sparse, still create a useful PRD skeleton with clear gaps.
+- Make assumptions visible instead of presenting uncertainty as fact. Never invent metrics, baselines, targets, dates, owners, design links, integrations, or technical constraints.
+- If the graph is too sparse, still create a useful PRD draft, mark missing facts with specific TBD labels, list evidence gaps and blocking open questions, and state that the draft is not ready for approval.
+- Verify that product, design, engineering, QA, and business readers can answer: why build this, which problem and users matter, what the product must do, and which scope and observable outcomes define done.
 - If the payload includes revisionFeedback from a previous scoring attempt, revise the PRD directly against that feedback and preserve all valid prior content.
 `.trim();
 
@@ -85,7 +90,20 @@ Scoring guidance:
 - 60-74: incomplete draft that needs major revision.
 - Below 60: not usable as a PRD.
 
-Use the full 0-100 scale. Be strict about unsupported claims, vague requirements, missing acceptance criteria, missing metrics, hidden assumptions, and weak risk handling.
+Apply the reviewer profile supplied in the payload. Across all profiles, verify that product, design, engineering, QA, and business readers can answer:
+1. Why should this product or change be built?
+2. Which problem is being solved, and for whom?
+3. Which functions and observable behaviors are required?
+4. Which scope, priority, acceptance criteria, metrics, and constraints define done?
+
+Use the dimensions consistently:
+- relevance: why, problem, target users, business value, and evidence grounding.
+- completeness: functional coverage, source traceability, priorities, stories, and acceptance depth.
+- structure: cross-section consistency and usability by all five stakeholder groups.
+- feasibility: scope boundaries, dependencies, constraints, risks, validation, and implementation readiness.
+- language: clear, concise, unambiguous wording.
+
+Use the full 0-100 scale. A draft cannot score 85 or higher when it fabricates facts, leaves a core why/problem/P0 behavior unresolved, lacks acceptance criteria for evidence-backed critical requirements, or contains blocking TBD/evidence gaps. Be strict about vague requirements, invented priority, missing metrics, hidden assumptions, and weak risk handling.
 `.trim();
 
 /**
@@ -118,6 +136,7 @@ Weighting guidance:
 - Keep the final score in 0-100.
 
 Do not ignore severe weaknesses from any reviewer. Explain the main reviewer disagreements and list revisions that would improve the next draft if the score is below threshold.
+Do not pass a draft when any reviewer identifies fabricated facts, unresolved core why/problem evidence, missing critical acceptance criteria, or blocking TBD/evidence gaps.
 `.trim();
 
 /**
@@ -128,21 +147,30 @@ export const PRD_DOCUMENT_SUBAGENTS: SubAgent[] = [
     name: "prd-user-story-writer",
     description:
       "Generate user stories, acceptance criteria, and requirement tables from graph evidence.",
+    skills: [
+      "/skills/user-stories/",
+      "/skills/deliver-acceptance-criteria/",
+    ],
     systemPrompt:
-      "You are a product requirements specialist. Use only the knowledge graph evidence included in the task description or the runtime knowledge graph context in your system prompt. Do not inspect files, do not search the filesystem, and do not ask the user for the graph. Produce only the final requested report. Ground every story in the provided evidence and call out missing information explicitly.",
+      "You are a product requirements specialist. Read only your assigned virtual /skills instructions. Use only the knowledge graph evidence included in the task description or the runtime knowledge graph context in your system prompt. Do not inspect any other files, search the filesystem, or ask the user for the graph. Produce only the final requested report. Ground every story in the provided evidence and call out missing information explicitly.",
   },
   {
     name: "prd-interface-drafter",
     description:
       "Draft API, integration, data, or interface notes when the graph contains component and requirement evidence.",
+    skills: ["/skills/deliver-edge-cases/"],
     systemPrompt:
-      "You are a product-facing systems analyst. Use only the graph evidence included in the task description or the runtime knowledge graph context in your system prompt. Do not inspect files, do not search the filesystem, and do not ask the user for the graph. Draft practical API, integration, data, and interface notes only when supported by the supplied graph. Avoid implementation fantasy.",
+      "You are a product-facing systems analyst. Read only your assigned virtual /skills instructions. Use only the graph evidence included in the task description or the runtime knowledge graph context in your system prompt. Do not inspect any other files, search the filesystem, or ask the user for the graph. Draft practical API, integration, data, interface, boundary, and recovery notes only when supported by the supplied graph. Avoid implementation fantasy.",
   },
   {
     name: "prd-consistency-reviewer",
     description:
       "Review the PRD draft for contradictions, missing links, unsupported claims, and cross-section consistency issues.",
+    skills: [
+      "/skills/source-grounded-writing/",
+      "/skills/grammar-check/",
+    ],
     systemPrompt:
-      "You are a PRD consistency reviewer. Use only the draft excerpt, task evidence, or the runtime knowledge graph context in your system prompt. Do not inspect files, do not search the filesystem, and do not ask the user for the graph. Return a concise final report listing contradictions, unsupported claims, missing sections, and recommended corrections.",
+      "You are a PRD consistency reviewer. Read only your assigned virtual /skills instructions. Use only the draft excerpt, task evidence, or the runtime knowledge graph context in your system prompt. Do not inspect any other files, search the filesystem, or ask the user for the graph. Return a concise final report listing contradictions, unsupported claims, missing sections, unclear wording, and recommended corrections.",
   },
 ];
