@@ -48,6 +48,11 @@ test("planner prompt preserves graph-semantics guardrails", () => {
   );
   assert.match(
     PLANNER_AGENT_PROMPT,
+    /reuse compatible active Feature, Component, Metric, Evidence, and constraint nodes/,
+  );
+  assert.match(PLANNER_AGENT_PROMPT, /A relation-only correction task is valid/);
+  assert.match(
+    PLANNER_AGENT_PROMPT,
     /first plan Goal\/Requirement work plus evidence-producing tasks, then add a downstream Product Strategy refinement task/,
   );
   assert.match(
@@ -235,8 +240,14 @@ test("critique agent prompt stays compact and does not request full graph copies
   );
   assert.match(
     CRITIQUE_AGENT_PROMPT,
-    /graph_ref must be an object/,
+    /Never output knowledge_graph_review\.graph_ref/,
   );
+  assert.match(
+    CRITIQUE_AGENT_PROMPT,
+    /source_context and target_context/,
+  );
+  assert.match(CRITIQUE_AGENT_PROMPT, /CONFLICTING_PRECISE_CONSTRAINT/);
+  assert.match(CRITIQUE_AGENT_PROMPT, /UNSUPPORTED_EVIDENCE_CLAIM/);
   assert.match(
     CRITIQUE_AGENT_PROMPT,
     /Review content only/,
@@ -292,6 +303,8 @@ test("executor prompt preserves append-only graph writing semantics", () => {
 
   assert.match(prompt, /ONLY create new traceable records/);
   assert.match(prompt, /The graph tools are append-only/);
+  assert.match(prompt, /Reusing active node IDs in a relation-only correction is valid/);
+  assert.match(prompt, /otherwise omit the field and never pass null/);
   assert.match(prompt, /Never reuse an existing node, relation, decision, risk, or open-question ID/);
   assert.match(prompt, /runtime allocates/);
   assert.match(prompt, /runtime generates the execution summary/);

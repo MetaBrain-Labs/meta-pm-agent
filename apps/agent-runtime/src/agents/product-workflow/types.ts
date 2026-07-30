@@ -47,6 +47,8 @@ export interface WorkflowResumeContext {
   rerunTaskIds?: string[];
   forceSupplementPlan?: boolean;
   supplementAgentTypes?: ExecutorAgentType[];
+  supplementSourceTaskIds?: string[];
+  supplementAffectedTaskIds?: string[];
   answeredOpenQuestionIds?: string[];
   productWorkflow?: ProductWorkflowResult | null;
 }
@@ -57,6 +59,8 @@ export interface WorkflowResumeContext {
 export interface PlannerAgentInput extends ProductWorkflowInput {
   knowledgeGraph: ProductKnowledgeGraph;
   supplementAgentTypes?: ExecutorAgentType[];
+  supplementSourceTaskIds?: string[];
+  supplementAffectedTaskIds?: string[];
 }
 
 /**
@@ -65,6 +69,8 @@ export interface PlannerAgentInput extends ProductWorkflowInput {
 export interface OrchestratorAgentInput extends ProductWorkflowInput {
   knowledgeGraph: ProductKnowledgeGraph;
   supplementAgentTypes?: ExecutorAgentType[];
+  supplementSourceTaskIds?: string[];
+  supplementAffectedTaskIds?: string[];
   answeredOpenQuestionIds?: string[];
 }
 

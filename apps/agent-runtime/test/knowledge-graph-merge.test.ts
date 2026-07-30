@@ -21,6 +21,7 @@ import type {
   TaskExecutionPlan,
 } from "@repo/shared";
 import {
+  CritiqueAgentModelOutputSchema,
   compactTaskSemanticUpdates,
   composeProductWorkflowResult,
   createCritiqueValidationReport,
@@ -60,6 +61,7 @@ test("rejects a final executor attempt with no structured writes", () => {
 });
 
 test("keeps compact semantic updates reviewable without copying the full graph", () => {
+  const goal = createGoal("G-001");
   const entity = createRequirement(
     "R-001",
     "task-01",
@@ -79,10 +81,21 @@ test("keeps compact semantic updates reviewable without copying the full graph",
     ),
   });
 
-  const updates = compactTaskSemanticUpdates([result]);
+  const updates = compactTaskSemanticUpdates(
+    [result],
+    createGraph({ entities: [goal, entity], relations: result.relations }),
+  );
 
   assert.equal(updates[0]?.entities[0]?.description, entity.description);
   assert.equal(updates[0]?.relations[0]?.target, entity.id);
+  assert.equal(
+    updates[0]?.relations[0]?.source_context?.description,
+    goal.description,
+  );
+  assert.equal(
+    updates[0]?.relations[0]?.target_context?.description,
+    entity.description,
+  );
   assert.equal(updates[0]?.web_search_enabled, false);
 });
 
@@ -323,7 +336,12 @@ test("critique composition keeps runtime validation and graph counts authoritati
     },
     modelReview,
   );
+  const parsedModelReview = CritiqueAgentModelOutputSchema.parse(modelReview);
 
+  assert.equal(
+    "graph_ref" in parsedModelReview.knowledge_graph_review,
+    false,
+  );
   assert.deepEqual(result.review.accepted_task_ids, [task.task_id]);
   assert.deepEqual(result.knowledge_graph_review?.graph_ref, {
     entity_count: 2,

@@ -16,6 +16,7 @@
 import { randomUUID } from "node:crypto";
 import { getWriter, type LangGraphRunnableConfig } from "@langchain/langgraph";
 import type { ProductWorkflowResult, TaskExecutionNode } from "@repo/shared";
+import { inferSupplementAffectedTaskIds } from "../../agents/conversation/workflow-resume";
 import type { UserInputRecord } from "../../agents/request/user-input";
 import type { ProductWorkflowStreamEvent } from "../../agents/product-workflow/agent";
 import {
@@ -151,6 +152,8 @@ export async function orchestratorAgentNode(
       userInput: state.userInput,
       knowledgeGraph,
       supplementAgentTypes: state.supplementAgentTypes,
+      supplementSourceTaskIds: state.supplementSourceTaskIds,
+      supplementAffectedTaskIds: state.supplementAffectedTaskIds,
       answeredOpenQuestionIds: state.answeredOpenQuestionIds,
       signal: config?.signal,
     }),
@@ -480,6 +483,13 @@ async function executeCritiqueAgentReview(
       ...(nextWorkflowResult.review.issues ?? []),
       ...(nextWorkflowResult.knowledge_graph_review?.issues ?? []),
     ];
+    const supplementSourceTaskIds =
+      nextWorkflowResult.review.retry_task_ids ?? [];
+    const supplementAffectedTaskIds = inferSupplementAffectedTaskIds(
+      supplementSourceTaskIds,
+      state.plan,
+      reviewedKnowledgeGraph,
+    );
     const planningResult = await orchestratorAgentNode(
       {
         ...state,
@@ -493,6 +503,8 @@ async function executeCritiqueAgentReview(
         supplementAgentTypes: EXECUTOR_DEFINITIONS.map(
           (definition) => definition.agentType,
         ),
+        supplementSourceTaskIds,
+        supplementAffectedTaskIds,
       },
       config,
     );
@@ -506,6 +518,8 @@ async function executeCritiqueAgentReview(
       supplementAgentTypes: EXECUTOR_DEFINITIONS.map(
         (definition) => definition.agentType,
       ),
+      supplementSourceTaskIds,
+      supplementAffectedTaskIds,
     };
   }
 

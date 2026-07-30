@@ -201,7 +201,7 @@ test("limits supplement Planner context and preserves tracked questions", () => 
 
   const compact = compactGraphForPlanner(graph, true);
 
-  assert.ok(compact.entities.length <= 20);
+  assert.ok(compact.entities.length <= 40);
   assert.deepEqual(compact.open_questions, [
     {
       id: "OQ-001",
@@ -210,6 +210,50 @@ test("limits supplement Planner context and preserves tracked questions", () => 
       source_task_id: "task-01",
     },
   ]);
+});
+
+test("supplement Planner context includes affected neighbor descriptions", () => {
+  const graph = createEmptyKnowledgeGraph();
+  graph.entities = [
+    {
+      id: "R-001",
+      type: "Requirement",
+      name: "SM4 encryption",
+      description: "The confirmed encryption requirement uses SM4.",
+      source_task_id: "task-strategy",
+      status: "confirmed",
+    },
+    {
+      id: "C-001",
+      type: "Custom",
+      name: "Legacy encryption guardrail",
+      description: "Use AES-256 for data encryption.",
+      source_task_id: "task-toolkit",
+      status: "confirmed",
+    },
+  ];
+  graph.relations = [
+    {
+      id: "REL-001",
+      type: "Constrains",
+      source: "C-001",
+      target: "R-001",
+      source_task_id: "task-toolkit",
+    },
+  ];
+
+  const compact = compactGraphForPlanner(
+    graph,
+    true,
+    ["task-strategy"],
+    ["task-strategy", "task-toolkit"],
+  );
+
+  assert.equal(
+    compact.entities.find((entity) => entity.id === "C-001")?.description,
+    "Use AES-256 for data encryption.",
+  );
+  assert.equal(compact.relations[0]?.description, undefined);
 });
 
 test("fails when Orchestrator does not actually delegate to Planner", () => {

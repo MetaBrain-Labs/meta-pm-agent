@@ -205,6 +205,14 @@ function createWorkflowResumeContext({
         workflowAnswerResolution,
       )
     : knowledgeGraph;
+  const supplementSourceTaskIds = forceSupplementPlan ? rerunTaskIds : [];
+  const supplementAffectedTaskIds = forceSupplementPlan
+    ? inferSupplementAffectedTaskIds(
+        supplementSourceTaskIds,
+        plan,
+        resolvedKnowledgeGraph,
+      )
+    : [];
 
   return {
     requestAnalysis,
@@ -216,8 +224,10 @@ function createWorkflowResumeContext({
     forceSupplementPlan,
     answeredOpenQuestionIds,
     productWorkflow,
+    supplementSourceTaskIds,
+    supplementAffectedTaskIds,
     supplementAgentTypes: forceSupplementPlan
-      ? inferSupplementAgentTypes(rerunTaskIds, plan)
+      ? inferSupplementAgentTypes(supplementAffectedTaskIds, plan)
       : [],
   };
 }
@@ -506,6 +516,59 @@ function inferSupplementAgentTypes(
         .filter(isExecutorAgentType),
     ),
   ];
+}
+
+/**
+ * 从问题来源任务沿活跃图关系扩展一跳，找出需要参与补充修正的原 DAG 任务。
+ */
+export function inferSupplementAffectedTaskIds(
+  sourceTaskIds: string[],
+  plan: NonNullable<WorkflowResumeContext["plan"]>,
+  knowledgeGraph: ProductKnowledgeGraph | null | undefined,
+): string[] {
+  const affectedTaskIds = new Set(sourceTaskIds);
+  if (!knowledgeGraph) {
+    return plan.tasks
+      .map((task) => task.task_id)
+      .filter((taskId) => affectedTaskIds.has(taskId));
+  }
+
+  const activeEntities = knowledgeGraph.entities.filter(
+    (entity) => entity.status !== "deprecated",
+  );
+  const activeEntityById = new Map(
+    activeEntities.map((entity) => [entity.id, entity]),
+  );
+  const sourceEntityIds = new Set(
+    activeEntities
+      .filter(
+        (entity) =>
+          entity.source_task_id &&
+          affectedTaskIds.has(entity.source_task_id),
+      )
+      .map((entity) => entity.id),
+  );
+
+  for (const relation of knowledgeGraph.relations) {
+    const source = activeEntityById.get(relation.source);
+    const target = activeEntityById.get(relation.target);
+    if (!source || !target) continue;
+    if (
+      !sourceEntityIds.has(source.id) &&
+      !sourceEntityIds.has(target.id)
+    ) {
+      continue;
+    }
+    if (source.source_task_id) affectedTaskIds.add(source.source_task_id);
+    if (target.source_task_id) affectedTaskIds.add(target.source_task_id);
+    if (relation.source_task_id) {
+      affectedTaskIds.add(relation.source_task_id);
+    }
+  }
+
+  return plan.tasks
+    .map((task) => task.task_id)
+    .filter((taskId) => affectedTaskIds.has(taskId));
 }
 
 /**

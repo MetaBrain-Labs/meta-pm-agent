@@ -103,6 +103,7 @@ User-facing UI copy and final prose may be localized. Internal comments may be C
 - Planner SubAgent receives compact graph context, not unrestricted graph/file tools. DeepAgents default filesystem tools remain excluded by the Harness profile and allowlist middleware.
 - Document Agent is the deliberate exception allowed to use built-in `write_todos` and `task`. Other internal DeepAgents helpers must not appear in normal SSE or persistence.
 - External search failures return `{ results: [], error }` instead of throwing. Search-backed Evidence nodes must reference verified results; user-input and existing-graph provenance must remain traceable.
+- Natural-language semantic judgments—including whether constraints conflict, whether Evidence supports a claim, and whether differently worded concepts are equivalent—belong to the responsible Agent with sufficient compact context. Do not encode them in backend keyword/regex dictionaries or enumerated domain-term lists. Keep deterministic backend validation to exact invariants such as schemas, authorization, provenance presence, relation direction, references, and graph integrity; when an Agent lacks evidence for a semantic judgment, enrich its context or prompt instead of adding semantic matching code.
 - Preserve `agentType` on authorized `tool-call`/`tool-result` events. Filter internal helpers, unscoped reads, graph patches, and full graph payloads from user-visible SSE and message persistence.
 
 ### SSE and stop behavior

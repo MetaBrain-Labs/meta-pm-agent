@@ -312,6 +312,8 @@ function createOrchestratorPayload(input: OrchestratorAgentInput) {
   const compactGraph = compactGraphForPlanner(
     input.knowledgeGraph,
     isWorkflowSupplementInput(input),
+    input.supplementSourceTaskIds,
+    input.supplementAffectedTaskIds,
   );
 
   return {
@@ -346,33 +348,63 @@ function createOrchestratorPayload(input: OrchestratorAgentInput) {
       request_analysis: input.requestAnalysis,
       user_input: input.userInput,
       supplement_agents: input.supplementAgentTypes ?? [],
+      supplement_source_task_ids: input.supplementSourceTaskIds ?? [],
+      supplement_affected_task_ids: input.supplementAffectedTaskIds ?? [],
       answered_open_question_ids: input.answeredOpenQuestionIds ?? [],
     }),
   };
 }
 
 /**
- * 为 Planner SubAgent 生成精简知识图谱摘要，去除 entity description 和 relation description。
- * Planner 仅需了解图谱结构（有哪些节点、什么类型、关系拓扑）即可生成 DAG，
- * 无需完整节点描述（每个 entity description 约 200-600 字符，在 100+ 节点时浪费严重）。
+ * 为 Planner SubAgent 生成精简知识图谱摘要。
+ * 初始轮次仅提供结构；补充轮次为来源任务和一跳影响节点保留截断描述，
+ * 让 Planner 能识别语义冲突，同时避免复制完整图谱。
  */
 export function compactGraphForPlanner(
   knowledgeGraph: OrchestratorAgentInput["knowledgeGraph"],
   supplement = false,
+  sourceTaskIds: string[] = [],
+  affectedTaskIds: string[] = [],
 ) {
   const MAX_ENTITY_NAME = 120;
+  const MAX_ENTITY_DESCRIPTION = 240;
+  const MAX_RELATION_DESCRIPTION = 180;
   const MAX_SUMMARY_LEN = 600;
   const entities = supplement
-    ? selectSupplementPlannerEntities(knowledgeGraph.entities)
+    ? selectSupplementPlannerEntities(
+        knowledgeGraph,
+        sourceTaskIds,
+        affectedTaskIds,
+      )
     : knowledgeGraph.entities;
   const entityIds = new Set(entities.map((entity) => entity.id));
+  const sourceEntityIds = new Set(
+    knowledgeGraph.entities
+      .filter(
+        (entity) =>
+          entity.source_task_id &&
+          sourceTaskIds.includes(entity.source_task_id),
+      )
+      .map((entity) => entity.id),
+  );
   const relations = supplement
     ? knowledgeGraph.relations
         .filter(
           (relation) =>
             entityIds.has(relation.source) && entityIds.has(relation.target),
         )
-        .slice(-24)
+        .sort(
+          (left, right) =>
+            Number(
+              sourceEntityIds.has(right.source) ||
+                sourceEntityIds.has(right.target),
+            ) -
+            Number(
+              sourceEntityIds.has(left.source) ||
+                sourceEntityIds.has(left.target),
+            ),
+        )
+        .slice(0, 64)
     : knowledgeGraph.relations;
 
   return {
@@ -405,23 +437,78 @@ export function compactGraphForPlanner(
           : node.name,
       source_task_id: node.source_task_id,
       status: node.status,
+      ...(supplement && node.description
+        ? {
+            description:
+              node.description.length > MAX_ENTITY_DESCRIPTION
+                ? `${node.description.slice(0, MAX_ENTITY_DESCRIPTION)}...`
+                : node.description,
+          }
+        : {}),
+      ...(supplement && node.replacement_node_id
+        ? { replacement_node_id: node.replacement_node_id }
+        : {}),
     })),
     relations: relations.map((rel) => ({
       id: rel.id,
       type: rel.type,
       source: rel.source,
       target: rel.target,
+      source_task_id: rel.source_task_id,
+      ...(supplement && rel.description
+        ? {
+            description:
+              rel.description.length > MAX_RELATION_DESCRIPTION
+                ? `${rel.description.slice(0, MAX_RELATION_DESCRIPTION)}...`
+                : rel.description,
+          }
+        : {}),
     })),
   };
 }
 
 /**
- * 补充轮次只传目标、决策、待确认问题和最近节点，避免为少量表单答案复制全图。
+ * 补充轮次优先传递来源任务、受影响任务、一跳邻居及替换节点，并用少量全局节点补足语境。
  */
 function selectSupplementPlannerEntities(
-  entities: OrchestratorAgentInput["knowledgeGraph"]["entities"],
+  knowledgeGraph: OrchestratorAgentInput["knowledgeGraph"],
+  sourceTaskIds: string[],
+  affectedTaskIds: string[],
 ) {
+  const entities = knowledgeGraph.entities;
+  const sourceTasks = new Set(sourceTaskIds);
+  const affectedTasks = new Set([...sourceTaskIds, ...affectedTaskIds]);
+  const entityById = new Map(entities.map((entity) => [entity.id, entity]));
   const selected = new Map<string, (typeof entities)[number]>();
+
+  for (const entity of entities) {
+    if (entity.source_task_id && sourceTasks.has(entity.source_task_id)) {
+      selected.set(entity.id, entity);
+    }
+  }
+  for (const entity of entities) {
+    if (entity.source_task_id && affectedTasks.has(entity.source_task_id)) {
+      selected.set(entity.id, entity);
+    }
+  }
+  const directlyAffectedIds = new Set(selected.keys());
+  for (const relation of knowledgeGraph.relations) {
+    if (
+      !directlyAffectedIds.has(relation.source) &&
+      !directlyAffectedIds.has(relation.target)
+    ) {
+      continue;
+    }
+    const source = entityById.get(relation.source);
+    const target = entityById.get(relation.target);
+    if (source) selected.set(source.id, source);
+    if (target) selected.set(target.id, target);
+  }
+  for (const entity of [...selected.values()]) {
+    if (!entity.replacement_node_id) continue;
+    const replacement = entityById.get(entity.replacement_node_id);
+    if (replacement) selected.set(replacement.id, replacement);
+  }
   for (const entity of entities) {
     if (["Goal", "Decision", "OpenQuestion"].includes(entity.type)) {
       selected.set(entity.id, entity);
@@ -430,7 +517,7 @@ function selectSupplementPlannerEntities(
   for (const entity of entities.slice(-10)) {
     selected.set(entity.id, entity);
   }
-  return [...selected.values()].slice(-20);
+  return [...selected.values()].slice(0, 40);
 }
 
 export function createFallbackOrchestratorDecision(

@@ -12,11 +12,16 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { ChatMessage, ProductWorkflowResult } from "@repo/shared";
+import type {
+  ChatMessage,
+  ProductWorkflowResult,
+  TaskExecutionPlan,
+} from "@repo/shared";
 import {
   createWorkflowContinuationResumeContextFromMessages,
   createWorkflowExecutorRetryResumeContextFromMessages,
   createWorkflowResumeContextFromMessages,
+  inferSupplementAffectedTaskIds,
 } from "../src/agents/conversation/workflow-resume";
 import { streamConversation } from "../src/agents/conversation/stream";
 import { createProductWorkflowKnowledgeGraph } from "../src/agents/product-workflow/common/knowledge-graph";
@@ -157,6 +162,8 @@ test("restores dynamic Critique confirmation as a scoped supplement", () => {
     "executor-product-strategy",
     "executor-product-execution",
   ]);
+  assert.deepEqual(context?.supplementSourceTaskIds, ["task-02", "task-01"]);
+  assert.deepEqual(context?.supplementAffectedTaskIds, ["task-01", "task-02"]);
   assert.deepEqual(context?.answeredOpenQuestionIds, [
     "task-01-oq",
     "task-01-oq-2",
@@ -172,6 +179,78 @@ test("restores dynamic Critique confirmation as a scoped supplement", () => {
         `task-01-backlog-${index + 1}`,
       ),
     ],
+  );
+});
+
+test("expands supplement scope to one-hop graph owners", () => {
+  const graph = createProductWorkflowKnowledgeGraph();
+  graph.entities = [
+    {
+      id: "R-001",
+      type: "Requirement",
+      name: "SM4 encryption",
+      source_task_id: "task-strategy",
+      status: "confirmed",
+    },
+    {
+      id: "C-001",
+      type: "Custom",
+      name: "AES-256 guardrail",
+      description: "Use AES-256 for data encryption.",
+      source_task_id: "task-toolkit",
+      status: "confirmed",
+    },
+  ];
+  graph.relations = [
+    {
+      id: "REL-001",
+      type: "Constrains",
+      source: "C-001",
+      target: "R-001",
+      source_task_id: "task-toolkit",
+    },
+  ];
+  const plan = {
+    status: "initial",
+    request_summary: "Encryption policy",
+    dag: {
+      nodes: ["task-strategy", "task-toolkit"],
+      edges: [],
+    },
+    tasks: [
+      {
+        task_id: "task-strategy",
+        sequence: 1,
+        title: "Strategy",
+        description: "Confirm encryption requirement.",
+        assigned_agent: "executor-product-strategy",
+        depends_on: [],
+        covered_business_model_indexes: [1],
+        expected_output: "Requirement",
+        quality_check: { status: "pending", criteria: ["Traceable"] },
+      },
+      {
+        task_id: "task-toolkit",
+        sequence: 2,
+        title: "Toolkit",
+        description: "Maintain encryption guardrails.",
+        assigned_agent: "executor-toolkit",
+        depends_on: [],
+        covered_business_model_indexes: [1],
+        expected_output: "Constraint",
+        quality_check: { status: "pending", criteria: ["Traceable"] },
+      },
+    ],
+    assumptions: [],
+  } satisfies TaskExecutionPlan;
+
+  assert.deepEqual(
+    inferSupplementAffectedTaskIds(
+      ["task-strategy"],
+      plan,
+      graph,
+    ),
+    ["task-strategy", "task-toolkit"],
   );
 });
 

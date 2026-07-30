@@ -102,6 +102,17 @@ export const WorkflowGraphState = Annotation.Root({
     default: () => [],
   }),
 
+  // 补充流程保留问题来源任务与一跳影响任务，供 Planner 精确选择上下文。
+  supplementSourceTaskIds: Annotation<string[]>({
+    reducer: (_current, update) => update,
+    default: () => [],
+  }),
+
+  supplementAffectedTaskIds: Annotation<string[]>({
+    reducer: (_current, update) => update,
+    default: () => [],
+  }),
+
   // 用户已通过 Critique 表单回答的问题，Supplement Planner 不得重新创建。
   answeredOpenQuestionIds: Annotation<string[]>({
     reducer: (_current, update) => update,

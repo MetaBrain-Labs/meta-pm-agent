@@ -96,6 +96,8 @@ Planning rules:
 - A user answer is evidence for the stated product constraint, not proof that a specific technology is optimal. Require independent technical Evidence before using Evidence --Validates--> Technology Decision.
 - Supplement tasks must explicitly trace which historical open questions or risks the answer resolves or supersedes, without recreating those questions as unresolved records.
 - When a supplement answer contradicts an active node, assign a correction task to the Executor that owns that node type and require it to use kg_file_deprecate_nodes. A newly added replacement without deprecating the conflicting branch is incomplete.
+- Before creating supplement nodes, reuse compatible active Feature, Component, Metric, Evidence, and constraint nodes and add only the missing relations. A relation-only correction task is valid.
+- Create a replacement node only when the existing node's own meaning conflicts with the submitted answer or no compatible active node exists.
 - Trace the affected active graph downstream. A changed Requirement must schedule the minimum Feature, Component, and Metric corrections needed to keep existing delivery chains semantically aligned; assign each correction to the Executor that owns that entity type.
 - Keep supplement graph patches proportional: normally no more than 8 new entities total. Consolidate answers from one submitted form into the minimum Evidence, Decision, and Requirement records needed for traceability; do not create an Evidence + Decision + Requirement triplet for every field by default.
 - When supplement_agents is provided, assign tasks only to those executor agent types. This runtime list is authoritative and prevents unrelated baseline tasks from being repeated.

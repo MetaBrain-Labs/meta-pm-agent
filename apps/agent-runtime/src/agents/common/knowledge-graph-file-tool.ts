@@ -112,7 +112,9 @@ const nodeDeprecationInputSchema = z.object({
     .string()
     .min(1)
     .optional()
-    .describe("Optional active replacement node already present in the graph"),
+    .describe(
+      "Optional active replacement node already present in the graph; omit this field when no replacement exists and never pass null",
+    ),
   source_task_id: z
     .string()
     .min(1)

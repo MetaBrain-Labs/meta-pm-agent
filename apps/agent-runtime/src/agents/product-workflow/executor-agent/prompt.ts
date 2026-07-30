@@ -77,9 +77,9 @@ ${PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT}
 
 Structured graph writing workflow (use these tools instead of free-text):
 1. Inspect the provided compact context first. Query only missing details; do not load the full graph.
-2. Call \`kg_file_add_nodes\` with your entity nodes as a typed JSON array. Omit id; the tool returns every persisted node ID. Every node must have: type (${definition.allowedEntityTypes.join("/")}), name, description, source_task_id (the current task ID), status ("proposed" by default), and at least one provenance item.
-3. During a supplement workflow, call \`kg_file_deprecate_nodes\` for active nodes of your owned entity types that directly conflict with the submitted answer. Provide the current task ID, a concrete reason, and the replacement node ID when one exists. Never leave both branches active.
-4. Call \`kg_file_add_relations\` with your relation edges as a typed JSON array. Omit id and use the persisted node IDs returned in step 2. Every relation must have: type (${definition.allowedRelationTypes.join("/")}), source, target, description, and source_task_id.
+2. If new nodes are required, call \`kg_file_add_nodes\` with your entity nodes as a typed JSON array. Omit id; the tool returns every persisted node ID. Every node must have: type (${definition.allowedEntityTypes.join("/")}), name, description, source_task_id (the current task ID), status ("proposed" by default), and at least one provenance item.
+3. During a supplement workflow, call \`kg_file_deprecate_nodes\` for active nodes of your owned entity types that directly conflict with the submitted answer. Provide the current task ID and a concrete reason. Include replacement_node_id only when an active replacement exists; otherwise omit the field and never pass null. Never leave both branches active.
+4. Call \`kg_file_add_relations\` with the minimum relation edges needed. Reusing active node IDs in a relation-only correction is valid. Omit relation id and use either existing node IDs or persisted node IDs returned in step 2. Every relation must have: type (${definition.allowedRelationTypes.join("/")}), source, target, description, and source_task_id.
    - If the tool skips a relation for invalid_relation_direction, correct and resubmit it immediately before continuing. The runtime allocates a fresh relation ID.
 5. Call \`kg_file_add_decisions\` only for Decision nodes created through \`kg_file_add_nodes\`; each item must reuse that exact D-* node id and include text. Never create a separate DEC-* alias.
 6. Call \`kg_file_add_risks\` with an array of risk items. Omit id; each item must include text.
@@ -92,7 +92,7 @@ Node type names you may use: Goal, Requirement, Evidence, Decision, Feature, Com
 Knowledge graph relation names: Drives, Satisfies, Promotes, Produces, Constrains, Implements, Measures, Validates, References, Composes, Custom. This metamodel list is not permission: use only the Agent-specific allowed relation types stated above, plus Custom when a non-canonical connection is clearly justified.
 
 Graph writing rules:
-- Review existing graph nodes before creating new ones. Avoid duplicate nodes when an existing node can be referenced or refined.
+- Review existing graph nodes before creating new ones. Reuse compatible active nodes and add missing relations before considering replacement nodes.
 - The graph tools are append-only. Never reuse an existing node, relation, decision, risk, or open-question ID to simulate an update, and never claim that a relation or node was deleted.
 - If the assigned task asks you to refine, correct, or supersede existing graph items, create uniquely identified replacement or clarification records and connect them to the affected existing IDs when an allowed relation expresses the trace.
 - New node names should be short and specific. Descriptions should use natural business language, normally 2-3 sentences when detail is needed.

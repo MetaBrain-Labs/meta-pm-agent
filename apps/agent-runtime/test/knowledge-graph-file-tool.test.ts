@@ -426,6 +426,19 @@ test("deprecates owned nodes only during supplement workflows", async () => {
     }),
     /new_nodes_cannot_start_deprecated/i,
   );
+  await assert.rejects(
+    deprecateNodes.invoke({
+      deprecations: [
+        {
+          node_id: "F-001",
+          reason: "The user confirmed Markdown-only editing.",
+          replacement_node_id: null,
+          source_task_id: "task-02",
+        },
+      ],
+    }),
+    /replacement_node_id|string/i,
+  );
 
   const result = JSON.parse(
     String(

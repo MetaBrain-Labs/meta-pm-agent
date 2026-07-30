@@ -14,6 +14,7 @@
  */
 import {
   CritiqueAgentOutputSchema,
+  ProductWorkflowKnowledgeGraphReviewSchema,
   type ExecutorAgentResult,
   type CritiqueAgentOutput,
   type KnowledgeGraphEntity,
@@ -43,6 +44,15 @@ import {
 import { CRITIQUE_AGENT_PROMPT } from "./prompt";
 
 /**
+ * 模型只负责审查结论；图谱引用由运行时从最终快照注入。
+ */
+export const CritiqueAgentModelOutputSchema = CritiqueAgentOutputSchema.extend({
+  knowledge_graph_review: ProductWorkflowKnowledgeGraphReviewSchema.omit({
+    graph_ref: true,
+  }),
+});
+
+/**
  * Critique Agent：在 Executor 全部完成后审查工作流结果并生成用户确认数据。
  */
 export async function* streamCritiqueAgent(
@@ -59,7 +69,7 @@ export async function* streamCritiqueAgent(
     systemPrompt: CRITIQUE_AGENT_PROMPT,
     payload: createCritiqueAgentPayload(input),
     resolveOutput: (context) =>
-      resolveJsonOutput(context, CritiqueAgentOutputSchema),
+      resolveJsonOutput(context, CritiqueAgentModelOutputSchema),
     fallback: (reason) => createFallbackCritiqueAgentOutput(input, reason),
     signal: input.signal,
   });
@@ -139,7 +149,10 @@ function createCritiqueAgentPayload(input: CritiqueAgentInput) {
     })),
     planner_summary: compactPlanForReview(input.plan),
     final_graph_summary: createFinalGraphSummary(input.knowledgeGraph),
-    task_semantic_updates: compactTaskSemanticUpdates(input.executorResults),
+    task_semantic_updates: compactTaskSemanticUpdates(
+      input.executorResults,
+      input.knowledgeGraph,
+    ),
     validation_report: validationReport,
     prior_unresolved_issues: (input.priorIssues ?? []).map((issue) => ({
       issue_key: createReviewIssueKey(issue),
@@ -209,21 +222,33 @@ function compactPlanForReview(plan: TaskExecutionPlan) {
  */
 export function compactTaskSemanticUpdates(
   executorResults: ExecutorAgentResult[],
+  knowledgeGraph?: ProductKnowledgeGraph,
 ) {
+  const entityById = new Map(
+    (knowledgeGraph?.entities ?? []).map((entity) => [entity.id, entity]),
+  );
+  const compactEntity = (entity: KnowledgeGraphEntity | undefined) =>
+    entity
+      ? {
+          id: entity.id,
+          type: entity.type,
+          name: truncateText(entity.name, 120),
+          description: entity.description
+            ? truncateText(entity.description, 280)
+            : undefined,
+          status: entity.status,
+          provenance: entity.provenance,
+          source_task_id: entity.source_task_id,
+        }
+      : undefined;
+
   return executorResults.map((result) => ({
     task_id: result.task_id,
     agent_type: result.agent_type,
     web_search_enabled: canExecutorUseWebSearch(result.agent_type),
     summary: truncateText(result.summary, 240),
     entities: result.entities.map((entity) => ({
-      id: entity.id,
-      type: entity.type,
-      name: truncateText(entity.name, 120),
-      description: entity.description
-        ? truncateText(entity.description, 280)
-        : undefined,
-      status: entity.status,
-      provenance: entity.provenance,
+      ...compactEntity(entity)!,
       deprecated_by_task_id: entity.deprecated_by_task_id,
       deprecation_reason: entity.deprecation_reason
         ? truncateText(entity.deprecation_reason, 220)
@@ -238,6 +263,8 @@ export function compactTaskSemanticUpdates(
       description: relation.description
         ? truncateText(relation.description, 180)
         : undefined,
+      source_context: compactEntity(entityById.get(relation.source)),
+      target_context: compactEntity(entityById.get(relation.target)),
     })),
     decisions: result.decisions.map((decision) => ({
       ...decision,
@@ -264,9 +291,15 @@ function createFinalGraphSummary(knowledgeGraph: ProductKnowledgeGraph) {
   );
   return {
     graph_ref: createKnowledgeGraphReviewRef(knowledgeGraph),
+    total_entity_count: knowledgeGraph.entities.length,
+    active_entity_count: activeEntities.length,
     entity_counts: countBy(activeEntities.map((item) => item.type)),
     deprecated_entity_count:
       knowledgeGraph.entities.length - activeEntities.length,
+    total_relation_count: knowledgeGraph.relations.length,
+    active_relation_count: activeRelations.length,
+    inactive_relation_count:
+      knowledgeGraph.relations.length - activeRelations.length,
     relation_counts: countBy(activeRelations.map((item) => item.type)),
     decision_count: knowledgeGraph.decisions.length,
     risk_count: knowledgeGraph.risks.length,
@@ -732,7 +765,7 @@ function createSemanticIntegrityIssues(
         code: "BROKEN_REQUIREMENT_DELIVERY_CHAIN",
         severity: "error",
         taskId: findCurrentOwnerTaskId(input, entity),
-        message: `Requirement ${requirementId} has no active Requirement <-Satisfies- Feature <-Implements- Component delivery chain.`,
+        message: `Requirement ${requirementId} must reuse and reconnect a compatible active Feature/Component delivery chain, or create only the missing nodes.`,
       }),
     );
   }
@@ -743,7 +776,7 @@ function createSemanticIntegrityIssues(
         code: "MISSING_SUPPLEMENT_METRIC_PROPAGATION",
         severity: "error",
         taskId: findCurrentOwnerTaskId(input, entity),
-        message: `Supplement Requirement ${requirementId} is not covered by an active Metric relation after the scope change.`,
+        message: `Supplement Requirement ${requirementId} must reuse and reconnect a compatible active Metric, or create one only when no compatible Metric exists.`,
       }),
     );
   }
