@@ -138,6 +138,7 @@ test("keeps skill reads internal while enforcing PRD detail and gap rules", () =
   assert.equal(DOCUMENT_VISIBLE_BUILTIN_TOOL_NAMES.length, 0);
   assert.match(PRD_DOCUMENT_AGENT_PROMPT, /virtual \/skills paths/);
   assert.match(PRD_DOCUMENT_AGENT_PROMPT, /Do not call write_todos or task/);
+  assert.match(PRD_DOCUMENT_AGENT_PROMPT, /reserve at least half of the output budget/);
   assert.match(PRD_DOCUMENT_AGENT_PROMPT, /P0, critical-path, or high-risk/);
   assert.match(PRD_DOCUMENT_AGENT_PROMPT, /Given\/When\/Then/);
   assert.match(PRD_DOCUMENT_AGENT_PROMPT, /Keep P1 and P2 requirements concise/);

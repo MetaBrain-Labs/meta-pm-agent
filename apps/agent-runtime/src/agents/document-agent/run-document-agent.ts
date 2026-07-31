@@ -387,7 +387,9 @@ export async function* runDocumentAgent(
 
     const markdown = sanitizePrdMarkdown(responseText);
     if (!markdown) {
-      throw new Error("Document Agent completed without PRD markdown.");
+      throw new Error(
+        "Document Agent returned no PRD markdown. The model may have exhausted maxTokens during reasoning; increase the Document model maxTokens or lower its reasoning effort.",
+      );
     }
 
     await summaryRecorder.finish({
