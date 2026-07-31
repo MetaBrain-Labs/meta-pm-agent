@@ -73,7 +73,7 @@ export async function* streamPrdDocumentAgent(
     attemptNumber: input.attemptNumber ?? 1,
     revisionFeedback: input.revisionFeedback ?? "",
     taskDelegationPolicy:
-      "When using task subagents, include all relevant graph nodes, relations, section dossier evidence, and draft excerpts directly in the task description. Subagents may read only their assigned virtual /skills instructions and must not look for external files or graph context.",
+      "When using task subagents, include all relevant graph nodes, relations, section dossier evidence, and draft excerpts directly in the task description. Invoke prd-consistency-reviewer only after the complete PRD exists and include it between <prd_draft> tags. Subagents may read only their assigned virtual /skills instructions and must not look for external files or graph context.",
     graph: input.graph,
     sectionDossiers: input.dossiers,
   };

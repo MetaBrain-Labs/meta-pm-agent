@@ -90,6 +90,10 @@ export const DocumentWorkflowGraphState = Annotation.Root({
     reducer: (_current, update) => update,
     default: () => null,
   }),
+  evidenceBlockers: Annotation<string[]>({
+    reducer: (_current, update) => update,
+    default: () => [],
+  }),
   scoreReviewerReports: Annotation<DocumentScoreReview[]>({
     reducer: (_current, update) => update,
     default: () => [],

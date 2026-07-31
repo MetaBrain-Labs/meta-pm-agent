@@ -48,6 +48,8 @@ export interface DocumentScoreAttempt {
     strengths: string[];
     weaknesses: string[];
     revisionAdvice: string[];
+    evidenceBlocked?: boolean;
+    evidenceBlockers?: string[];
   }>;
   scoreSpread: number;
   varianceAccepted: boolean;
@@ -65,6 +67,8 @@ export interface DocumentScoreAttempt {
     };
   };
   passed: boolean;
+  evidenceBlocked?: boolean;
+  evidenceBlockers?: string[];
   selected: boolean;
 }
 

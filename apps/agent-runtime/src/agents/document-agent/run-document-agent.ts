@@ -14,6 +14,7 @@
  * - Document Agent 不写知识图谱；知识图谱只作为输入事实源。
  */
 
+import { createHash } from "node:crypto";
 import {
   AIMessage,
   HumanMessage,
@@ -30,6 +31,7 @@ import { calculateCost } from "../../config";
 import {
   createAgentRunSummaryMiddleware,
   createAgentRunSummaryRecorder,
+  createNamedToolCallExtractor,
   createSubagentTaskCallExtractor,
   extractSubagentTaskResult,
 } from "../common/agent-run-summary";
@@ -152,6 +154,7 @@ export async function* runDocumentAgent(
         skills: subagent.skills ?? [],
       })),
       skills: options.skills ?? [],
+      skillManifest: createSkillManifest(skillFiles),
       systemPrompt: PRD_DOCUMENT_AGENT_PROMPT,
       visibleTools: [...VISIBLE_BUILTIN_TOOL_NAMES],
     },
@@ -186,8 +189,31 @@ export async function* runDocumentAgent(
     let currentTextBlock = "";
     /** 跟踪 task 工具调用中 tool_call_id -> subagentType 的映射，用于结果匹配。 */
     const taskCallToSubagent = new Map<string, string>();
+    /** Debug-only Skill 读取审计；不进入 SSE 或业务持久化。 */
+    const skillReadCallPaths = new Map<string, string>();
     const subagentTaskCallExtractor = createSubagentTaskCallExtractor();
+    const skillReadCallExtractor = createNamedToolCallExtractor(
+      SKILL_READER_TOOL_NAME,
+      (input) =>
+        typeof input.file_path === "string" &&
+        input.file_path.startsWith("/skills/") &&
+        input.file_path.endsWith("/SKILL.md"),
+    );
     for await (const [message] of run) {
+      for (const skillRead of skillReadCallExtractor.extract(message)) {
+        const filePath = String(skillRead.input.file_path);
+        if (skillRead.toolCallId) {
+          skillReadCallPaths.set(skillRead.toolCallId, filePath);
+        }
+        summaryRecorder.recordToolCall({
+          toolCallId: skillRead.toolCallId,
+          toolName: "read_file",
+          toolArgs: {
+            file_path: filePath,
+            auditScope: "virtual-skill",
+          },
+        });
+      }
       const subagentTaskCalls = subagentTaskCallExtractor.extract(message);
       for (const taskCall of subagentTaskCalls) {
         if (taskCall.toolCallId) {
@@ -227,6 +253,24 @@ export async function* runDocumentAgent(
       }
       if (hasAnyToolCalls) {
         // 带工具调用的 AI 文本通常是 DeepAgents 子任务编排说明，不属于最终 PRD 正文。
+        currentTextBlock = "";
+        continue;
+      }
+
+      const skillReadResult = getSkillReadToolResult(
+        message,
+        skillReadCallPaths,
+      );
+      if (skillReadResult) {
+        summaryRecorder.recordToolResult({
+          toolCallId: skillReadResult.toolCallId,
+          toolName: "read_file",
+          toolResult: {
+            filePath: skillReadResult.filePath,
+            success: skillReadResult.success,
+            sha256: skillReadResult.sha256,
+          },
+        });
         currentTextBlock = "";
         continue;
       }
@@ -378,6 +422,69 @@ export function sanitizePrdMarkdown(markdown: string): string {
  */
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 构建只包含虚拟路径和内容摘要的 Skill 清单，供本地 Debug 汇总审计。
+ */
+function createSkillManifest(skillFiles: Record<string, FileData>) {
+  return Object.entries(skillFiles).map(([filePath, file]) => ({
+    filePath,
+    sha256: hashContent(file.content),
+  }));
+}
+
+/**
+ * 将虚拟 Skill 读取结果压缩为成功状态和内容 hash。
+ */
+function getSkillReadToolResult(
+  message: BaseMessage,
+  skillReadCallPaths: ReadonlyMap<string, string>,
+): {
+  toolCallId?: string;
+  filePath: string;
+  success: boolean;
+  sha256: string | null;
+} | null {
+  if (!ToolMessage.isInstance(message) || message.name !== "read_file") {
+    return null;
+  }
+  const toolCallId = (message as { tool_call_id?: string }).tool_call_id;
+  const filePath = toolCallId
+    ? skillReadCallPaths.get(toolCallId)
+    : undefined;
+  if (!filePath) return null;
+  const content = stringifyToolContent(message.content);
+  const success = !/^Error:/i.test(content.trim());
+
+  return {
+    toolCallId,
+    filePath,
+    success,
+    sha256: success ? hashContent(content) : null,
+  };
+}
+
+/**
+ * 将工具内容稳定转换为 hash 输入。
+ */
+function stringifyToolContent(content: unknown): string {
+  return typeof content === "string"
+    ? content
+    : JSON.stringify(content ?? "");
+}
+
+/**
+ * 计算本地调试所需的 SHA-256 内容摘要。
+ */
+function hashContent(content: unknown): string {
+  const normalized =
+    typeof content === "string"
+      ? content
+      : content instanceof Uint8Array
+        ? Buffer.from(content)
+        : JSON.stringify(content ?? "");
+  return createHash("sha256").update(normalized).digest("hex");
 }
 
 /**

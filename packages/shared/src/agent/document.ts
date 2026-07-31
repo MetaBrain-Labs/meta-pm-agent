@@ -97,6 +97,8 @@ export const DocumentScoreAttemptSchema = z.object({
       strengths: z.array(z.string()),
       weaknesses: z.array(z.string()),
       revisionAdvice: z.array(z.string()),
+      evidenceBlocked: z.boolean().default(false),
+      evidenceBlockers: z.array(z.string()).default([]),
     }),
   ),
   scoreSpread: z.number().min(0).max(100),
@@ -115,6 +117,8 @@ export const DocumentScoreAttemptSchema = z.object({
     }),
   }),
   passed: z.boolean(),
+  evidenceBlocked: z.boolean().default(false),
+  evidenceBlockers: z.array(z.string()).default([]),
   selected: z.boolean().default(false),
 });
 

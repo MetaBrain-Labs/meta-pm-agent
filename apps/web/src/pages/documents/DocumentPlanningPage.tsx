@@ -104,7 +104,10 @@ export function DocumentPlanningPage({
   const [error, setError] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] =
     useState<KnowledgeGraphNodeData | null>(null);
-  const [artifactModalOpen, setArtifactModalOpen] = useState(false);
+  const [previewDocument, setPreviewDocument] = useState<{
+    title: string;
+    markdown: string;
+  } | null>(null);
   const [messageApi, contextHolder] = message.useMessage();
 
   const run = documentState.run;
@@ -168,12 +171,6 @@ export function DocumentPlanningPage({
   }, [kgData?.nodes, selectedNode]);
 
   useEffect(() => {
-    if (!artifact) {
-      setArtifactModalOpen(false);
-    }
-  }, [artifact]);
-
-  useEffect(() => {
     if (!runActive || !run?.id) return;
 
     const timer = window.setInterval(() => {
@@ -221,27 +218,28 @@ export function DocumentPlanningPage({
     }
   }, [messageApi, run?.id, stopping]);
 
-  const handleDownloadArtifact = useCallback(() => {
-    if (!artifact) return;
-
-    try {
-      const blob = new Blob([artifact.markdown], {
-        type: "text/markdown;charset=utf-8",
-      });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = buildMarkdownFilename(artifact.title, workspaceId);
-      document.body.appendChild(anchor);
-      anchor.click();
-      document.body.removeChild(anchor);
-      URL.revokeObjectURL(url);
-      void messageApi.success("PRD Markdown 已下载。");
-    } catch (error) {
-      console.error("[document] Failed to download artifact:", error);
-      void messageApi.error("下载失败，请重试。");
-    }
-  }, [artifact, messageApi, workspaceId]);
+  const handleDownloadMarkdown = useCallback(
+    (markdown: string, title: string) => {
+      try {
+        const blob = new Blob([markdown], {
+          type: "text/markdown;charset=utf-8",
+        });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = buildMarkdownFilename(title, workspaceId);
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+        URL.revokeObjectURL(url);
+        void messageApi.success("PRD Markdown 已下载。");
+      } catch (error) {
+        console.error("[document] Failed to download artifact:", error);
+        void messageApi.error("下载失败，请重试。");
+      }
+    },
+    [messageApi, workspaceId],
+  );
 
   const statusTag = useMemo(() => renderRunStatus(run), [run]);
 
@@ -379,6 +377,18 @@ export function DocumentPlanningPage({
                   attempts={scoringAttempts}
                   qualityScore={qualityScore}
                   currentStage={run?.currentStage ?? null}
+                  onViewAttempt={(attempt) =>
+                    setPreviewDocument({
+                      title: `${artifact?.title ?? "PRD"} · 第 ${attempt.attempt} 轮`,
+                      markdown: attempt.markdown,
+                    })
+                  }
+                  onDownloadAttempt={(attempt) =>
+                    handleDownloadMarkdown(
+                      attempt.markdown,
+                      `${artifact?.title ?? "PRD"}-round-${attempt.attempt}`,
+                    )
+                  }
                 />
 
                 {artifact && (
@@ -393,20 +403,33 @@ export function DocumentPlanningPage({
                         </Text>
                       </div>
                       <Space size="small" wrap>
-                        <Tag color="success" icon={<FileDoneOutlined />}>
-                          已生成
+                        <Tag color="processing" icon={<FileDoneOutlined />}>
+                          推荐版本
+                          {qualityScore
+                            ? ` · 第 ${qualityScore.selectedAttempt} 轮`
+                            : ""}
                         </Tag>
                         <Button
                           size="small"
                           icon={<EyeOutlined />}
-                          onClick={() => setArtifactModalOpen(true)}
+                          onClick={() =>
+                            setPreviewDocument({
+                              title: artifact.title,
+                              markdown: artifact.markdown,
+                            })
+                          }
                         >
                           查看完整 MD
                         </Button>
                         <Button
                           size="small"
                           icon={<DownloadOutlined />}
-                          onClick={handleDownloadArtifact}
+                          onClick={() =>
+                            handleDownloadMarkdown(
+                              artifact.markdown,
+                              artifact.title,
+                            )
+                          }
                         >
                           下载 MD
                         </Button>
@@ -460,27 +483,32 @@ export function DocumentPlanningPage({
         <Modal
           centered
           width="min(960px, 92vw)"
-          open={artifactModalOpen}
-          title={artifact?.title ?? "PRD Markdown"}
+          open={previewDocument !== null}
+          title={previewDocument?.title ?? "PRD Markdown"}
           footer={
-            artifact ? (
+            previewDocument ? (
               <Space>
                 <Button
                   icon={<DownloadOutlined />}
-                  onClick={handleDownloadArtifact}
+                  onClick={() =>
+                    handleDownloadMarkdown(
+                      previewDocument.markdown,
+                      previewDocument.title,
+                    )
+                  }
                 >
                   下载 MD
                 </Button>
                 <Button
                   type="primary"
-                  onClick={() => setArtifactModalOpen(false)}
+                  onClick={() => setPreviewDocument(null)}
                 >
                   关闭
                 </Button>
               </Space>
             ) : null
           }
-          onCancel={() => setArtifactModalOpen(false)}
+          onCancel={() => setPreviewDocument(null)}
           styles={{
             body: {
               maxHeight: "72vh",
@@ -489,9 +517,9 @@ export function DocumentPlanningPage({
             },
           }}
         >
-          {artifact ? (
+          {previewDocument ? (
             <div className="text-sm leading-7">
-              {renderMarkdown(artifact.markdown)}
+              {renderMarkdown(previewDocument.markdown)}
             </div>
           ) : (
             <Empty description="暂无可查看的 PRD 内容" />
@@ -662,10 +690,14 @@ function ScoringResultPanel({
   attempts,
   qualityScore,
   currentStage,
+  onViewAttempt,
+  onDownloadAttempt,
 }: {
   attempts: DocumentScoreAttempt[];
   qualityScore: DocumentQualityScore | null;
   currentStage: DocumentWorkflowStage | null;
+  onViewAttempt: (attempt: DocumentScoreAttempt) => void;
+  onDownloadAttempt: (attempt: DocumentScoreAttempt) => void;
 }) {
   const scoringActive =
     currentStage === "scoreDraft" || currentStage === "aggregateScore";
@@ -676,20 +708,42 @@ function ScoringResultPanel({
         <div>
           <Text strong>评分结果</Text>
           <Text type="secondary" className="block text-xs mt-1">
-            三位评分 Agent 分差超过 8 分时跳过共识评分并重试，分差合格后才进入共识评分。
+            三位评分 Agent 独立评审；可重写问题最多修订三轮，缺少新证据时直接保留草案。
           </Text>
         </div>
         {scoringActive ? <Spin size="small" /> : <Tag>{attempts.length}/3 轮</Tag>}
       </div>
 
       {qualityScore && (
-        <div className="rounded bg-gray-50 px-3 py-2 mb-3 text-sm">
-          <div className="flex flex-wrap items-center gap-2">
-            <Tag color={qualityScore.passed ? "success" : "warning"}>
-              最终 {qualityScore.finalScore} / {qualityScore.threshold}
-            </Tag>
-            <Tag>选择第 {qualityScore.selectedAttempt} 轮</Tag>
-            <Tag>{getSelectionReasonLabel(qualityScore.selectionReason)}</Tag>
+        <div className="rounded border border-blue-200 bg-blue-50 px-3 py-3 mb-3 text-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Tag color={qualityScore.passed ? "success" : "warning"}>
+                最终 {qualityScore.finalScore} / {qualityScore.threshold}
+              </Tag>
+              <Tag color="processing">
+                推荐第 {qualityScore.selectedAttempt} 轮
+              </Tag>
+              <Tag>{getSelectionReasonLabel(qualityScore.selectionReason)}</Tag>
+            </div>
+            {attempts.find(
+              (attempt) => attempt.attempt === qualityScore.selectedAttempt,
+            ) && (
+              <Button
+                type="primary"
+                size="small"
+                icon={<EyeOutlined />}
+                onClick={() => {
+                  const selectedAttempt = attempts.find(
+                    (attempt) =>
+                      attempt.attempt === qualityScore.selectedAttempt,
+                  );
+                  if (selectedAttempt) onViewAttempt(selectedAttempt);
+                }}
+              >
+                查看最佳 PRD
+              </Button>
+            )}
           </div>
         </div>
       )}
@@ -700,33 +754,83 @@ function ScoringResultPanel({
         </Text>
       ) : (
         <div className="flex flex-col gap-3">
-          {attempts.map((attempt) => (
-            <div key={attempt.attempt} className="rounded border border-gray-100 p-3">
-              <div className="flex flex-wrap items-center gap-2 mb-2">
-                <Text strong>第 {attempt.attempt} 轮</Text>
-                <Tag color={attempt.varianceAccepted ? "success" : "error"}>
-                  分差 {attempt.scoreSpread}
-                </Tag>
-                <Tag color={attempt.aggregate.passed ? "success" : "warning"}>
-                  {attempt.varianceAccepted ? "共识" : "跳过共识"} {attempt.aggregate.score}
-                </Tag>
-                {attempt.selected && <Tag color="processing">已选中</Tag>}
+          {qualityScore && (
+            <Text type="secondary" className="text-xs">
+              本次运行共生成 {attempts.length} 份 PRD，以下版本均可查看和下载。
+            </Text>
+          )}
+          {attempts.map((attempt) => {
+            const selected =
+              attempt.selected ||
+              qualityScore?.selectedAttempt === attempt.attempt;
+            return (
+              <div
+                key={attempt.attempt}
+                className={`rounded border p-3 ${
+                  selected
+                    ? "border-blue-300 bg-blue-50/40"
+                    : "border-gray-100"
+                }`}
+              >
+                <div className="flex flex-wrap items-center gap-2 mb-2">
+                  <Text strong>第 {attempt.attempt} 轮</Text>
+                  <Tag color={attempt.varianceAccepted ? "success" : "error"}>
+                    分差 {attempt.scoreSpread}
+                  </Tag>
+                  <Tag
+                    color={attempt.aggregate.passed ? "success" : "warning"}
+                  >
+                    {attempt.varianceAccepted ? "共识" : "跳过共识"}{" "}
+                    {attempt.aggregate.score}
+                  </Tag>
+                  {attempt.evidenceBlocked && (
+                    <Tag color="error">等待补充证据</Tag>
+                  )}
+                  {selected && <Tag color="processing">最佳版本</Tag>}
+                  <span className="ml-auto flex gap-2">
+                    <Button
+                      size="small"
+                      icon={<EyeOutlined />}
+                      onClick={() => onViewAttempt(attempt)}
+                    >
+                      查看 PRD
+                    </Button>
+                    <Button
+                      size="small"
+                      icon={<DownloadOutlined />}
+                      onClick={() => onDownloadAttempt(attempt)}
+                    >
+                      下载
+                    </Button>
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-2 mb-2">
+                  {attempt.reviewerScores.map((review) => (
+                    <div
+                      key={review.reviewerId}
+                      className="rounded bg-gray-50 p-2"
+                    >
+                      <Text
+                        type="secondary"
+                        className="block text-[11px] truncate"
+                      >
+                        {review.reviewerName}
+                      </Text>
+                      <Text strong>{review.score}</Text>
+                    </div>
+                  ))}
+                </div>
+                <Text type="secondary" className="text-xs whitespace-pre-wrap">
+                  {attempt.aggregate.rationale}
+                </Text>
+                {(attempt.evidenceBlockers?.length ?? 0) > 0 && (
+                  <Text type="danger" className="block text-xs mt-2">
+                    证据阻塞：{attempt.evidenceBlockers?.join("；")}
+                  </Text>
+                )}
               </div>
-              <div className="grid grid-cols-3 gap-2 mb-2">
-                {attempt.reviewerScores.map((review) => (
-                  <div key={review.reviewerId} className="rounded bg-gray-50 p-2">
-                    <Text type="secondary" className="block text-[11px] truncate">
-                      {review.reviewerName}
-                    </Text>
-                    <Text strong>{review.score}</Text>
-                  </div>
-                ))}
-              </div>
-              <Text type="secondary" className="text-xs whitespace-pre-wrap">
-                {attempt.aggregate.rationale}
-              </Text>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </section>

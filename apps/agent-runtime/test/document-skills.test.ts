@@ -19,7 +19,7 @@ import { createSkillsMiddleware, StateBackend } from "deepagents";
 import {
   PRD_DOCUMENT_AGENT_PROMPT,
   PRD_DOCUMENT_SUBAGENTS,
-  PRD_GAOKAO_SCORING_AGENT_PROMPT,
+  PRD_SCORING_REVIEWER_PROMPT,
 } from "../src/agents/document-agent/prompt";
 import {
   createDocumentAllowedBuiltinToolNames,
@@ -126,12 +126,18 @@ test("keeps skill reads internal while enforcing PRD detail and gap rules", () =
   assert.match(PRD_DOCUMENT_AGENT_PROMPT, /mark missing facts with specific TBD/);
   assert.match(PRD_DOCUMENT_AGENT_PROMPT, /Never invent priority/);
   assert.match(
-    PRD_GAOKAO_SCORING_AGENT_PROMPT,
+    PRD_SCORING_REVIEWER_PROMPT,
     /cannot score 85 or higher/,
   );
   assert.match(
-    PRD_GAOKAO_SCORING_AGENT_PROMPT,
+    PRD_SCORING_REVIEWER_PROMPT,
     /product, design, engineering, QA, and business/,
+  );
+  assert.match(
+    PRD_DOCUMENT_SUBAGENTS.find(
+      (subagent) => subagent.name === "prd-consistency-reviewer",
+    )?.systemPrompt ?? "",
+    /<prd_draft>/,
   );
 });
 

@@ -17,12 +17,26 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyPrdCompletionGate,
+  DOCUMENT_SCORE_REVIEWERS,
   DOCUMENT_SCORE_MAX_SPREAD,
   createSkippedConsensusScore,
   selectFinalScoreAttempt,
+  shouldRetryDocumentScoreAttempt,
+  validatePrdSourceGrounding,
   type DocumentScoreAttempt,
   type DocumentScoreReview,
 } from "../src/agents/document-agent/scoring";
+
+test("uses responsibility-based English reviewer names", () => {
+  assert.deepEqual(
+    DOCUMENT_SCORE_REVIEWERS.map((reviewer) => reviewer.name),
+    [
+      "Product Rationale & Evidence Reviewer",
+      "Requirements & Acceptance Reviewer",
+      "Scope & Delivery Readiness Reviewer",
+    ],
+  );
+});
 
 test("blocks PRDs with unresolved TBD evidence gaps from passing", () => {
   const blocked = applyPrdCompletionGate({
@@ -40,9 +54,9 @@ test("blocks PRDs with unresolved TBD evidence gaps from passing", () => {
 
 test("records high-spread attempts as failed without consensus pass", () => {
   const reviewerScores = [
-    createReview("gaokao-reviewer-a", 92),
-    createReview("gaokao-reviewer-b", 71),
-    createReview("gaokao-reviewer-c", 88),
+    createReview("product-rationale-evidence-reviewer", 92),
+    createReview("requirements-acceptance-reviewer", 71),
+    createReview("scope-delivery-readiness-reviewer", 88),
   ];
 
   const aggregate = createSkippedConsensusScore({
@@ -53,6 +67,48 @@ test("records high-spread attempts as failed without consensus pass", () => {
   assert.equal(aggregate.passed, false);
   assert.match(aggregate.rationale, /consensus scoring was skipped/i);
   assert.equal(21 > DOCUMENT_SCORE_MAX_SPREAD, true);
+});
+
+test("stops rewriting when the draft needs new graph evidence", () => {
+  assert.equal(
+    shouldRetryDocumentScoreAttempt({
+      attemptCount: 1,
+      passed: false,
+      evidenceBlocked: true,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRetryDocumentScoreAttempt({
+      attemptCount: 1,
+      passed: false,
+      evidenceBlocked: false,
+    }),
+    true,
+  );
+});
+
+test("rejects unknown citations and proposed nodes presented as confirmed", () => {
+  const issues = validatePrdSourceGrounding({
+    markdown: [
+      "# PRD",
+      "| Decision D-12345678 | Confirmed |",
+      "Evidence: E-deadbeef",
+    ].join("\n"),
+    nodes: [
+      {
+        id: "D-12345678-0000-4000-8000-000000000000",
+        type: "Decision",
+        name: "Candidate scope",
+        status: "proposed",
+      },
+    ],
+    relations: [],
+  });
+
+  assert.equal(issues.length, 2);
+  assert.match(issues.join("\n"), /unknown graph source ID E-deadbeef/);
+  assert.match(issues.join("\n"), /D-12345678 is proposed/);
 });
 
 test("selects the first attempt that passed threshold", () => {
@@ -90,9 +146,12 @@ function createAttempt(
     attempt,
     markdown: `# Draft ${attempt}`,
     reviewerScores: [
-      createReview("gaokao-reviewer-a", aggregateScore),
-      createReview("gaokao-reviewer-b", aggregateScore - scoreSpread),
-      createReview("gaokao-reviewer-c", aggregateScore),
+      createReview("product-rationale-evidence-reviewer", aggregateScore),
+      createReview(
+        "requirements-acceptance-reviewer",
+        aggregateScore - scoreSpread,
+      ),
+      createReview("scope-delivery-readiness-reviewer", aggregateScore),
     ],
     scoreSpread,
     varianceAccepted: scoreSpread <= DOCUMENT_SCORE_MAX_SPREAD,
@@ -110,6 +169,8 @@ function createAttempt(
       },
     },
     passed,
+    evidenceBlocked: false,
+    evidenceBlockers: [],
     selected: false,
   };
 }
@@ -135,5 +196,7 @@ function createReview(
     strengths: [],
     weaknesses: [],
     revisionAdvice: ["Improve PRD evidence."],
+    evidenceBlocked: false,
+    evidenceBlockers: [],
   };
 }
