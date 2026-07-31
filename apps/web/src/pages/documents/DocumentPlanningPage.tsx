@@ -39,6 +39,7 @@ import {
 } from "@ant-design/icons";
 import {
   fetchProductKnowledgeGraph,
+  fetchModelProfiles,
   type KnowledgeGraphNodeData,
   type KnowledgeGraphRelationData,
   type WorkspaceKnowledgeGraphData,
@@ -55,6 +56,7 @@ import {
   type DocumentGenerationStatusResponse,
   type DocumentWorkflowStage,
 } from "../../api/document-api";
+import { ModelProfileSelector } from "../../components/ModelProfileSelector";
 import { TodoCard } from "../../components/TodoCard";
 import {
   KnowledgeGraphView,
@@ -63,6 +65,7 @@ import {
 } from "../../components/KnowledgeGraphView";
 import { renderMarkdown } from "../../utils/markdown";
 import { mapErrorToChinese } from "../../utils/errors";
+import type { ModelUsageProfile } from "../../types";
 
 const { Content } = Layout;
 const { Text, Title } = Typography;
@@ -101,6 +104,9 @@ export function DocumentPlanningPage({
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const [modelProfiles, setModelProfiles] = useState<ModelUsageProfile[]>([]);
+  const [selectedModelProfileId, setSelectedModelProfileId] =
+    useState("system-default");
   const [error, setError] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] =
     useState<KnowledgeGraphNodeData | null>(null);
@@ -129,6 +135,16 @@ export function DocumentPlanningPage({
     setKgData(graph);
     setDocumentState(latestRun);
   }, [workspaceId]);
+
+  const refreshModelProfiles = useCallback(async () => {
+    const profiles = await fetchModelProfiles();
+    setModelProfiles(profiles);
+    setSelectedModelProfileId((current) =>
+      profiles.some((profile) => profile.id === current)
+        ? current
+        : "system-default",
+    );
+  }, []);
 
   const handleRefresh = useCallback(async () => {
     setLoading(true);
@@ -163,6 +179,18 @@ export function DocumentPlanningPage({
   }, [refresh]);
 
   useEffect(() => {
+    const reload = () => {
+      void refreshModelProfiles().catch((error) => {
+        console.error("[document] Failed to load model profiles:", error);
+        setError(toUserMessage(error));
+      });
+    };
+    reload();
+    window.addEventListener("model-profiles-changed", reload);
+    return () => window.removeEventListener("model-profiles-changed", reload);
+  }, [refreshModelProfiles]);
+
+  useEffect(() => {
     if (!selectedNode) return;
     const stillExists = kgData?.nodes.some((node) => node.id === selectedNode.id);
     if (!stillExists) {
@@ -191,7 +219,11 @@ export function DocumentPlanningPage({
     setError(null);
 
     try {
-      const next = await startDocumentGeneration(workspaceId, "prd");
+      const next = await startDocumentGeneration(
+        workspaceId,
+        "prd",
+        selectedModelProfileId,
+      );
       setDocumentState(next);
       void messageApi.success("PRD 生成任务已进入后台。");
     } catch (error) {
@@ -200,7 +232,13 @@ export function DocumentPlanningPage({
     } finally {
       setStarting(false);
     }
-  }, [messageApi, runActive, starting, workspaceId]);
+  }, [
+    messageApi,
+    runActive,
+    selectedModelProfileId,
+    starting,
+    workspaceId,
+  ]);
 
   const handleStop = useCallback(async () => {
     if (!run?.id || stopping) return;
@@ -451,6 +489,17 @@ export function DocumentPlanningPage({
               PRD 生成开始后会进入后台；只有手动中断或服务不可用会停止。
             </Text>
             <Space wrap>
+              <Space size={4}>
+                <Text type="secondary" className="text-xs">
+                  下次生成模型
+                </Text>
+                <ModelProfileSelector
+                  profiles={modelProfiles}
+                  selectedProfileId={selectedModelProfileId}
+                  disabled={runActive || starting}
+                  onChange={setSelectedModelProfileId}
+                />
+              </Space>
               {runActive && (
                 <Button
                   danger
@@ -465,7 +514,9 @@ export function DocumentPlanningPage({
                 type="primary"
                 icon={<FileTextOutlined />}
                 loading={starting}
-                disabled={!graphReady || runActive}
+                disabled={
+                  !graphReady || runActive || modelProfiles.length === 0
+                }
                 onClick={handleGeneratePrd}
               >
                 生成 PRD

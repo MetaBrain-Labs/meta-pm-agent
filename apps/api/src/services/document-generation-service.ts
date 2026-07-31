@@ -27,6 +27,7 @@ import type {
   DocumentWorkflowStage,
   KnowledgeGraphEntity,
   KnowledgeGraphRelation,
+  ModelUsageProfile,
 } from "@repo/shared";
 import {
   completeDocumentGenerationRun,
@@ -42,6 +43,10 @@ import {
   type DocumentArtifactDto,
   type DocumentGenerationRunDto,
 } from "../repositories/document-generation-repository";
+import {
+  getLocalModelProfile,
+  ModelProfileNotFoundError,
+} from "../repositories/model-profile-repository";
 import { getWorkspaceKnowledgeGraph } from "./product-knowledge-graph-service";
 
 /**
@@ -72,12 +77,24 @@ const activeDocumentRuns = new Map<string, AbortController>();
 export async function startDocumentGeneration({
   workspaceId,
   kind,
+  profileId,
 }: {
   workspaceId: string;
   kind: DocumentKind;
+  profileId: string;
 }): Promise<DocumentGenerationStatusDto> {
   if (kind !== "prd") {
     throw new DocumentGenerationServiceError("当前仅支持生成 PRD。", 400);
+  }
+
+  let modelProfile: ModelUsageProfile;
+  try {
+    modelProfile = await getLocalModelProfile(profileId);
+  } catch (error) {
+    if (error instanceof ModelProfileNotFoundError) {
+      throw new DocumentGenerationServiceError("模型使用列表不存在。", 404);
+    }
+    throw error;
   }
 
   const existingRun = await getActiveDocumentGenerationRun(workspaceId, kind);
@@ -104,7 +121,7 @@ export async function startDocumentGeneration({
     workflowThreadId,
   });
 
-  launchDocumentGenerationRun(run, graph);
+  launchDocumentGenerationRun(run, graph, modelProfile);
 
   return { run, artifact: null };
 }
@@ -189,11 +206,17 @@ function launchDocumentGenerationRun(
     nodes: KnowledgeGraphEntity[];
     relations: KnowledgeGraphRelation[];
   },
+  modelProfile: ModelUsageProfile,
 ): void {
   const controller = new AbortController();
   activeDocumentRuns.set(run.id, controller);
 
-  void executeDocumentGenerationRun(run, graph, controller).finally(() => {
+  void executeDocumentGenerationRun(
+    run,
+    graph,
+    modelProfile,
+    controller,
+  ).finally(() => {
     if (activeDocumentRuns.get(run.id) === controller) {
       activeDocumentRuns.delete(run.id);
     }
@@ -209,6 +232,7 @@ async function executeDocumentGenerationRun(
     nodes: KnowledgeGraphEntity[];
     relations: KnowledgeGraphRelation[];
   },
+  modelProfile: ModelUsageProfile,
   controller: AbortController,
 ): Promise<void> {
   let latestTodos = run.todos;
@@ -223,6 +247,7 @@ async function executeDocumentGenerationRun(
       runId: run.id,
       kind: run.kind,
       graph,
+      modelProfile,
       workflowThreadId: run.workflowThreadId,
       signal: controller.signal,
     });

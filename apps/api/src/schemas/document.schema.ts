@@ -18,6 +18,7 @@ import { DocumentKindSchema } from "@repo/shared";
  */
 export const StartDocumentGenerationRequestSchema = z.object({
   kind: DocumentKindSchema,
+  profileId: z.string().trim().min(1),
 });
 
 /**

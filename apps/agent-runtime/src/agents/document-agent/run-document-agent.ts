@@ -26,7 +26,7 @@ import {
   type FileData,
   type SubAgent,
 } from "deepagents";
-import type { DocumentTodo } from "@repo/shared";
+import type { DocumentTodo, ModelUsageProfile } from "@repo/shared";
 import { calculateCost } from "../../config";
 import {
   createAgentRunSummaryMiddleware,
@@ -38,6 +38,11 @@ import {
 import { createDeepAgentToolAllowlistMiddleware } from "../common/deep-agent-tool-policy";
 import { createDefaultAgentMiddleware } from "../common/middleware";
 import { createChatModel } from "../common/model";
+import {
+  createModelSummarySnapshot,
+  resolveAgentModelSelection,
+  toLlmPricing,
+} from "../common/model-profile";
 import {
   getReasoningContent,
   getTextContent,
@@ -95,6 +100,7 @@ export interface RunDocumentAgentOptions {
   subagents: SubAgent[];
   skills?: string[];
   skillFiles?: Record<string, FileData>;
+  modelProfile?: ModelUsageProfile;
   signal?: AbortSignal;
 }
 
@@ -128,6 +134,10 @@ export async function* runDocumentAgent(
   options: RunDocumentAgentOptions,
 ): AsyncGenerator<DocumentAgentStreamEvent, string, void> {
   const startTime = Date.now();
+  const modelSelection = resolveAgentModelSelection(
+    options.modelProfile,
+    "document",
+  );
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
   let responseText = "";
   const skillFiles = options.skillFiles ?? {};
@@ -143,6 +153,7 @@ export async function* runDocumentAgent(
     agentLabel: "PRD Document Agent",
     agentName: "document-agent-prd",
     agentType: "document",
+    model: createModelSummarySnapshot(modelSelection),
     context: {
       payload: options.payload,
       subagents: options.subagents.map((subagent) => ({
@@ -159,11 +170,14 @@ export async function* runDocumentAgent(
 
   try {
     const agent = createDeepAgent({
-      model: createChatModel({
-        enableThinking: true,
-        temperature: 0.2,
-        maxTokens: 24000,
-      }) as any,
+      model: createChatModel(
+        {
+          enableThinking: true,
+          temperature: 0.2,
+          maxTokens: 24000,
+        },
+        modelSelection,
+      ) as any,
       systemPrompt: PRD_DOCUMENT_AGENT_PROMPT,
       name: "document-agent-prd",
       skills: options.skills ?? [],
@@ -354,6 +368,7 @@ export async function* runDocumentAgent(
         tokenUsage.cacheMissInputTokens,
         tokenUsage.cacheHitInputTokens,
         tokenUsage.outputTokens,
+        toLlmPricing(modelSelection),
       );
       yield {
         type: "token-usage",

@@ -127,13 +127,14 @@ export interface DocumentGenerationStatusResponse {
 export async function startDocumentGeneration(
   workspaceId: string,
   kind: DocumentKind,
+  profileId: string,
 ): Promise<DocumentGenerationStatusResponse> {
   const response = await fetch(
     `/api/workspaces/${encodeURIComponent(workspaceId)}/document-generation`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind }),
+      body: JSON.stringify({ kind, profileId }),
     },
   );
 

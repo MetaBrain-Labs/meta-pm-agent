@@ -1,7 +1,7 @@
 /**
  * 模型使用列表共享契约
  *
- * 定义 DeepSeek 模型参数、分层/通用模型使用列表以及 Chat 产品流中的 Agent 职责分组，
+ * 定义 DeepSeek 模型参数、分层/通用模型使用列表以及 Chat、Document 工作流中的 Agent 职责分组，
  * 供 API 持久化、Agent Runtime 解析和前端 DTO 校验共同使用。
  *
  * Responsibilities:
@@ -31,6 +31,7 @@ export const AgentModelGroupSchema = z.enum([
   "planner",
   "executors",
   "critique",
+  "document",
 ]);
 
 export const ModelPricingSchema = z.object({
@@ -79,6 +80,8 @@ export const AgentTierAssignmentsSchema = z.object({
   planner: ModelTierSchema,
   executors: ModelTierSchema,
   critique: ModelTierSchema,
+  // 兼容功能上线前已持久化、尚未包含 Document 映射的列表 JSON。
+  document: ModelTierSchema.default("reasoning"),
 });
 
 export const TieredModelUsageConfigSchema = z.object({
@@ -141,6 +144,7 @@ export const DEFAULT_AGENT_TIER_ASSIGNMENTS: AgentTierAssignments = {
   planner: "reasoning",
   executors: "standard",
   critique: "reasoning",
+  document: "reasoning",
 };
 
 export const DEFAULT_DEEPSEEK_PRICING: Record<

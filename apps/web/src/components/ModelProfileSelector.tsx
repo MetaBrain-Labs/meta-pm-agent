@@ -1,11 +1,11 @@
 /**
- * Chat 模型使用列表选择器
+ * 工作流模型使用列表选择器
  *
- * 在两个响应式 Composer 中复用，展示列表模式、模型组成与完整配置详情。
+ * 供 Chat Composer 与 Document 页面复用，展示列表模式、模型组成与关键配置。
  *
  * Responsibilities:
- * - 渲染当前会话模型列表
- * - 在下拉菜单展示每个用途的参数和价格
+ * - 渲染当前工作流选择的模型列表
+ * - 在下拉菜单展示每个用途的模型、推理力度和最大输出
  * - 运行态禁用选择并解释切换时机
  */
 
@@ -47,7 +47,7 @@ export function ModelProfileSelector({
   );
 
   return (
-    <Tooltip title={disabled ? "运行中不可切换；请在 HITL、完成或其他非运行状态切换" : undefined}>
+    <Tooltip title={disabled ? "运行中不可切换；请等待当前任务暂停或结束" : undefined}>
       <span>
         <Dropdown
           disabled={disabled || profiles.length === 0}

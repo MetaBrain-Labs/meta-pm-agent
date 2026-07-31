@@ -66,7 +66,8 @@ export type AgentModelGroup =
   | "orchestrator"
   | "planner"
   | "executors"
-  | "critique";
+  | "critique"
+  | "document";
 
 /** 设置页和 Chat 选择器共享的模型使用列表 DTO。 */
 export interface ModelUsageProfile {

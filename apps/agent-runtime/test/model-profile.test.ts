@@ -1,5 +1,5 @@
 /**
- * Chat 模型使用列表运行时测试
+ * Chat 与 Document 模型使用列表运行时测试
  *
  * 验证分类/通用职责解析、自定义计价和无密钥诊断快照。
  */
@@ -32,6 +32,10 @@ test("resolves default responsibility groups to the expected tiers", () => {
     resolveAgentModelSelection(SYSTEM_DEFAULT_MODEL_PROFILE, "conversation")?.tier,
     "fast",
   );
+  assert.equal(
+    resolveAgentModelSelection(SYSTEM_DEFAULT_MODEL_PROFILE, "document")?.tier,
+    "reasoning",
+  );
 });
 
 test("applies one universal model to every responsibility group", () => {
@@ -47,8 +51,10 @@ test("applies one universal model to every responsibility group", () => {
   };
   const request = resolveAgentModelSelection(universal, "request");
   const critique = resolveAgentModelSelection(universal, "critique");
+  const document = resolveAgentModelSelection(universal, "document");
   assert.equal(request?.tier, "universal");
   assert.equal(request?.model.modelId, critique?.model.modelId);
+  assert.equal(request?.model.modelId, document?.model.modelId);
 });
 
 test("uses the selected model pricing and never includes an API key in summaries", () => {
@@ -79,6 +85,20 @@ test("validates parameter boundaries and all tiered responsibilities", () => {
     },
   };
   assert.equal(ModelUsageProfileConfigSchema.safeParse(repeatedModels).success, true);
+  const legacyAssignments = { ...base.assignments } as Partial<
+    typeof base.assignments
+  >;
+  delete legacyAssignments.document;
+  const legacyProfile = ModelUsageProfileConfigSchema.parse({
+    ...base,
+    assignments: legacyAssignments,
+  });
+  assert.equal(
+    legacyProfile.mode === "tiered"
+      ? legacyProfile.assignments.document
+      : undefined,
+    "reasoning",
+  );
   assert.equal(
     ModelUsageProfileConfigSchema.safeParse({
       ...base,

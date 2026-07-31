@@ -16,6 +16,7 @@
 import type {
   KnowledgeGraphEntity,
   KnowledgeGraphRelation,
+  ModelUsageProfile,
 } from "@repo/shared";
 import {
   runDocumentAgent,
@@ -46,6 +47,7 @@ export interface PrdDocumentAgentInput {
   }>;
   attemptNumber?: number;
   revisionFeedback?: string;
+  modelProfile?: ModelUsageProfile;
   signal?: AbortSignal;
 }
 
@@ -62,6 +64,7 @@ export async function* streamPrdDocumentAgent(
     skills: skillBundle.sources,
     skillFiles: skillBundle.files,
     subagents: [],
+    modelProfile: input.modelProfile,
     signal: input.signal,
   });
 

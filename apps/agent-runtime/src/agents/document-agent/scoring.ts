@@ -18,6 +18,7 @@ import type {
   DocumentSectionDraft,
   KnowledgeGraphEntity,
   KnowledgeGraphRelation,
+  ModelUsageProfile,
 } from "@repo/shared";
 import {
   type AgentRunEvent,
@@ -172,6 +173,7 @@ export async function runPrdScoringReviewers({
   sourceGraph,
   sourceGroundingIssues,
   attempt,
+  modelProfile,
   signal,
   onEvent,
 }: {
@@ -183,6 +185,7 @@ export async function runPrdScoringReviewers({
   };
   sourceGroundingIssues: string[];
   attempt: number;
+  modelProfile?: ModelUsageProfile;
   signal?: AbortSignal;
   onEvent?: (event: DocumentScoringStreamEvent) => void;
 }): Promise<DocumentScoreReview[]> {
@@ -195,6 +198,8 @@ export async function runPrdScoringReviewers({
       name: `document-${reviewer.id}`,
       systemPrompt: PRD_SCORING_REVIEWER_PROMPT,
       modelOptions: DOCUMENT_REVIEWER_MODEL_OPTIONS,
+      modelProfile,
+      modelGroup: "document",
       payload: {
         attempt,
         scoringScale: "0-100",

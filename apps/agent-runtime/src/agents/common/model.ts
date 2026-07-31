@@ -298,7 +298,7 @@ export function createChatModel(
 ) {
   const config = getLlmConfig();
   const modelKwargs: Record<string, unknown> = {};
-  // Chat 模型列表强制开启思考；未传列表的独立 Document 工作流沿用原环境配置。
+  // 模型列表强制开启思考；未传列表的兼容调用沿用原环境配置。
   const enableThinking = selection
     ? true
     : options.enableThinking ?? config.enableThinking;

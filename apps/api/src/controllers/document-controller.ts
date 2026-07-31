@@ -53,6 +53,7 @@ export async function startDocumentGenerationHandler(c: Context) {
     const data = await startDocumentGeneration({
       workspaceId: params.data.workspaceId,
       kind: parsed.data.kind,
+      profileId: parsed.data.profileId,
     });
     return c.json(data, 202);
   } catch (error) {
@@ -145,7 +146,8 @@ async function readJsonBody(request: Request): Promise<unknown> {
  */
 function jsonServiceError(c: Context, error: unknown) {
   if (error instanceof DocumentGenerationServiceError) {
-    const status = error.statusCode === 409 ? 409 : 400;
+    const status =
+      error.statusCode === 404 ? 404 : error.statusCode === 409 ? 409 : 400;
     return c.json({ error: error.message }, status);
   }
 

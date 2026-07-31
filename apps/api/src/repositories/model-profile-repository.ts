@@ -49,6 +49,15 @@ export async function listLocalModelProfiles(): Promise<ModelUsageProfile[]> {
   return [SYSTEM_DEFAULT_MODEL_PROFILE, ...rows.map(mapModelProfileRow)];
 }
 
+/** 按 ID 读取本地账号可使用的列表；内置默认列表不访问数据库。 */
+export async function getLocalModelProfile(
+  id: string,
+): Promise<ModelUsageProfile> {
+  return id === SYSTEM_MODEL_PROFILE_ID
+    ? SYSTEM_DEFAULT_MODEL_PROFILE
+    : getOwnedProfile(id);
+}
+
 /** 为本地账号创建自定义模型使用列表。 */
 export async function createLocalModelProfile(input: {
   name: string;
@@ -159,7 +168,7 @@ export async function selectConversationModelProfile(
     return SYSTEM_DEFAULT_MODEL_PROFILE;
   }
 
-  const profile = await getOwnedProfile(profileId);
+  const profile = await getLocalModelProfile(profileId);
   await prisma.$executeRaw`
     INSERT INTO "conversation_model_profile" (
       "conversation_id", "profile_id", "updated_at"

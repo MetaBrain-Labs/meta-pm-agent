@@ -15,6 +15,21 @@ import {
   registerChatRun,
   unregisterChatRun,
 } from "../src/services/chat-run-registry";
+import { StartDocumentGenerationRequestSchema } from "../src/schemas/document.schema";
+
+test("requires a model profile when starting Document generation", () => {
+  assert.equal(
+    StartDocumentGenerationRequestSchema.safeParse({ kind: "prd" }).success,
+    false,
+  );
+  assert.deepEqual(
+    StartDocumentGenerationRequestSchema.parse({
+      kind: "prd",
+      profileId: "system-default",
+    }),
+    { kind: "prd", profileId: "system-default" },
+  );
+});
 
 test("rejects an invalid model profile before database access", async () => {
   const app = new Hono();

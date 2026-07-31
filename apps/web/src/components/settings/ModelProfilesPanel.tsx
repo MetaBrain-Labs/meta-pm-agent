@@ -6,7 +6,7 @@
  * Responsibilities:
  * - 加载与维护账号模型列表
  * - 编辑每个模型的标识、名称、地址和高级参数
- * - 配置七类 Agent 职责映射
+ * - 配置 Chat 与 Document 工作流的 Agent 职责映射
  *
  * Notes:
  * - thinking 固定开启；temperature/topP 仅保存展示，不参与思考模式请求
@@ -57,6 +57,7 @@ const GROUP_LABELS: Record<AgentModelGroup, string> = {
   planner: "Planner",
   executors: "全部 Executors",
   critique: "Critique",
+  document: "Document",
 };
 const GROUPS = Object.keys(GROUP_LABELS) as AgentModelGroup[];
 
@@ -106,6 +107,7 @@ function createDraftProfile(): ModelUsageProfile {
         planner: "reasoning",
         executors: "standard",
         critique: "reasoning",
+        document: "reasoning",
       },
     },
   };
@@ -169,7 +171,7 @@ export function ModelProfilesPanel() {
       />
       <div className="flex items-center justify-between gap-3">
         <Typography.Text type="secondary">
-          Chat 产品工作流按会话选择列表，Document 工作流不受影响。
+          Chat 产品工作流按会话选择列表；Document 工作流在每次生成前选择列表。
         </Typography.Text>
         <Button type="primary" onClick={() => setDraft(createDraftProfile())}>
           新建列表

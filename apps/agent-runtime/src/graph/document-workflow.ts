@@ -33,6 +33,7 @@ import type {
   DocumentTodo,
   KnowledgeGraphEntity,
   KnowledgeGraphRelation,
+  ModelUsageProfile,
 } from "@repo/shared";
 import {
   streamPrdDocumentAgent,
@@ -55,6 +56,10 @@ import {
 } from "../agents/document-agent/scoring";
 import { getWorkflowCheckpointer } from "./workflow-checkpointer";
 import {
+  getModelProfileFromRunnableConfig,
+  MODEL_PROFILE_RUN_CONFIG_KEY,
+} from "../agents/common/model-profile";
+import {
   DocumentWorkflowGraphState,
   type DocumentCrossCheck,
   type DocumentSectionDossier,
@@ -70,6 +75,7 @@ export interface DocumentWorkflowInput {
   runId: string;
   kind: DocumentKind;
   graph: DocumentWorkflowGraphSnapshot;
+  modelProfile: ModelUsageProfile;
   workflowThreadId?: string;
   signal?: AbortSignal;
 }
@@ -233,6 +239,7 @@ function createDocumentWorkflowRunConfig(input: DocumentWorkflowInput) {
           runId: input.runId,
           kind: input.kind,
         }),
+      [MODEL_PROFILE_RUN_CONFIG_KEY]: input.modelProfile,
     },
   };
 }
@@ -347,6 +354,7 @@ async function draftSectionNode(
       dossiers: state.dossiers,
       attemptNumber: state.scoreAttempts.length + 1,
       revisionFeedback: state.scoreFeedback,
+      modelProfile: getModelProfileFromRunnableConfig(config),
       signal: config?.signal,
     }),
     (event) => {
@@ -423,6 +431,7 @@ async function scoreDraftNode(
     sourceGraph: requireNormalizedGraph(state),
     sourceGroundingIssues: state.sourceGroundingIssues,
     attempt: state.scoreAttempts.length + 1,
+    modelProfile: getModelProfileFromRunnableConfig(config),
     signal: config?.signal,
     onEvent: (event) => writer?.(event),
   });
