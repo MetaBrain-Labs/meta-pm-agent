@@ -2,11 +2,11 @@
  * Document Agent Skill 与 PRD 规则测试
  *
  * 使用真实 DeepAgents StateBackend 验证六个文档 Skill 的发现和读取，并检查
- * 主 Agent、三个自定义 SubAgent、评分提示词和内置工具可见性遵循既定边界。
+ * 主 Agent、紧凑 payload、评分提示词和内置工具可见性遵循既定边界。
  *
  * Responsibilities:
  * - 验证 PRD Skill bundle 的虚拟路径、元数据、许可证和错误信息
- * - 验证自定义 SubAgent 显式获得各自的 Skill
+ * - 验证主 Agent 直接使用 Skill，且 payload 不重复章节证据
  * - 验证关键需求验收深度、稀疏证据和评分门禁规则
  *
  * Notes:
@@ -18,9 +18,9 @@ import test from "node:test";
 import { createSkillsMiddleware, StateBackend } from "deepagents";
 import {
   PRD_DOCUMENT_AGENT_PROMPT,
-  PRD_DOCUMENT_SUBAGENTS,
   PRD_SCORING_REVIEWER_PROMPT,
 } from "../src/agents/document-agent/prompt";
+import { createPrdDocumentAgentPayload } from "../src/agents/document-agent/agent";
 import {
   createDocumentAllowedBuiltinToolNames,
   DOCUMENT_VISIBLE_BUILTIN_TOOL_NAMES,
@@ -90,25 +90,41 @@ test("loads skill content through StateBackend and reports missing sources", asy
   );
 });
 
-test("assigns only the relevant skills to custom PRD subagents", () => {
-  const subagents = new Map(
-    PRD_DOCUMENT_SUBAGENTS.map((subagent) => [
-      subagent.name,
-      subagent.skills ?? [],
-    ]),
-  );
+test("removes duplicated dossier evidence from the main agent payload", () => {
+  const payload = createPrdDocumentAgentPayload({
+    workspaceId: "workspace-1",
+    runId: "run-1",
+    graph: {
+      nodes: [
+        {
+          id: "G-12345678",
+          type: "Goal",
+          name: "Goal",
+          description: "Goal detail",
+          status: "confirmed",
+          source_task_id: "task-1",
+        },
+      ],
+      relations: [],
+    },
+    dossiers: [
+      {
+        id: "overview",
+        title: "Overview",
+        purpose: "Explain why",
+        nodeIds: ["G-12345678"],
+        relationIds: [],
+        evidence: ["duplicated long evidence"],
+      },
+    ],
+  });
 
-  assert.deepEqual(subagents.get("prd-user-story-writer"), [
-    "/skills/user-stories/",
-    "/skills/deliver-acceptance-criteria/",
-  ]);
-  assert.deepEqual(subagents.get("prd-interface-drafter"), [
-    "/skills/deliver-edge-cases/",
-  ]);
-  assert.deepEqual(subagents.get("prd-consistency-reviewer"), [
-    "/skills/source-grounded-writing/",
-    "/skills/grammar-check/",
-  ]);
+  assert.equal("evidence" in payload.sectionDossiers[0]!, false);
+  assert.equal("source_task_id" in payload.graph.nodes[0]!, false);
+  assert.equal(
+    JSON.stringify(payload).includes("duplicated long evidence"),
+    false,
+  );
 });
 
 test("keeps skill reads internal while enforcing PRD detail and gap rules", () => {
@@ -119,7 +135,9 @@ test("keeps skill reads internal while enforcing PRD detail and gap rules", () =
     new Set<string>(DOCUMENT_VISIBLE_BUILTIN_TOOL_NAMES).has("read_file"),
     false,
   );
+  assert.equal(DOCUMENT_VISIBLE_BUILTIN_TOOL_NAMES.length, 0);
   assert.match(PRD_DOCUMENT_AGENT_PROMPT, /virtual \/skills paths/);
+  assert.match(PRD_DOCUMENT_AGENT_PROMPT, /Do not call write_todos or task/);
   assert.match(PRD_DOCUMENT_AGENT_PROMPT, /P0, critical-path, or high-risk/);
   assert.match(PRD_DOCUMENT_AGENT_PROMPT, /Given\/When\/Then/);
   assert.match(PRD_DOCUMENT_AGENT_PROMPT, /Keep P1 and P2 requirements concise/);
@@ -133,12 +151,7 @@ test("keeps skill reads internal while enforcing PRD detail and gap rules", () =
     PRD_SCORING_REVIEWER_PROMPT,
     /product, design, engineering, QA, and business/,
   );
-  assert.match(
-    PRD_DOCUMENT_SUBAGENTS.find(
-      (subagent) => subagent.name === "prd-consistency-reviewer",
-    )?.systemPrompt ?? "",
-    /<prd_draft>/,
-  );
+  assert.match(PRD_SCORING_REVIEWER_PROMPT, /sourceGroundingIssues/);
 });
 
 /**

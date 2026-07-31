@@ -1,12 +1,12 @@
 /**
  * Document Agent 专用运行器
  *
- * 独立承载 Document Agent 的 DeepAgents 创建、SubAgent task 记录、write_todos
- * 任务规划事件转换、token 用量统计和最终 PRD Markdown 清理逻辑。
+ * 独立承载 Document Agent 的 DeepAgents 创建、Skill 读取审计、
+ * token 用量统计和最终 PRD Markdown 清理逻辑。
  *
  * Responsibilities:
- * - runDocumentAgent()：运行带 PRD 子代理的 Document Agent
- * - 将 write_todos/task 内置工具转换为文档工作流事件
+ * - runDocumentAgent()：运行直接使用 PRD Skills 的 Document Agent
+ * - 保留兼容的工具事件转换边界
  * - 清理最终 Markdown，避免持久化 DeepAgents 编排说明
  *
  * Notes:
@@ -98,10 +98,7 @@ export interface RunDocumentAgentOptions {
   signal?: AbortSignal;
 }
 
-export const DOCUMENT_VISIBLE_BUILTIN_TOOL_NAMES = [
-  "write_todos",
-  "task",
-] as const;
+export const DOCUMENT_VISIBLE_BUILTIN_TOOL_NAMES = [] as const;
 const VISIBLE_BUILTIN_TOOL_NAMES = new Set<string>(
   DOCUMENT_VISIBLE_BUILTIN_TOOL_NAMES,
 );

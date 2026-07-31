@@ -9,7 +9,7 @@
  * Responsibilities:
  * - 定义文档生成图输入、输出和流事件
  * - 组装 Document Agent PRD 工作流节点
- * - 将 Deep Agents write_todos/task 事件透传给 API 后台任务
+ * - 将 Document Agent 与评分事件透传给 API 后台任务
  *
  * Notes:
  * - 当前 PRD 后台生成不主动打断等待人工审核；humanReview 节点先做自动通过，
@@ -43,10 +43,10 @@ import {
   DOCUMENT_SCORE_MAX_SPREAD,
   DOCUMENT_SCORE_THRESHOLD,
   calculateScoreSpread,
+  createDeterministicConsensusScore,
   createScoreRetryFeedback,
   createSkippedConsensusScore,
   runPrdScoringReviewers,
-  runPrdWeightedScoringAgent,
   selectFinalScoreAttempt,
   shouldRetryDocumentScoreAttempt,
   validatePrdSourceGrounding,
@@ -389,12 +389,12 @@ function crossCheckNode(
     notes.push("PRD 章节识别较少，建议人工复核文档结构。");
   }
   const graph = requireNormalizedGraph(state);
-  const evidenceBlockers = validatePrdSourceGrounding({
+  const sourceGroundingIssues = validatePrdSourceGrounding({
     markdown,
     nodes: graph.nodes,
     relations: graph.relations,
   });
-  notes.push(...evidenceBlockers);
+  notes.push(...sourceGroundingIssues);
 
   const crossCheckResult: DocumentCrossCheck = {
     passed: notes.length === 0,
@@ -404,7 +404,7 @@ function crossCheckNode(
   emitStage(config, "crossCheck", "completed");
   const todos = createWorkflowTodos("crossCheck", true);
   emitTodoUpdate(config, todos);
-  return { crossCheckResult, evidenceBlockers, todos };
+  return { crossCheckResult, sourceGroundingIssues, todos };
 }
 
 /**
@@ -421,7 +421,7 @@ async function scoreDraftNode(
     markdown: state.draftMarkdown,
     sections: state.sectionDrafts,
     sourceGraph: requireNormalizedGraph(state),
-    deterministicEvidenceBlockers: state.evidenceBlockers,
+    sourceGroundingIssues: state.sourceGroundingIssues,
     attempt: state.scoreAttempts.length + 1,
     signal: config?.signal,
     onEvent: (event) => writer?.(event),
@@ -445,6 +445,7 @@ function rejectScoreNode(
   const aggregate = createSkippedConsensusScore({
     reviewerScores: state.scoreReviewerReports,
     scoreSpread,
+    sourceGroundingIssues: state.sourceGroundingIssues,
   });
   const attempt = {
     attempt: state.scoreAttempts.length + 1,
@@ -454,14 +455,8 @@ function rejectScoreNode(
     varianceAccepted,
     aggregate,
     passed: false,
-    evidenceBlocked: hasEvidenceBlockers(
-      state.evidenceBlockers,
-      state.scoreReviewerReports,
-    ),
-    evidenceBlockers: collectEvidenceBlockers(
-      state.evidenceBlockers,
-      state.scoreReviewerReports,
-    ),
+    evidenceBlocked: hasEvidenceBlockers(state.scoreReviewerReports),
+    evidenceBlockers: collectEvidenceBlockers(state.scoreReviewerReports),
     selected: false,
   };
   const scoreAttempts = [...state.scoreAttempts, attempt];
@@ -469,6 +464,7 @@ function rejectScoreNode(
   const shouldRetry = shouldRetryDocumentScoreAttempt({
     attemptCount: scoreAttempts.length,
     passed: attempt.passed,
+    varianceAccepted: attempt.varianceAccepted,
     evidenceBlocked: attempt.evidenceBlocked,
   });
   const persistedAttempt = {
@@ -491,7 +487,7 @@ function rejectScoreNode(
 }
 
 /**
- * 调用共识评分系统汇总三方评分，并决定是否进入下一轮重写。
+ * 确定性汇总三方评分，并决定是否进入下一轮重写。
  */
 async function aggregateScoreNode(
   state: DocumentWorkflowGraphStateValue,
@@ -499,21 +495,19 @@ async function aggregateScoreNode(
 ) {
   emitStage(config, "aggregateScore", "started");
   emitTodoUpdate(config, createWorkflowTodos("aggregateScore"));
-  const writer = getWriter(config);
   const scoreSpread = calculateScoreSpread(state.scoreReviewerReports);
   const varianceAccepted = scoreSpread <= DOCUMENT_SCORE_MAX_SPREAD;
-  const aggregate = await runPrdWeightedScoringAgent({
+  const reviewerEvidenceBlockers = collectEvidenceBlockers(
+    state.scoreReviewerReports,
+  );
+  const aggregate = createDeterministicConsensusScore({
     markdown: state.draftMarkdown,
     reviewerScores: state.scoreReviewerReports,
     scoreSpread,
-    varianceAccepted,
-    blockingEvidenceIssues: collectEvidenceBlockers(
-      state.evidenceBlockers,
-      state.scoreReviewerReports,
-    ),
-    attempt: state.scoreAttempts.length + 1,
-    signal: config?.signal,
-    onEvent: (event) => writer?.(event),
+    blockingEvidenceIssues: [
+      ...state.sourceGroundingIssues,
+      ...reviewerEvidenceBlockers,
+    ],
   });
   const attempt = {
     attempt: state.scoreAttempts.length + 1,
@@ -523,14 +517,8 @@ async function aggregateScoreNode(
     varianceAccepted,
     aggregate,
     passed: aggregate.passed,
-    evidenceBlocked: hasEvidenceBlockers(
-      state.evidenceBlockers,
-      state.scoreReviewerReports,
-    ),
-    evidenceBlockers: collectEvidenceBlockers(
-      state.evidenceBlockers,
-      state.scoreReviewerReports,
-    ),
+    evidenceBlocked: hasEvidenceBlockers(state.scoreReviewerReports),
+    evidenceBlockers: reviewerEvidenceBlockers,
     selected: false,
   };
   const scoreAttempts = [...state.scoreAttempts, attempt];
@@ -538,6 +526,7 @@ async function aggregateScoreNode(
   const shouldRetry = shouldRetryDocumentScoreAttempt({
     attemptCount: scoreAttempts.length,
     passed: attempt.passed,
+    varianceAccepted: attempt.varianceAccepted,
     evidenceBlocked: attempt.evidenceBlocked,
   });
   const persistedAttempt = {
@@ -580,21 +569,20 @@ function selectNextNodeAfterScore(state: DocumentWorkflowGraphStateValue) {
   const latestAttempt = state.scoreAttempts.at(-1);
   if (!latestAttempt) return "retry";
   if (latestAttempt.passed) return "pass";
-  if (latestAttempt.evidenceBlocked) return "pass";
   if (state.scoreAttempts.length >= DOCUMENT_SCORE_MAX_ATTEMPTS) return "pass";
+  if (!latestAttempt.varianceAccepted) return "retry";
+  if (latestAttempt.evidenceBlocked) return "pass";
   return "retry";
 }
 
 /**
- * 合并确定性检查和评分 Agent 识别的证据阻塞项。
+ * 合并评分 Agent 识别的真实证据阻塞项。
  */
 function collectEvidenceBlockers(
-  deterministicBlockers: string[],
   reviewerScores: DocumentScoreReview[],
 ): string[] {
   return Array.from(
     new Set([
-      ...deterministicBlockers,
       ...reviewerScores.flatMap((review) =>
         review.evidenceBlockers.length > 0
           ? review.evidenceBlockers
@@ -610,15 +598,11 @@ function collectEvidenceBlockers(
  * 判断当前草稿是否必须等待新图谱证据或利益相关者决策。
  */
 function hasEvidenceBlockers(
-  deterministicBlockers: string[],
   reviewerScores: DocumentScoreReview[],
 ): boolean {
-  return (
-    deterministicBlockers.length > 0 ||
-    reviewerScores.some(
-      (review) =>
-        review.evidenceBlocked || review.evidenceBlockers.length > 0,
-    )
+  return reviewerScores.some(
+    (review) =>
+      review.evidenceBlocked || review.evidenceBlockers.length > 0,
   );
 }
 

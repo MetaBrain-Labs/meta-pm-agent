@@ -17,8 +17,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyPrdCompletionGate,
+  createDeterministicConsensusScore,
+  createReviewerSourceLedger,
   DOCUMENT_SCORE_REVIEWERS,
   DOCUMENT_SCORE_MAX_SPREAD,
+  DOCUMENT_REVIEWER_MODEL_OPTIONS,
   createSkippedConsensusScore,
   selectFinalScoreAttempt,
   shouldRetryDocumentScoreAttempt,
@@ -36,6 +39,8 @@ test("uses responsibility-based English reviewer names", () => {
       "Scope & Delivery Readiness Reviewer",
     ],
   );
+  assert.equal(DOCUMENT_REVIEWER_MODEL_OPTIONS.enableThinking, false);
+  assert.equal(DOCUMENT_REVIEWER_MODEL_OPTIONS.maxTokens, 3072);
 });
 
 test("blocks PRDs with unresolved TBD evidence gaps from passing", () => {
@@ -69,11 +74,21 @@ test("records high-spread attempts as failed without consensus pass", () => {
   assert.equal(21 > DOCUMENT_SCORE_MAX_SPREAD, true);
 });
 
-test("stops rewriting when the draft needs new graph evidence", () => {
+test("retries high-spread drafts before stopping for evidence gaps", () => {
   assert.equal(
     shouldRetryDocumentScoreAttempt({
       attemptCount: 1,
       passed: false,
+      varianceAccepted: false,
+      evidenceBlocked: true,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldRetryDocumentScoreAttempt({
+      attemptCount: 1,
+      passed: false,
+      varianceAccepted: true,
       evidenceBlocked: true,
     }),
     false,
@@ -82,13 +97,23 @@ test("stops rewriting when the draft needs new graph evidence", () => {
     shouldRetryDocumentScoreAttempt({
       attemptCount: 1,
       passed: false,
+      varianceAccepted: true,
       evidenceBlocked: false,
     }),
     true,
   );
+  assert.equal(
+    shouldRetryDocumentScoreAttempt({
+      attemptCount: 3,
+      passed: false,
+      varianceAccepted: false,
+      evidenceBlocked: true,
+    }),
+    false,
+  );
 });
 
-test("rejects unknown citations and proposed nodes presented as confirmed", () => {
+test("rejects unknown citations without line-level source status false positives", () => {
   const issues = validatePrdSourceGrounding({
     markdown: [
       "# PRD",
@@ -106,9 +131,72 @@ test("rejects unknown citations and proposed nodes presented as confirmed", () =
     relations: [],
   });
 
-  assert.equal(issues.length, 2);
+  assert.equal(issues.length, 1);
   assert.match(issues.join("\n"), /unknown graph source ID E-deadbeef/);
-  assert.match(issues.join("\n"), /D-12345678 is proposed/);
+  assert.doesNotMatch(issues.join("\n"), /D-12345678 is proposed/);
+});
+
+test("builds reviewer-specific source details plus a complete lightweight index", () => {
+  const reviewer = DOCUMENT_SCORE_REVIEWERS.find(
+    (item) => item.id === "requirements-acceptance-reviewer",
+  );
+  assert.ok(reviewer);
+
+  const ledger = createReviewerSourceLedger({
+    markdown: "# PRD\nEvidence E-12345678\nRequirement R-12345678",
+    reviewer,
+    sourceGraph: {
+      nodes: [
+        {
+          id: "E-12345678-0000-4000-8000-000000000000",
+          type: "Evidence",
+          name: "Cited evidence",
+          description: "Detailed cited evidence",
+          status: "confirmed",
+        },
+        {
+          id: "R-12345678-0000-4000-8000-000000000000",
+          type: "Requirement",
+          name: "Relevant requirement",
+          description: "Detailed requirement",
+          status: "confirmed",
+        },
+        {
+          id: "M-12345678-0000-4000-8000-000000000000",
+          type: "Metric",
+          name: "Unrelated metric",
+          description: "Large unrelated metric detail",
+          status: "proposed",
+        },
+      ],
+      relations: [],
+    },
+  });
+
+  assert.equal(ledger.nodeIndex.length, 3);
+  assert.equal("description" in ledger.nodeIndex[0]!, false);
+  assert.deepEqual(
+    ledger.nodes.map((node) => node.id),
+    ["R-12345678"],
+  );
+});
+
+test("uses deterministic 70/30 consensus scoring without a fourth model result", () => {
+  const reviewerScores = [
+    createReview("product-rationale-evidence-reviewer", 90),
+    createReview("requirements-acceptance-reviewer", 88),
+    createReview("scope-delivery-readiness-reviewer", 87),
+  ];
+  const result = createDeterministicConsensusScore({
+    markdown: "# PRD\nComplete and evidenced.",
+    reviewerScores,
+    scoreSpread: 3,
+    blockingEvidenceIssues: [],
+  });
+
+  assert.equal(result.score, 88);
+  assert.equal(result.passed, true);
+  assert.equal(result.weights.minimumScore, 87);
 });
 
 test("selects the first attempt that passed threshold", () => {

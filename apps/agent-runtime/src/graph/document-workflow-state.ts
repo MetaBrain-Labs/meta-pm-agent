@@ -90,7 +90,7 @@ export const DocumentWorkflowGraphState = Annotation.Root({
     reducer: (_current, update) => update,
     default: () => null,
   }),
-  evidenceBlockers: Annotation<string[]>({
+  sourceGroundingIssues: Annotation<string[]>({
     reducer: (_current, update) => update,
     default: () => [],
   }),

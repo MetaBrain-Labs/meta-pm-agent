@@ -2,11 +2,11 @@
  * Document Agent 评分执行器
  *
  * 为 PRD 草稿提供独立质量门禁：三位职责明确的评分 Agent 按统一量表独立打分。
- * 只有三方分差不超过阈值时，才进入共识评分；分差过大时直接记录失败并触发重写重试。
+ * 只有三方分差不超过阈值时，才进入确定性共识评分；分差过大时直接记录失败并触发重写重试。
  *
  * Responsibilities:
  * - runPrdScoringReviewers()：运行三位独立评分 Agent
- * - runPrdWeightedScoringAgent()：运行分差合格后的共识评分 Agent
+ * - createDeterministicConsensusScore()：汇总分差合格后的三方评分
  * - 提供评分阈值、最大偏差、最大重试次数与确定性回退
  *
  * Notes:
@@ -25,14 +25,16 @@ import {
   resolveJsonOutput,
   runAgent,
 } from "../common/run-agent";
-import {
-  PRD_SCORING_REVIEWER_PROMPT,
-  PRD_WEIGHTED_SCORING_AGENT_PROMPT,
-} from "./prompt";
+import { PRD_SCORING_REVIEWER_PROMPT } from "./prompt";
 
 export const DOCUMENT_SCORE_THRESHOLD = 85;
 export const DOCUMENT_SCORE_MAX_SPREAD = 8;
 export const DOCUMENT_SCORE_MAX_ATTEMPTS = 3;
+export const DOCUMENT_REVIEWER_MODEL_OPTIONS = {
+  ...JSON_AGENT_MODEL_OPTIONS,
+  enableThinking: false,
+  maxTokens: 3072,
+} as const;
 
 export type DocumentScoreAgentType = "document-score";
 
@@ -125,41 +127,39 @@ const ReviewerScoreSchema = z.object({
   evidenceBlockers: z.array(z.string()).default([]),
 });
 
-const WeightedScoreSchema = z.object({
-  score: z.number().min(0).max(100),
-  confidence: z.number().min(0).max(1),
-  rationale: z.string().min(1),
-  requiredRevisions: z.array(z.string()).default([]),
-  weights: z.object({
-    averageScore: z.number().min(0).max(100),
-    minimumScore: z.number().min(0).max(100),
-    spreadPenalty: z.number().min(0),
-    consistencyBonus: z.number().min(0),
-  }),
-});
-
 export const DOCUMENT_SCORE_REVIEWERS: Array<{
   id: DocumentScoringReviewerId;
   name: string;
   profile: string;
+  relevantTypes: KnowledgeGraphEntity["type"][];
 }> = [
   {
     id: "product-rationale-evidence-reviewer",
     name: "Product Rationale & Evidence Reviewer",
     profile:
       "Why-and-evidence reviewer. Prioritize why the work matters, the problem and target users, business value, source-node traceability, and whether facts or priorities were invented.",
+    relevantTypes: ["Goal", "Evidence", "Decision", "Metric"],
   },
   {
     id: "requirements-acceptance-reviewer",
     name: "Requirements & Acceptance Reviewer",
     profile:
       "Cross-functional specification reviewer. Prioritize functional coverage, user experience, stable requirement IDs, P0 or high-risk Given/When/Then acceptance criteria, edge cases, and clarity for product, design, engineering, and QA.",
+    relevantTypes: ["Requirement", "Feature", "Component"],
   },
   {
     id: "scope-delivery-readiness-reviewer",
     name: "Scope & Delivery Readiness Reviewer",
     profile:
       "Scope-and-readiness reviewer. Prioritize scope and priority, measurable outcomes, dependencies, constraints, risks, validation, business usability, and whether the document defines the required degree of completion.",
+    relevantTypes: [
+      "Goal",
+      "Decision",
+      "Metric",
+      "Requirement",
+      "Component",
+      "Custom",
+    ],
   },
 ];
 
@@ -170,7 +170,7 @@ export async function runPrdScoringReviewers({
   markdown,
   sections,
   sourceGraph,
-  deterministicEvidenceBlockers,
+  sourceGroundingIssues,
   attempt,
   signal,
   onEvent,
@@ -181,7 +181,7 @@ export async function runPrdScoringReviewers({
     nodes: KnowledgeGraphEntity[];
     relations: KnowledgeGraphRelation[];
   };
-  deterministicEvidenceBlockers: string[];
+  sourceGroundingIssues: string[];
   attempt: number;
   signal?: AbortSignal;
   onEvent?: (event: DocumentScoringStreamEvent) => void;
@@ -194,21 +194,19 @@ export async function runPrdScoringReviewers({
       agentLabel: reviewer.name,
       name: `document-${reviewer.id}`,
       systemPrompt: PRD_SCORING_REVIEWER_PROMPT,
-      modelOptions: {
-        ...JSON_AGENT_MODEL_OPTIONS,
-        maxTokens: 4096,
-      },
+      modelOptions: DOCUMENT_REVIEWER_MODEL_OPTIONS,
       payload: {
-        reviewer,
         attempt,
         scoringScale: "0-100",
         markdown,
         sections,
-        deterministicEvidenceBlockers,
-        sourceLedger: {
-          nodes: sourceGraph.nodes.map(compactSourceNode),
-          relations: sourceGraph.relations.map(compactSourceRelation),
-        },
+        sourceGroundingIssues,
+        sourceLedger: createReviewerSourceLedger({
+          markdown,
+          sourceGraph,
+          reviewer,
+        }),
+        reviewer,
       },
       resolveOutput: (context) =>
         resolveJsonOutput(context, ReviewerScoreSchema),
@@ -235,11 +233,11 @@ export async function runPrdScoringReviewers({
         feasibility: clampScore(parsed.dimensions.feasibility),
         language: clampScore(parsed.dimensions.language),
       },
-      strengths: parsed.strengths.slice(0, 6),
-      weaknesses: parsed.weaknesses.slice(0, 6),
-      revisionAdvice: parsed.revisionAdvice.slice(0, 8),
+      strengths: parsed.strengths.slice(0, 3),
+      weaknesses: parsed.weaknesses.slice(0, 5),
+      revisionAdvice: parsed.revisionAdvice.slice(0, 5),
       evidenceBlocked: parsed.evidenceBlocked,
-      evidenceBlockers: parsed.evidenceBlockers.slice(0, 10),
+      evidenceBlockers: parsed.evidenceBlockers.slice(0, 5),
     });
   }
 
@@ -247,67 +245,41 @@ export async function runPrdScoringReviewers({
 }
 
 /**
- * 运行分差合格后的共识评分 Agent，并由代码层强制执行阈值与偏差规则。
+ * 通过固定权重汇总三方评分，避免重复调用模型解释 Reviewer 已给出的结论。
  */
-export async function runPrdWeightedScoringAgent({
+export function createDeterministicConsensusScore({
   markdown,
   reviewerScores,
   scoreSpread,
-  varianceAccepted,
   blockingEvidenceIssues,
-  attempt,
-  signal,
-  onEvent,
 }: {
   markdown: string;
   reviewerScores: DocumentScoreReview[];
   scoreSpread: number;
-  varianceAccepted: boolean;
   blockingEvidenceIssues: string[];
-  attempt: number;
-  signal?: AbortSignal;
-  onEvent?: (event: DocumentScoringStreamEvent) => void;
-}): Promise<DocumentWeightedScore> {
-  const stream = runAgent({
-    agentType: "document-score",
-    agentLabel: "Document Weighted Scoring Agent",
-    name: "document-weighted-scoring-agent",
-    systemPrompt: PRD_WEIGHTED_SCORING_AGENT_PROMPT,
-    modelOptions: {
-      ...JSON_AGENT_MODEL_OPTIONS,
-      // 共识评分需要综合三方分歧和修订项，使用与单评审一致的 4k 结构化输出预算。
-      maxTokens: 4096,
-    },
-    payload: {
-      attempt,
-      threshold: DOCUMENT_SCORE_THRESHOLD,
-      maxAllowedScoreSpread: DOCUMENT_SCORE_MAX_SPREAD,
-      scoreSpread,
-      varianceAccepted,
-      blockingEvidenceIssues,
-      reviewerScores,
-      markdown,
-    },
-    resolveOutput: (context) =>
-      resolveJsonOutput(context, WeightedScoreSchema),
-    fallback: (reason) =>
-      createWeightedFallback({
-        reviewerScores,
-        scoreSpread,
-        varianceAccepted,
-        reason,
-      }),
-    signal,
-    suppressFallbackReasoning: true,
-  });
-
-  const parsed = await consumeJsonAgentStream(stream, onEvent);
+}): DocumentWeightedScore {
+  const scores = reviewerScores.map((review) => review.score);
+  const averageScore =
+    scores.length > 0
+      ? scores.reduce((sum, score) => sum + score, 0) / scores.length
+      : 0;
+  const minimumScore = scores.length > 0 ? Math.min(...scores) : 0;
+  const baseScore = clampScore(averageScore * 0.7 + minimumScore * 0.3);
   const completionGate = applyPrdCompletionGate({
     markdown,
-    score: clampScore(parsed.score),
+    score: baseScore,
     blockingEvidenceIssues,
   });
-  const requiredRevisions = parsed.requiredRevisions.slice(0, 10);
+  const requiredRevisions = Array.from(
+    new Set(
+      [
+        ...blockingEvidenceIssues,
+        ...reviewerScores.flatMap((review) => review.revisionAdvice),
+      ]
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ).slice(0, 10);
   if (completionGate.blocked) {
     requiredRevisions.unshift(
       "Keep unsupported facts as TBD and obtain new graph evidence before quality approval.",
@@ -317,19 +289,18 @@ export async function runPrdWeightedScoringAgent({
   return {
     score: completionGate.score,
     passed:
-      varianceAccepted &&
       !completionGate.blocked &&
       completionGate.score >= DOCUMENT_SCORE_THRESHOLD,
-    confidence: Math.max(0, Math.min(1, parsed.confidence)),
+    confidence: 0.72,
     rationale: completionGate.blocked
-      ? `${parsed.rationale} The deterministic completion gate found unresolved evidence or source-grounding gaps.`
-      : parsed.rationale,
+      ? "The deterministic consensus score is below approval because unresolved evidence or source-grounding gaps remain."
+      : "The deterministic consensus score weights the reviewer average at 70% and the strictest reviewer at 30%.",
     requiredRevisions: Array.from(new Set(requiredRevisions)).slice(0, 10),
     weights: {
-      averageScore: clampScore(parsed.weights.averageScore),
-      minimumScore: clampScore(parsed.weights.minimumScore),
-      spreadPenalty: Math.max(0, parsed.weights.spreadPenalty),
-      consistencyBonus: Math.max(0, parsed.weights.consistencyBonus),
+      averageScore,
+      minimumScore,
+      spreadPenalty: 0,
+      consistencyBonus: 0,
     },
   };
 }
@@ -360,7 +331,7 @@ export function applyPrdCompletionGate({
 }
 
 /**
- * 检查 PRD 中可确定验证的图谱引用与节点状态，不执行自然语言事实判断。
+ * 检查 PRD 中可确定验证的图谱引用，不执行自然语言状态判断。
  */
 export function validatePrdSourceGrounding({
   markdown,
@@ -386,39 +357,6 @@ export function validatePrdSourceGrounding({
     }
   }
 
-  for (const node of nodes) {
-    if (node.status !== "proposed" && node.status !== "deprecated") continue;
-    const shortId = shortenGraphId(node.id);
-    for (const line of markdown.split(/\r?\n/)) {
-      if (!line.includes(shortId)) continue;
-      const claimsConfirmed =
-        /\b(?:confirmed|resolved|approved)\b|已确认|已解决|已批准/i.test(line);
-      const preservesProposedStatus =
-        /\bproposed\b|待确认|候选/i.test(line);
-      const preservesDeprecatedStatus =
-        /\b(?:deprecated|superseded)\b|已废弃|已取代|取代/i.test(line);
-
-      if (
-        node.status === "proposed" &&
-        claimsConfirmed &&
-        !preservesProposedStatus
-      ) {
-        issues.push(
-          `Graph node ${shortId} is proposed but the PRD presents it as confirmed or resolved.`,
-        );
-      }
-      if (
-        node.status === "deprecated" &&
-        claimsConfirmed &&
-        !preservesDeprecatedStatus
-      ) {
-        issues.push(
-          `Graph node ${shortId} is deprecated but the PRD presents it as active or confirmed.`,
-        );
-      }
-    }
-  }
-
   return Array.from(new Set(issues));
 }
 
@@ -428,17 +366,17 @@ export function validatePrdSourceGrounding({
 export function shouldRetryDocumentScoreAttempt({
   attemptCount,
   passed,
+  varianceAccepted,
   evidenceBlocked,
 }: {
   attemptCount: number;
   passed: boolean;
+  varianceAccepted: boolean;
   evidenceBlocked: boolean;
 }): boolean {
-  return (
-    !passed &&
-    !evidenceBlocked &&
-    attemptCount < DOCUMENT_SCORE_MAX_ATTEMPTS
-  );
+  if (passed || attemptCount >= DOCUMENT_SCORE_MAX_ATTEMPTS) return false;
+  if (!varianceAccepted) return true;
+  return !evidenceBlocked;
 }
 
 /**
@@ -447,9 +385,11 @@ export function shouldRetryDocumentScoreAttempt({
 export function createSkippedConsensusScore({
   reviewerScores,
   scoreSpread,
+  sourceGroundingIssues = [],
 }: {
   reviewerScores: DocumentScoreReview[];
   scoreSpread: number;
+  sourceGroundingIssues?: string[];
 }): DocumentWeightedScore {
   const scores = reviewerScores.map((review) => review.score);
   const averageScore =
@@ -463,8 +403,10 @@ export function createSkippedConsensusScore({
   );
   const requiredRevisions = Array.from(
     new Set(
-      reviewerScores
-        .flatMap((review) => review.revisionAdvice)
+      [
+        ...sourceGroundingIssues,
+        ...reviewerScores.flatMap((review) => review.revisionAdvice),
+      ]
         .map((item) => item.trim())
         .filter(Boolean),
     ),
@@ -585,7 +527,7 @@ function createReviewerFallback({
   const hasMetric = /指标|metric|success/i.test(markdown);
   const hasAcceptance = /验收|acceptance/i.test(markdown);
   const baseScore = Math.min(
-    88,
+    74,
     62 +
       Math.min(12, sections.length * 2) +
       (hasRisk ? 5 : 0) +
@@ -611,58 +553,47 @@ function createReviewerFallback({
       "Make acceptance criteria and measurable success metrics explicit.",
       "Clarify risks, dependencies, and implementation constraints.",
     ],
-    evidenceBlocked: /\bTBD\b/i.test(markdown),
-    evidenceBlockers: /\bTBD\b/i.test(markdown)
-      ? ["The fallback reviewer found unresolved TBD content."]
-      : [],
+    evidenceBlocked: false,
+    evidenceBlockers: [],
   };
 }
 
 /**
- * 创建共识评分 Agent 的确定性回退结果。
+ * 为单个 Reviewer 构造轻量全图索引和职责相关的详细事实。
  */
-function createWeightedFallback({
-  reviewerScores,
-  scoreSpread,
-  varianceAccepted,
-  reason,
+export function createReviewerSourceLedger({
+  markdown,
+  sourceGraph,
+  reviewer,
 }: {
-  reviewerScores: DocumentScoreReview[];
-  scoreSpread: number;
-  varianceAccepted: boolean;
-  reason: string;
-}): z.infer<typeof WeightedScoreSchema> {
-  const scores = reviewerScores.map((review) => review.score);
-  const averageScore =
-    scores.length > 0
-      ? scores.reduce((sum, score) => sum + score, 0) / scores.length
-      : 0;
-  const minimumScore = scores.length > 0 ? Math.min(...scores) : 0;
-  const spreadPenalty = Math.max(0, scoreSpread - 4) * 1.5;
-  const consistencyBonus = varianceAccepted ? 2 : 0;
-  const score = clampScore(
-    averageScore * 0.72 +
-      minimumScore * 0.18 +
-      consistencyBonus -
-      spreadPenalty,
+  markdown: string;
+  sourceGraph: {
+    nodes: KnowledgeGraphEntity[];
+    relations: KnowledgeGraphRelation[];
+  };
+  reviewer: (typeof DOCUMENT_SCORE_REVIEWERS)[number];
+}) {
+  const citedIds = new Set(
+    (markdown.match(
+      /\b(?:G|E|R|F|D|M|CUS|COMP|REL|RISK)-[0-9a-f]{8}\b/gi,
+    ) ?? []).map((id) => id.toUpperCase()),
+  );
+  const detailedNodes = sourceGraph.nodes.filter(
+    (node) =>
+      citedIds.has(shortenGraphId(node.id).toUpperCase()) &&
+      reviewer.relevantTypes.includes(node.type),
+  );
+  const detailedNodeIds = new Set(detailedNodes.map((node) => node.id));
+  const detailedRelations = sourceGraph.relations.filter(
+    (relation) =>
+      detailedNodeIds.has(relation.source) &&
+      detailedNodeIds.has(relation.target),
   );
 
   return {
-    score,
-    confidence: varianceAccepted ? 0.72 : 0.48,
-    rationale:
-      "Weighted scoring was completed by the deterministic backup scorer because the weighted scoring agent did not return a valid structured result.",
-    requiredRevisions: [
-      "Address the lowest scoring reviewer comments first.",
-      "Reduce reviewer disagreement by making requirements more concrete and evidence-backed.",
-      "Improve PRD completeness before final export.",
-    ],
-    weights: {
-      averageScore,
-      minimumScore,
-      spreadPenalty,
-      consistencyBonus,
-    },
+    nodeIndex: sourceGraph.nodes.map(compactSourceNodeIndex),
+    nodes: detailedNodes.map(compactSourceNode),
+    relations: detailedRelations.map(compactSourceRelation),
   };
 }
 
@@ -678,10 +609,20 @@ function clampScore(score: number): number {
  */
 function compactSourceNode(node: KnowledgeGraphEntity) {
   return {
-    id: node.id,
+    id: shortenGraphId(node.id),
     type: node.type,
     name: node.name,
     description: node.description,
+    status: node.status,
+  };
+}
+
+/** 压缩全图节点索引，不复制长描述。 */
+function compactSourceNodeIndex(node: KnowledgeGraphEntity) {
+  return {
+    id: shortenGraphId(node.id),
+    type: node.type,
+    name: node.name,
     status: node.status,
   };
 }
@@ -691,10 +632,10 @@ function compactSourceNode(node: KnowledgeGraphEntity) {
  */
 function compactSourceRelation(relation: KnowledgeGraphRelation) {
   return {
-    id: relation.id,
+    id: shortenGraphId(relation.id),
     type: relation.type,
-    source: relation.source,
-    target: relation.target,
+    source: shortenGraphId(relation.source),
+    target: shortenGraphId(relation.target),
     description: relation.description,
   };
 }
