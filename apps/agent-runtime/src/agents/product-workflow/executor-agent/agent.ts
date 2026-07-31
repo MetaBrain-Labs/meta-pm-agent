@@ -207,6 +207,8 @@ export async function* streamExecutorAgent(
           maxTokens: 16384,
           timeout: 60_000,
         },
+        modelProfile: input.modelProfile,
+        modelGroup: "executors",
         systemPrompt: createExecutorAgentPrompt(definition),
         tools,
         skills: skillBundle.sources,

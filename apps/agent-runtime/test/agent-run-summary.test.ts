@@ -85,6 +85,11 @@ test("writes enabled summary sections as markdown after finish", async () => {
           agentLabel: "Test Agent",
           agentName: "test-agent",
           agentType: "test",
+          model: {
+            profileName: "测试模型列表",
+            modelId: "deepseek-v4-pro",
+            pricingCnyPerMillionTokens: { outputPricePerMillion: 6 },
+          },
           context: {
             payload: { request: "build" },
             systemPrompt: "## System Title\n\n- Follow the supplied context.",
@@ -161,6 +166,8 @@ test("writes enabled summary sections as markdown after finish", async () => {
           "utf8",
         );
         assert.match(markdown, /# Agent Run Summary/);
+        assert.match(markdown, /## Model Configuration/);
+        assert.match(markdown, /deepseek-v4-pro/);
         assert.match(markdown, /## 1\. Agent 思考过程汇总/);
         assert.match(markdown, /## 2\. Agent 工具调用汇总/);
         assert.match(markdown, /## 3\. Agent 接收上下文汇总/);

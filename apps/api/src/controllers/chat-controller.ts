@@ -60,6 +60,12 @@ import {
   listWorkspaces,
 } from "../services/workspace-service";
 import { writeSse, writeSseDone } from "../utils/sse";
+import {
+  abortChatRun,
+  registerChatRun,
+  unregisterChatRun,
+} from "../services/chat-run-registry";
+import { getConversationModelProfile } from "../repositories/model-profile-repository";
 
 /**
  * SSE 处理期间的 Agent 输出累加器，内部始终保留可写的工具调用数组和 token 用量。
@@ -71,8 +77,6 @@ type AgentOutputAccumulator = AgentConversationOutput & {
   durationMs: number;
   tokenUsageRecordIds: string[];
 };
-
-const activeChatRuns = new Map<string, AbortController>();
 
 /**
  * 获取当前本地用户的账户信息。
@@ -173,12 +177,7 @@ export async function stopChatHandler(c: Context) {
     return c.json({ error: parsed.error.flatten() }, 400);
   }
 
-  const controller = activeChatRuns.get(parsed.data.chatId);
-  if (controller && !controller.signal.aborted) {
-    controller.abort();
-  }
-
-  return c.json({ stopped: Boolean(controller) });
+  return c.json({ stopped: abortChatRun(parsed.data.chatId) });
 }
 
 /**
@@ -206,7 +205,7 @@ export async function chatStreamHandler(c: Context) {
     let requestFormStatus: string | null = null;
 
     if (chatId) {
-      activeChatRuns.set(chatId, runtimeController);
+      registerChatRun(chatId, runtimeController);
     }
     c.req.raw.signal.addEventListener("abort", abortRuntime, { once: true });
 
@@ -314,6 +313,10 @@ export async function chatStreamHandler(c: Context) {
       const runtimeContext = await loadProductRuntimeContextForConversation(
         parsed.data.chatId,
       );
+      // 在 SSE 开始执行 Agent 前只解析一次，保证本轮剩余节点使用同一不可变快照。
+      const modelProfile = await getConversationModelProfile(
+        parsed.data.chatId!,
+      );
       runtimeWorkspaceId = runtimeContext.workspaceId;
       if (
         parseLatestExistingGraphNewProjectAction(parsed.data.messages) ===
@@ -338,6 +341,7 @@ export async function chatStreamHandler(c: Context) {
           productContext: runtimeContext.productContext,
           contextSource: runtimeContext.contextSource,
           knowledgeGraph: runtimeContext.knowledgeGraph,
+          modelProfile,
           workflowAnswerResolution,
           workflowRetry: parsed.data.workflowRetry,
           workflowRetryFailure,
@@ -621,9 +625,7 @@ export async function chatStreamHandler(c: Context) {
         });
       }
     } finally {
-      if (chatId && activeChatRuns.get(chatId) === runtimeController) {
-        activeChatRuns.delete(chatId);
-      }
+      if (chatId) unregisterChatRun(chatId, runtimeController);
       c.req.raw.signal.removeEventListener("abort", abortRuntime);
     }
 

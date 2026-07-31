@@ -20,6 +20,7 @@ import type {
   OrchestratorContextSource,
   ProductWorkflowResult,
   ProductKnowledgeGraph,
+  ModelUsageProfile,
   WorkflowRetryAction,
   WorkflowRetryRequest,
 } from "@repo/shared";
@@ -153,6 +154,8 @@ export interface ConversationStreamOptions {
   productContext?: string;
   contextSource?: OrchestratorContextSource;
   knowledgeGraph?: ProductKnowledgeGraph | null;
+  /** API 在 SSE 开始前解析的不可变模型使用列表快照。 */
+  modelProfile?: ModelUsageProfile;
   workflowAnswerResolution?: WorkflowAnswerResolution | null;
   workflowRetry?: WorkflowRetryRequest;
   /** API 从持久化错误中恢复的可信重试上下文，不属于客户端请求契约。 */

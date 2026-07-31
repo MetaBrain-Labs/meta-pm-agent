@@ -17,9 +17,13 @@
  */
 
 import { createDeepAgent } from "deepagents";
-import type { AgentRuntimeTool } from "@repo/shared";
+import type { AgentRuntimeTool, ModelUsageProfile } from "@repo/shared";
 import { canAgentUseTool, createToolsForAgent } from "../common/tool-access";
 import { createChatModel } from "../common/model";
+import {
+  resolveAgentModelSelection,
+  type ResolvedAgentModelSelection,
+} from "../common/model-profile";
 import { createDefaultAgentMiddleware } from "../common/middleware";
 import { createDeepAgentToolAllowlistMiddleware } from "../common/deep-agent-tool-policy";
 import {
@@ -35,6 +39,7 @@ import { DISCOVERY_PROMPT, CHAT_ONLY_PROMPT } from "./prompt";
 export interface ConversationAgentOptions {
   enabledTools?: AgentRuntimeTool[];
   summaryRecorder?: AgentRunSummaryRecorder;
+  modelProfile?: ModelUsageProfile;
   /** 当设为 "chat" 时使用纯闲聊模式，不产生标记块或表单 */
   mode?: "project" | "chat";
 }
@@ -43,7 +48,11 @@ export interface ConversationAgentOptions {
  * 创建 Conversation Agent，负责和用户交互、生成问题表单并整理 user_input。
  */
 export function createConversationAgent(options: ConversationAgentOptions = {}) {
-  const model = createChatModel();
+  const modelSelection = resolveAgentModelSelection(
+    options.modelProfile,
+    "conversation",
+  );
+  const model = createChatModel({}, modelSelection);
   const tools = createToolsForAgent("conversation", options.enabledTools);
 
   return createDeepAgent({
@@ -64,6 +73,13 @@ export function createConversationAgent(options: ConversationAgentOptions = {}) 
       ...createAgentRunSummaryMiddleware(options.summaryRecorder),
     ] as any,
   });
+}
+
+/** 返回 Conversation Agent 当前实际模型，供流计费和诊断报告复用。 */
+export function resolveConversationModel(
+  options: ConversationAgentOptions,
+): ResolvedAgentModelSelection | undefined {
+  return resolveAgentModelSelection(options.modelProfile, "conversation");
 }
 
 /**

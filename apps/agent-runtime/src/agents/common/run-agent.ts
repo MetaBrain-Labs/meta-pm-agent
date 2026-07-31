@@ -14,6 +14,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import type { AgentModelGroup, ModelUsageProfile } from "@repo/shared";
 import { HumanMessage, type BaseMessage, type StructuredTool } from "langchain";
 import { createDeepAgent, type FileData, type SubAgent } from "deepagents";
 import { calculateCost } from "../../config";
@@ -31,6 +32,12 @@ import {
 import { createDeepAgentToolAllowlistMiddleware } from "./deep-agent-tool-policy";
 import { createDefaultAgentMiddleware } from "./middleware";
 import { createChatModel, type ChatModelOptions } from "./model";
+import {
+  createModelSummarySnapshot,
+  resolveAgentModelSelection,
+  toLlmPricing,
+  type ResolvedAgentModelSelection,
+} from "./model-profile";
 
 const SKILL_READ_TOOL_NAME = "read_file";
 
@@ -116,6 +123,12 @@ export interface RunAgentOptions<T, AgentType extends string> {
   agentLabel: string;
   name: string;
   modelOptions?: ChatModelOptions;
+  modelProfile?: ModelUsageProfile;
+  modelGroup?: AgentModelGroup;
+  /** 主 Agent 报告需要同时展示 SubAgent 模型时可覆盖默认模型区块。 */
+  modelSummary?: unknown;
+  /** SubAgent 名称到职责组的映射，用于按其实际模型单独计费。 */
+  subagentModelGroups?: Partial<Record<string, AgentModelGroup>>;
   systemPrompt: string;
   tools?: StructuredTool[];
   skills?: string[];
@@ -254,6 +267,7 @@ interface AgentEventStreamAdapterOptions<AgentType extends string> {
   agentType: AgentType;
   visibleToolNames: ReadonlySet<string>;
   summaryRecorder: AgentRunSummaryRecorder;
+  subagentSelections?: ReadonlyMap<string, ResolvedAgentModelSelection>;
   getToolResultError?: (
     toolName: string,
     toolResult: unknown,
@@ -460,7 +474,11 @@ async function consumeSubagentProjection<AgentType extends string>(
   options: AgentEventStreamAdapterOptions<AgentType>,
   push: (event: AgentRunEvent<AgentType>) => void,
 ): Promise<void> {
+  const startedAt = Date.now();
   let streamedText = "";
+  const subagentUsage: { value: ReturnType<typeof getTokenUsage> } = {
+    value: null,
+  };
   const messages = (async () => {
     for await (const message of subagent.messages) {
       await Promise.all([
@@ -487,7 +505,8 @@ async function consumeSubagentProjection<AgentType extends string>(
           });
         }),
       ]);
-      await message.output;
+      subagentUsage.value =
+        getTokenUsage(await message.output) ?? subagentUsage.value;
     }
   })();
 
@@ -505,6 +524,23 @@ async function consumeSubagentProjection<AgentType extends string>(
     toolCallId,
     result,
   });
+  const selection = options.subagentSelections?.get(subagent.name);
+  const tokenUsage = subagentUsage.value;
+  if (tokenUsage && selection) {
+    const cost = calculateCost(
+      tokenUsage.cacheMissInputTokens,
+      tokenUsage.cacheHitInputTokens,
+      tokenUsage.outputTokens,
+      toLlmPricing(selection),
+    );
+    push({
+      type: "token-usage",
+      agentType: subagent.name as AgentType,
+      ...tokenUsage,
+      ...cost,
+      durationMs: Date.now() - startedAt,
+    });
+  }
 }
 
 /** 消费可回放的文本 projection。 */
@@ -549,6 +585,18 @@ export async function* runAgent<T, AgentType extends string>(
   options: RunAgentOptions<T, AgentType>,
 ): AsyncGenerator<AgentRunEvent<AgentType>, T, void> {
   const startTime = Date.now();
+  const modelSelection = options.modelGroup
+    ? resolveAgentModelSelection(options.modelProfile, options.modelGroup)
+    : undefined;
+  const subagentSelections = new Map<string, ResolvedAgentModelSelection>();
+  for (const [name, group] of Object.entries(
+    options.subagentModelGroups ?? {},
+  )) {
+    const selection = group
+      ? resolveAgentModelSelection(options.modelProfile, group)
+      : undefined;
+    if (selection) subagentSelections.set(name, selection);
+  }
   const tools = options.tools ?? [];
   const subagents = options.subagents ?? [];
   const skillFiles = options.skillFiles ?? {};
@@ -562,6 +610,8 @@ export async function* runAgent<T, AgentType extends string>(
     agentLabel: options.agentLabel,
     agentName: options.name,
     agentType: options.agentType,
+    model:
+      options.modelSummary ?? createModelSummarySnapshot(modelSelection),
     context: {
       modelOptions: options.modelOptions,
       payload: options.payload,
@@ -580,7 +630,7 @@ export async function* runAgent<T, AgentType extends string>(
 
   try {
     const agent = createDeepAgent({
-      model: createChatModel(options.modelOptions) as any,
+      model: createChatModel(options.modelOptions, modelSelection) as any,
       systemPrompt: options.systemPrompt,
       tools,
       name: options.name,
@@ -616,6 +666,7 @@ export async function* runAgent<T, AgentType extends string>(
         agentType: options.agentType,
         visibleToolNames,
         summaryRecorder,
+        subagentSelections,
         getToolResultError: options.getToolResultError,
       },
     );
@@ -630,6 +681,7 @@ export async function* runAgent<T, AgentType extends string>(
         tokenUsage.cacheMissInputTokens,
         tokenUsage.cacheHitInputTokens,
         tokenUsage.outputTokens,
+        toLlmPricing(modelSelection),
       );
       yield {
         type: "token-usage",
@@ -656,7 +708,8 @@ export async function* runAgent<T, AgentType extends string>(
     const resolution = options.resolveOutput({
       text: responseText,
       tokenUsage,
-      maxTokens: options.modelOptions?.maxTokens,
+      maxTokens:
+        modelSelection?.model.maxTokens ?? options.modelOptions?.maxTokens,
     });
     if (resolution.success) {
       await summaryRecorder.finish({

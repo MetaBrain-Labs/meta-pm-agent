@@ -20,6 +20,10 @@ import {
 } from "@repo/shared";
 
 import { resolveJsonOutput, runAgent } from "../../common/run-agent";
+import {
+  createModelSummarySnapshot,
+  resolveAgentModelSelection,
+} from "../../common/model-profile";
 import type {
   OrchestratorAgentInput,
   ProductWorkflowStreamEvent,
@@ -79,12 +83,28 @@ export async function* streamOrchestratorAgent(
       // json_object 会导致模型跳过 task 工具调用直接生成 JSON 输出，
       // 因此两种模式都不能使用 responseFormat: "json_object"。
       modelOptions: { enableThinking: true, temperature: 0, maxTokens: 16384 },
+      modelProfile: input.modelProfile,
+      modelGroup: "orchestrator",
+      modelSummary: {
+        current: createModelSummarySnapshot(
+          resolveAgentModelSelection(input.modelProfile, "orchestrator"),
+        ),
+        delegatedSubagent: createModelSummarySnapshot(
+          resolveAgentModelSelection(
+            input.modelProfile,
+            isPreCheck ? "pre-orchestrator" : "planner",
+          ),
+        ),
+      },
       systemPrompt: ORCHESTRATOR_AGENT_PROMPT,
       // pre-check 模式只需 Pre-Orchestrator SubAgent；full 模式只需 Planner SubAgent。
       // 不混用可避免 LLM 在同一轮次中调用不该出现的 SubAgent。
       subagents: isPreCheck
-        ? [createPreOrchestratorSubagent()]
-        : [createPlannerSubagent()],
+        ? [createPreOrchestratorSubagent(input.modelProfile)]
+        : [createPlannerSubagent(input.modelProfile)],
+      subagentModelGroups: isPreCheck
+        ? { "pre-orchestrator": "pre-orchestrator" }
+        : { planner: "planner" },
       payload:
         attempt === 1
           ? payload

@@ -64,7 +64,9 @@ export function useAppShell() {
   const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [configModalOpen, setConfigModalOpen] = useState(false);
-  const [configTab, setConfigTab] = useState<"account" | "workspace">(
+  const [configTab, setConfigTab] = useState<
+    "account" | "workspace" | "models"
+  >(
     "account",
   );
   const [configWorkspaceVisible, setConfigWorkspaceVisible] = useState(false);
@@ -241,11 +243,14 @@ export function useAppShell() {
     setActiveThreadId(null);
   }, []);
 
-  const openConfigModal = useCallback((tab: "account" | "workspace") => {
-    setConfigWorkspaceVisible(tab === "workspace");
-    setConfigTab(tab);
-    setConfigModalOpen(true);
-  }, []);
+  const openConfigModal = useCallback(
+    (tab: "account" | "workspace" | "models") => {
+      setConfigWorkspaceVisible(tab === "workspace");
+      setConfigTab(tab);
+      setConfigModalOpen(true);
+    },
+    [],
+  );
 
   const openProjectModal = useCallback(() => {
     setProjectLocationHint(false);

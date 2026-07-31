@@ -24,6 +24,7 @@ import type {
   ChatResult,
 } from "@langchain/core/outputs";
 import { getLlmConfig } from "../../config";
+import type { ResolvedAgentModelSelection } from "./model-profile";
 
 // 在模型实例创建前，全局注册 HarnessProfile 排除 DeepAgents 文件系统工具。
 import "./harness-profile";
@@ -291,26 +292,37 @@ class ReasoningCompatibleChatOpenAI extends ChatOpenAI {
 /**
  * 创建所有 Agent 共用的聊天模型实例，统一读取 LLM 配置，并允许特定 Agent 覆盖结构化输出参数。
  */
-export function createChatModel(options: ChatModelOptions = {}) {
+export function createChatModel(
+  options: ChatModelOptions = {},
+  selection?: ResolvedAgentModelSelection,
+) {
   const config = getLlmConfig();
   const modelKwargs: Record<string, unknown> = {};
-  const enableThinking = options.enableThinking ?? config.enableThinking;
+  // Chat 模型列表强制开启思考；未传列表的独立 Document 工作流沿用原环境配置。
+  const enableThinking = selection
+    ? true
+    : options.enableThinking ?? config.enableThinking;
 
   if (enableThinking) {
     modelKwargs.thinking = { type: "enabled" };
-    modelKwargs.reasoning_effort = config.reasoningEffort;
+    modelKwargs.reasoning_effort =
+      selection?.model.reasoningEffort ?? config.reasoningEffort;
   }
   if (options.responseFormat) {
     modelKwargs.response_format = { type: options.responseFormat };
   }
 
   return new ReasoningCompatibleChatOpenAI({
-    model: config.model,
+    model: selection?.model.modelId ?? config.model,
     apiKey: config.apiKey,
-    temperature: options.temperature ?? config.temperature,
-    maxTokens: options.maxTokens ?? config.maxTokens,
+    // DeepSeek 思考模式会忽略采样参数；列表值只保存和展示，运行时不下发。
+    temperature: selection
+      ? undefined
+      : options.temperature ?? config.temperature,
+    maxTokens:
+      selection?.model.maxTokens ?? options.maxTokens ?? config.maxTokens,
     timeout: options.timeout ?? config.timeout,
-    configuration: { baseURL: config.baseURL },
+    configuration: { baseURL: selection?.model.baseUrl ?? config.baseURL },
     modelKwargs: Object.keys(modelKwargs).length > 0 ? modelKwargs : undefined,
   });
 }

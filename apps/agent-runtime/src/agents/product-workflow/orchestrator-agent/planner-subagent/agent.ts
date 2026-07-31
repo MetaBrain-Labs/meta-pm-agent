@@ -14,9 +14,11 @@ import type { SubAgent } from "deepagents";
 import {
   TaskExecutionPlanSchema,
   type TaskExecutionPlan,
+  type ModelUsageProfile,
 } from "@repo/shared";
 import { createDeepAgentToolAllowlistMiddleware } from "../../../common/deep-agent-tool-policy";
 import { createChatModel } from "../../../common/model";
+import { resolveAgentModelSelection } from "../../../common/model-profile";
 import { parseJsonObject } from "../../../../utils/json";
 import type { OrchestratorAgentInput } from "../../types";
 import type { ExecutorAgentType } from "../../executor-agent/definitions";
@@ -38,7 +40,9 @@ const BROAD_PRODUCT_DESIGN_REQUIRED_AGENTS = [
  * 创建 Planner 子代理；该子代理接收完整产品上下文并通过 task 描述返回 DAG JSON。
  * 子代理无工具权限，仅从 task 描述中读取上下文并返回结构化 JSON。
  */
-export function createPlannerSubagent(): SubAgent {
+export function createPlannerSubagent(
+  modelProfile?: ModelUsageProfile,
+): SubAgent {
   const subagentToolAllowlistMiddleware =
     createDeepAgentToolAllowlistMiddleware({
       agentName: "orchestrator-planner-subagent",
@@ -50,13 +54,16 @@ export function createPlannerSubagent(): SubAgent {
     description:
       "Generates executable TaskExecutionPlan DAG from product request analysis and knowledge graph context. Returns JSON matching TaskExecutionPlanSchema.",
     systemPrompt: PLANNER_SUBAGENT_PROMPT,
-    model: createChatModel({
-      enableThinking: true,
-      responseFormat: "json_object",
-      temperature: 0,
-      maxTokens: 16_384,
-      timeout: 120_000,
-    }),
+    model: createChatModel(
+      {
+        enableThinking: true,
+        responseFormat: "json_object",
+        temperature: 0,
+        maxTokens: 16_384,
+        timeout: 120_000,
+      },
+      resolveAgentModelSelection(modelProfile, "planner"),
+    ),
     tools: [],
     middleware: [subagentToolAllowlistMiddleware],
   };

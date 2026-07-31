@@ -20,6 +20,7 @@ import type {
   RequestAnalysis,
   TaskExecutionNode,
   TaskExecutionPlan,
+  ModelUsageProfile,
 } from "@repo/shared";
 import type { UserInputRecord } from "../request/user-input";
 import type { ExecutorAgentType } from "./executor-agent/definitions";
@@ -28,6 +29,7 @@ import type { ExecutorAgentType } from "./executor-agent/definitions";
  * 产品工作流的公共输入，贯穿 Planner 与 Executor。
  */
 export interface ProductWorkflowInput {
+  modelProfile?: ModelUsageProfile;
   workspaceId?: string;
   productContext?: string;
   contextSource?: OrchestratorContextSource;
@@ -90,6 +92,7 @@ export interface ExecutorAgentInput extends ProductWorkflowInput {
  * Critique Agent 收尾节点输入，用于审查 Planner 与 Executor 的产出。
  */
 export interface CritiqueAgentInput {
+  modelProfile?: ModelUsageProfile;
   workspaceId?: string;
   productContext?: string;
   requestAnalysis: RequestAnalysis;

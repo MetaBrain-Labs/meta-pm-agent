@@ -17,7 +17,10 @@
  */
 
 import { z } from "zod";
-import type { ProductKnowledgeGraph } from "@repo/shared";
+import type {
+  ModelUsageProfile,
+  ProductKnowledgeGraph,
+} from "@repo/shared";
 
 const ORCHESTRATOR_CLARIFICATION_FORM_PREFIX = "orch-clarification";
 const ORCHESTRATOR_GRAPH_CONFLICT_FORM_PREFIX = "orch-graph-conflict";
@@ -74,6 +77,7 @@ export const PreOrchResultSchema = z.object({
 export type PreOrchResult = z.infer<typeof PreOrchResultSchema>;
 
 export interface PreOrchestratorInput {
+  modelProfile?: ModelUsageProfile;
   userMessage: string;
   productContext?: string;
   knowledgeGraph?: ProductKnowledgeGraph | null;

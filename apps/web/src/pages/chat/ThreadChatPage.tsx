@@ -16,7 +16,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChatApp } from "../../components/ChatApp";
-import { createChatRecord, fetchChatMessages } from "../../api/chat-api";
+import {
+  createChatRecord,
+  fetchChatMessages,
+  fetchChatModelProfile,
+  fetchModelProfiles,
+  selectChatModelProfile,
+} from "../../api/chat-api";
 import {
   DEFAULT_CHAT_TITLE,
   NO_WORKSPACE_MESSAGE,
@@ -24,6 +30,7 @@ import {
 import type {
   HumanInTheLoopResume,
   Message,
+  ModelUsageProfile,
   ThreadInfo,
   WorkflowRetryRequest,
 } from "../../types";
@@ -63,6 +70,10 @@ export function ThreadChatPage({
   const [isLoading, setIsLoading] = useState(false);
   const [isMessagesLoading, setIsMessagesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [modelProfiles, setModelProfiles] = useState<ModelUsageProfile[]>([]);
+  const [selectedModelProfileId, setSelectedModelProfileId] =
+    useState("system-default");
+  const selectedModelProfileIdRef = useRef("system-default");
   const workspaceIdRef = useRef<string | null>(workspaceId);
   const threadIdRef = useRef<string | null>(thread?.id ?? null);
   const requestFormIdRef = useRef<string | undefined>(thread?.requestFormId);
@@ -75,6 +86,10 @@ export function ThreadChatPage({
   }, [messages]);
 
   useEffect(() => {
+    selectedModelProfileIdRef.current = selectedModelProfileId;
+  }, [selectedModelProfileId]);
+
+  useEffect(() => {
     if (creationError) {
       setError(creationError);
     }
@@ -84,6 +99,60 @@ export function ThreadChatPage({
     workspaceIdRef.current = workspaceId;
     setError(null);
   }, [workspaceId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const reload = async () => {
+      try {
+        const profiles = await fetchModelProfiles();
+        if (cancelled) return;
+        setModelProfiles(profiles);
+        const currentThreadId = threadIdRef.current;
+        if (currentThreadId) {
+          const selected = await fetchChatModelProfile(currentThreadId);
+          if (!cancelled) setSelectedModelProfileId(selected.id);
+        } else if (
+          !profiles.some(
+            (profile) => profile.id === selectedModelProfileIdRef.current,
+          )
+        ) {
+          setSelectedModelProfileId(profiles[0]?.id ?? "system-default");
+        }
+      } catch {
+        if (!cancelled) {
+          setError("模型使用列表加载失败，请确认已执行建表 SQL");
+        }
+      }
+    };
+    const handleProfilesChanged = () => void reload();
+    void reload();
+    window.addEventListener("model-profiles-changed", handleProfilesChanged);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(
+        "model-profiles-changed",
+        handleProfilesChanged,
+      );
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!threadId) {
+      setSelectedModelProfileId("system-default");
+      return;
+    }
+    let cancelled = false;
+    fetchChatModelProfile(threadId)
+      .then((profile) => {
+        if (!cancelled) setSelectedModelProfileId(profile.id);
+      })
+      .catch(() => {
+        if (!cancelled) setError("当前会话模型列表加载失败");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [threadId]);
 
   useEffect(() => {
     threadIdRef.current = threadId;
@@ -157,6 +226,25 @@ export function ThreadChatPage({
     setIsLoading(false);
   }, []);
 
+  /** 在空白会话仅预选，已有会话则立即持久化；失败时回滚 UI。 */
+  const changeModelProfile = useCallback(
+    async (profileId: string) => {
+      if (isLoading || profileId === selectedModelProfileId) return;
+      const previousId = selectedModelProfileId;
+      setSelectedModelProfileId(profileId);
+      const currentThreadId = threadIdRef.current;
+      if (!currentThreadId) return;
+      try {
+        const selected = await selectChatModelProfile(currentThreadId, profileId);
+        setSelectedModelProfileId(selected.id);
+      } catch {
+        setSelectedModelProfileId(previousId);
+        setError("模型列表切换失败；运行中只能在 HITL 或完成后切换");
+      }
+    },
+    [isLoading, selectedModelProfileId],
+  );
+
   const sendMessage = useCallback(
     async (
       text: string,
@@ -185,6 +273,8 @@ export function ThreadChatPage({
           threadId = newThread.id;
           threadIdRef.current = threadId;
           requestFormIdRef.current = newThread.requestFormId;
+          // 空白新会话先持久化预选列表，成功后才允许启动 SSE。
+          await selectChatModelProfile(threadId, selectedModelProfileId);
           onNewThread(newThread);
         } catch (error: unknown) {
           setError(mapErrorToChinese(error));
@@ -206,7 +296,13 @@ export function ThreadChatPage({
         onThreadTitleChange,
       });
     },
-    [isLoading, onNewThread, onThreadMessageStarted, onThreadTitleChange],
+    [
+      isLoading,
+      onNewThread,
+      onThreadMessageStarted,
+      onThreadTitleChange,
+      selectedModelProfileId,
+    ],
   );
 
   const clearMessages = useCallback(() => {
@@ -223,6 +319,9 @@ export function ThreadChatPage({
       isMessagesLoading={isMessagesLoading}
       error={error}
       disabledReason={workspaceId ? null : NO_WORKSPACE_MESSAGE}
+      modelProfiles={modelProfiles}
+      selectedModelProfileId={selectedModelProfileId}
+      onModelProfileChange={(profileId) => void changeModelProfile(profileId)}
       onSend={sendMessage}
       onStop={stopGeneration}
       onClear={clearMessages}

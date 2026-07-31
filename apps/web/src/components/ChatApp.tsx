@@ -23,7 +23,6 @@ import {
 } from "react";
 import {
   Button,
-  Dropdown,
   FloatButton,
   Input,
   Skeleton,
@@ -38,7 +37,6 @@ import {
   ArrowLeftOutlined,
   CaretRightOutlined,
   ClearOutlined,
-  DownOutlined,
   PaperClipOutlined,
   PartitionOutlined,
   SearchOutlined,
@@ -50,12 +48,14 @@ import type {
   Message,
   TokenUsageInfo,
   WorkflowRetryRequest,
+  ModelUsageProfile,
 } from "../types";
 import {
   fetchProductKnowledgeGraph,
   type WorkspaceKnowledgeGraphData,
 } from "../api/chat-api";
 import { MessageBubble } from "./MessageBubble";
+import { ModelProfileSelector } from "./ModelProfileSelector";
 import { KnowledgeGraphModal } from "./modals/KnowledgeGraphModal";
 import {
   LangGraphModal,
@@ -79,8 +79,6 @@ const EXAMPLE_QUERIES = [
   "把今天的讨论整理成待办事项",
 ];
 
-const ACTIVE_MODEL = "DeepSeek V4 Pro";
-
 interface Props {
   workspaceId: string | null;
   workspaceName: string;
@@ -89,6 +87,9 @@ interface Props {
   isMessagesLoading: boolean;
   error: string | null;
   disabledReason?: string | null;
+  modelProfiles: ModelUsageProfile[];
+  selectedModelProfileId: string;
+  onModelProfileChange: (profileId: string) => void;
   onSend: (
     text: string,
     options?: {
@@ -110,6 +111,9 @@ export function ChatApp({
   isMessagesLoading,
   error,
   disabledReason,
+  modelProfiles,
+  selectedModelProfileId,
+  onModelProfileChange,
   onSend,
   onStop,
   onClear,
@@ -628,19 +632,12 @@ export function ChatApp({
                             onClick={handleOpenKgModal}
                           />
                         </Tooltip>
-                        <Dropdown
-                          trigger={["click"]}
-                          menu={{
-                            selectable: true,
-                            selectedKeys: [ACTIVE_MODEL],
-                            items: [{ key: ACTIVE_MODEL, label: ACTIVE_MODEL }],
-                          }}
-                        >
-                          <button type="button" className="model-selector">
-                            <span>{ACTIVE_MODEL}</span>
-                            <DownOutlined />
-                          </button>
-                        </Dropdown>
+                        <ModelProfileSelector
+                          profiles={modelProfiles}
+                          selectedProfileId={selectedModelProfileId}
+                          disabled={isLoading}
+                          onChange={onModelProfileChange}
+                        />
                         <div className="chat-composer-actions">
                           {isLoading ? (
                             <Tooltip title="停止生成">
@@ -917,19 +914,12 @@ export function ChatApp({
                         onClick={handleOpenKgModal}
                       />
                     </Tooltip>
-                    <Dropdown
-                      trigger={["click"]}
-                      menu={{
-                        selectable: true,
-                        selectedKeys: [ACTIVE_MODEL],
-                        items: [{ key: ACTIVE_MODEL, label: ACTIVE_MODEL }],
-                      }}
-                    >
-                      <button type="button" className="model-selector">
-                        <span>{ACTIVE_MODEL}</span>
-                        <DownOutlined />
-                      </button>
-                    </Dropdown>
+                    <ModelProfileSelector
+                      profiles={modelProfiles}
+                      selectedProfileId={selectedModelProfileId}
+                      disabled={isLoading}
+                      onChange={onModelProfileChange}
+                    />
                     <div className="chat-composer-actions">
                       {isLoading ? (
                         <Tooltip title="停止生成">

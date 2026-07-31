@@ -40,6 +40,50 @@ export type StreamEventType =
   | "error"
   | "abort";
 
+/** DeepSeek 模型使用列表中的单模型配置。 */
+export interface DeepSeekModelConfig {
+  provider: "deepseek";
+  modelId: "deepseek-v4-flash" | "deepseek-v4-pro";
+  customName: string;
+  baseUrl: string;
+  thinking: true;
+  temperature: number;
+  topP: number;
+  maxTokens: number;
+  reasoningEffort: "low" | "high" | "max";
+  pricing: {
+    cacheHitInputPricePerMillion: number;
+    cacheMissInputPricePerMillion: number;
+    outputPricePerMillion: number;
+  };
+}
+
+export type ModelTier = "reasoning" | "standard" | "fast";
+export type AgentModelGroup =
+  | "conversation"
+  | "pre-orchestrator"
+  | "request"
+  | "orchestrator"
+  | "planner"
+  | "executors"
+  | "critique";
+
+/** 设置页和 Chat 选择器共享的模型使用列表 DTO。 */
+export interface ModelUsageProfile {
+  id: string;
+  name: string;
+  isSystem: boolean;
+  config:
+    | {
+        mode: "tiered";
+        models: Record<ModelTier, DeepSeekModelConfig>;
+        assignments: Record<AgentModelGroup, ModelTier>;
+      }
+    | { mode: "universal"; model: DeepSeekModelConfig };
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface StreamEvent {
   type: StreamEventType;
   roundId?: string;

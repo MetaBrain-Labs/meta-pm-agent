@@ -66,6 +66,8 @@ export async function* streamCritiqueAgent(
       ...JSON_AGENT_MODEL_OPTIONS,
       maxTokens: 16384,
     },
+    modelProfile: input.modelProfile,
+    modelGroup: "critique",
     systemPrompt: CRITIQUE_AGENT_PROMPT,
     payload: createCritiqueAgentPayload(input),
     resolveOutput: (context) =>

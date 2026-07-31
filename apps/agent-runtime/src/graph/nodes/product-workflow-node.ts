@@ -35,6 +35,7 @@ import {
   streamCritiqueAgent,
   type OrchestratorAgentOutput,
 } from "../../agents/product-workflow/agent";
+import { getModelProfileFromRunnableConfig } from "../../agents/common/model-profile";
 import { updateProductContextMetadata } from "../../agents/product-workflow/common/context-metadata";
 import type { WorkflowGraphStateValue } from "../state";
 
@@ -145,6 +146,7 @@ export async function orchestratorAgentNode(
   });
   const { decision, plan } = (await consumeProductWorkflowStream(
     streamOrchestratorAgent({
+      modelProfile: getModelProfileFromRunnableConfig(config),
       workspaceId: state.workspaceId,
       productContext: state.productContext,
       contextSource: state.contextSource,
@@ -360,6 +362,7 @@ async function executeExecutorAgentTask(
 
   const result = await consumeProductWorkflowStream(
     streamExecutorAgent({
+      modelProfile: getModelProfileFromRunnableConfig(config),
       task,
       plan: state.plan,
       knowledgeGraph,
@@ -429,6 +432,7 @@ async function executeCritiqueAgentReview(
   });
   const workflowResult = await consumeProductWorkflowStream(
     streamCritiqueAgent({
+      modelProfile: getModelProfileFromRunnableConfig(config),
       workspaceId: state.workspaceId,
       productContext: state.productContext,
       requestAnalysis: state.requestAnalysis,

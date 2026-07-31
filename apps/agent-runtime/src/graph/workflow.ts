@@ -24,6 +24,7 @@ import type {
   ProductWorkflowResult,
   RequestAnalysis,
   TaskExecutionPlan,
+  ModelUsageProfile,
 } from "@repo/shared";
 import type { UserInputRecord } from "../agents/request/user-input";
 import type { ProductWorkflowStreamEvent } from "../agents/product-workflow/agent";
@@ -50,6 +51,8 @@ import { WorkflowGraphState, type WorkflowGraphStateValue } from "./state";
 import { getWorkflowCheckpointer } from "./workflow-checkpointer";
 
 export interface WorkflowGraphInput {
+  /** API 在本次请求或恢复前重新解析的会话当前模型快照。 */
+  modelProfile?: ModelUsageProfile;
   workspaceId?: string;
   productContext?: string;
   contextSource?: OrchestratorContextSource;
@@ -306,6 +309,7 @@ function createWorkflowRunConfig(
       thread_id:
         input.workflowThreadId ??
         `workflow:local:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      ...(input.modelProfile ? { model_profile: input.modelProfile } : {}),
       ...(input.retryFailure
         ? {
             retry_task_id: input.retryFailure.taskId,

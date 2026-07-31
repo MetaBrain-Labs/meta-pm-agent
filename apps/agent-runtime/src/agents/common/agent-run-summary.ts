@@ -43,6 +43,8 @@ export interface AgentRunSummaryOptions {
   agentName: string;
   agentType: string;
   context?: unknown;
+  /** 当前 Agent 实际使用的模型与价格快照，不得包含 API Key。 */
+  model?: unknown;
 }
 
 export interface AgentRunSummaryFinishOptions {
@@ -639,6 +641,15 @@ function renderAgentRunMarkdown({
     `- Ended at: ${endedAt.toISOString()}`,
     `- Duration: ${endedAt.getTime() - startedAt.getTime()} ms`,
   ];
+
+  if (summaryOptions.model) {
+    lines.push(
+      "",
+      "## Model Configuration",
+      "",
+      formatJsonBlock(summaryOptions.model),
+    );
+  }
 
   if (finishOptions.tokenUsage) {
     lines.push(

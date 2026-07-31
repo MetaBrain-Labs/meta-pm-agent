@@ -25,7 +25,12 @@ import { createAgentRunSummaryRecorder } from "../common/agent-run-summary";
 import {
   createConversationAgent,
   createConversationAgentSystemPrompt,
+  resolveConversationModel,
 } from "./agent";
+import {
+  createModelSummarySnapshot,
+  toLlmPricing,
+} from "../common/model-profile";
 import {
   getReasoningContent,
   getTextContent,
@@ -101,12 +106,15 @@ async function* streamAgentEvents(
   let failedError: unknown = null;
   const baseAgentOptions = {
     enabledTools: options.enabledTools,
+    modelProfile: options.modelProfile,
     mode: options.mode,
   };
+  const modelSelection = resolveConversationModel(baseAgentOptions);
   const summaryRecorder = createAgentRunSummaryRecorder({
     agentLabel: "Conversation Agent",
     agentName: "conversation-agent",
     agentType: "conversation",
+    model: createModelSummarySnapshot(modelSelection),
     context: {
       enabledTools: options.enabledTools ?? [],
       knowledgeGraph: options.knowledgeGraph ?? null,
@@ -196,6 +204,7 @@ async function* streamAgentEvents(
         tokenUsage.cacheMissInputTokens,
         tokenUsage.cacheHitInputTokens,
         tokenUsage.outputTokens,
+        toLlmPricing(modelSelection),
       );
       yield {
         type: "token-usage",
@@ -312,6 +321,7 @@ async function* streamWithPreOrchestrator(
   lastMessage: ChatMessage,
 ): AsyncGenerator<ConversationStreamEvent> {
   const orchStream = streamOrchestratorPreCheck({
+    modelProfile: options.modelProfile,
     userMessage: lastMessage.content ?? "",
     productContext: options.productContext,
     knowledgeGraph: options.knowledgeGraph,
@@ -703,6 +713,7 @@ async function* streamPlanningAfterUserInput(
         undefined;
 
     for await (const event of streamWorkflowGraph({
+      modelProfile: options.modelProfile,
       workspaceId: options.workspaceId,
       productContext: options.productContext,
       contextSource: options.contextSource,

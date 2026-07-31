@@ -17,7 +17,11 @@
 
 import { HumanMessage, type BaseMessage } from "langchain";
 import { createDeepAgent } from "deepagents";
-import { RequestAnalysisSchema, type RequestAnalysis } from "@repo/shared";
+import {
+  RequestAnalysisSchema,
+  type ModelUsageProfile,
+  type RequestAnalysis,
+} from "@repo/shared";
 import { createChatModel } from "../common/model";
 import { createDefaultAgentMiddleware } from "../common/middleware";
 import { createDeepAgentToolAllowlistMiddleware } from "../common/deep-agent-tool-policy";
@@ -35,10 +39,16 @@ import {
 } from "../../utils/message-adapter";
 import { parseJsonObject } from "../../utils/json";
 import type { UserInputRecord } from "./user-input";
+import {
+  createModelSummarySnapshot,
+  resolveAgentModelSelection,
+  toLlmPricing,
+} from "../common/model-profile";
 
 const REQUEST_AGENT_MAX_ATTEMPTS = 2;
 
 export interface RequestAgentInput {
+  modelProfile?: ModelUsageProfile;
   productContext?: string;
   userInput: UserInputRecord[];
   signal?: AbortSignal;
@@ -67,13 +77,20 @@ export type RequestAgentStreamEvent =
 /**
  * 创建真正的 Request Agent，由 DeepAgent 承载 system prompt 和模型调用。
  */
-export function createRequestAgent(summaryRecorder?: AgentRunSummaryRecorder) {
-  const model = createChatModel({
-    enableThinking: true,
-    maxTokens: 8192,
-    responseFormat: "json_object",
-    temperature: 0,
-  });
+export function createRequestAgent(
+  summaryRecorder?: AgentRunSummaryRecorder,
+  modelProfile?: ModelUsageProfile,
+) {
+  const modelSelection = resolveAgentModelSelection(modelProfile, "request");
+  const model = createChatModel(
+    {
+      enableThinking: true,
+      maxTokens: 8192,
+      responseFormat: "json_object",
+      temperature: 0,
+    },
+    modelSelection,
+  );
   return createDeepAgent({
     model: model as any,
     systemPrompt: REQUEST_AGENT_PROMPT,
@@ -119,6 +136,10 @@ export async function* streamRequestAgent(
   let lastError: Error | null = null;
   const startTime = Date.now();
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
+  const modelSelection = resolveAgentModelSelection(
+    input.modelProfile,
+    "request",
+  );
 
   for (let attempt = 1; attempt <= REQUEST_AGENT_MAX_ATTEMPTS; attempt++) {
     const requestPayload = {
@@ -136,6 +157,7 @@ export async function* streamRequestAgent(
       agentLabel: `Request Agent Attempt ${attempt}`,
       agentName: `request-agent-attempt-${attempt}`,
       agentType: "request",
+      model: createModelSummarySnapshot(modelSelection),
       context: {
         attempt,
         maxAttempts: REQUEST_AGENT_MAX_ATTEMPTS,
@@ -143,7 +165,7 @@ export async function* streamRequestAgent(
         systemPrompt: REQUEST_AGENT_PROMPT,
       },
     });
-    const agent = createRequestAgent(summaryRecorder);
+    const agent = createRequestAgent(summaryRecorder, input.modelProfile);
     let responseText = "";
 
     let run: AsyncIterable<[BaseMessage, unknown]>;
@@ -220,6 +242,7 @@ export async function* streamRequestAgent(
           tokenUsage.cacheMissInputTokens,
           tokenUsage.cacheHitInputTokens,
           tokenUsage.outputTokens,
+          toLlmPricing(modelSelection),
         );
         yield {
           type: "token-usage",

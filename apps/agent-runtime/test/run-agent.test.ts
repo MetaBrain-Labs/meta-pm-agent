@@ -23,6 +23,11 @@ import {
   type AgentRunEvent,
 } from "../src/agents/common/run-agent";
 import type { AgentRunSummaryRecorder } from "../src/agents/common/agent-run-summary";
+import { SYSTEM_DEFAULT_MODEL_PROFILE } from "@repo/shared";
+import {
+  resolveAgentModelSelection,
+  type ResolvedAgentModelSelection,
+} from "../src/agents/common/model-profile";
 
 /** 构造不含 provider token 数据的解析上下文。 */
 const context = (text: string) => ({
@@ -44,6 +49,7 @@ async function collectEventStream(
     "kg_file_add_nodes",
     "kg_file_raise_blocker",
   ]),
+  subagentSelections?: ReadonlyMap<string, ResolvedAgentModelSelection>,
 ): Promise<{
   events: AgentRunEvent<"executor">[];
   result: AgentEventStreamResult;
@@ -52,6 +58,7 @@ async function collectEventStream(
     agentType: "executor",
     visibleToolNames,
     summaryRecorder: recorder,
+    subagentSelections,
   });
   const events: AgentRunEvent<"executor">[] = [];
   let next = await generator.next();
@@ -298,6 +305,50 @@ test("adapts native tool and SubAgent projections without parsing tool_calls", a
     probe.subagentCalls.map((record) => record.input),
     [{ description: "Plan A" }, { description: "Plan B" }],
   );
+});
+
+test("prices SubAgent usage with its own responsibility model", async () => {
+  const probe = createSummaryProbe();
+  const plannerSelection = resolveAgentModelSelection(
+    SYSTEM_DEFAULT_MODEL_PROFILE,
+    "planner",
+  );
+  assert.ok(plannerSelection);
+  const usageMessage = new AIMessage({
+    content: "planner result",
+    usage_metadata: {
+      input_tokens: 1_000_000,
+      output_tokens: 1_000_000,
+      total_tokens: 2_000_000,
+      input_token_details: { cache_read: 0 },
+    },
+  });
+  const run: AgentEventStreamProjection = {
+    messages: streamOf(),
+    toolCalls: streamOf(),
+    subagents: streamOf({
+      name: "planner",
+      taskInput: Promise.resolve("Plan"),
+      messages: streamOf({
+        text: streamOf("planner result"),
+        reasoning: streamOf(),
+        output: Promise.resolve(usageMessage),
+      }),
+      output: Promise.resolve({ messages: [usageMessage] }),
+    }),
+    output: Promise.resolve({ messages: [] }),
+  };
+
+  const { events } = await collectEventStream(
+    run,
+    probe.recorder,
+    new Set(),
+    new Map([["planner", plannerSelection]]),
+  );
+  const usage = events.find((event) => event.type === "token-usage");
+  assert.equal(usage?.agentType, "planner");
+  assert.equal(usage?.costInput, 3);
+  assert.equal(usage?.costOutput, 6);
 });
 
 test("emits structured tool errors and propagates projection failures", async () => {
