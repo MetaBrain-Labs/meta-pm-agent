@@ -33,6 +33,7 @@ import type {
 export interface DocumentWorkflowGraphSnapshot {
   nodes: KnowledgeGraphEntity[];
   relations: KnowledgeGraphRelation[];
+  version?: number;
 }
 
 /**

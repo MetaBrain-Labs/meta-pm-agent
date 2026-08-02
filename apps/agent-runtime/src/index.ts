@@ -43,8 +43,29 @@ export {
 export {
   createDocumentWorkflowThreadId,
   documentGraph,
+  selectNextNodeAfterScore,
   streamDocumentWorkflow,
 } from "./graph/document-workflow";
+export {
+  createScoreRetryFeedback,
+  DOCUMENT_SCORE_MAX_ATTEMPTS,
+} from "./agents/document-agent/scoring";
+export {
+  createDocumentEvidenceResolutionThreadId,
+  formatDocumentEvidenceQuestionForm,
+  isDocumentEvidenceResolutionFormId,
+  resumeDocumentEvidenceResolutionWorkflow,
+  startDocumentEvidenceResolutionWorkflow,
+  type DocumentEvidenceAnswerResult,
+  type DocumentEvidenceResolutionWorkflowInput,
+} from "./graph/document-evidence-resolution-workflow";
+export {
+  createFallbackDocumentEvidenceResolution,
+  normalizeDocumentEvidenceResolution,
+  type DocumentEvidenceBlocker,
+  type DocumentEvidenceResolution,
+  type DocumentEvidenceResolutionInput,
+} from "./agents/product-workflow/orchestrator-agent/document-evidence-resolver-subagent";
 export type {
   DocumentWorkflowInput,
   DocumentWorkflowResult,

@@ -15,6 +15,10 @@
 
 import { randomUUID } from "node:crypto";
 import type { WorkflowAnswerResolution } from "@repo/agent-runtime";
+import type {
+  DocumentEvidenceBlocker,
+  DocumentEvidenceResolution,
+} from "@repo/agent-runtime";
 import { prisma } from "@repo/database";
 import type {
   ChatMessage,
@@ -327,6 +331,211 @@ export async function finishAnsweredDecisionItems(
 
     return resolution;
   });
+}
+
+/** request_form_item JSONB 中的证据解决流程上下文。 */
+export interface DocumentEvidenceResolutionRecord {
+  itemId: string;
+  requestFormId: string;
+  conversationId: string;
+  workspaceId: string;
+  runId: string;
+  sourceGraphVersion: number;
+  blockers: DocumentEvidenceBlocker[];
+  resolution?: DocumentEvidenceResolution;
+  status: string;
+  resolvedGraphVersion?: number;
+}
+
+interface DocumentEvidenceResolutionRow {
+  item_id: string;
+  form_id: string;
+  conversation_id: string;
+  workspace_id: string;
+  status: string;
+  payload: unknown;
+}
+
+/**
+ * 为专用会话创建一条证据解决上下文，阻断内容只来自服务端持久化评分结果。
+ */
+export async function createDocumentEvidenceResolutionItem({
+  requestFormId,
+  runId,
+  sourceGraphVersion,
+  blockers,
+}: {
+  requestFormId: string;
+  runId: string;
+  sourceGraphVersion: number;
+  blockers: DocumentEvidenceBlocker[];
+}): Promise<void> {
+  await prisma.$executeRaw`
+    INSERT INTO "request_form_item" (
+      "id", "form_id", "type", "status", "agent", "priority", "payload"
+    )
+    VALUES (
+      ${randomUUID()},
+      ${requestFormId},
+      'document_evidence_resolution',
+      'ready',
+      'orchestrator',
+      100,
+      ${JSON.stringify({
+        run_id: runId,
+        source_graph_version: sourceGraphVersion,
+        blockers,
+      })}::jsonb
+    )
+  `;
+}
+
+/**
+ * 按 PRD run 查找已存在的专用会话，保证重复点击返回同一条未结束流程。
+ */
+export async function findDocumentEvidenceResolutionByRunId(
+  runId: string,
+): Promise<DocumentEvidenceResolutionRecord | null> {
+  const rows = await prisma.$queryRaw<DocumentEvidenceResolutionRow[]>`
+    SELECT
+      i."id" AS "item_id",
+      i."form_id",
+      f."chat_id" AS "conversation_id",
+      c."workspace_id",
+      i."status",
+      i."payload"
+    FROM "request_form_item" i
+    JOIN "request_form" f ON f."id" = i."form_id"
+    JOIN "conversation" c ON c."id" = f."chat_id"
+    WHERE i."type" = 'document_evidence_resolution'
+      AND i."payload"->>'run_id' = ${runId}
+      AND i."status" IN ('ready', 'collecting', 'supplement_running', 'completed')
+    ORDER BY i."created_at" DESC
+    LIMIT 1
+  `;
+  return rows[0] ? mapDocumentEvidenceResolutionRow(rows[0]) : null;
+}
+
+/**
+ * 按 request form 恢复专用流程上下文；普通聊天不会命中该记录。
+ */
+export async function getDocumentEvidenceResolutionByRequestFormId(
+  requestFormId: string | undefined,
+): Promise<DocumentEvidenceResolutionRecord | null> {
+  if (!requestFormId) return null;
+  const rows = await prisma.$queryRaw<DocumentEvidenceResolutionRow[]>`
+    SELECT
+      i."id" AS "item_id",
+      i."form_id",
+      f."chat_id" AS "conversation_id",
+      c."workspace_id",
+      i."status",
+      i."payload"
+    FROM "request_form_item" i
+    JOIN "request_form" f ON f."id" = i."form_id"
+    JOIN "conversation" c ON c."id" = f."chat_id"
+    WHERE i."form_id" = ${requestFormId}
+      AND i."type" = 'document_evidence_resolution'
+    ORDER BY i."created_at" DESC
+    LIMIT 1
+  `;
+  return rows[0] ? mapDocumentEvidenceResolutionRow(rows[0]) : null;
+}
+
+/**
+ * 保存 Resolver 生成的问题与 blocker 映射，便于刷新恢复和审计。
+ */
+export async function persistDocumentEvidenceResolutionPlan(
+  requestFormId: string | undefined,
+  resolution: DocumentEvidenceResolution,
+): Promise<void> {
+  if (!requestFormId) return;
+  await prisma.$executeRaw`
+    UPDATE "request_form_item"
+    SET
+      "status" = 'collecting',
+      "payload" = "payload" || ${JSON.stringify({ resolution })}::jsonb,
+      "updated_at" = CURRENT_TIMESTAMP
+    WHERE "form_id" = ${requestFormId}
+      AND "type" = 'document_evidence_resolution'
+      AND "status" IN ('ready', 'collecting')
+  `;
+}
+
+/**
+ * 在答案提交后记录 supplement 执行中状态。
+ */
+export async function markDocumentEvidenceSupplementRunning(
+  requestFormId: string | undefined,
+  answer: string,
+): Promise<void> {
+  if (!requestFormId) return;
+  await prisma.$executeRaw`
+    UPDATE "request_form_item"
+    SET
+      "status" = 'supplement_running',
+      "payload" = "payload" || ${JSON.stringify({
+        answer,
+        answered_at: new Date().toISOString(),
+      })}::jsonb,
+      "updated_at" = CURRENT_TIMESTAMP
+    WHERE "form_id" = ${requestFormId}
+      AND "type" = 'document_evidence_resolution'
+      AND "status" IN ('collecting', 'supplement_running')
+  `;
+}
+
+/**
+ * Critique 接受且图谱版本递增后完成证据解决项。
+ */
+export async function completeDocumentEvidenceResolutionItem({
+  requestFormId,
+  resolvedGraphVersion,
+}: {
+  requestFormId: string | undefined;
+  resolvedGraphVersion: number;
+}): Promise<void> {
+  if (!requestFormId) return;
+  await prisma.$executeRaw`
+    UPDATE "request_form_item"
+    SET
+      "status" = 'completed',
+      "payload" = "payload" || ${JSON.stringify({
+        resolved_graph_version: resolvedGraphVersion,
+        completed_at: new Date().toISOString(),
+      })}::jsonb,
+      "updated_at" = CURRENT_TIMESTAMP
+    WHERE "form_id" = ${requestFormId}
+      AND "type" = 'document_evidence_resolution'
+      AND "status" = 'supplement_running'
+  `;
+}
+
+/**
+ * 将 JSONB 行安全映射为内部证据解决上下文。
+ */
+function mapDocumentEvidenceResolutionRow(
+  row: DocumentEvidenceResolutionRow,
+): DocumentEvidenceResolutionRecord {
+  const payload = parsePayload(row.payload) ?? {};
+  return {
+    itemId: row.item_id,
+    requestFormId: row.form_id,
+    conversationId: row.conversation_id,
+    workspaceId: row.workspace_id,
+    runId: String(payload.run_id ?? ""),
+    sourceGraphVersion: Number(payload.source_graph_version ?? 0),
+    blockers: Array.isArray(payload.blockers)
+      ? (payload.blockers as DocumentEvidenceBlocker[])
+      : [],
+    ...(payload.resolution && typeof payload.resolution === "object"
+      ? { resolution: payload.resolution as DocumentEvidenceResolution }
+      : {}),
+    status: row.status,
+    ...(typeof payload.resolved_graph_version === "number"
+      ? { resolvedGraphVersion: payload.resolved_graph_version }
+      : {}),
+  };
 }
 
 interface RequestFormDecisionRow {

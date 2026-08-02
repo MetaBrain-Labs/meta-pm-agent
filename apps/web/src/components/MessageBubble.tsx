@@ -29,6 +29,7 @@ import type {
   SubagentTrace,
   TokenUsageInfo,
 } from "../types";
+import { buildDocumentsPath } from "../router/app-route";
 import { ProseBlock } from "./ProseBlock";
 import {
   CritiqueAgentReviewCard,
@@ -167,6 +168,7 @@ export function MessageBubble({
     !message.plannerExecution &&
     !message.plannerReview &&
     !message.workflowCompletion &&
+    !message.documentEvidenceResolutionComplete &&
     !message.agentError;
   const handleFormSubmit = useCallback(
     (formId: string, text: string, hitlResume?: HumanInTheLoopResume) => {
@@ -223,6 +225,22 @@ export function MessageBubble({
 
       {showMainContent && message.todos && message.todos.length > 0 && (
         <TodoCard todos={message.todos} />
+      )}
+
+      {showMainContent && message.documentEvidenceResolutionComplete && (
+        <div className="mb-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3">
+          <div className="text-sm font-semibold text-green-800">
+            证据阻断补充已完成，产品知识图谱已更新。
+          </div>
+          <a
+            className="mt-2 inline-flex rounded-md bg-green-600 px-3 py-1.5 text-sm font-medium text-white"
+            href={buildDocumentsPath(
+              message.documentEvidenceResolutionComplete.workspaceId,
+            )}
+          >
+            返回文档产出页面
+          </a>
+        </div>
       )}
 
       {showProcessContent &&

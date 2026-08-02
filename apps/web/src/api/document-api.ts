@@ -11,11 +11,13 @@
  */
 
 import type { TodoItem } from "../types";
+import type { ThreadInfo } from "../types";
 
 export type DocumentKind = "prd" | "mrd" | "brd";
 export type DocumentGenerationStatus =
   | "queued"
   | "running"
+  | "awaiting_input"
   | "completed"
   | "stopped"
   | "failed";
@@ -110,6 +112,11 @@ export interface DocumentArtifact {
   markdown: string;
   content: {
     qualityScore?: DocumentQualityScore;
+    sourceGraphStats?: {
+      nodeCount: number;
+      relationCount: number;
+      version?: number;
+    };
   } | null;
   version: number;
   createdAt: string;
@@ -119,6 +126,11 @@ export interface DocumentArtifact {
 export interface DocumentGenerationStatusResponse {
   run: DocumentGenerationRun | null;
   artifact: DocumentArtifact | null;
+}
+
+export interface DocumentEvidenceResolutionResponse {
+  thread: ThreadInfo;
+  autoStart: boolean;
 }
 
 /**
@@ -178,6 +190,42 @@ export async function stopDocumentGeneration(runId: string): Promise<void> {
     { method: "POST" },
   );
   await readJsonResponse<{ stopped: boolean }>(response);
+}
+
+/**
+ * 创建或恢复证据阻断专用会话。
+ */
+export async function createDocumentEvidenceResolution(
+  runId: string,
+  profileId: string,
+): Promise<DocumentEvidenceResolutionResponse> {
+  const response = await fetch(
+    `/api/document-generation/${encodeURIComponent(runId)}/evidence-resolution`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profileId }),
+    },
+  );
+  return readJsonResponse<DocumentEvidenceResolutionResponse>(response);
+}
+
+/**
+ * 在权威知识图谱版本更新后恢复原 PRD run。
+ */
+export async function resumeDocumentGeneration(
+  runId: string,
+  profileId: string,
+): Promise<DocumentGenerationStatusResponse> {
+  const response = await fetch(
+    `/api/document-generation/${encodeURIComponent(runId)}/resume`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profileId }),
+    },
+  );
+  return readJsonResponse<DocumentGenerationStatusResponse>(response);
 }
 
 /**

@@ -189,64 +189,62 @@ export async function runPrdScoringReviewers({
   signal?: AbortSignal;
   onEvent?: (event: DocumentScoringStreamEvent) => void;
 }): Promise<DocumentScoreReview[]> {
-  const reviews: DocumentScoreReview[] = [];
-
-  for (const reviewer of DOCUMENT_SCORE_REVIEWERS) {
-    const stream = runAgent({
-      agentType: "document-score",
-      agentLabel: reviewer.name,
-      name: `document-${reviewer.id}`,
-      systemPrompt: PRD_SCORING_REVIEWER_PROMPT,
-      modelOptions: DOCUMENT_REVIEWER_MODEL_OPTIONS,
-      modelProfile,
-      modelGroup: "document",
-      payload: {
-        attempt,
-        scoringScale: "0-100",
-        markdown,
-        sections,
-        sourceGroundingIssues,
-        sourceLedger: createReviewerSourceLedger({
-          markdown,
-          sourceGraph,
-          reviewer,
-        }),
-        reviewer,
-      },
-      resolveOutput: (context) =>
-        resolveJsonOutput(context, ReviewerScoreSchema),
-      fallback: (reason) =>
-        createReviewerFallback({
-          reviewer,
+  return Promise.all(
+    DOCUMENT_SCORE_REVIEWERS.map(async (reviewer) => {
+      const stream = runAgent({
+        agentType: "document-score",
+        agentLabel: reviewer.name,
+        name: `document-${reviewer.id}`,
+        systemPrompt: PRD_SCORING_REVIEWER_PROMPT,
+        modelOptions: DOCUMENT_REVIEWER_MODEL_OPTIONS,
+        modelProfile,
+        modelGroup: "document",
+        payload: {
+          attempt,
+          scoringScale: "0-100",
           markdown,
           sections,
-          reason,
-        }),
-      signal,
-      suppressFallbackReasoning: true,
-    });
+          sourceGroundingIssues,
+          sourceLedger: createReviewerSourceLedger({
+            markdown,
+            sourceGraph,
+            reviewer,
+          }),
+          reviewer,
+        },
+        resolveOutput: (context) =>
+          resolveJsonOutput(context, ReviewerScoreSchema),
+        fallback: (reason) =>
+          createReviewerFallback({
+            reviewer,
+            markdown,
+            sections,
+            reason,
+          }),
+        signal,
+        suppressFallbackReasoning: true,
+      });
 
-    const parsed = await consumeJsonAgentStream(stream, onEvent);
-    reviews.push({
-      reviewerId: reviewer.id,
-      reviewerName: reviewer.name,
-      score: clampScore(parsed.score),
-      dimensions: {
-        relevance: clampScore(parsed.dimensions.relevance),
-        completeness: clampScore(parsed.dimensions.completeness),
-        structure: clampScore(parsed.dimensions.structure),
-        feasibility: clampScore(parsed.dimensions.feasibility),
-        language: clampScore(parsed.dimensions.language),
-      },
-      strengths: parsed.strengths.slice(0, 3),
-      weaknesses: parsed.weaknesses.slice(0, 5),
-      revisionAdvice: parsed.revisionAdvice.slice(0, 5),
-      evidenceBlocked: parsed.evidenceBlocked,
-      evidenceBlockers: parsed.evidenceBlockers.slice(0, 5),
-    });
-  }
-
-  return reviews;
+      const parsed = await consumeJsonAgentStream(stream, onEvent);
+      return {
+        reviewerId: reviewer.id,
+        reviewerName: reviewer.name,
+        score: clampScore(parsed.score),
+        dimensions: {
+          relevance: clampScore(parsed.dimensions.relevance),
+          completeness: clampScore(parsed.dimensions.completeness),
+          structure: clampScore(parsed.dimensions.structure),
+          feasibility: clampScore(parsed.dimensions.feasibility),
+          language: clampScore(parsed.dimensions.language),
+        },
+        strengths: parsed.strengths,
+        weaknesses: parsed.weaknesses,
+        revisionAdvice: parsed.revisionAdvice,
+        evidenceBlocked: parsed.evidenceBlocked,
+        evidenceBlockers: parsed.evidenceBlockers,
+      };
+    }),
+  );
 }
 
 /**

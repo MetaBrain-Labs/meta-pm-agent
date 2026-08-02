@@ -35,6 +35,7 @@ export type StreamEventType =
   | "subagent-result"
   | "token-usage"
   | "conversation-title"
+  | "document-evidence-resolution-complete"
   | "step-finish"
   | "finish"
   | "error"
@@ -116,6 +117,8 @@ export interface StreamEvent {
   error?: unknown;
   chatId?: string;
   title?: string;
+  runId?: string;
+  workspaceId?: string;
   todos?: Array<{ index: number; content: string; status: string }>;
   analysis?: RequestAnalysis;
   interrupt?: HumanInTheLoopInterrupt;
@@ -401,6 +404,10 @@ export interface Message {
   workflowCompletion?: {
     state: "complete";
     content: string;
+  };
+  documentEvidenceResolutionComplete?: {
+    runId: string;
+    workspaceId: string;
   };
   executorResults?: ExecutorAgentResult[];
   activeAgent?: string;

@@ -243,6 +243,24 @@ export async function getConversationWorkspace(
 }
 
 /**
+ * 按 ID 读取本地用户拥有的会话，供跨业务流程恢复既有专用对话。
+ */
+export async function getConversationById(
+  conversationId: string,
+): Promise<ConversationDto | null> {
+  const rows = await prisma.$queryRaw<ConversationRow[]>`
+    SELECT
+      "id", "workspace_id", "user_id", "title", "type", "status",
+      "last_message_at", "created_at"
+    FROM "conversation"
+    WHERE "id" = ${conversationId}
+      AND "user_id" = ${LOCAL_USER_ID}
+    LIMIT 1
+  `;
+  return rows[0] ? mapConversationRow(rows[0]) : null;
+}
+
+/**
  * 首轮用户消息完成后，仅在会话仍是默认标题时写入基于意图生成的标题。
  */
 export async function updateFirstTurnConversationTitle(

@@ -15,7 +15,10 @@
 
 import { randomUUID } from "node:crypto";
 import {
+  type DocumentEvidenceBlocker,
+  createScoreRetryFeedback,
   createDocumentWorkflowThreadId,
+  DOCUMENT_SCORE_MAX_ATTEMPTS,
   streamDocumentWorkflow,
 } from "@repo/agent-runtime";
 import type {
@@ -32,21 +35,32 @@ import type {
 import {
   completeDocumentGenerationRun,
   createDocumentGenerationRun,
+  ensureDocumentArtifactSourceGraphVersion,
   failDocumentGenerationRun,
   getActiveDocumentGenerationRun,
   getDocumentArtifactByRunId,
   getDocumentGenerationRunById,
   getLatestDocumentGenerationRun,
   markDocumentGenerationRunRunning,
+  resumeAwaitingDocumentGenerationRun,
   stopDocumentGenerationRun,
   updateDocumentGenerationRunProgress,
   type DocumentArtifactDto,
   type DocumentGenerationRunDto,
 } from "../repositories/document-generation-repository";
 import {
+  getConversationById,
+} from "../repositories/chat-repository";
+import {
+  createDocumentEvidenceResolutionItem,
+  findDocumentEvidenceResolutionByRunId,
+} from "../repositories/request-form-repository";
+import {
   getLocalModelProfile,
   ModelProfileNotFoundError,
+  selectConversationModelProfile,
 } from "../repositories/model-profile-repository";
+import { createChat } from "./chat-service";
 import { getWorkspaceKnowledgeGraph } from "./product-knowledge-graph-service";
 
 /**
@@ -55,6 +69,20 @@ import { getWorkspaceKnowledgeGraph } from "./product-knowledge-graph-service";
 export interface DocumentGenerationStatusDto {
   run: DocumentGenerationRunDto | null;
   artifact: DocumentArtifactDto | null;
+}
+
+/** 文档页创建或恢复专用对话后的导航数据。 */
+export interface DocumentEvidenceResolutionConversationDto {
+  thread: {
+    id: string;
+    workspaceId: string;
+    requestFormId: string;
+    title: string;
+    messageCount: number;
+    createdAt: string;
+    updatedAt: string;
+  };
+  autoStart: boolean;
 }
 
 /**
@@ -177,11 +205,196 @@ export async function stopDocumentGeneration(runId: string): Promise<void> {
 }
 
 /**
+ * 为 awaiting_input PRD run 创建或恢复专用证据解决会话。
+ */
+export async function createDocumentEvidenceResolutionConversation({
+  runId,
+  profileId,
+}: {
+  runId: string;
+  profileId: string;
+}): Promise<DocumentEvidenceResolutionConversationDto> {
+  const run = await getDocumentGenerationRunById(runId);
+  if (!run) throw new DocumentGenerationServiceError("文档任务不存在。", 404);
+  if (run.status !== "awaiting_input") {
+    throw new DocumentGenerationServiceError(
+      "只有等待补充信息的文档任务可以解决证据阻断。",
+      409,
+    );
+  }
+
+  const existing = await findDocumentEvidenceResolutionByRunId(runId);
+  if (existing) {
+    const conversation = await getConversationById(existing.conversationId);
+    if (conversation && conversation.workspaceId === run.workspaceId) {
+      return {
+        thread: {
+          id: conversation.id,
+          workspaceId: conversation.workspaceId,
+          requestFormId: existing.requestFormId,
+          title: conversation.title,
+          messageCount: existing.status === "ready" ? 0 : 1,
+          createdAt: conversation.createdAt,
+          updatedAt: conversation.updatedAt,
+        },
+        autoStart: existing.status === "ready",
+      };
+    }
+  }
+
+  try {
+    await getLocalModelProfile(profileId);
+  } catch (error) {
+    if (error instanceof ModelProfileNotFoundError) {
+      throw new DocumentGenerationServiceError("模型使用列表不存在。", 404);
+    }
+    throw error;
+  }
+
+  const artifact = await getDocumentArtifactByRunId(runId);
+  let sourceGraphVersion = artifact?.content?.sourceGraphStats.version;
+  if (typeof sourceGraphVersion !== "number") {
+    const currentGraph = await loadDocumentSourceGraph(run.workspaceId);
+    sourceGraphVersion =
+      await ensureDocumentArtifactSourceGraphVersion({
+        runId,
+        workspaceId: run.workspaceId,
+        sourceGraphVersion: currentGraph.version,
+      });
+  }
+  if (typeof sourceGraphVersion !== "number") {
+    throw new DocumentGenerationServiceError(
+      "无法为当前文档产物补齐源知识图谱版本，请刷新后重试。",
+      409,
+    );
+  }
+  const latestAttempt = run.scoringAttempts.at(-1);
+  const blockers: DocumentEvidenceBlocker[] =
+    latestAttempt?.reviewerScores.flatMap((reviewer) =>
+      (reviewer.evidenceBlockers ?? []).map((text) => ({
+        index: 0,
+        reviewerId: reviewer.reviewerId,
+        reviewerName: reviewer.reviewerName,
+        text,
+      })),
+    ) ?? [];
+  const reviewerBlockerTexts = new Set(blockers.map((blocker) => blocker.text));
+  for (const text of latestAttempt?.evidenceBlockers ?? []) {
+    if (reviewerBlockerTexts.has(text)) continue;
+    blockers.push({
+      index: blockers.length,
+      reviewerId: "source-grounding-validator",
+      reviewerName: "PRD Source Grounding Validator",
+      text,
+    });
+  }
+  blockers.forEach((blocker, index) => {
+    blocker.index = index;
+  });
+  if (blockers.length === 0) {
+    throw new DocumentGenerationServiceError(
+      "当前评分结果没有可解决的证据阻断。",
+      409,
+    );
+  }
+
+  const created = await createChat(run.workspaceId, "解决 PRD 证据阻断");
+  await selectConversationModelProfile(created.chat.id, profileId);
+  await createDocumentEvidenceResolutionItem({
+    requestFormId: created.requestForm.id,
+    runId,
+    sourceGraphVersion,
+    blockers,
+  });
+  return {
+    thread: {
+      id: created.chat.id,
+      workspaceId: created.chat.workspaceId,
+      requestFormId: created.requestForm.id,
+      title: created.chat.title,
+      messageCount: 0,
+      createdAt: created.chat.createdAt,
+      updatedAt: created.chat.updatedAt,
+    },
+    autoStart: true,
+  };
+}
+
+/**
+ * 在知识图谱补充完成后恢复原 PRD run 的剩余评分轮次。
+ */
+export async function resumeDocumentGeneration({
+  runId,
+  profileId,
+}: {
+  runId: string;
+  profileId: string;
+}): Promise<DocumentGenerationStatusDto> {
+  const run = await getDocumentGenerationRunById(runId);
+  if (!run) {
+    throw new DocumentGenerationServiceError("文档任务不存在。", 404);
+  }
+  if (run.status !== "awaiting_input") {
+    throw new DocumentGenerationServiceError(
+      "只有等待补充信息的文档任务可以继续。",
+      409,
+    );
+  }
+  if (run.scoringAttempts.length >= DOCUMENT_SCORE_MAX_ATTEMPTS) {
+    throw new DocumentGenerationServiceError("文档评分轮次已经用完。", 409);
+  }
+
+  const artifact = await getDocumentArtifactByRunId(runId);
+  const sourceVersion = artifact?.content?.sourceGraphStats.version;
+  const graph = await loadDocumentSourceGraph(run.workspaceId);
+  if (
+    typeof sourceVersion !== "number" ||
+    typeof graph.version !== "number" ||
+    graph.version <= sourceVersion
+  ) {
+    throw new DocumentGenerationServiceError(
+      "产品知识图谱尚未更新，请先完成证据阻断解决流程。",
+      409,
+    );
+  }
+
+  let modelProfile: ModelUsageProfile;
+  try {
+    modelProfile = await getLocalModelProfile(profileId);
+  } catch (error) {
+    if (error instanceof ModelProfileNotFoundError) {
+      throw new DocumentGenerationServiceError("模型使用列表不存在。", 404);
+    }
+    throw error;
+  }
+
+  if (!(await resumeAwaitingDocumentGenerationRun(runId))) {
+    throw new DocumentGenerationServiceError("文档任务已被其他请求恢复。", 409);
+  }
+
+  const latestAttempt = run.scoringAttempts.at(-1);
+  launchDocumentGenerationRun(run, graph, modelProfile, {
+    priorScoreAttempts: run.scoringAttempts,
+    revisionFeedback: latestAttempt
+      ? createScoreRetryFeedback(latestAttempt)
+      : "",
+    workflowThreadId: `${run.workflowThreadId}:attempt:${run.scoringAttempts.length + 1}`,
+    alreadyRunning: true,
+  });
+
+  return {
+    run: { ...run, status: "running", finishedAt: null },
+    artifact,
+  };
+}
+
+/**
  * 从产品知识图谱服务加载文档生成所需图谱。
  */
 async function loadDocumentSourceGraph(workspaceId: string): Promise<{
   nodes: KnowledgeGraphEntity[];
   relations: KnowledgeGraphRelation[];
+  version: number;
 }> {
   const graph = await getWorkspaceKnowledgeGraph(workspaceId);
   if (!graph || graph.nodes.length === 0) {
@@ -194,6 +407,7 @@ async function loadDocumentSourceGraph(workspaceId: string): Promise<{
   return {
     nodes: graph.nodes,
     relations: graph.relations,
+    version: graph.version,
   };
 }
 
@@ -205,8 +419,15 @@ function launchDocumentGenerationRun(
   graph: {
     nodes: KnowledgeGraphEntity[];
     relations: KnowledgeGraphRelation[];
+    version: number;
   },
   modelProfile: ModelUsageProfile,
+  resume?: {
+    priorScoreAttempts: DocumentScoreAttempt[];
+    revisionFeedback: string;
+    workflowThreadId: string;
+    alreadyRunning: boolean;
+  },
 ): void {
   const controller = new AbortController();
   activeDocumentRuns.set(run.id, controller);
@@ -216,6 +437,7 @@ function launchDocumentGenerationRun(
     graph,
     modelProfile,
     controller,
+    resume,
   ).finally(() => {
     if (activeDocumentRuns.get(run.id) === controller) {
       activeDocumentRuns.delete(run.id);
@@ -231,9 +453,16 @@ async function executeDocumentGenerationRun(
   graph: {
     nodes: KnowledgeGraphEntity[];
     relations: KnowledgeGraphRelation[];
+    version: number;
   },
   modelProfile: ModelUsageProfile,
   controller: AbortController,
+  resume?: {
+    priorScoreAttempts: DocumentScoreAttempt[];
+    revisionFeedback: string;
+    workflowThreadId: string;
+    alreadyRunning: boolean;
+  },
 ): Promise<void> {
   let latestTodos = run.todos;
   let latestReasoning = run.reasoningLog;
@@ -241,14 +470,18 @@ async function executeDocumentGenerationRun(
   let result: DocumentGenerationResult | null = null;
 
   try {
-    await markDocumentGenerationRunRunning({ runId: run.id });
+    if (!resume?.alreadyRunning) {
+      await markDocumentGenerationRunRunning({ runId: run.id });
+    }
     const stream = streamDocumentWorkflow({
       workspaceId: run.workspaceId,
       runId: run.id,
       kind: run.kind,
       graph,
+      priorScoreAttempts: resume?.priorScoreAttempts,
+      revisionFeedback: resume?.revisionFeedback,
       modelProfile,
-      workflowThreadId: run.workflowThreadId,
+      workflowThreadId: resume?.workflowThreadId ?? run.workflowThreadId,
       signal: controller.signal,
     });
 
@@ -312,12 +545,19 @@ async function executeDocumentGenerationRun(
       throw createAbortError();
     }
 
+    const latestAttempt = result.qualityScore.attempts.at(-1);
+    const awaitingInput = Boolean(
+      latestAttempt?.evidenceBlocked &&
+        !result.qualityScore.passed &&
+        result.qualityScore.attempts.length < result.qualityScore.maxAttempts,
+    );
     await completeDocumentGenerationRun({
       runId: run.id,
       workspaceId: run.workspaceId,
       kind: run.kind,
       result,
       todos: latestTodos,
+      status: awaitingInput ? "awaiting_input" : "completed",
     });
   } catch (error) {
     if (isAbortError(error) || controller.signal.aborted) {

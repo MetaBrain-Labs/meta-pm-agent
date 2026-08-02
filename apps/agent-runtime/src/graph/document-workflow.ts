@@ -51,6 +51,7 @@ import {
   selectFinalScoreAttempt,
   shouldRetryDocumentScoreAttempt,
   validatePrdSourceGrounding,
+  type DocumentScoreAttempt,
   type DocumentScoreReview,
   type DocumentScoringStreamEvent,
 } from "../agents/document-agent/scoring";
@@ -75,6 +76,8 @@ export interface DocumentWorkflowInput {
   runId: string;
   kind: DocumentKind;
   graph: DocumentWorkflowGraphSnapshot;
+  priorScoreAttempts?: DocumentScoreAttempt[];
+  revisionFeedback?: string;
   modelProfile: ModelUsageProfile;
   workflowThreadId?: string;
   signal?: AbortSignal;
@@ -156,11 +159,13 @@ function createDocumentWorkflowGraph(checkpointer: BaseCheckpointSaver) {
     })
     .addConditionalEdges("rejectScore", selectNextNodeAfterScore, {
       retry: "draftSection",
-      pass: "humanReview",
+      review: "humanReview",
+      export: "exportPrd",
     })
     .addConditionalEdges("aggregateScore", selectNextNodeAfterScore, {
       retry: "draftSection",
-      pass: "humanReview",
+      review: "humanReview",
+      export: "exportPrd",
     })
     .addEdge("humanReview", "exportPrd")
     .addEdge("exportPrd", END)
@@ -220,6 +225,8 @@ function createDocumentWorkflowInitialState(input: DocumentWorkflowInput) {
     runId: input.runId,
     kind: input.kind,
     sourceGraph: input.graph,
+    scoreAttempts: input.priorScoreAttempts ?? [],
+    scoreFeedback: input.revisionFeedback ?? "",
   };
 }
 
@@ -294,11 +301,27 @@ function normalizeGraphNode(
 ) {
   emitStage(config, "normalizeGraph", "started");
   emitTodoUpdate(config, createWorkflowTodos("normalizeGraph"));
+  const normalizedGraph = normalizeDocumentWorkflowGraph(state.sourceGraph);
 
-  const nodes = dedupeByKey(state.sourceGraph.nodes, (node) => node.id);
+  emitStage(config, "normalizeGraph", "completed");
+  const todos = createWorkflowTodos("normalizeGraph", true);
+  emitTodoUpdate(config, todos);
+  return {
+    normalizedGraph,
+    todos,
+  };
+}
+
+/**
+ * 规范化文档输入图谱，同时保留用于证据阻断恢复的源版本。
+ */
+export function normalizeDocumentWorkflowGraph(
+  graph: DocumentWorkflowGraphSnapshot,
+): DocumentWorkflowGraphSnapshot {
+  const nodes = dedupeByKey(graph.nodes, (node) => node.id);
   const nodeIds = new Set(nodes.map((node) => node.id));
   const relations = dedupeByKey(
-    state.sourceGraph.relations.filter(
+    graph.relations.filter(
       (relation) =>
         nodeIds.has(relation.source) && nodeIds.has(relation.target),
     ),
@@ -307,13 +330,7 @@ function normalizeGraphNode(
       `${relation.type}:${relation.source}:${relation.target}:${relation.source_task_id ?? ""}`,
   );
 
-  emitStage(config, "normalizeGraph", "completed");
-  const todos = createWorkflowTodos("normalizeGraph", true);
-  emitTodoUpdate(config, todos);
-  return {
-    normalizedGraph: { nodes, relations },
-    todos,
-  };
+  return { nodes, relations, version: graph.version };
 }
 
 /**
@@ -574,13 +591,15 @@ function selectNextNodeAfterReviewerScore(
 /**
  * 根据评分门禁决定继续审核或回到草稿节点重写。
  */
-function selectNextNodeAfterScore(state: DocumentWorkflowGraphStateValue) {
+export function selectNextNodeAfterScore(
+  state: DocumentWorkflowGraphStateValue,
+): "retry" | "review" | "export" {
   const latestAttempt = state.scoreAttempts.at(-1);
   if (!latestAttempt) return "retry";
-  if (latestAttempt.passed) return "pass";
-  if (state.scoreAttempts.length >= DOCUMENT_SCORE_MAX_ATTEMPTS) return "pass";
+  if (latestAttempt.passed) return "review";
+  if (state.scoreAttempts.length >= DOCUMENT_SCORE_MAX_ATTEMPTS) return "export";
   if (!latestAttempt.varianceAccepted) return "retry";
-  if (latestAttempt.evidenceBlocked) return "pass";
+  if (latestAttempt.evidenceBlocked) return "export";
   return "retry";
 }
 
@@ -652,6 +671,7 @@ function exportPrdNode(
     sourceGraphStats: {
       nodeCount: graph.nodes.length,
       relationCount: graph.relations.length,
+      version: graph.version,
     },
     crossCheck: state.crossCheckResult ?? {
       passed: false,

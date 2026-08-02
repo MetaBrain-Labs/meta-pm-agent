@@ -28,9 +28,19 @@ export const StopDocumentGenerationRequestSchema = z.object({
   runId: z.string().uuid(),
 });
 
+/**
+ * 恢复等待补充信息的文档任务请求体。
+ */
+export const ResumeDocumentGenerationRequestSchema = z.object({
+  profileId: z.string().trim().min(1),
+});
+
 export type StartDocumentGenerationRequest = z.infer<
   typeof StartDocumentGenerationRequestSchema
 >;
 export type StopDocumentGenerationRequest = z.infer<
   typeof StopDocumentGenerationRequestSchema
+>;
+export type ResumeDocumentGenerationRequest = z.infer<
+  typeof ResumeDocumentGenerationRequestSchema
 >;

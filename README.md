@@ -126,6 +126,12 @@ pnpm --filter @repo/database db:push
 
 `db:generate` only generates Prisma Client. `db:push` changes the configured database.
 
+For an existing database, enable the PRD evidence-blocker waiting status with:
+
+```bash
+pnpm --filter @repo/database db:upgrade-document-status
+```
+
 #### Database schema note
 
 The current Prisma schema covers the core application tables, but the API also uses raw SQL tables that are not yet represented by tracked Prisma migrations:

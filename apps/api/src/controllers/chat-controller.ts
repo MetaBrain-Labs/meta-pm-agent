@@ -16,6 +16,7 @@
 import type { Context } from "hono";
 import { stream } from "hono/streaming";
 import {
+  createDocumentEvidenceResolutionThreadId,
   createHumanInTheLoopThreadId,
   createWorkflowThreadId,
   extractQuestionFormId,
@@ -24,6 +25,7 @@ import {
   isPreOrchGraphConflictFormId,
   parseGraphConflictAction,
   releaseQuestionFormHumanInterrupt,
+  resumeDocumentEvidenceResolutionWorkflow,
   resumeQuestionFormHumanInterrupt,
   streamConversation,
 } from "@repo/agent-runtime";
@@ -66,6 +68,12 @@ import {
   unregisterChatRun,
 } from "../services/chat-run-registry";
 import { getConversationModelProfile } from "../repositories/model-profile-repository";
+import {
+  completeDocumentEvidenceResolutionItem,
+  getDocumentEvidenceResolutionByRequestFormId,
+  markDocumentEvidenceSupplementRunning,
+  persistDocumentEvidenceResolutionPlan,
+} from "../repositories/request-form-repository";
 
 /**
  * SSE 处理期间的 Agent 输出累加器，内部始终保留可写的工具调用数组和 token 用量。
@@ -225,15 +233,46 @@ export async function chatStreamHandler(c: Context) {
     let latestKnowledgeGraph: ProductKnowledgeGraph | null = null;
     let runtimeWorkspaceId: string | undefined;
     let autoFinalizedWorkflowRound = false;
+    let documentEvidenceCompletionPending = false;
     let terminalStreamError = false;
     const shouldFinalizeWorkflowRound = isProductWorkflowFinalConfirmationAnswer(
       parsed.data.messages,
     );
 
     try {
+      const documentEvidenceResolution =
+        await getDocumentEvidenceResolutionByRequestFormId(
+          parsed.data.requestFormId,
+        );
+      let documentEvidenceAnswer = null;
       if (parsed.data.hitlResume) {
         // 先恢复 LangGraph HITL 中断，再让现有 Conversation Agent 消费表单答案。
-        await resumeQuestionFormHumanInterrupt(parsed.data.hitlResume);
+        if (parsed.data.hitlResume.threadId.startsWith("document-evidence:")) {
+          const expectedThreadId = documentEvidenceResolution
+            ? createDocumentEvidenceResolutionThreadId({
+                conversationId: documentEvidenceResolution.conversationId,
+                runId: documentEvidenceResolution.runId,
+              })
+            : null;
+          if (
+            !expectedThreadId ||
+            parsed.data.hitlResume.threadId !== expectedThreadId
+          ) {
+            throw new Error(
+              "Document evidence resolution does not belong to this request form.",
+            );
+          }
+          documentEvidenceAnswer =
+            await resumeDocumentEvidenceResolutionWorkflow(
+              parsed.data.hitlResume,
+            );
+          await markDocumentEvidenceSupplementRunning(
+            parsed.data.requestFormId,
+            documentEvidenceAnswer.answerText,
+          );
+        } else {
+          await resumeQuestionFormHumanInterrupt(parsed.data.hitlResume);
+        }
       }
 
       // 持久化用户发送的消息
@@ -345,9 +384,32 @@ export async function chatStreamHandler(c: Context) {
           workflowAnswerResolution,
           workflowRetry: parsed.data.workflowRetry,
           workflowRetryFailure,
+          documentEvidenceResolution:
+            documentEvidenceResolution &&
+            documentEvidenceResolution.status !== "completed"
+            ? {
+                conversationId: documentEvidenceResolution.conversationId,
+                runId: documentEvidenceResolution.runId,
+                sourceGraphVersion:
+                  documentEvidenceResolution.sourceGraphVersion,
+                blockers: documentEvidenceResolution.blockers,
+              }
+            : undefined,
+          documentEvidenceAnswer: documentEvidenceAnswer ?? undefined,
           signal: runtimeController.signal,
         },
       )) {
+        if (event.type === "document-evidence-resolution-plan") {
+          await persistDocumentEvidenceResolutionPlan(
+            parsed.data.requestFormId,
+            event.resolution,
+          );
+          continue;
+        }
+        if (event.type === "document-evidence-resolution-complete") {
+          documentEvidenceCompletionPending = true;
+          continue;
+        }
         if (event.type === "workflow-round-start") {
           currentWorkflowRoundId = event.roundId;
           await writeSse(writer, toApiEvent(event));
@@ -357,6 +419,12 @@ export async function chatStreamHandler(c: Context) {
           // 捕获工作流完整结构化结果，供最终知识图谱归档使用
           productWorkflowResult = event.result;
           autoFinalizedWorkflowRound = event.result.status === "completed";
+          if (
+            documentEvidenceResolution?.status === "supplement_running" &&
+            event.result.status === "completed"
+          ) {
+            documentEvidenceCompletionPending = true;
+          }
           continue;
         }
         if (
@@ -574,6 +642,27 @@ export async function chatStreamHandler(c: Context) {
               ? productWorkflowResult.knowledge_graph_update
               : undefined),
         });
+
+        if (documentEvidenceCompletionPending && documentEvidenceResolution) {
+          const resolvedGraph = await getWorkspaceKnowledgeGraph(
+            runtimeContext.workspaceId!,
+          );
+          if (
+            resolvedGraph &&
+            resolvedGraph.version >
+              documentEvidenceResolution.sourceGraphVersion
+          ) {
+            await completeDocumentEvidenceResolutionItem({
+              requestFormId: parsed.data.requestFormId,
+              resolvedGraphVersion: resolvedGraph.version,
+            });
+            await writeSse(writer, {
+              type: "document-evidence-resolution-complete",
+              runId: documentEvidenceResolution.runId,
+              workspaceId: runtimeContext.workspaceId,
+            });
+          }
+        }
 
         if (titleUpdate) {
           await writeSse(writer, {

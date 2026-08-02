@@ -69,6 +69,10 @@ import {
   extractQuestionFormId,
   releaseQuestionFormHumanInterrupt,
 } from "../../graph/human-in-the-loop";
+import {
+  isDocumentEvidenceResolutionFormId,
+  startDocumentEvidenceResolutionWorkflow,
+} from "../../graph/document-evidence-resolution-workflow";
 import type {
   AgentMessageType,
   ConversationStreamEvent,
@@ -85,6 +89,7 @@ import {
 import {
   streamOrchestratorPreCheck,
 } from "../product-workflow/orchestrator-agent/agent";
+import { isExecutorAgentType } from "../product-workflow/executor-agent/definitions";
 
 const PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID = "product-workflow-confirmation";
 const EXECUTOR_BLOCKER_FORM_PREFIX = "executor-blocker-";
@@ -271,9 +276,19 @@ export async function* streamConversation(
     return;
   }
 
+  if (options.documentEvidenceResolution && !isFormAnswer(lastMessage.content)) {
+    yield* streamDocumentEvidenceResolutionStart(options);
+    return;
+  }
+
   // 处理表单答案
   if (lastMessage.role === "user" && isFormAnswer(lastMessage.content)) {
     const formId = getFormAnswerId(lastMessage.content);
+
+    if (formId && isDocumentEvidenceResolutionFormId(formId)) {
+      yield* streamDocumentEvidenceResolutionAnswer(messages, options);
+      return;
+    }
 
     // Pre-Orchestrator 澄清表单答案 → 整合后直接进入产品工作流
     if (formId && isPreOrchClarificationFormId(formId)) {
@@ -298,6 +313,101 @@ export async function* streamConversation(
 
   // 新消息先交给 Orchestrator 判断是否属于 checkpoint 恢复。
   yield* streamWithResumeCheckOrPreOrchestrator(messages, options, lastMessage);
+}
+
+/**
+ * 启动专用证据解决图并把其必填 Question Form 与 interrupt 投影到聊天流。
+ */
+async function* streamDocumentEvidenceResolutionStart(
+  options: ConversationStreamOptions,
+): AsyncGenerator<ConversationStreamEvent> {
+  const context = options.documentEvidenceResolution;
+  if (!context || !options.knowledgeGraph) {
+    throw new Error("Document evidence resolution context is unavailable.");
+  }
+  const stream = startDocumentEvidenceResolutionWorkflow({
+    conversationId: context.conversationId,
+    runId: context.runId,
+    workspaceId: options.workspaceId ?? "",
+    sourceGraphVersion: context.sourceGraphVersion,
+    blockers: context.blockers,
+    knowledgeGraph: options.knowledgeGraph,
+    modelProfile: options.modelProfile,
+    signal: options.signal,
+  });
+  let next = await stream.next();
+  while (!next.done) {
+    yield next.value as ConversationStreamEvent;
+    next = await stream.next();
+  }
+  const interrupt = next.value;
+  const action = interrupt.value.actionRequests[0];
+  const questionForm = action?.args.questionForm;
+  if (!questionForm) throw new Error("Evidence resolution form is unavailable.");
+  yield { type: "question-form-start", agentType: "orchestrator" };
+  yield {
+    type: "question-form-complete",
+    content: questionForm,
+    agentType: "orchestrator",
+  };
+  yield { type: "human-interrupt", interrupt, agentType: "orchestrator" };
+}
+
+/**
+ * 将专用表单答案强制转为 supplement DAG，知识图谱写入仍由现有 Executor 完成。
+ */
+async function* streamDocumentEvidenceResolutionAnswer(
+  messages: ChatMessage[],
+  options: ConversationStreamOptions,
+): AsyncGenerator<ConversationStreamEvent> {
+  const answer = options.documentEvidenceAnswer;
+  if (!answer || !options.knowledgeGraph) {
+    throw new Error("Document evidence resolution interrupt was not resumed.");
+  }
+  const userInputBlock = ensureUserInputBlock([
+    `Resolve persisted PRD evidence blockers for document run ${answer.runId}.`,
+    answer.answerText,
+    `Blocker-to-question mapping: ${JSON.stringify(
+      answer.resolution.questions.map((question) => ({
+        questionId: question.id,
+        blockerIndexes: question.blockerIndexes,
+        relatedNodeIds: question.relatedNodeIds,
+      })),
+    )}`,
+  ].join("\n\n"));
+  yield { type: "user-input-start" };
+  yield { type: "user-input-complete", content: userInputBlock };
+
+  const supplementAgentTypes = answer.suggestedAgentTypes.filter(
+    isExecutorAgentType,
+  );
+  const selectedAgentTypes = supplementAgentTypes.length > 0
+    ? supplementAgentTypes
+    : ["executor-product-discovery" as const];
+  for await (const event of streamPlanningAfterUserInput(
+    userInputBlock,
+    options,
+    messages,
+    {
+      resumeContext: {
+        userInputBlock,
+        knowledgeGraph: options.knowledgeGraph,
+        forceSupplementPlan: true,
+        supplementAgentTypes: selectedAgentTypes,
+        supplementSourceTaskIds: [`document-evidence:${answer.runId}`],
+      },
+      suppressRestoredRequestAnalysis: true,
+    },
+  )) {
+    yield event;
+    if (event.type === "complete" && isAcceptedWorkflowResult(event.result)) {
+      yield {
+        type: "document-evidence-resolution-complete",
+        runId: answer.runId,
+        workspaceId: options.workspaceId ?? "",
+      };
+    }
+  }
 }
 
 /**

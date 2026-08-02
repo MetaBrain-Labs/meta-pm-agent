@@ -23,9 +23,11 @@ import {
   getWorkspaceKnowledgeGraphHandler,
 } from "./chat-controller";
 import {
+  createDocumentEvidenceResolutionHandler,
   getDocumentGenerationRunHandler,
   getLatestDocumentGenerationHandler,
   startDocumentGenerationHandler,
+  resumeDocumentGenerationHandler,
   stopDocumentGenerationHandler,
 } from "./document-controller";
 import {
@@ -70,6 +72,14 @@ export function createChatRoutes() {
   routes.post(
     "/document-generation/:runId/stop",
     stopDocumentGenerationHandler,
+  );
+  routes.post(
+    "/document-generation/:runId/resume",
+    resumeDocumentGenerationHandler,
+  );
+  routes.post(
+    "/document-generation/:runId/evidence-resolution",
+    createDocumentEvidenceResolutionHandler,
   );
 
   return routes;

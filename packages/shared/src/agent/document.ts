@@ -26,6 +26,7 @@ export const DocumentKindSchema = z.enum(["prd", "mrd", "brd"]);
 export const DocumentGenerationStatusSchema = z.enum([
   "queued",
   "running",
+  "awaiting_input",
   "completed",
   "stopped",
   "failed",
@@ -79,12 +80,21 @@ export const DocumentSectionDraftSchema = z.object({
 /**
  * 单个 PRD 评分尝试的持久化摘要。
  */
+export const DocumentScoringReviewerIdSchema = z.enum([
+  "product-rationale-evidence-reviewer",
+  "requirements-acceptance-reviewer",
+  "scope-delivery-readiness-reviewer",
+]);
+
+/**
+ * 单个 PRD 评分尝试的持久化摘要。
+ */
 export const DocumentScoreAttemptSchema = z.object({
   attempt: z.number().int().positive(),
   markdown: z.string().min(1),
   reviewerScores: z.array(
     z.object({
-      reviewerId: z.string().min(1),
+      reviewerId: DocumentScoringReviewerIdSchema,
       reviewerName: z.string().min(1),
       score: z.number().min(0).max(100),
       dimensions: z.object({
@@ -133,6 +143,7 @@ export const DocumentGenerationResultSchema = z.object({
   sourceGraphStats: z.object({
     nodeCount: z.number().int().nonnegative(),
     relationCount: z.number().int().nonnegative(),
+    version: z.number().int().nonnegative().optional(),
   }),
   crossCheck: z.object({
     passed: z.boolean(),
@@ -161,6 +172,9 @@ export type DocumentReasoningLogEntry = z.infer<
 export type DocumentWorkflowStage = z.infer<typeof DocumentWorkflowStageSchema>;
 export type DocumentSectionDraft = z.infer<typeof DocumentSectionDraftSchema>;
 export type DocumentScoreAttempt = z.infer<typeof DocumentScoreAttemptSchema>;
+export type DocumentScoringReviewerId = z.infer<
+  typeof DocumentScoringReviewerIdSchema
+>;
 export type DocumentGenerationResult = z.infer<
   typeof DocumentGenerationResultSchema
 >;

@@ -78,6 +78,7 @@ export function ThreadChatPage({
   const threadIdRef = useRef<string | null>(thread?.id ?? null);
   const requestFormIdRef = useRef<string | undefined>(thread?.requestFormId);
   const messagesRef = useRef<Message[]>(messages);
+  const evidenceAutoStartedThreadRef = useRef<string | null>(null);
   const threadId = thread?.id ?? null;
   const requestFormId = thread?.requestFormId;
 
@@ -304,6 +305,31 @@ export function ThreadChatPage({
       selectedModelProfileId,
     ],
   );
+
+  useEffect(() => {
+    if (
+      !threadId ||
+      isMessagesLoading ||
+      isLoading ||
+      messages.length > 0 ||
+      evidenceAutoStartedThreadRef.current === threadId
+    ) {
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("documentEvidence") !== "1") return;
+    evidenceAutoStartedThreadRef.current = threadId;
+    params.delete("documentEvidence");
+    const query = params.toString();
+    window.history.replaceState(
+      {},
+      "",
+      `${window.location.pathname}${query ? `?${query}` : ""}`,
+    );
+    void sendMessage("请根据当前 PRD 评分中持久化的证据阻断，生成必填补充问题。", {
+      webSearchEnabled: false,
+    });
+  }, [isLoading, isMessagesLoading, messages.length, sendMessage, threadId]);
 
   const clearMessages = useCallback(() => {
     setMessages([]);

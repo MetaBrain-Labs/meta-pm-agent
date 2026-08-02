@@ -126,6 +126,12 @@ pnpm --filter @repo/database db:push
 
 `db:generate` 只生成 Prisma Client；`db:push` 会修改已配置的数据库。
 
+已有数据库升级到支持 PRD 证据阻断等待状态时，执行：
+
+```bash
+pnpm --filter @repo/database db:upgrade-document-status
+```
+
 #### 数据库结构说明
 
 当前 Prisma schema 覆盖核心应用表，但 API 还会使用尚未纳入受跟踪 Prisma migration 的 raw SQL 表：

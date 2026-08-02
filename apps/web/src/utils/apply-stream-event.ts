@@ -27,6 +27,16 @@ export function applyStreamEvent(
   event: StreamEvent,
 ): Message {
   switch (event.type) {
+    case "document-evidence-resolution-complete":
+      return event.runId && event.workspaceId
+        ? {
+            ...message,
+            documentEvidenceResolutionComplete: {
+              runId: event.runId,
+              workspaceId: event.workspaceId,
+            },
+          }
+        : message;
     case "agent-status":
       return applyAgentStatus(message, event);
     case "thinking":

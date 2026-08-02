@@ -8,6 +8,7 @@
  * - 验证完整根 JSON 可被正常解析
  * - 验证 Markdown fenced JSON 不会触发昂贵的模型重试
  * - 验证带前后缀文本的完整 JSON 仍可被提取
+ * - 验证带前言的嵌套 JSON 不会退化为最后一个内部对象
  * - 验证截断根 JSON 不会退化解析内部对象
  *
  * Notes:
@@ -34,6 +35,18 @@ test("parseJsonObject extracts a complete object from mixed text", () => {
   assert.deepEqual(parseJsonObject('prefix {"ok":true} suffix'), {
     ok: true,
   });
+});
+
+test("parseJsonObject keeps the outer object when prefixed JSON is nested", () => {
+  assert.deepEqual(
+    parseJsonObject(
+      'result: {"summary":"ok","questions":[{"id":"q1","label":"Answer"}]}',
+    ),
+    {
+      summary: "ok",
+      questions: [{ id: "q1", label: "Answer" }],
+    },
+  );
 });
 
 test("parseJsonObject does not parse nested objects from a truncated root JSON", () => {

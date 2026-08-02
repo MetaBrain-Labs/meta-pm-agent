@@ -25,6 +25,10 @@ import type {
   WorkflowRetryRequest,
 } from "@repo/shared";
 import type { HumanInTheLoopInterrupt } from "./graph/human-in-the-loop";
+import type {
+  DocumentEvidenceAnswerResult,
+} from "./graph/document-evidence-resolution-workflow";
+import type { DocumentEvidenceBlocker } from "./agents/product-workflow/orchestrator-agent/document-evidence-resolver-subagent";
 
 /**
  * 标识当前流式内容所属的 Agent，便于 API 持久化和前端按阶段展示。
@@ -141,6 +145,16 @@ export type ConversationStreamEvent =
       terminal?: boolean;
     }
   | { type: "complete"; result: ProductWorkflowResult }
+  | {
+      type: "document-evidence-resolution-plan";
+      runId: string;
+      resolution: DocumentEvidenceAnswerResult["resolution"];
+    }
+  | {
+      type: "document-evidence-resolution-complete";
+      runId: string;
+      workspaceId: string;
+    }
   | { type: "knowledge-graph-update"; knowledgeGraph: ProductKnowledgeGraph };
 
 /**
@@ -163,6 +177,15 @@ export interface ConversationStreamOptions {
     taskId: string;
     error: string;
   };
+  /** 服务端从文档 run 与 artifact 恢复的可信证据阻断上下文。 */
+  documentEvidenceResolution?: {
+    conversationId: string;
+    runId: string;
+    sourceGraphVersion: number;
+    blockers: DocumentEvidenceBlocker[];
+  };
+  /** API 按 document-evidence 线程恢复 LangGraph 后返回的表单答案。 */
+  documentEvidenceAnswer?: DocumentEvidenceAnswerResult;
   signal?: AbortSignal;
   /** "chat" 模式使用纯闲聊提示词，不产生标记块或表单 */
   mode?: "project" | "chat";
