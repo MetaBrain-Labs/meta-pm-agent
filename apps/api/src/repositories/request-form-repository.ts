@@ -343,6 +343,7 @@ export interface DocumentEvidenceResolutionRecord {
   sourceGraphVersion: number;
   blockers: DocumentEvidenceBlocker[];
   resolution?: DocumentEvidenceResolution;
+  answer?: string;
   status: string;
   resolvedGraphVersion?: number;
 }
@@ -531,6 +532,7 @@ function mapDocumentEvidenceResolutionRow(
     ...(payload.resolution && typeof payload.resolution === "object"
       ? { resolution: payload.resolution as DocumentEvidenceResolution }
       : {}),
+    ...(typeof payload.answer === "string" ? { answer: payload.answer } : {}),
     status: row.status,
     ...(typeof payload.resolved_graph_version === "number"
       ? { resolvedGraphVersion: payload.resolved_graph_version }

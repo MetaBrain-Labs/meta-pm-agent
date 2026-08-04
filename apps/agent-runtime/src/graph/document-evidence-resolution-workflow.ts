@@ -67,6 +67,42 @@ export interface DocumentEvidenceAnswerResult {
   relatedNodeIds: string[];
 }
 
+/**
+ * 从持久化的问题映射和答案重建 supplement 上下文，供首次恢复与失败重试共用。
+ */
+export function createDocumentEvidenceAnswerResult({
+  runId,
+  sourceGraphVersion,
+  answerText,
+  resolution,
+}: {
+  runId: string;
+  sourceGraphVersion: number;
+  answerText: string;
+  resolution: DocumentEvidenceResolution;
+}): DocumentEvidenceAnswerResult {
+  const normalizedAnswer = answerText.trim();
+  if (!normalizedAnswer) {
+    throw new Error("Evidence resolution requires a response.");
+  }
+  return {
+    runId,
+    sourceGraphVersion,
+    answerText: normalizedAnswer,
+    resolution,
+    suggestedAgentTypes: [
+      ...new Set(
+        resolution.questions.flatMap((question) => question.suggestedAgentTypes),
+      ),
+    ],
+    relatedNodeIds: [
+      ...new Set(
+        resolution.questions.flatMap((question) => question.relatedNodeIds),
+      ),
+    ],
+  };
+}
+
 export type DocumentEvidenceResolutionStreamEvent =
   | ProductWorkflowStreamEvent
   | {
@@ -328,26 +364,13 @@ function normalizeAnswersNode(state: DocumentEvidenceResolutionStateValue) {
       ? [decision.message.trim()]
       : [],
   ).join("\n");
-  if (!answerText) throw new Error("Evidence resolution requires a response.");
   return {
-    answerResult: {
+    answerResult: createDocumentEvidenceAnswerResult({
       runId: state.runId,
       sourceGraphVersion: state.sourceGraphVersion,
       answerText,
       resolution: state.resolution,
-      suggestedAgentTypes: [
-        ...new Set(
-          state.resolution.questions.flatMap(
-            (question) => question.suggestedAgentTypes,
-          ),
-        ),
-      ],
-      relatedNodeIds: [
-        ...new Set(
-          state.resolution.questions.flatMap((question) => question.relatedNodeIds),
-        ),
-      ],
-    },
+    }),
   };
 }
 

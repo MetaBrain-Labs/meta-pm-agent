@@ -24,6 +24,8 @@ import {
   createDocumentEvidenceResolutionPayload,
   createDocumentEvidenceResolverPrompt,
 } from "../src/agents/product-workflow/orchestrator-agent/document-evidence-resolver-subagent/prompt";
+import { createFormAnswerUserInputBlock } from "../src/agents/conversation/stream";
+import { parseUserInputBlock } from "../src/agents/request/user-input";
 import { normalizeDocumentWorkflowGraph } from "../src/graph/document-workflow";
 
 const input: DocumentEvidenceResolutionInput = {
@@ -44,6 +46,22 @@ const input: DocumentEvidenceResolutionInput = {
     notes: [],
   },
 };
+
+test("serializes evidence-resolution answers as valid Request Agent user_input", () => {
+  const content = [
+    "Resolve persisted PRD evidence blockers for document run run-1.",
+    "Q1: Use the confirmed MVP scope.",
+    'Blocker-to-question mapping: [{"questionId":"q1","blockerIndexes":[0,1]}]',
+  ].join("\n\n");
+
+  assert.deepEqual(parseUserInputBlock(createFormAnswerUserInputBlock(content)), [
+    {
+      index: 1,
+      content,
+      type: "表单答复",
+    },
+  ]);
+});
 
 test("keeps merged resolver questions required and covers every blocker", () => {
   const result = normalizeDocumentEvidenceResolution(

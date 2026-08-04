@@ -16,6 +16,7 @@
 import type { Context } from "hono";
 import { stream } from "hono/streaming";
 import {
+  createDocumentEvidenceAnswerResult,
   createDocumentEvidenceResolutionThreadId,
   createHumanInTheLoopThreadId,
   createWorkflowThreadId,
@@ -273,6 +274,18 @@ export async function chatStreamHandler(c: Context) {
         } else {
           await resumeQuestionFormHumanInterrupt(parsed.data.hitlResume);
         }
+      } else if (
+        documentEvidenceResolution?.status === "supplement_running" &&
+        documentEvidenceResolution.resolution &&
+        documentEvidenceResolution.answer
+      ) {
+        // 下游失败重试时复用已持久化答案，避免要求用户重复填写已消费的 Question Form。
+        documentEvidenceAnswer = createDocumentEvidenceAnswerResult({
+          runId: documentEvidenceResolution.runId,
+          sourceGraphVersion: documentEvidenceResolution.sourceGraphVersion,
+          answerText: documentEvidenceResolution.answer,
+          resolution: documentEvidenceResolution.resolution,
+        });
       }
 
       // 持久化用户发送的消息

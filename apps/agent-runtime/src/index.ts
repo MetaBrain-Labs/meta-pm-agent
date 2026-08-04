@@ -51,6 +51,7 @@ export {
   DOCUMENT_SCORE_MAX_ATTEMPTS,
 } from "./agents/document-agent/scoring";
 export {
+  createDocumentEvidenceAnswerResult,
   createDocumentEvidenceResolutionThreadId,
   formatDocumentEvidenceQuestionForm,
   isDocumentEvidenceResolutionFormId,

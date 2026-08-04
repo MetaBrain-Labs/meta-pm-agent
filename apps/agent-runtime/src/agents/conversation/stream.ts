@@ -364,7 +364,7 @@ async function* streamDocumentEvidenceResolutionAnswer(
   if (!answer || !options.knowledgeGraph) {
     throw new Error("Document evidence resolution interrupt was not resumed.");
   }
-  const userInputBlock = ensureUserInputBlock([
+  const userInputBlock = createFormAnswerUserInputBlock([
     `Resolve persisted PRD evidence blockers for document run ${answer.runId}.`,
     answer.answerText,
     `Blocker-to-question mapping: ${JSON.stringify(
@@ -1294,7 +1294,7 @@ function isProductWorkflowResumeFormId(formId: string): boolean {
 /**
  * 将原始表单答案包装成合法 user_input，供恢复后的 Executor Agent 读取用户补充信息。
  */
-function createFormAnswerUserInputBlock(content: string): string {
+export function createFormAnswerUserInputBlock(content: string): string {
   return `<user-input>\n${JSON.stringify(
     {
       user_input: [
