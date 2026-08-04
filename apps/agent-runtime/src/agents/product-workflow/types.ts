@@ -25,6 +25,21 @@ import type {
 import type { UserInputRecord } from "../request/user-input";
 import type { ExecutorAgentType } from "./executor-agent/definitions";
 
+const DOCUMENT_EVIDENCE_SOURCE_PREFIX = "document-evidence:";
+
+/**
+ * 判断当前补充 DAG 是否来自 PRD 证据阻断专用流程。
+ */
+export function isDocumentEvidenceSupplement(
+  sourceTaskIds: string[] | undefined,
+): boolean {
+  return Boolean(
+    sourceTaskIds?.some((taskId) =>
+      taskId.startsWith(DOCUMENT_EVIDENCE_SOURCE_PREFIX),
+    ),
+  );
+}
+
 /**
  * 产品工作流的公共输入，贯穿 Planner 与 Executor。
  */
@@ -86,6 +101,8 @@ export interface ExecutorAgentInput extends ProductWorkflowInput {
   previousResults: ExecutorAgentResult[];
   /** 手动定点重试时，由服务端从可信错误记录恢复的修正指令。 */
   retryInstruction?: string;
+  /** 仅为 PRD 证据阻断补充流程开放额外的风险关闭能力。 */
+  documentEvidenceResolution?: boolean;
 }
 
 /**
@@ -101,6 +118,7 @@ export interface CritiqueAgentInput {
   knowledgeGraph: ProductKnowledgeGraph;
   priorIssues?: CritiqueReviewIssue[];
   userInput?: UserInputRecord[];
+  documentEvidenceResolution?: boolean;
   signal?: AbortSignal;
 }
 

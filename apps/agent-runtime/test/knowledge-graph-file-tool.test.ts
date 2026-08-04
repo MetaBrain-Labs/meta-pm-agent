@@ -462,6 +462,42 @@ test("deprecates owned nodes only during supplement workflows", async () => {
   );
 });
 
+test("document evidence resolution deprecates an answered active risk", async () => {
+  const state = createKnowledgeGraph();
+  state.risks.push({
+    id: "RISK-001",
+    text: "Security certification is not confirmed.",
+    source_task_id: "task-01",
+  });
+  const tools = createKnowledgeGraphTools(state, {
+    allowNodeDeprecation: true,
+    allowRiskDeprecation: true,
+    sourceTaskId: "supplement-task-01",
+    allowedEntityTypes: ["Decision"],
+  });
+  const deprecate = getTool(tools, "kg_file_deprecate_nodes");
+  const result = JSON.parse(
+    String(
+      await deprecate.invoke({
+        deprecations: [
+          {
+            node_id: "RISK-001",
+            source_task_id: "supplement-task-01",
+            reason: "The required certification was confirmed by the user.",
+          },
+        ],
+      }),
+    ),
+  ) as ToolResult;
+
+  assert.equal(result.count, 1);
+  assert.equal(state.risks.length, 0);
+  assert.equal(
+    state.entities.find((item) => item.id === "RISK-001")?.status,
+    "deprecated",
+  );
+});
+
 interface ToolResult {
   count: number;
   items: Array<{ id: string }>;

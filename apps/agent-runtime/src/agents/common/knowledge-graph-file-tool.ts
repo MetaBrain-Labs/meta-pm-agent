@@ -249,6 +249,7 @@ export interface KnowledgeGraphToolPolicy {
   allowedRelationTypes?: readonly ProductKnowledgeGraph["relations"][number]["type"][];
   requiredBlockingOpenQuestionCount?: number;
   allowNodeDeprecation?: boolean;
+  allowRiskDeprecation?: boolean;
   sourceTaskId?: string;
   userInput?: ReadonlyArray<{ index: number; content: string }>;
   verifiedWebSources?: ReadonlyMap<string, VerifiedWebSource>;
@@ -452,7 +453,22 @@ export function createKnowledgeGraphTools(
           const nodeIndex = state.entities.findIndex(
             (entity) => entity.id === deprecation.node_id,
           );
-          const existing = state.entities[nodeIndex];
+          let existing = state.entities[nodeIndex];
+          const riskIndex = state.risks.findIndex(
+            (risk) => risk.id === deprecation.node_id,
+          );
+          const risk = state.risks[riskIndex];
+          if (!existing && risk && policy.allowRiskDeprecation) {
+            existing = {
+              id: risk.id,
+              type: "Risk",
+              name: risk.text.slice(0, 120),
+              description: risk.text,
+              source_task_id: risk.source_task_id,
+              status: "proposed",
+              provenance: [{ kind: "existing_graph", node_id: risk.id }],
+            };
+          }
           if (!existing) {
             skipped.push({
               id: deprecation.node_id,
@@ -461,6 +477,7 @@ export function createKnowledgeGraphTools(
             continue;
           }
           if (
+            !(existing.type === "Risk" && policy.allowRiskDeprecation) &&
             policy.allowedEntityTypes &&
             !policy.allowedEntityTypes.includes(existing.type)
           ) {
@@ -502,7 +519,14 @@ export function createKnowledgeGraphTools(
             deprecation_reason: deprecation.reason,
             replacement_node_id: replacement?.id,
           };
-          state.entities[nodeIndex] = deprecated;
+          if (nodeIndex >= 0) {
+            state.entities[nodeIndex] = deprecated;
+          } else {
+            state.entities.push(deprecated);
+          }
+          if (existing.type === "Risk" && riskIndex >= 0) {
+            state.risks.splice(riskIndex, 1);
+          }
           items.push(deprecated);
         }
 
@@ -520,7 +544,7 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_deprecate_nodes",
         description:
-          "Deprecate active graph nodes during a supplement workflow without deleting history. Use the domain owner for each node type. Provide the concrete correction reason and an active replacement node when one exists.",
+          `Deprecate active graph nodes during a supplement workflow without deleting history. Use the domain owner for each node type. Provide the concrete correction reason and an active replacement node when one exists.${policy.allowRiskDeprecation ? " In document evidence resolution, directly answered active Risk IDs may also be deprecated without a replacement." : ""}`,
         schema: z.object({
           deprecations: z
             .array(nodeDeprecationInputSchema)

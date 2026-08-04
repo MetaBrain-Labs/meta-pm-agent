@@ -37,6 +37,7 @@ import {
 } from "../../agents/product-workflow/agent";
 import { getModelProfileFromRunnableConfig } from "../../agents/common/model-profile";
 import { updateProductContextMetadata } from "../../agents/product-workflow/common/context-metadata";
+import { isDocumentEvidenceSupplement } from "../../agents/product-workflow/types";
 import type { WorkflowGraphStateValue } from "../state";
 
 const AUTOMATIC_CRITIQUE_CORRECTION_MARKER =
@@ -372,6 +373,9 @@ async function executeExecutorAgentTask(
       userInput: state.userInput,
       previousResults: state.executorResults,
       retryInstruction,
+      documentEvidenceResolution: isDocumentEvidenceSupplement(
+        state.supplementSourceTaskIds,
+      ),
       signal: config?.signal,
     }),
     writer,
@@ -441,6 +445,9 @@ async function executeCritiqueAgentReview(
       knowledgeGraph,
       priorIssues: state.priorCritiqueIssues,
       userInput: state.userInput,
+      documentEvidenceResolution: isDocumentEvidenceSupplement(
+        state.supplementSourceTaskIds,
+      ),
       signal: config?.signal,
     }),
     writer,
@@ -487,8 +494,12 @@ async function executeCritiqueAgentReview(
       ...(nextWorkflowResult.review.issues ?? []),
       ...(nextWorkflowResult.knowledge_graph_review?.issues ?? []),
     ];
-    const supplementSourceTaskIds =
-      nextWorkflowResult.review.retry_task_ids ?? [];
+    const retryTaskIds = nextWorkflowResult.review.retry_task_ids ?? [];
+    const supplementSourceTaskIds = isDocumentEvidenceSupplement(
+      state.supplementSourceTaskIds,
+    )
+      ? [...new Set([...state.supplementSourceTaskIds, ...retryTaskIds])]
+      : retryTaskIds;
     const supplementAffectedTaskIds = inferSupplementAffectedTaskIds(
       supplementSourceTaskIds,
       state.plan,

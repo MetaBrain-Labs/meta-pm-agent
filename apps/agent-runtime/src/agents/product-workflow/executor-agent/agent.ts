@@ -64,6 +64,15 @@ const STRUCTURED_TOOL_NAMES = new Set([
   "kg_file_add_risks",
   "kg_file_add_open_questions",
 ]);
+const STRUCTURED_WRITE_FAILURE_PREFIXES = [
+  "unauthorized_entity_type:",
+  "unauthorized_relation_type:",
+  "invalid_relation_direction:",
+  "missing_relation_",
+  "missing_deprecation_target",
+  "missing_active_replacement_node",
+  "source_task_id_mismatch",
+] as const;
 
 const BLOCKER_TOOL_NAME = "kg_file_raise_blocker";
 
@@ -193,6 +202,7 @@ export async function* streamExecutorAgent(
           requiredBlockingOpenQuestionCount:
             input.task.required_open_question_count ?? 0,
           allowNodeDeprecation: input.plan.status === "supplement",
+          allowRiskDeprecation: input.documentEvidenceResolution === true,
           sourceTaskId: input.task.task_id,
           userInput: input.userInput,
           webSearchEvidenceRegistry,
@@ -232,11 +242,7 @@ export async function* streamExecutorAgent(
         suppressFallbackReasoning: true,
         signal: input.signal,
         throwOnError: true,
-        getToolResultError: (toolName, toolResult) =>
-          STRUCTURED_TOOL_NAMES.has(toolName) &&
-          isNodeProvenanceValidationFailure(toolResult)
-            ? new Error(getErrorMessage(toolResult))
-            : null,
+        getToolResultError: getStructuredWriteError,
       });
 
       try {
@@ -274,11 +280,17 @@ export async function* streamExecutorAgent(
           throw error;
         }
         attemptErrors.push(getErrorMessage(error));
-        if (attempt === 1 && isNodeProvenanceValidationFailure(error)) {
-          retryInstruction = createNodeProvenanceRetryInstruction(
-            error,
-            webSearchEvidenceRegistry,
-          );
+        if (
+          attempt === 1 &&
+          (isNodeProvenanceValidationFailure(error) ||
+            isStructuredWriteValidationFailure(error))
+        ) {
+          retryInstruction = isNodeProvenanceValidationFailure(error)
+            ? createNodeProvenanceRetryInstruction(
+                error,
+                webSearchEvidenceRegistry,
+              )
+            : createStructuredWriteRetryInstruction(error);
           yield {
             type: "reasoning",
             agentType: definition.agentType,
@@ -518,6 +530,71 @@ function getErrorMessage(error: unknown): string {
  */
 export function isNodeProvenanceValidationFailure(error: unknown): boolean {
   return getErrorMessage(error).includes("Node provenance validation failed:");
+}
+
+/**
+ * 将结构化写工具的不可接受跳过项提升为一次本地修正。
+ */
+export function getStructuredWriteError(
+  toolName: string,
+  toolResult: unknown,
+): Error | null {
+  if (!STRUCTURED_TOOL_NAMES.has(toolName)) return null;
+  if (isNodeProvenanceValidationFailure(toolResult)) {
+    return new Error(getErrorMessage(toolResult));
+  }
+  const result = parseStructuredToolResult(toolResult);
+  const failures = result?.skipped?.filter((item) =>
+    STRUCTURED_WRITE_FAILURE_PREFIXES.some((prefix) =>
+      item.reason.startsWith(prefix),
+    ),
+  );
+  return failures?.length
+    ? new Error(
+        `Structured graph write validation failed: ${failures
+          .map((item) => `${item.id}:${item.reason}`)
+          .join(", ")}`,
+      )
+    : null;
+}
+
+/** 判断异常是否为结构化图谱写入校验失败。 */
+export function isStructuredWriteValidationFailure(error: unknown): boolean {
+  return getErrorMessage(error).includes(
+    "Structured graph write validation failed:",
+  );
+}
+
+/** 为唯一一次原地修正提供精确的失败原因。 */
+function createStructuredWriteRetryInstruction(error: unknown): string {
+  return [
+    "The previous graph write was partially rejected. This is the only local correction attempt; keep all successful writes and do not repeat research or analysis.",
+    `Validation error: ${getErrorMessage(error)}`,
+    "Immediately rewrite only the rejected items using authorized entity and relation types, valid typed directions, and existing endpoint IDs. Do not merely describe the correction.",
+  ].join(" ");
+}
+
+/** 兼容工具运行时返回对象或 JSON 字符串。 */
+function parseStructuredToolResult(
+  value: unknown,
+): { skipped?: Array<{ id: string; reason: string }> } | null {
+  const parsed = typeof value === "string" ? parseJsonObject(value) : value;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const skipped = (parsed as { skipped?: unknown }).skipped;
+  if (!Array.isArray(skipped)) return {};
+  return {
+    skipped: skipped.filter(
+      (item): item is { id: string; reason: string } =>
+        Boolean(
+          item &&
+            typeof item === "object" &&
+            typeof (item as { id?: unknown }).id === "string" &&
+            typeof (item as { reason?: unknown }).reason === "string",
+        ),
+    ),
+  };
 }
 
 /**

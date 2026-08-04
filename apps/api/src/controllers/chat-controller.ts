@@ -22,6 +22,7 @@ import {
   createWorkflowThreadId,
   extractQuestionFormId,
   getFormAnswerId,
+  isAcceptedDocumentEvidenceWorkflowResult,
   isProductWorkflowOptionalStopAnswer,
   isPreOrchGraphConflictFormId,
   parseGraphConflictAction,
@@ -434,7 +435,7 @@ export async function chatStreamHandler(c: Context) {
           autoFinalizedWorkflowRound = event.result.status === "completed";
           if (
             documentEvidenceResolution?.status === "supplement_running" &&
-            event.result.status === "completed"
+            isAcceptedDocumentEvidenceWorkflowResult(event.result)
           ) {
             documentEvidenceCompletionPending = true;
           }
@@ -656,7 +657,12 @@ export async function chatStreamHandler(c: Context) {
               : undefined),
         });
 
-        if (documentEvidenceCompletionPending && documentEvidenceResolution) {
+        if (
+          documentEvidenceCompletionPending &&
+          documentEvidenceResolution &&
+          isProductWorkflowResult(productWorkflowResult) &&
+          isAcceptedDocumentEvidenceWorkflowResult(productWorkflowResult)
+        ) {
           const resolvedGraph = await getWorkspaceKnowledgeGraph(
             runtimeContext.workspaceId!,
           );

@@ -16,6 +16,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  isAcceptedDocumentEvidenceWorkflowResult,
   normalizeDocumentEvidenceResolution,
   selectNextNodeAfterScore,
   type DocumentEvidenceResolutionInput,
@@ -112,11 +113,47 @@ test("falls back to one required textarea when blocker coverage is invalid", () 
   assert.deepEqual(result.questions[0]?.blockerIndexes, [0, 1]);
 });
 
+test("keeps trusted active Risk IDs and removes invented related nodes", () => {
+  const result = normalizeDocumentEvidenceResolution(
+    {
+      summary: "Resolve the certification risk",
+      questions: [
+        {
+          id: "risk",
+          label: "Confirm the certification.",
+          type: "text",
+          required: true,
+          blockerIndexes: [0, 1],
+          suggestedAgentTypes: ["executor-product-strategy"],
+          relatedNodeIds: ["RISK-1", "RISK-invented"],
+        },
+      ],
+    },
+    {
+      ...input,
+      knowledgeGraph: {
+        ...input.knowledgeGraph,
+        risks: [{ id: "RISK-1", text: "Certification is not confirmed." }],
+      },
+    },
+  );
+
+  assert.deepEqual(result.questions[0]?.relatedNodeIds, ["RISK-1"]);
+});
+
 test("injects every trusted blocker and the exact label contract into Resolver context", () => {
-  const payload = createDocumentEvidenceResolutionPayload(input);
-  const prompt = createDocumentEvidenceResolverPrompt(input);
+  const resolutionInput = {
+    ...input,
+    knowledgeGraph: {
+      ...input.knowledgeGraph,
+      risks: [{ id: "RISK-1", text: "Certification is not confirmed." }],
+    },
+  };
+  const payload = createDocumentEvidenceResolutionPayload(resolutionInput);
+  const prompt = createDocumentEvidenceResolverPrompt(resolutionInput);
 
   assert.deepEqual(payload.blockers, input.blockers);
+  assert.equal(payload.knowledge_graph.risks[0]?.id, "RISK-1");
   assert.match(prompt, /Missing source citation/);
   assert.match(prompt, /"label":/);
   assert.match(prompt, /never "question"/);
@@ -140,6 +177,27 @@ test("preserves source graph version while normalizing document graph", () => {
   assert.equal(normalized.version, 7);
   assert.equal(normalized.nodes.length, 1);
   assert.equal(normalized.relations.length, 0);
+});
+
+test("does not accept document evidence with an unconsumed Evidence issue", () => {
+  const result = {
+    status: "completed",
+    review: {
+      retry_task_ids: [],
+      issues: [
+        {
+          code: "UNCONSUMED_EVIDENCE",
+          severity: "warning",
+          message: "Evidence is not consumed.",
+        },
+      ],
+    },
+    knowledge_graph_review: { issues: [] },
+  } as any;
+
+  assert.equal(isAcceptedDocumentEvidenceWorkflowResult(result), false);
+  result.review.issues = [];
+  assert.equal(isAcceptedDocumentEvidenceWorkflowResult(result), true);
 });
 
 test("routes all five document scoring outcomes", () => {

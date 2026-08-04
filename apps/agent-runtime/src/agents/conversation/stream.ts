@@ -400,7 +400,10 @@ async function* streamDocumentEvidenceResolutionAnswer(
     },
   )) {
     yield event;
-    if (event.type === "complete" && isAcceptedWorkflowResult(event.result)) {
+    if (
+      event.type === "complete" &&
+      isAcceptedDocumentEvidenceWorkflowResult(event.result)
+    ) {
       yield {
         type: "document-evidence-resolution-complete",
         runId: answer.runId,
@@ -1126,6 +1129,21 @@ export function isAcceptedWorkflowResult(
     ![...(result.review.issues ?? []), ...(result.knowledge_graph_review?.issues ?? [])].some(
       (issue) => issue.severity === "error",
     )
+  );
+}
+
+/**
+ * 文档补证必须通过更严格的证据消费门禁，不能把普通完成状态当作验收。
+ */
+export function isAcceptedDocumentEvidenceWorkflowResult(
+  result: ProductWorkflowResult,
+): boolean {
+  return (
+    isAcceptedWorkflowResult(result) &&
+    ![
+      ...(result.review.issues ?? []),
+      ...(result.knowledge_graph_review?.issues ?? []),
+    ].some((issue) => issue.code === "UNCONSUMED_EVIDENCE")
   );
 }
 

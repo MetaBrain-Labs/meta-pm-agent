@@ -28,8 +28,10 @@ Rules:
 6. A user must be allowed to explicitly answer that information is deferred, unknown, or awaiting owner confirmation; this is an answer, not a skipped field.
 7. radio/select questions must provide at least two options.
 8. suggestedAgentTypes must use executor agent names when possible, such as executor-product-strategy, executor-market-research, executor-product-discovery, executor-product-execution, executor-data-analytics, or executor-interface-craft.
-9. relatedNodeIds may only contain IDs present in the supplied knowledge graph context.
-10. Do not write a PRD and do not propose direct document edits. The answers will be converted into a supplement product workflow that updates the authoritative knowledge graph.`;
+9. suggestedAgentTypes are recommendations, not an exhaustive executor allowlist. Include executor-market-research when the user must supply or authorize external benchmark, standard, certification, or vendor-capability evidence.
+10. relatedNodeIds must include every active Risk node that the answer would directly resolve or invalidate, so the supplement workflow can close it explicitly.
+11. relatedNodeIds may only contain IDs present in the supplied knowledge graph context.
+12. Do not write a PRD and do not propose direct document edits. The answers will be converted into a supplement product workflow that updates the authoritative knowledge graph.`;
 
 export const DOCUMENT_EVIDENCE_RESOLUTION_OUTPUT_SHAPE = `{
   "summary": "Short Simplified Chinese summary",
@@ -67,6 +69,7 @@ export function createDocumentEvidenceResolutionPayload(
         name: entity.name,
         status: entity.status,
       })),
+      risks: input.knowledgeGraph.risks.slice(-20),
       open_questions: input.knowledgeGraph.open_questions.slice(-20),
     },
   };

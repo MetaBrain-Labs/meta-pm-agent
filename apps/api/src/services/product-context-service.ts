@@ -251,7 +251,7 @@ function restoreDecisionInputs(
  */
 function restoreRiskInputs(nodes: KnowledgeGraphEntity[]): KnowledgeGraphRiskInput[] {
   return nodes
-    .filter((node) => node.type === "Risk")
+    .filter((node) => node.type === "Risk" && node.status !== "deprecated")
     .map((node) => ({
       id: node.id,
       text: node.description || node.name,

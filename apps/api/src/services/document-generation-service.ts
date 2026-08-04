@@ -69,6 +69,11 @@ import { getWorkspaceKnowledgeGraph } from "./product-knowledge-graph-service";
 export interface DocumentGenerationStatusDto {
   run: DocumentGenerationRunDto | null;
   artifact: DocumentArtifactDto | null;
+  evidenceResolution?: {
+    status: string;
+    sourceGraphVersion: number;
+    resolvedGraphVersion?: number;
+  } | null;
 }
 
 /** 文档页创建或恢复专用对话后的导航数据。 */
@@ -127,11 +132,16 @@ export async function startDocumentGeneration({
 
   const existingRun = await getActiveDocumentGenerationRun(workspaceId, kind);
   if (existingRun) {
+    const evidenceResolution =
+      existingRun.status === "awaiting_input"
+        ? await findDocumentEvidenceResolutionByRunId(existingRun.id)
+        : null;
     return {
       run: existingRun,
       artifact: existingRun.documentArtifactId
         ? await getDocumentArtifactByRunId(existingRun.id)
         : null,
+      evidenceResolution: toEvidenceResolutionSummary(evidenceResolution),
     };
   }
 
@@ -166,12 +176,17 @@ export async function getLatestDocumentGenerationStatus({
 }): Promise<DocumentGenerationStatusDto> {
   const run = await getLatestDocumentGenerationRun(workspaceId, kind);
   if (!run) return { run: null, artifact: null };
+  const [artifact, evidenceResolution] = await Promise.all([
+    run.documentArtifactId ? getDocumentArtifactByRunId(run.id) : null,
+    run.status === "awaiting_input"
+      ? findDocumentEvidenceResolutionByRunId(run.id)
+      : null,
+  ]);
 
   return {
     run,
-    artifact: run.documentArtifactId
-      ? await getDocumentArtifactByRunId(run.id)
-      : null,
+    artifact,
+    evidenceResolution: toEvidenceResolutionSummary(evidenceResolution),
   };
 }
 
@@ -183,12 +198,17 @@ export async function getDocumentGenerationStatusByRunId(
 ): Promise<DocumentGenerationStatusDto> {
   const run = await getDocumentGenerationRunById(runId);
   if (!run) return { run: null, artifact: null };
+  const [artifact, evidenceResolution] = await Promise.all([
+    run.documentArtifactId ? getDocumentArtifactByRunId(run.id) : null,
+    run.status === "awaiting_input"
+      ? findDocumentEvidenceResolutionByRunId(run.id)
+      : null,
+  ]);
 
   return {
     run,
-    artifact: run.documentArtifactId
-      ? await getDocumentArtifactByRunId(run.id)
-      : null,
+    artifact,
+    evidenceResolution: toEvidenceResolutionSummary(evidenceResolution),
   };
 }
 
@@ -347,10 +367,14 @@ export async function resumeDocumentGeneration({
   const artifact = await getDocumentArtifactByRunId(runId);
   const sourceVersion = artifact?.content?.sourceGraphStats.version;
   const graph = await loadDocumentSourceGraph(run.workspaceId);
+  const evidenceResolution = await findDocumentEvidenceResolutionByRunId(runId);
   if (
     typeof sourceVersion !== "number" ||
+    evidenceResolution?.status !== "completed" ||
+    typeof evidenceResolution.resolvedGraphVersion !== "number" ||
+    evidenceResolution.resolvedGraphVersion <= sourceVersion ||
     typeof graph.version !== "number" ||
-    graph.version <= sourceVersion
+    graph.version < evidenceResolution.resolvedGraphVersion
   ) {
     throw new DocumentGenerationServiceError(
       "产品知识图谱尚未更新，请先完成证据阻断解决流程。",
@@ -385,7 +409,23 @@ export async function resumeDocumentGeneration({
   return {
     run: { ...run, status: "running", finishedAt: null },
     artifact,
+    evidenceResolution: toEvidenceResolutionSummary(evidenceResolution),
   };
+}
+
+/** 将内部 request-form 记录压缩为文档页只读状态。 */
+function toEvidenceResolutionSummary(
+  resolution: Awaited<ReturnType<typeof findDocumentEvidenceResolutionByRunId>>,
+): DocumentGenerationStatusDto["evidenceResolution"] {
+  return resolution
+    ? {
+        status: resolution.status,
+        sourceGraphVersion: resolution.sourceGraphVersion,
+        ...(typeof resolution.resolvedGraphVersion === "number"
+          ? { resolvedGraphVersion: resolution.resolvedGraphVersion }
+          : {}),
+      }
+    : null;
 }
 
 /**

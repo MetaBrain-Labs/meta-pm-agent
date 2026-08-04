@@ -142,11 +142,15 @@ export function DocumentPlanningPage({
       })),
     ) ?? [];
   const sourceGraphVersion = artifact?.content?.sourceGraphStats?.version;
+  const evidenceResolution = documentState.evidenceResolution;
   const canResume =
     awaitingInput &&
+    evidenceResolution?.status === "completed" &&
     typeof sourceGraphVersion === "number" &&
+    typeof evidenceResolution.resolvedGraphVersion === "number" &&
+    evidenceResolution.resolvedGraphVersion > sourceGraphVersion &&
     typeof kgData?.version === "number" &&
-    kgData.version > sourceGraphVersion;
+    kgData.version >= evidenceResolution.resolvedGraphVersion;
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -451,7 +455,9 @@ export function DocumentPlanningPage({
                             title={
                               canResume
                                 ? `知识图谱已从 v${sourceGraphVersion} 更新到 v${kgData?.version}`
-                                : "知识图谱版本更新后方可继续"
+                                : evidenceResolution?.status !== "completed"
+                                  ? "证据补充工作流尚未通过 Critique 验收"
+                                  : "证据补充完成后仍需等待知识图谱版本更新"
                             }
                           >
                             <Button

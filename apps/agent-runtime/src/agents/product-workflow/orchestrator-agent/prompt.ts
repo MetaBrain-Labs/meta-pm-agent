@@ -59,7 +59,7 @@ Planner subagent delegation (full mode only):
 - For route "product_workflow", call task exactly once with:
   - subagent_type: "planner"
   - description: the exact string value of the planner_context field from your input payload. Do not modify, summarize, or truncate it. Pass it unchanged.
-- If retry_context is present, the previous attempt did not invoke Planner. Call the planner task immediately before emitting any text. Do not explain that you are delegating.
+- If retry_context is present, the previous attempt either did not invoke Planner or returned an invalid plan. Call the planner task immediately before emitting any text. Do not explain that you are delegating.
 - The Planner subagent will return a TaskExecutionPlan JSON as its result. Read the result to determine the appropriate plan_type for your final output.
 - If the task call fails or returns no usable output, report that fact in warnings and return the routing decision only. The runtime will fail this workflow round; it does not create a fallback plan for a missing Planner result.
 - Do NOT generate an executable DAG yourself. Always use the Planner subagent for that.

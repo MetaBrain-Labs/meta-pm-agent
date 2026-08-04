@@ -97,6 +97,10 @@ export function normalizeDocumentEvidenceResolution(
   }
 
   const validIndexes = new Set(input.blockers.map((blocker) => blocker.index));
+  const validNodeIds = new Set([
+    ...input.knowledgeGraph.entities.map((entity) => entity.id),
+    ...input.knowledgeGraph.risks.map((risk) => risk.id),
+  ]);
   const questions = parsed.data.questions.map((question, index) => ({
     ...question,
     id: question.id.trim() || `evidence-question-${index + 1}`,
@@ -104,7 +108,9 @@ export function normalizeDocumentEvidenceResolution(
       validIndexes.has(blockerIndex),
     ),
     suggestedAgentTypes: [...new Set(question.suggestedAgentTypes)],
-    relatedNodeIds: [...new Set(question.relatedNodeIds)],
+    relatedNodeIds: [...new Set(question.relatedNodeIds)].filter((nodeId) =>
+      validNodeIds.has(nodeId),
+    ),
   }));
 
   return { ...parsed.data, questions };

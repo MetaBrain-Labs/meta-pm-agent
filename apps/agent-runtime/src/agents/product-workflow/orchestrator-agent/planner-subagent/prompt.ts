@@ -19,7 +19,7 @@ import {
 
 const EXECUTOR_ROUTING_TABLE = EXECUTOR_DEFINITIONS.map(
   (item) =>
-    `- ${item.agentType}: ${item.graphRole} Allowed entities: ${item.allowedEntityTypes.join(", ")}.`,
+    `- ${item.agentType}: ${item.graphRole} Allowed entities: ${item.allowedEntityTypes.join(", ")}. Allowed relations: ${item.allowedRelationTypes.join(", ")}.`,
 ).join("\n");
 
 /**
@@ -100,7 +100,11 @@ Planning rules:
 - Create a replacement node only when the existing node's own meaning conflicts with the submitted answer or no compatible active node exists.
 - Trace the affected active graph downstream. A changed Requirement must schedule the minimum Feature, Component, and Metric corrections needed to keep existing delivery chains semantically aligned; assign each correction to the Executor that owns that entity type.
 - Keep supplement graph patches proportional: normally no more than 8 new entities total. Consolidate answers from one submitted form into the minimum Evidence, Decision, and Requirement records needed for traceability; do not create an Evidence + Decision + Requirement triplet for every field by default.
-- When supplement_agents is provided, assign tasks only to those executor agent types. This runtime list is authoritative and prevents unrelated baseline tasks from being repeated.
+- When supplement_agents is provided, assign tasks only to those executor agent types. This runtime list is authoritative and prevents unrelated baseline tasks from being repeated, except when supplement_source_task_ids contains a document-evidence: entry.
+- When supplement_source_task_ids contains a document-evidence: entry, supplement_agents contains recommendations rather than an exhaustive allowlist. Select the minimum executor set required to resolve every mapped blocker. Add Market Research when an answer delegates external benchmark, standard, certification, or vendor-capability research instead of supplying a verifiable source, and make downstream Analytics or Strategy tasks depend on its source-verifiable Evidence.
+- In document-evidence supplements, a request to use common market values authorizes research but is not evidence for any concrete numeric target. Keep numbers unconfirmed until a verified source supports them.
+- In document-evidence supplements, every external evidence task must use the exact phrase "source-verifiable Evidence" in expected_output so deterministic validation can enforce the artifact contract.
+- In document-evidence supplements, explicitly close each active Risk ID that the submitted answer directly resolves by requiring one relevant task to call kg_file_deprecate_nodes with that Risk ID and no replacement. Do not leave a contradicted or answered Risk active.
 - The knowledge graph write tools are append-only for creation. Do not plan deletion or reuse an existing relation/decision/risk/open-question ID. The only controlled state change is kg_file_deprecate_nodes for an existing node during a supplement workflow.
 - For supplement corrections, create uniquely identified replacement records where needed, then deprecate every directly conflicting active node through its domain owner. Do not ask an Executor to delete relations or rewrite a node's business content in place.
 - Do not ask an Executor to "update D-001", "delete REL-001", or reuse an existing ID for different content; use the controlled deprecation tool only for the node status transition.

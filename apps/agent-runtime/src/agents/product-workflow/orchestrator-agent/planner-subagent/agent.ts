@@ -20,7 +20,10 @@ import { createDeepAgentToolAllowlistMiddleware } from "../../../common/deep-age
 import { createChatModel } from "../../../common/model";
 import { resolveAgentModelSelection } from "../../../common/model-profile";
 import { parseJsonObject } from "../../../../utils/json";
-import type { OrchestratorAgentInput } from "../../types";
+import {
+  isDocumentEvidenceSupplement,
+  type OrchestratorAgentInput,
+} from "../../types";
 import type { ExecutorAgentType } from "../../executor-agent/definitions";
 import { PLANNER_SUBAGENT_PROMPT } from "./prompt";
 import {
@@ -78,31 +81,33 @@ export function extractPlanFromSubagentResult(
   input: OrchestratorAgentInput,
 ): TaskExecutionPlan {
   if (rawResult === null || rawResult === undefined) {
-    return finalizePlan(
-      createFallbackPlan(input, "Planner subagent was not invoked or returned no output"),
+    return fallbackOrRejectPlan(
       input,
+      "Planner subagent was not invoked or returned no output",
     );
   }
 
   const content = resolveToolMessageContent(rawResult);
   if (content === null) {
-    return finalizePlan(
-      createFallbackPlan(input, "Planner subagent returned no parseable output"),
+    return fallbackOrRejectPlan(
       input,
+      "Planner subagent returned no parseable output",
     );
   }
 
   const parsed = parseJsonObject(content);
   if (parsed === null) {
-    return finalizePlan(
-      createFallbackPlan(input, "Planner subagent output was not valid JSON"),
+    return fallbackOrRejectPlan(
       input,
+      "Planner subagent output was not valid JSON",
     );
   }
 
   const result = TaskExecutionPlanSchema.safeParse(parsed);
   if (result.success) {
-    const candidate = input.supplementAgentTypes?.length
+    const candidate =
+      input.supplementAgentTypes?.length &&
+      !isDocumentEvidenceSupplement(input.supplementSourceTaskIds)
       ? scopeSupplementPlan(result.data, input.supplementAgentTypes)
       : scopeInitialDecisionPlan(result.data, input);
     if (candidate.tasks.length > 0) {
@@ -119,13 +124,23 @@ export function extractPlanFromSubagentResult(
     }
   }
 
-  return finalizePlan(
-    createFallbackPlan(
-      input,
-      `Planner subagent output failed schema validation`,
-    ),
+  return fallbackOrRejectPlan(
     input,
+    "Planner subagent output failed schema validation",
   );
+}
+
+/**
+ * 普通流程保留确定性 fallback；补证流程宁可重试也不执行不完整 DAG。
+ */
+function fallbackOrRejectPlan(
+  input: OrchestratorAgentInput,
+  reason: string,
+): TaskExecutionPlan {
+  if (isDocumentEvidenceSupplement(input.supplementSourceTaskIds)) {
+    throw new Error(`document-evidence-planner-invalid:${reason}`);
+  }
+  return finalizePlan(createFallbackPlan(input, reason), input);
 }
 
 /**

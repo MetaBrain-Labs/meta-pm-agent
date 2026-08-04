@@ -178,6 +178,50 @@ test("critique validation rejects executor boundary violations", () => {
   );
 });
 
+test("document evidence review permits only deprecated Risk audit nodes", () => {
+  const task = createTask("task-risk", 1, "executor-product-strategy");
+  const risk: ProductKnowledgeGraph["entities"][number] = {
+    id: "RISK-1",
+    type: "Risk",
+    name: "Certification is not confirmed",
+    description: "The user has now confirmed the certification.",
+    source_task_id: "task-old",
+    status: "deprecated",
+    deprecated_by_task_id: task.task_id,
+    deprecation_reason: "The submitted evidence form resolved this risk.",
+  };
+  const result: ExecutorAgentResult = {
+    task_id: task.task_id,
+    agent_type: task.assigned_agent,
+    focus_layer: "Decision",
+    summary: "Closed the answered certification risk.",
+    entities: [risk],
+    relations: [],
+    decisions: [],
+    risks: [],
+    open_questions: [],
+    quality_result: { passed: true, notes: "ok" },
+  };
+  const report = createCritiqueValidationReport({
+    requestAnalysis: createRequestAnalysis(),
+    plan: {
+      status: "supplement",
+      request_summary: "Close answered evidence risks.",
+      dag: { nodes: [task.task_id], edges: [] },
+      tasks: [task],
+      assumptions: [],
+    },
+    executorResults: [result],
+    knowledgeGraph: createGraph({ entities: [risk] }),
+    documentEvidenceResolution: true,
+  });
+
+  assert.equal(
+    report.issues.some((issue) => issue.code === "UNAUTHORIZED_ENTITY_TYPE"),
+    false,
+  );
+});
+
 test("critique validation rejects a task that omits its required blocking question", () => {
   const task = {
     ...createTask("task-01", 1, "executor-product-discovery"),
@@ -893,6 +937,19 @@ test("critique rejects research gaps when expected_output requires verified Evid
     target: requirement.id,
     source_task_id: task.task_id,
   };
+  const unconsumed = createCritiqueValidationReport({
+    ...input,
+    executorResults: [{ ...executorResult, entities: [evidence] }],
+    knowledgeGraph: createGraph({ entities: [requirement, evidence] }),
+    documentEvidenceResolution: true,
+  });
+  assert.equal(
+    unconsumed.issues.find(
+      (issue) => issue.code === "UNCONSUMED_EVIDENCE",
+    )?.severity,
+    "error",
+  );
+  assert.deepEqual(unconsumed.retry_task_ids, [task.task_id]);
   const completed = createCritiqueValidationReport({
     ...input,
     executorResults: [

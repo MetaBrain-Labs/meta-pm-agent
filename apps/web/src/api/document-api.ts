@@ -126,6 +126,11 @@ export interface DocumentArtifact {
 export interface DocumentGenerationStatusResponse {
   run: DocumentGenerationRun | null;
   artifact: DocumentArtifact | null;
+  evidenceResolution?: {
+    status: string;
+    sourceGraphVersion: number;
+    resolvedGraphVersion?: number;
+  } | null;
 }
 
 export interface DocumentEvidenceResolutionResponse {

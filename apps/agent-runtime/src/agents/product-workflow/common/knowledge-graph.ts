@@ -166,6 +166,11 @@ export function appendKnowledgeGraphPatch({
       source_agent: question.source_agent ?? agentType,
     }),
   );
+  const deprecatedRiskIds = new Set(
+    entities
+      .filter((entity) => entity.type === "Risk" && entity.status === "deprecated")
+      .map((entity) => entity.id),
+  );
 
   return {
     ...knowledgeGraph,
@@ -180,8 +185,11 @@ export function appendKnowledgeGraphPatch({
       [...knowledgeGraph.decisions, ...decisionsWithSource],
       (item) => item.id.trim(),
     ),
-    risks: mergeByKey([...knowledgeGraph.risks, ...risksWithSource], (item) =>
-      item.id.trim(),
+    risks: mergeByKey(
+      [...knowledgeGraph.risks, ...risksWithSource].filter(
+        (risk) => !deprecatedRiskIds.has(risk.id),
+      ),
+      (item) => item.id.trim(),
     ),
     open_questions: mergeByKey(
       [...knowledgeGraph.open_questions, ...openQuestionsWithSource],

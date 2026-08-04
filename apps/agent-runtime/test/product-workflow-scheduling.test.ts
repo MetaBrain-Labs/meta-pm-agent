@@ -705,6 +705,41 @@ test("scopes a model-generated supplement plan to authorized agents", () => {
   ]);
 });
 
+test("treats document evidence executor suggestions as advisory", () => {
+  const modelPlan = {
+    ...createPlan([
+      createTask("task-01", 1, "executor-market-research", []),
+      createTask("task-02", 2, "executor-data-analytics", ["task-01"]),
+    ]),
+    status: "supplement" as const,
+  };
+  const input = {
+    productContext: "Workspace: local test",
+    knowledgeGraph: createEmptyKnowledgeGraph(),
+    requestAnalysis: createCollaborativeDocumentRequestAnalysis(),
+    userInput: [{ index: 1, content: "Resolve evidence blockers", type: "request" }],
+    supplementAgentTypes: ["executor-data-analytics" as const],
+    supplementSourceTaskIds: ["document-evidence:run-1"],
+  };
+  const result = extractPlanFromSubagentResult(JSON.stringify(modelPlan), input);
+
+  assert.deepEqual(
+    result.tasks.map((task) => task.assigned_agent),
+    ["executor-market-research", "executor-data-analytics"],
+  );
+  assert.throws(
+    () => extractPlanFromSubagentResult("not-json", input),
+    /document-evidence-planner-invalid/,
+  );
+  assert.equal(
+    shouldRetryPlannerDelegation(
+      new Error("document-evidence-planner-invalid:invalid-json"),
+      1,
+    ),
+    true,
+  );
+});
+
 test("keeps minimum MVP execution while deferring detailed technical work", () => {
   const scoped = scopeInitialDecisionPlan(
     createPlan([

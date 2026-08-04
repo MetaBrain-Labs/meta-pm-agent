@@ -75,6 +75,7 @@ export async function* streamOrchestratorAgent(
     : OrchestratorAgentResultSchema;
 
   let rawOutput: unknown;
+  let retryError = "required-subagent-not-invoked: planner";
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const runner = runAgent({
       agentType: "orchestrator" as any,
@@ -112,9 +113,8 @@ export async function* streamOrchestratorAgent(
               ...payload,
               retry_context: {
                 attempt,
-                error: "required-subagent-not-invoked: planner",
-                previous_raw_output:
-                  "No Planner task call was emitted by the previous attempt.",
+                error: retryError,
+                previous_raw_output: "The previous Planner result was unavailable or invalid.",
               },
             },
       resolveOutput: (context) =>
@@ -190,11 +190,12 @@ export async function* streamOrchestratorAgent(
       break;
     } catch (error) {
       if (!shouldRetryPlannerDelegation(error, attempt)) throw error;
+      retryError = error instanceof Error ? error.message : String(error);
       yield {
         type: "reasoning",
         agentType: "orchestrator",
         content:
-          "Planner SubAgent was not invoked; retrying delegation once.\n",
+          "Planner SubAgent did not produce a usable evidence-resolution plan; retrying delegation once.\n",
       };
     }
   }
@@ -258,7 +259,8 @@ export function shouldRetryPlannerDelegation(
   return (
     attempt === 1 &&
     error instanceof Error &&
-    error.message === "required-subagent-not-invoked: planner"
+    (error.message === "required-subagent-not-invoked: planner" ||
+      error.message.startsWith("document-evidence-planner-invalid:"))
   );
 }
 

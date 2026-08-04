@@ -197,6 +197,14 @@ test("orchestrator planner subagent prompt satisfies json response format", () =
     ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
     /do not create placeholder capacity metrics, numeric targets/,
   );
+  assert.match(
+    ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
+    /Allowed relations:/,
+  );
+  assert.match(
+    ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
+    /supplement_agents contains recommendations rather than an exhaustive allowlist/,
+  );
 });
 
 test("orchestrator retry requires an immediate Planner task call", () => {
@@ -206,7 +214,7 @@ test("orchestrator retry requires an immediate Planner task call", () => {
   );
   assert.match(
     ORCHESTRATOR_AGENT_PROMPT,
-    /If retry_context is present, the previous attempt did not invoke Planner/,
+    /If retry_context is present, the previous attempt either did not invoke Planner or returned an invalid plan/,
   );
   assert.match(
     ORCHESTRATOR_AGENT_PROMPT,

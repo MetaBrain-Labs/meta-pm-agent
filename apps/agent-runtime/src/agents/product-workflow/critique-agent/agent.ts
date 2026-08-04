@@ -58,25 +58,56 @@ export const CritiqueAgentModelOutputSchema = CritiqueAgentOutputSchema.extend({
 export async function* streamCritiqueAgent(
   input: CritiqueAgentInput,
 ): AsyncGenerator<ProductWorkflowStreamEvent, ProductWorkflowResult, void> {
-  const review = yield* runAgent({
-    agentType: "critique",
-    agentLabel: "Critique Agent",
-    name: "critique-agent",
-    modelOptions: {
-      ...JSON_AGENT_MODEL_OPTIONS,
-      maxTokens: 16384,
-    },
-    modelProfile: input.modelProfile,
-    modelGroup: "critique",
-    systemPrompt: CRITIQUE_AGENT_PROMPT,
-    payload: createCritiqueAgentPayload(input),
-    resolveOutput: (context) =>
-      resolveJsonOutput(context, CritiqueAgentModelOutputSchema),
-    fallback: (reason) => createFallbackCritiqueAgentOutput(input, reason),
-    signal: input.signal,
-  });
+  const maxAttempts = input.documentEvidenceResolution ? 2 : 1;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let fallbackReason: string | null = null;
+    const review = yield* runAgent({
+      agentType: "critique",
+      agentLabel: "Critique Agent",
+      name: `critique-agent${attempt > 1 ? "-structured-retry" : ""}`,
+      modelOptions: {
+        ...JSON_AGENT_MODEL_OPTIONS,
+        maxTokens: 16384,
+      },
+      modelProfile: input.modelProfile,
+      modelGroup: "critique",
+      systemPrompt: CRITIQUE_AGENT_PROMPT,
+      payload: {
+        ...createCritiqueAgentPayload(input),
+        ...(attempt > 1
+          ? {
+              structured_output_retry:
+                "The previous response failed final JSON validation. Put the complete JSON object in final answer content, not only in reasoning.",
+            }
+          : {}),
+      },
+      resolveOutput: (context) =>
+        resolveJsonOutput(context, CritiqueAgentModelOutputSchema),
+      fallback: (reason) => {
+        fallbackReason = reason;
+        return createFallbackCritiqueAgentOutput(input, reason);
+      },
+      suppressFallbackReasoning: input.documentEvidenceResolution,
+      signal: input.signal,
+    });
 
-  return composeProductWorkflowResult(input, review);
+    if (!fallbackReason) return composeProductWorkflowResult(input, review);
+    if (!input.documentEvidenceResolution) {
+      return composeProductWorkflowResult(input, review);
+    }
+    if (attempt < maxAttempts) {
+      yield {
+        type: "reasoning",
+        agentType: "critique",
+        content:
+          "Critique Agent 未生成可验收的结构化结果，正在原地重试一次。\n",
+      };
+    }
+  }
+
+  throw new Error(
+    "Critique Agent 连续两次未生成有效结构化结果，证据解决流程尚未完成，请重试当前会话。",
+  );
 }
 
 /**
@@ -469,7 +500,11 @@ export function createCritiqueValidationReport(
 
     if (isExecutorAgentType(task.assigned_agent)) {
       taskIssues.push(
-        ...validateExecutorBoundaries(result, task.assigned_agent),
+        ...validateExecutorBoundaries(
+          result,
+          task.assigned_agent,
+          input.documentEvidenceResolution === true,
+        ),
       );
     }
     taskIssues.push(
@@ -1251,7 +1286,7 @@ function createSemanticQualityIssues(
     issues.push(
       createReviewIssue({
         code: "UNCONSUMED_EVIDENCE",
-        severity: "warning",
+        severity: input.documentEvidenceResolution ? "error" : "warning",
         taskId: evidence.source_task_id!,
         message: `Evidence ${evidence.id} is not consumed by a Validates or References relation.`,
       }),
@@ -1556,11 +1591,20 @@ function normalizeMetricText(text: string): string {
 function validateExecutorBoundaries(
   result: ExecutorAgentResult,
   assignedAgent: ExecutorAgentType,
+  allowResolvedRisk: boolean,
 ): CritiqueValidationIssue[] {
   const definition = getExecutorDefinition(assignedAgent);
   const unauthorizedEntityTypes = [
     ...new Set(
       result.entities
+        .filter(
+          (entity) =>
+            !(
+              allowResolvedRisk &&
+              entity.type === "Risk" &&
+              entity.status === "deprecated"
+            ),
+        )
         .map((entity) => entity.type)
         .filter(
           (entityType) =>
