@@ -290,24 +290,22 @@ export async function createDocumentEvidenceResolutionConversation({
   }
   const latestAttempt = run.scoringAttempts.at(-1);
   const blockers: DocumentEvidenceBlocker[] =
-    latestAttempt?.reviewerScores.flatMap((reviewer) =>
-      (reviewer.evidenceBlockers ?? []).map((text) => ({
-        index: 0,
-        reviewerId: reviewer.reviewerId,
-        reviewerName: reviewer.reviewerName,
-        text,
-      })),
-    ) ?? [];
-  const reviewerBlockerTexts = new Set(blockers.map((blocker) => blocker.text));
-  for (const text of latestAttempt?.evidenceBlockers ?? []) {
-    if (reviewerBlockerTexts.has(text)) continue;
-    blockers.push({
-      index: blockers.length,
-      reviewerId: "source-grounding-validator",
-      reviewerName: "PRD Source Grounding Validator",
-      text,
-    });
-  }
+    latestAttempt?.evidenceBlockerGroups?.length
+      ? latestAttempt.evidenceBlockerGroups.map((group, index) => ({
+          index,
+          reviewerId: "document-evidence-blocker-consolidator",
+          reviewerName: "PRD Evidence Blocker Consolidator",
+          text: `${group.title}: ${group.description}`,
+          sources: group.sources,
+        }))
+      : latestAttempt?.reviewerScores.flatMap((reviewer) =>
+          (reviewer.evidenceBlockers ?? []).map((text, index) => ({
+            index,
+            reviewerId: reviewer.reviewerId,
+            reviewerName: reviewer.reviewerName,
+            text,
+          })),
+        ) ?? [];
   blockers.forEach((blocker, index) => {
     blocker.index = index;
   });

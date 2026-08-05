@@ -15,6 +15,7 @@
 
 import { randomUUID } from "node:crypto";
 import { prisma } from "@repo/database";
+import { DocumentScoreAttemptSchema } from "@repo/shared";
 import type {
   DocumentGenerationResult,
   DocumentGenerationStatus,
@@ -460,7 +461,7 @@ function mapRunRow(row: DocumentGenerationRunRow): DocumentGenerationRunDto {
     currentStage: row.current_stage,
     todos: parseJsonColumn(row.task_planning, []),
     reasoningLog: parseJsonColumn(row.reasoning_log, []),
-    scoringAttempts: parseJsonColumn(row.scoring_attempts, []),
+    scoringAttempts: parseDocumentScoreAttempts(row.scoring_attempts),
     documentArtifactId: row.document_artifact_id,
     errorMessage: row.error_message,
     startedAt: row.started_at?.toISOString() ?? null,
@@ -508,4 +509,14 @@ function parseJsonColumn<T>(value: unknown, fallback: T): T {
   }
 
   return fallback;
+}
+
+/**
+ * 解析评分历史并为旧记录补齐语义阻断分组默认字段。
+ */
+function parseDocumentScoreAttempts(value: unknown): DocumentScoreAttempt[] {
+  return parseJsonColumn<unknown[]>(value, []).flatMap((attempt) => {
+    const parsed = DocumentScoreAttemptSchema.safeParse(attempt);
+    return parsed.success ? [parsed.data] : [];
+  });
 }

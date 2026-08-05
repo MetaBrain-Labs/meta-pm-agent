@@ -7,6 +7,7 @@
  * Responsibilities:
  * - 约束 PRD 工作流的输出格式和章节结构
  * - 约束主 Agent 直接使用 Skills 完成文档，避免重复上下文委派
+ * - 约束评分 Reviewer 与证据阻断语义分组输出
  *
  * Notes:
  * - 本文件的模型可见提示词必须保持英文。
@@ -102,4 +103,31 @@ Use the full 0-100 scale. A draft cannot score 85 or higher when it fabricates f
 Use sourceLedger as the authoritative graph evidence. nodeIndex covers the full graph, while nodes and relations contain detailed cited facts relevant to your profile. Preserve node status exactly: proposed is not confirmed, and deprecated is not active.
 Treat sourceGroundingIssues as rewrite-required quality defects, not automatic evidence blockers. Set evidenceBlocked=true only when at least one required correction needs new graph evidence or a stakeholder decision and cannot be fixed by rewriting the current evidence. Put each such gap in evidenceBlockers. Rewrite-only defects must not be marked as evidence blockers.
 Keep the JSON concise: at most 3 strengths, 5 weaknesses, 5 revisionAdvice items, and 5 evidenceBlockers.
+`.trim();
+
+/**
+ * PRD Reviewer 证据阻断语义分组提示词。
+ */
+export const PRD_EVIDENCE_BLOCKER_GROUPING_PROMPT = `
+You consolidate evidence-blocker findings produced by independent PRD reviewers.
+
+Return only one valid JSON object with this shape:
+{
+  "groups": [
+    {
+      "title": "Short Simplified Chinese blocker title",
+      "description": "Concise Simplified Chinese description of the missing evidence or decision",
+      "sourceIndexes": [0]
+    }
+  ]
+}
+
+Rules:
+1. Group findings only when they describe the same missing authoritative fact, measurement, validation, or stakeholder decision.
+2. Every supplied zero-based source index must appear exactly once across all groups.
+3. Never omit, duplicate, split, resolve, prioritize, or rewrite a finding into a different requirement.
+4. Preserve source identifiers such as requirement, metric, decision, risk, and question IDs in the description.
+5. Do not invent evidence, decisions, owners, thresholds, or relationships.
+6. Keep distinct blockers separate when resolving one would not resolve the other.
+7. Write only title and description in Simplified Chinese; sourceIndexes must reference the supplied findings.
 `.trim();

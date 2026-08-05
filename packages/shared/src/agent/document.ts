@@ -87,6 +87,26 @@ export const DocumentScoringReviewerIdSchema = z.enum([
 ]);
 
 /**
+ * 语义阻断组中的单条 Reviewer 原始意见。
+ */
+export const DocumentEvidenceBlockerSourceSchema = z.object({
+  reviewerId: DocumentScoringReviewerIdSchema,
+  reviewerName: z.string().min(1),
+  text: z.string().min(1),
+});
+
+/**
+ * 三方 Reviewer 意见经语义合并后的独立证据阻断。
+ */
+export const DocumentEvidenceBlockerGroupSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  description: z.string().min(1),
+  sourceIndexes: z.array(z.number().int().nonnegative()).min(1),
+  sources: z.array(DocumentEvidenceBlockerSourceSchema).min(1),
+});
+
+/**
  * 单个 PRD 评分尝试的持久化摘要。
  */
 export const DocumentScoreAttemptSchema = z.object({
@@ -129,6 +149,10 @@ export const DocumentScoreAttemptSchema = z.object({
   passed: z.boolean(),
   evidenceBlocked: z.boolean().default(false),
   evidenceBlockers: z.array(z.string()).default([]),
+  evidenceBlockerGroups: z.array(DocumentEvidenceBlockerGroupSchema).default([]),
+  evidenceBlockerGroupingStatus: z
+    .enum(["grouped", "fallback"])
+    .default("fallback"),
   selected: z.boolean().default(false),
 });
 
@@ -172,6 +196,9 @@ export type DocumentReasoningLogEntry = z.infer<
 export type DocumentWorkflowStage = z.infer<typeof DocumentWorkflowStageSchema>;
 export type DocumentSectionDraft = z.infer<typeof DocumentSectionDraftSchema>;
 export type DocumentScoreAttempt = z.infer<typeof DocumentScoreAttemptSchema>;
+export type DocumentEvidenceBlockerGroup = z.infer<
+  typeof DocumentEvidenceBlockerGroupSchema
+>;
 export type DocumentScoringReviewerId = z.infer<
   typeof DocumentScoringReviewerIdSchema
 >;

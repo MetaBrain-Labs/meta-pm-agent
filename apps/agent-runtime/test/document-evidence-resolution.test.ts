@@ -40,6 +40,7 @@ const input: DocumentEvidenceResolutionInput = {
   knowledgeGraph: {
     entities: [],
     relations: [],
+    markdown: "",
     decisions: [],
     risks: [],
     open_questions: [],
@@ -157,6 +158,8 @@ test("injects every trusted blocker and the exact label contract into Resolver c
   assert.match(prompt, /Missing source citation/);
   assert.match(prompt, /"label":/);
   assert.match(prompt, /never "question"/);
+  assert.match(prompt, /Never ask the user to restate, categorize, prioritize, map/);
+  assert.match(prompt, /Do not ask which requirements, metrics, or decisions/);
 });
 
 test("preserves source graph version while normalizing document graph", () => {
@@ -238,6 +241,8 @@ function selectRoute(
     passed: false,
     evidenceBlocked: false,
     evidenceBlockers: [],
+    evidenceBlockerGroups: [],
+    evidenceBlockerGroupingStatus: "grouped",
     selected: false,
     ...patch,
   };

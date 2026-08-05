@@ -1,11 +1,13 @@
 /**
  * Document Agent 评分执行器
  *
- * 为 PRD 草稿提供独立质量门禁：三位职责明确的评分 Agent 按统一量表独立打分。
- * 只有三方分差不超过阈值时，才进入确定性共识评分；分差过大时直接记录失败并触发重写重试。
+ * 为 PRD 草稿提供独立质量门禁：三位职责明确的评分 Agent 按统一量表独立打分，
+ * 随后由语义聚合 Agent 合并重叠证据阻断。只有三方分差不超过阈值时，才进入
+ * 确定性共识评分；分差过大时直接记录失败并触发重写重试。
  *
  * Responsibilities:
  * - runPrdScoringReviewers()：运行三位独立评分 Agent
+ * - groupPrdEvidenceBlockers()：语义合并 Reviewer 阻断并保留来源
  * - createDeterministicConsensusScore()：汇总分差合格后的三方评分
  * - 提供评分阈值、最大偏差、最大重试次数与确定性回退
  *
@@ -15,6 +17,7 @@
 
 import { z } from "zod";
 import type {
+  DocumentEvidenceBlockerGroup,
   DocumentSectionDraft,
   KnowledgeGraphEntity,
   KnowledgeGraphRelation,
@@ -26,7 +29,10 @@ import {
   resolveJsonOutput,
   runAgent,
 } from "../common/run-agent";
-import { PRD_SCORING_REVIEWER_PROMPT } from "./prompt";
+import {
+  PRD_EVIDENCE_BLOCKER_GROUPING_PROMPT,
+  PRD_SCORING_REVIEWER_PROMPT,
+} from "./prompt";
 
 export const DOCUMENT_SCORE_THRESHOLD = 85;
 export const DOCUMENT_SCORE_MAX_SPREAD = 8;
@@ -97,7 +103,27 @@ export interface DocumentScoreAttempt {
   passed: boolean;
   evidenceBlocked: boolean;
   evidenceBlockers: string[];
+  evidenceBlockerGroups: DocumentEvidenceBlockerGroup[];
+  evidenceBlockerGroupingStatus: "grouped" | "fallback";
   selected: boolean;
+}
+
+/**
+ * 语义分组前带稳定索引的 Reviewer 阻断意见。
+ */
+export interface DocumentEvidenceBlockerFinding {
+  index: number;
+  reviewerId: DocumentScoringReviewerId;
+  reviewerName: string;
+  text: string;
+}
+
+/**
+ * 语义分组结果及其确定性降级状态。
+ */
+export interface DocumentEvidenceBlockerGrouping {
+  groups: DocumentEvidenceBlockerGroup[];
+  status: "grouped" | "fallback";
 }
 
 /**
@@ -126,6 +152,16 @@ const ReviewerScoreSchema = z.object({
   revisionAdvice: z.array(z.string()).default([]),
   evidenceBlocked: z.boolean().default(false),
   evidenceBlockers: z.array(z.string()).default([]),
+});
+
+const EvidenceBlockerGroupingSchema = z.object({
+  groups: z.array(
+    z.object({
+      title: z.string().min(1),
+      description: z.string().min(1),
+      sourceIndexes: z.array(z.number().int().nonnegative()).min(1),
+    }),
+  ),
 });
 
 export const DOCUMENT_SCORE_REVIEWERS: Array<{
@@ -245,6 +281,125 @@ export async function runPrdScoringReviewers({
       };
     }),
   );
+}
+
+/**
+ * 将三方 Reviewer 的重叠证据阻断合并为可展示、可追溯的语义组。
+ */
+export async function groupPrdEvidenceBlockers({
+  reviewerScores,
+  modelProfile,
+  signal,
+  onEvent,
+}: {
+  reviewerScores: DocumentScoreReview[];
+  modelProfile?: ModelUsageProfile;
+  signal?: AbortSignal;
+  onEvent?: (event: DocumentScoringStreamEvent) => void;
+}): Promise<DocumentEvidenceBlockerGrouping> {
+  const findings = flattenEvidenceBlockerFindings(reviewerScores);
+  if (findings.length === 0) return { groups: [], status: "grouped" };
+
+  const stream = runAgent({
+    agentType: "document-score",
+    agentLabel: "PRD Evidence Blocker Consolidator",
+    name: "document-evidence-blocker-consolidator",
+    systemPrompt: PRD_EVIDENCE_BLOCKER_GROUPING_PROMPT,
+    modelOptions: DOCUMENT_REVIEWER_MODEL_OPTIONS,
+    modelProfile,
+    modelGroup: "document",
+    payload: { findings },
+    resolveOutput: (context) =>
+      resolveJsonOutput(context, EvidenceBlockerGroupingSchema),
+    fallback: () => ({ groups: [] }),
+    signal,
+    suppressFallbackReasoning: true,
+  });
+  const result = await consumeJsonAgentStream(stream, onEvent);
+  return normalizeEvidenceBlockerGrouping(result, findings);
+}
+
+/**
+ * 为 Reviewer 阻断意见分配跨分组稳定的零基索引。
+ */
+export function flattenEvidenceBlockerFindings(
+  reviewerScores: DocumentScoreReview[],
+): DocumentEvidenceBlockerFinding[] {
+  return reviewerScores
+    .flatMap((reviewer) => {
+      const blockers =
+        reviewer.evidenceBlockers.length > 0
+          ? reviewer.evidenceBlockers
+          : reviewer.evidenceBlocked
+            ? [`${reviewer.reviewerName} identified a blocking evidence gap.`]
+            : [];
+      return blockers.map((text) => ({
+        index: 0,
+        reviewerId: reviewer.reviewerId,
+        reviewerName: reviewer.reviewerName,
+        text,
+      }));
+    })
+    .map((finding, index) => ({ ...finding, index }));
+}
+
+/**
+ * 校验模型分组覆盖率；无效结果逐条降级，确保每条原始意见恰好保留一次。
+ */
+export function normalizeEvidenceBlockerGrouping(
+  value: unknown,
+  findings: DocumentEvidenceBlockerFinding[],
+): DocumentEvidenceBlockerGrouping {
+  const parsed = EvidenceBlockerGroupingSchema.safeParse(value);
+  const expectedIndexes = new Set(findings.map((finding) => finding.index));
+  const actualIndexes = parsed.success
+    ? parsed.data.groups.flatMap((group) => group.sourceIndexes)
+    : [];
+  const valid =
+    parsed.success &&
+    actualIndexes.length === findings.length &&
+    new Set(actualIndexes).size === findings.length &&
+    actualIndexes.every((index) => expectedIndexes.has(index));
+
+  if (!valid) {
+    return {
+      status: "fallback",
+      groups: findings.map((finding, index) => ({
+        id: `evidence-blocker-group-${index + 1}`,
+        title: `证据阻断 ${index + 1}`,
+        description: finding.text,
+        sourceIndexes: [finding.index],
+        sources: [toEvidenceBlockerSource(finding)],
+      })),
+    };
+  }
+
+  const findingByIndex = new Map(
+    findings.map((finding) => [finding.index, finding] as const),
+  );
+  return {
+    status: "grouped",
+    groups: parsed.data.groups.map((group, index) => ({
+      id: `evidence-blocker-group-${index + 1}`,
+      title: group.title.trim(),
+      description: group.description.trim(),
+      sourceIndexes: group.sourceIndexes,
+      sources: group.sourceIndexes.map((sourceIndex) =>
+        toEvidenceBlockerSource(findingByIndex.get(sourceIndex)!),
+      ),
+    })),
+  };
+}
+
+/**
+ * 将内部索引意见压缩为共享持久化来源结构。
+ */
+function toEvidenceBlockerSource(finding: DocumentEvidenceBlockerFinding) {
+  return {
+    reviewerId: finding.reviewerId,
+    reviewerName: finding.reviewerName,
+    text: finding.text,
+  };
 }
 
 /**

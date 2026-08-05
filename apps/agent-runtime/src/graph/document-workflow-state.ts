@@ -23,6 +23,7 @@ import type {
   KnowledgeGraphRelation,
 } from "@repo/shared";
 import type {
+  DocumentEvidenceBlockerGrouping,
   DocumentScoreAttempt,
   DocumentScoreReview,
 } from "../agents/document-agent/scoring";
@@ -98,6 +99,10 @@ export const DocumentWorkflowGraphState = Annotation.Root({
   scoreReviewerReports: Annotation<DocumentScoreReview[]>({
     reducer: (_current, update) => update,
     default: () => [],
+  }),
+  scoreEvidenceBlockerGrouping: Annotation<DocumentEvidenceBlockerGrouping>({
+    reducer: (_current, update) => update,
+    default: () => ({ groups: [], status: "grouped" }),
   }),
   scoreAttempts: Annotation<DocumentScoreAttempt[]>({
     reducer: (_current, update) => update,

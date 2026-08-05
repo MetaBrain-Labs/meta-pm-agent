@@ -444,6 +444,32 @@ export async function getDocumentEvidenceResolutionByRequestFormId(
 }
 
 /**
+ * 按专用会话恢复证据解决上下文，避免客户端表单 ID 丢失后误入普通编排。
+ */
+export async function getDocumentEvidenceResolutionByConversationId(
+  conversationId: string | undefined,
+): Promise<DocumentEvidenceResolutionRecord | null> {
+  if (!conversationId) return null;
+  const rows = await prisma.$queryRaw<DocumentEvidenceResolutionRow[]>`
+    SELECT
+      i."id" AS "item_id",
+      i."form_id",
+      f."chat_id" AS "conversation_id",
+      c."workspace_id",
+      i."status",
+      i."payload"
+    FROM "request_form_item" i
+    JOIN "request_form" f ON f."id" = i."form_id"
+    JOIN "conversation" c ON c."id" = f."chat_id"
+    WHERE f."chat_id" = ${conversationId}
+      AND i."type" = 'document_evidence_resolution'
+    ORDER BY i."created_at" DESC
+    LIMIT 1
+  `;
+  return rows[0] ? mapDocumentEvidenceResolutionRow(rows[0]) : null;
+}
+
+/**
  * 保存 Resolver 生成的问题与 blocker 映射，便于刷新恢复和审计。
  */
 export async function persistDocumentEvidenceResolutionPlan(

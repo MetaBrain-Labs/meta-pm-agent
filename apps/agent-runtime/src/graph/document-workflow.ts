@@ -47,12 +47,12 @@ import {
   createDeterministicConsensusScore,
   createScoreRetryFeedback,
   createSkippedConsensusScore,
+  groupPrdEvidenceBlockers,
   runPrdScoringReviewers,
   selectFinalScoreAttempt,
   shouldRetryDocumentScoreAttempt,
   validatePrdSourceGrounding,
   type DocumentScoreAttempt,
-  type DocumentScoreReview,
   type DocumentScoringStreamEvent,
 } from "../agents/document-agent/scoring";
 import { getWorkflowCheckpointer } from "./workflow-checkpointer";
@@ -452,11 +452,21 @@ async function scoreDraftNode(
     signal: config?.signal,
     onEvent: (event) => writer?.(event),
   });
+  const blockerGrouping = await groupPrdEvidenceBlockers({
+    reviewerScores,
+    modelProfile: getModelProfileFromRunnableConfig(config),
+    signal: config?.signal,
+    onEvent: (event) => writer?.(event),
+  });
 
   emitStage(config, "scoreDraft", "completed");
   const todos = createWorkflowTodos("scoreDraft", true);
   emitTodoUpdate(config, todos);
-  return { scoreReviewerReports: reviewerScores, todos };
+  return {
+    scoreReviewerReports: reviewerScores,
+    scoreEvidenceBlockerGrouping: blockerGrouping,
+    todos,
+  };
 }
 
 /**
@@ -466,6 +476,9 @@ function rejectScoreNode(
   state: DocumentWorkflowGraphStateValue,
   config?: LangGraphRunnableConfig,
 ) {
+  const evidenceBlockers = state.scoreEvidenceBlockerGrouping.groups.map(
+    formatEvidenceBlockerGroup,
+  );
   const scoreSpread = calculateScoreSpread(state.scoreReviewerReports);
   const varianceAccepted = scoreSpread <= DOCUMENT_SCORE_MAX_SPREAD;
   const aggregate = createSkippedConsensusScore({
@@ -481,8 +494,10 @@ function rejectScoreNode(
     varianceAccepted,
     aggregate,
     passed: false,
-    evidenceBlocked: hasEvidenceBlockers(state.scoreReviewerReports),
-    evidenceBlockers: collectEvidenceBlockers(state.scoreReviewerReports),
+    evidenceBlocked: evidenceBlockers.length > 0,
+    evidenceBlockers,
+    evidenceBlockerGroups: state.scoreEvidenceBlockerGrouping.groups,
+    evidenceBlockerGroupingStatus: state.scoreEvidenceBlockerGrouping.status,
     selected: false,
   };
   const scoreAttempts = [...state.scoreAttempts, attempt];
@@ -523,8 +538,8 @@ async function aggregateScoreNode(
   emitTodoUpdate(config, createWorkflowTodos("aggregateScore"));
   const scoreSpread = calculateScoreSpread(state.scoreReviewerReports);
   const varianceAccepted = scoreSpread <= DOCUMENT_SCORE_MAX_SPREAD;
-  const reviewerEvidenceBlockers = collectEvidenceBlockers(
-    state.scoreReviewerReports,
+  const reviewerEvidenceBlockers = state.scoreEvidenceBlockerGrouping.groups.map(
+    formatEvidenceBlockerGroup,
   );
   const aggregate = createDeterministicConsensusScore({
     markdown: state.draftMarkdown,
@@ -543,8 +558,10 @@ async function aggregateScoreNode(
     varianceAccepted,
     aggregate,
     passed: aggregate.passed,
-    evidenceBlocked: hasEvidenceBlockers(state.scoreReviewerReports),
+    evidenceBlocked: reviewerEvidenceBlockers.length > 0,
     evidenceBlockers: reviewerEvidenceBlockers,
+    evidenceBlockerGroups: state.scoreEvidenceBlockerGrouping.groups,
+    evidenceBlockerGroupingStatus: state.scoreEvidenceBlockerGrouping.status,
     selected: false,
   };
   const scoreAttempts = [...state.scoreAttempts, attempt];
@@ -604,34 +621,12 @@ export function selectNextNodeAfterScore(
 }
 
 /**
- * 合并评分 Agent 识别的真实证据阻塞项。
+ * 将语义阻断组压缩为既有评分门禁使用的文本描述。
  */
-function collectEvidenceBlockers(
-  reviewerScores: DocumentScoreReview[],
-): string[] {
-  return Array.from(
-    new Set([
-      ...reviewerScores.flatMap((review) =>
-        review.evidenceBlockers.length > 0
-          ? review.evidenceBlockers
-          : review.evidenceBlocked
-            ? [`${review.reviewerName} identified a blocking evidence gap.`]
-            : [],
-      ),
-    ]),
-  ).slice(0, 20);
-}
-
-/**
- * 判断当前草稿是否必须等待新图谱证据或利益相关者决策。
- */
-function hasEvidenceBlockers(
-  reviewerScores: DocumentScoreReview[],
-): boolean {
-  return reviewerScores.some(
-    (review) =>
-      review.evidenceBlocked || review.evidenceBlockers.length > 0,
-  );
+function formatEvidenceBlockerGroup(
+  group: DocumentScoreAttempt["evidenceBlockerGroups"][number],
+): string {
+  return `${group.title}: ${group.description}`;
 }
 
 /**
@@ -695,6 +690,8 @@ function exportPrdNode(
         passed: attempt.passed,
         evidenceBlocked: attempt.evidenceBlocked,
         evidenceBlockers: attempt.evidenceBlockers,
+        evidenceBlockerGroups: attempt.evidenceBlockerGroups,
+        evidenceBlockerGroupingStatus: attempt.evidenceBlockerGroupingStatus,
         selected: selectedScoreAttempt?.attempt.attempt === attempt.attempt,
       })),
     },

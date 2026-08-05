@@ -71,7 +71,21 @@ export interface DocumentScoreAttempt {
   passed: boolean;
   evidenceBlocked?: boolean;
   evidenceBlockers?: string[];
+  evidenceBlockerGroups?: DocumentEvidenceBlockerGroup[];
+  evidenceBlockerGroupingStatus?: "grouped" | "fallback";
   selected: boolean;
+}
+
+export interface DocumentEvidenceBlockerGroup {
+  id: string;
+  title: string;
+  description: string;
+  sourceIndexes: number[];
+  sources: Array<{
+    reviewerId: string;
+    reviewerName: string;
+    text: string;
+  }>;
 }
 
 export interface DocumentQualityScore {

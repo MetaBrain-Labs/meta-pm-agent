@@ -53,6 +53,7 @@ import {
   startDocumentGeneration,
   stopDocumentGeneration,
   type DocumentQualityScore,
+  type DocumentEvidenceBlockerGroup,
   type DocumentGenerationRun,
   type DocumentReasoningLogEntry,
   type DocumentScoreAttempt,
@@ -134,13 +135,8 @@ export function DocumentPlanningPage({
     run?.scoringAttempts && run.scoringAttempts.length > 0
       ? run.scoringAttempts
       : (qualityScore?.attempts ?? []);
-  const evidenceBlockers =
-    scoringAttempts.at(-1)?.reviewerScores.flatMap((reviewer) =>
-      (reviewer.evidenceBlockers ?? []).map((blocker) => ({
-        reviewerName: reviewer.reviewerName,
-        blocker,
-      })),
-    ) ?? [];
+  const latestScoringAttempt = scoringAttempts.at(-1);
+  const evidenceBlockerGroups = getEvidenceBlockerGroups(latestScoringAttempt);
   const sourceGraphVersion = artifact?.content?.sourceGraphStats?.version;
   const evidenceResolution = documentState.evidenceResolution;
   const canResume =
@@ -449,7 +445,7 @@ export function DocumentPlanningPage({
                             解决证据阻断
                           </Button>
                           <Button onClick={() => setBlockersOpen(true)}>
-                            查看阻断汇总（{evidenceBlockers.length}）
+                            查看阻断汇总（{evidenceBlockerGroups.length}）
                           </Button>
                           <Tooltip
                             title={
@@ -654,17 +650,33 @@ export function DocumentPlanningPage({
           footer={<Button onClick={() => setBlockersOpen(false)}>关闭</Button>}
           onCancel={() => setBlockersOpen(false)}
         >
-          {evidenceBlockers.length > 0 ? (
+          {evidenceBlockerGroups.length > 0 ? (
             <div className="flex max-h-[60vh] flex-col gap-3 overflow-y-auto">
-              {evidenceBlockers.map((item, index) => (
+              {latestScoringAttempt?.evidenceBlockerGroupingStatus ===
+                "fallback" && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="语义合并失败，当前按 Reviewer 原始意见逐条展示。"
+                />
+              )}
+              {evidenceBlockerGroups.map((group) => (
                 <div
-                  key={`${item.reviewerName}-${index}`}
+                  key={group.id}
                   className="rounded border border-red-100 bg-red-50 px-3 py-2"
                 >
-                  <Text type="secondary" className="block text-xs">
-                    {item.reviewerName}
-                  </Text>
-                  <Text>{item.blocker}</Text>
+                  <Text strong>{group.title}</Text>
+                  <Text className="mt-1 block">{group.description}</Text>
+                  <div className="mt-2 flex flex-col gap-1.5 border-t border-red-100 pt-2">
+                    {group.sources.map((source, sourceIndex) => (
+                      <div key={`${source.reviewerId}-${sourceIndex}`}>
+                        <Text type="secondary" className="block text-xs">
+                          {source.reviewerName}
+                        </Text>
+                        <Text className="text-xs">{source.text}</Text>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>
@@ -718,6 +730,32 @@ export function DocumentPlanningPage({
       </div>
     </Content>
   );
+}
+
+/**
+ * 优先展示持久化语义阻断组；兼容旧评分记录时逐条保留 Reviewer 原文。
+ */
+function getEvidenceBlockerGroups(
+  attempt: DocumentScoreAttempt | undefined,
+): DocumentEvidenceBlockerGroup[] {
+  if (attempt?.evidenceBlockerGroups?.length) {
+    return attempt.evidenceBlockerGroups;
+  }
+  return (
+    attempt?.reviewerScores.flatMap((reviewer) =>
+      (reviewer.evidenceBlockers ?? []).map((text) => ({
+        reviewerId: reviewer.reviewerId,
+        reviewerName: reviewer.reviewerName,
+        text,
+      })),
+    ) ?? []
+  ).map((source, index) => ({
+    id: `legacy-evidence-blocker-${index + 1}`,
+    title: `证据阻断 ${index + 1}`,
+    description: source.text,
+    sourceIndexes: [index],
+    sources: [source],
+  }));
 }
 
 /**

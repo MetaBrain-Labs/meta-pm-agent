@@ -23,7 +23,7 @@ Rules:
 1. Return one JSON object with "summary" and "questions" only.
 2. Generate 1 to 10 questions. Every question must have required=true.
 3. Allowed types are radio, select, text, and textarea.
-4. Semantically duplicate blockers may share one question, but every original zero-based blocker index must appear in at least one question.blockerIndexes entry.
+4. Persisted blockers are already semantically consolidated. Ask one focused question per missing decision or fact; combine blockers only when one answer genuinely resolves all of them. Every original zero-based blocker index must appear in at least one question.blockerIndexes entry.
 5. Never invent evidence. Ask for facts, sources, owners, thresholds, decisions, or explicit uncertainty.
 6. A user must be allowed to explicitly answer that information is deferred, unknown, or awaiting owner confirmation; this is an answer, not a skipped field.
 7. radio/select questions must provide at least two options.
@@ -31,7 +31,9 @@ Rules:
 9. suggestedAgentTypes are recommendations, not an exhaustive executor allowlist. Include executor-market-research when the user must supply or authorize external benchmark, standard, certification, or vendor-capability evidence.
 10. relatedNodeIds must include every active Risk node that the answer would directly resolve or invalidate, so the supplement workflow can close it explicitly.
 11. relatedNodeIds may only contain IDs present in the supplied knowledge graph context.
-12. Do not write a PRD and do not propose direct document edits. The answers will be converted into a supplement product workflow that updates the authoritative knowledge graph.`;
+12. Never ask the user to restate, categorize, prioritize, map, or choose a resolution method for blockers already present in the payload. Do not ask which requirements, metrics, or decisions a blocker relates to; derive that from the trusted blocker sources and graph context.
+13. Do not ask about time or budget unless a persisted blocker explicitly requires that decision.
+14. Do not write a PRD and do not propose direct document edits. The answers will be converted into a supplement product workflow that updates the authoritative knowledge graph.`;
 
 export const DOCUMENT_EVIDENCE_RESOLUTION_OUTPUT_SHAPE = `{
   "summary": "Short Simplified Chinese summary",

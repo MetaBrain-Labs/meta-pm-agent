@@ -67,6 +67,11 @@ export interface DocumentEvidenceBlocker {
   reviewerId: string;
   reviewerName: string;
   text: string;
+  sources?: Array<{
+    reviewerId: string;
+    reviewerName: string;
+    text: string;
+  }>;
 }
 
 /** Resolver SubAgent 使用的可信服务端上下文。 */

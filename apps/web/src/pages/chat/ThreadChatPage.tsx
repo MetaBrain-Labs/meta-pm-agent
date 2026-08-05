@@ -326,7 +326,7 @@ export function ThreadChatPage({
       "",
       `${window.location.pathname}${query ? `?${query}` : ""}`,
     );
-    void sendMessage("请根据当前 PRD 评分中持久化的证据阻断，生成必填补充问题。", {
+    void sendMessage("开始解决当前 PRD 的证据阻断。", {
       webSearchEnabled: false,
     });
   }, [isLoading, isMessagesLoading, messages.length, sendMessage, threadId]);

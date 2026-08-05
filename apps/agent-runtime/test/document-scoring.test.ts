@@ -22,6 +22,7 @@ import {
   DOCUMENT_SCORE_REVIEWERS,
   DOCUMENT_SCORE_MAX_SPREAD,
   DOCUMENT_REVIEWER_MODEL_OPTIONS,
+  normalizeEvidenceBlockerGrouping,
   createSkippedConsensusScore,
   selectFinalScoreAttempt,
   shouldRetryDocumentScoreAttempt,
@@ -181,7 +182,7 @@ test("builds reviewer-specific source details plus a complete lightweight index"
   );
 });
 
-test("uses deterministic 70/30 consensus scoring without a fourth model result", () => {
+test("keeps the 70/30 consensus score deterministic", () => {
   const reviewerScores = [
     createReview("product-rationale-evidence-reviewer", 90),
     createReview("requirements-acceptance-reviewer", 88),
@@ -197,6 +198,72 @@ test("uses deterministic 70/30 consensus scoring without a fourth model result",
   assert.equal(result.score, 88);
   assert.equal(result.passed, true);
   assert.equal(result.weights.minimumScore, 87);
+});
+
+test("consolidates 14 multilingual reviewer findings into traceable semantic groups", () => {
+  const reviewerIds: DocumentScoreReview["reviewerId"][] = [
+    "product-rationale-evidence-reviewer",
+    "requirements-acceptance-reviewer",
+    "scope-delivery-readiness-reviewer",
+  ];
+  const findings = Array.from({ length: 14 }, (_, index) => ({
+    index,
+    reviewerId: reviewerIds[index % reviewerIds.length]!,
+    reviewerName: `Reviewer ${index % reviewerIds.length}`,
+    text: `Raw blocker ${index}`,
+  }));
+  const grouping = normalizeEvidenceBlockerGrouping(
+    {
+      groups: [
+        { title: "优先级", description: "需要确认优先级。", sourceIndexes: [0, 5, 9] },
+        { title: "范围决策", description: "需要确认范围决策。", sourceIndexes: [1, 6, 10] },
+        { title: "安全合规", description: "需要确认安全合规。", sourceIndexes: [2, 7, 11] },
+        { title: "性能基线", description: "需要补充性能基线。", sourceIndexes: [3, 8, 12] },
+        { title: "交付可行性", description: "需要确认交付可行性。", sourceIndexes: [4, 13] },
+      ],
+    },
+    findings,
+  );
+
+  assert.equal(grouping.status, "grouped");
+  assert.equal(grouping.groups.length, 5);
+  assert.equal(grouping.groups.flatMap((group) => group.sources).length, 14);
+  assert.deepEqual(
+    grouping.groups.flatMap((group) => group.sourceIndexes).sort((a, b) => a - b),
+    findings.map((finding) => finding.index),
+  );
+});
+
+test("falls back to one group per finding when semantic coverage is invalid", () => {
+  const findings = [
+    {
+      index: 0,
+      reviewerId: "product-rationale-evidence-reviewer" as const,
+      reviewerName: "Reviewer A",
+      text: "Missing priority",
+    },
+    {
+      index: 1,
+      reviewerId: "requirements-acceptance-reviewer" as const,
+      reviewerName: "Reviewer B",
+      text: "Missing baseline",
+    },
+  ];
+  const grouping = normalizeEvidenceBlockerGrouping(
+    {
+      groups: [
+        { title: "重复", description: "覆盖重复。", sourceIndexes: [0, 0] },
+      ],
+    },
+    findings,
+  );
+
+  assert.equal(grouping.status, "fallback");
+  assert.equal(grouping.groups.length, 2);
+  assert.deepEqual(
+    grouping.groups.map((group) => group.sourceIndexes),
+    [[0], [1]],
+  );
 });
 
 test("selects the first attempt that passed threshold", () => {
@@ -259,6 +326,8 @@ function createAttempt(
     passed,
     evidenceBlocked: false,
     evidenceBlockers: [],
+    evidenceBlockerGroups: [],
+    evidenceBlockerGroupingStatus: "grouped",
     selected: false,
   };
 }

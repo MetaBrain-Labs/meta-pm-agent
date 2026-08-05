@@ -72,9 +72,11 @@ import {
 import { getConversationModelProfile } from "../repositories/model-profile-repository";
 import {
   completeDocumentEvidenceResolutionItem,
+  getDocumentEvidenceResolutionByConversationId,
   getDocumentEvidenceResolutionByRequestFormId,
   markDocumentEvidenceSupplementRunning,
   persistDocumentEvidenceResolutionPlan,
+  type DocumentEvidenceResolutionRecord,
 } from "../repositories/request-form-repository";
 
 /**
@@ -87,6 +89,47 @@ type AgentOutputAccumulator = AgentConversationOutput & {
   durationMs: number;
   tokenUsageRecordIds: string[];
 };
+
+/**
+ * 使用服务端会话关联选择专用补证上下文，并拒绝客户端表单串线。
+ */
+export function resolveDocumentEvidenceResolutionContext({
+  chatId,
+  requestFormId,
+  resolutionByConversation,
+  resolutionByRequestForm,
+}: {
+  chatId: string | undefined;
+  requestFormId: string | undefined;
+  resolutionByConversation: DocumentEvidenceResolutionRecord | null;
+  resolutionByRequestForm: DocumentEvidenceResolutionRecord | null;
+}): {
+  resolution: DocumentEvidenceResolutionRecord | null;
+  effectiveRequestFormId: string | undefined;
+} {
+  if (
+    resolutionByRequestForm &&
+    resolutionByRequestForm.conversationId !== chatId
+  ) {
+    throw new Error(
+      "Document evidence resolution request form does not belong to this conversation.",
+    );
+  }
+  if (
+    resolutionByConversation &&
+    requestFormId &&
+    resolutionByConversation.requestFormId !== requestFormId
+  ) {
+    throw new Error(
+      "Document evidence resolution conversation has a different request form.",
+    );
+  }
+  const resolution = resolutionByConversation ?? resolutionByRequestForm;
+  return {
+    resolution,
+    effectiveRequestFormId: resolution?.requestFormId ?? requestFormId,
+  };
+}
 
 /**
  * 获取当前本地用户的账户信息。
@@ -212,6 +255,7 @@ export async function chatStreamHandler(c: Context) {
     const runtimeController = new AbortController();
     const abortRuntime = () => runtimeController.abort();
     const chatId = parsed.data.chatId;
+    let effectiveRequestFormId = parsed.data.requestFormId;
     let requestFormStatus: string | null = null;
 
     if (chatId) {
@@ -222,7 +266,7 @@ export async function chatStreamHandler(c: Context) {
     const markStatus = async (status: string) => {
       if (requestFormStatus === status) return;
       requestFormStatus = status;
-      await markRequestFormStatus(parsed.data.requestFormId, status);
+      await markRequestFormStatus(effectiveRequestFormId, status);
     };
 
     // 发送 SSE 开始事件
@@ -242,10 +286,22 @@ export async function chatStreamHandler(c: Context) {
     );
 
     try {
-      const documentEvidenceResolution =
-        await getDocumentEvidenceResolutionByRequestFormId(
-          parsed.data.requestFormId,
-        );
+      const [resolutionByConversation, resolutionByRequestForm] =
+        await Promise.all([
+          getDocumentEvidenceResolutionByConversationId(chatId),
+          getDocumentEvidenceResolutionByRequestFormId(
+            parsed.data.requestFormId,
+          ),
+        ]);
+      const resolvedEvidenceContext = resolveDocumentEvidenceResolutionContext({
+        chatId,
+        requestFormId: parsed.data.requestFormId,
+        resolutionByConversation,
+        resolutionByRequestForm,
+      });
+      const documentEvidenceResolution = resolvedEvidenceContext.resolution;
+      effectiveRequestFormId =
+        resolvedEvidenceContext.effectiveRequestFormId;
       let documentEvidenceAnswer = null;
       if (parsed.data.hitlResume) {
         // 先恢复 LangGraph HITL 中断，再让现有 Conversation Agent 消费表单答案。
@@ -269,7 +325,7 @@ export async function chatStreamHandler(c: Context) {
               parsed.data.hitlResume,
             );
           await markDocumentEvidenceSupplementRunning(
-            parsed.data.requestFormId,
+            effectiveRequestFormId,
             documentEvidenceAnswer.answerText,
           );
         } else {
@@ -294,7 +350,7 @@ export async function chatStreamHandler(c: Context) {
         ? null
         : await persistConversationStart(
             parsed.data.chatId,
-            parsed.data.requestFormId,
+            effectiveRequestFormId,
             parsed.data.messages,
           );
       const workflowRetryFailure = parsed.data.workflowRetry
@@ -310,7 +366,7 @@ export async function chatStreamHandler(c: Context) {
       const pendingDecisionForm =
         shouldFinalizeWorkflowRound || parsed.data.workflowRetry
         ? null
-        : await loadPendingDecisionQuestionForm(parsed.data.requestFormId);
+        : await loadPendingDecisionQuestionForm(effectiveRequestFormId);
       if (pendingDecisionForm) {
         await markStatus("pending_user_confirmation");
         const promptText =
@@ -338,7 +394,7 @@ export async function chatStreamHandler(c: Context) {
         });
         const pendingInterrupt = await releaseQuestionFormHumanInterrupt({
           threadId: createHumanInTheLoopThreadId({
-            scopeId: parsed.data.requestFormId ?? parsed.data.chatId,
+            scopeId: effectiveRequestFormId ?? parsed.data.chatId,
             formId: extractQuestionFormId(pendingDecisionForm),
           }),
           questionForm: pendingDecisionForm,
@@ -354,7 +410,7 @@ export async function chatStreamHandler(c: Context) {
 
         await persistConversationResult({
           conversationId: parsed.data.chatId,
-          requestFormId: parsed.data.requestFormId,
+          requestFormId: effectiveRequestFormId,
           agentOutputs: [...agentOutputs.values()],
           messages: parsed.data.messages,
         });
@@ -386,10 +442,10 @@ export async function chatStreamHandler(c: Context) {
         {
           enabledTools: parsed.data.enabledTools,
           workspaceId: runtimeContext.workspaceId,
-          requestFormId: parsed.data.requestFormId,
+          requestFormId: effectiveRequestFormId,
           workflowThreadId: createWorkflowThreadId({
             conversationId: parsed.data.chatId,
-            requestFormId: parsed.data.requestFormId,
+            requestFormId: effectiveRequestFormId,
           }),
           productContext: runtimeContext.productContext,
           contextSource: runtimeContext.contextSource,
@@ -415,7 +471,7 @@ export async function chatStreamHandler(c: Context) {
       )) {
         if (event.type === "document-evidence-resolution-plan") {
           await persistDocumentEvidenceResolutionPlan(
-            parsed.data.requestFormId,
+            effectiveRequestFormId,
             event.resolution,
           );
           continue;
@@ -453,7 +509,7 @@ export async function chatStreamHandler(c: Context) {
           await finalizeWorkspaceKnowledgeGraph({
             workspaceId: runtimeContext.workspaceId,
             conversationId: parsed.data.chatId,
-            requestFormId: parsed.data.requestFormId,
+            requestFormId: effectiveRequestFormId,
             knowledgeGraph: event.knowledgeGraph,
             advanceVersion: false,
           });
@@ -633,7 +689,7 @@ export async function chatStreamHandler(c: Context) {
       // Agent 完成后持久化结果
       const titleUpdate = await persistConversationResult({
         conversationId: parsed.data.chatId,
-        requestFormId: parsed.data.requestFormId,
+        requestFormId: effectiveRequestFormId,
         agentOutputs: [...agentOutputs.values()],
         messages: parsed.data.messages,
         // 是否跳过待确认条目由结构化 workflow 状态决定；新表单会重置该标记。
@@ -647,7 +703,7 @@ export async function chatStreamHandler(c: Context) {
         await finalizeWorkspaceKnowledgeGraph({
           workspaceId: runtimeContext.workspaceId,
           conversationId: parsed.data.chatId,
-          requestFormId: parsed.data.requestFormId,
+          requestFormId: effectiveRequestFormId,
           advanceVersion: true,
           // 最终归档优先使用运行时累计快照，避免 Critique Agent 的模型汇总覆盖成局部图谱。
           knowledgeGraph:
@@ -672,7 +728,7 @@ export async function chatStreamHandler(c: Context) {
               documentEvidenceResolution.sourceGraphVersion
           ) {
             await completeDocumentEvidenceResolutionItem({
-              requestFormId: parsed.data.requestFormId,
+              requestFormId: effectiveRequestFormId,
               resolvedGraphVersion: resolvedGraph.version,
             });
             await writeSse(writer, {
@@ -705,7 +761,7 @@ export async function chatStreamHandler(c: Context) {
           await finalizeWorkspaceKnowledgeGraph({
             workspaceId: runtimeWorkspaceId,
             conversationId: parsed.data.chatId,
-            requestFormId: parsed.data.requestFormId,
+            requestFormId: effectiveRequestFormId,
             knowledgeGraph: latestKnowledgeGraph,
             advanceVersion: true,
           });
@@ -717,7 +773,7 @@ export async function chatStreamHandler(c: Context) {
       if (isAbortError(error) || runtimeController.signal.aborted) {
         await persistConversationResult({
           conversationId: parsed.data.chatId,
-          requestFormId: parsed.data.requestFormId,
+          requestFormId: effectiveRequestFormId,
           agentOutputs: [...agentOutputs.values()],
           messages: parsed.data.messages,
           skipPendingDecisionItems: true,
