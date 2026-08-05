@@ -27,6 +27,7 @@ import {
   isPreOrchGraphConflictFormId,
   parseGraphConflictAction,
   releaseQuestionFormHumanInterrupt,
+  resolveAnsweredGraphOpenQuestions,
   resumeDocumentEvidenceResolutionWorkflow,
   resumeQuestionFormHumanInterrupt,
   streamConversation,
@@ -353,6 +354,20 @@ export async function chatStreamHandler(c: Context) {
             effectiveRequestFormId,
             parsed.data.messages,
           );
+      const submittedWorkflowFormId = getFormAnswerId(
+        parsed.data.messages
+          .filter((message) => message.role === "user")
+          .at(-1)?.content ?? "",
+      );
+      // 产品工作流表单必须命中服务端待处理决策，禁止过期答案退回普通编排。
+      if (
+        submittedWorkflowFormId?.endsWith("-proposal-decision") &&
+        !workflowAnswerResolution
+      ) {
+        throw new Error(
+          "The submitted product workflow question form is stale or does not match a pending decision.",
+        );
+      }
       const workflowRetryFailure = parsed.data.workflowRetry
         ? await loadExecutorRetryFailure(
             parsed.data.chatId,
@@ -422,6 +437,36 @@ export async function chatStreamHandler(c: Context) {
       const runtimeContext = await loadProductRuntimeContextForConversation(
         parsed.data.chatId,
       );
+      const answeredOpenQuestionIds = [
+        ...new Set(
+          (workflowAnswerResolution?.questions ?? []).flatMap((question) =>
+            question.answered
+              ? question.sources.flatMap((source) =>
+                  source.open_question_id ? [source.open_question_id] : [],
+                )
+              : [],
+          ),
+        ),
+      ];
+      // 在启动下一轮 Agent 前归档回答状态，确保失败重试也不会复活旧问题。
+      if (runtimeContext.knowledgeGraph && answeredOpenQuestionIds.length > 0) {
+        const resolvedKnowledgeGraph = resolveAnsweredGraphOpenQuestions(
+          runtimeContext.knowledgeGraph,
+          answeredOpenQuestionIds,
+          workflowAnswerResolution,
+        );
+        if (!resolvedKnowledgeGraph) {
+          throw new Error("Failed to apply resolved product workflow questions.");
+        }
+        runtimeContext.knowledgeGraph = resolvedKnowledgeGraph;
+        await finalizeWorkspaceKnowledgeGraph({
+          workspaceId: runtimeContext.workspaceId,
+          conversationId: parsed.data.chatId,
+          requestFormId: effectiveRequestFormId,
+          knowledgeGraph: runtimeContext.knowledgeGraph,
+          advanceVersion: false,
+        });
+      }
       // 在 SSE 开始执行 Agent 前只解析一次，保证本轮剩余节点使用同一不可变快照。
       const modelProfile = await getConversationModelProfile(
         parsed.data.chatId!,

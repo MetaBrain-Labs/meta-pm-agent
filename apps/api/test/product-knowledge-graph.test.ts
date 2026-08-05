@@ -22,6 +22,9 @@ import {
   createProductContextSnapshotKnowledgeGraph,
 } from "../src/services/product-knowledge-graph-service";
 import {
+  mergeProductContextSnapshotWithPersistedGraph,
+} from "../src/services/product-context-service";
+import {
   readProductContextResourceSnapshot,
   writeProductContextResourceSnapshot,
 } from "../src/services/product-context-resource-service";
@@ -66,6 +69,29 @@ test("strips nodes and relations from product context snapshots", () => {
   assert.equal(snapshot.decisions.length, 1);
   assert.equal(snapshot.risks.length, 1);
   assert.equal(snapshot.open_questions.length, 1);
+});
+
+test("does not persist or restore resolved open questions", () => {
+  const persistedGraph = createKnowledgeGraph();
+  const snapshot = {
+    ...createProductContextSnapshotKnowledgeGraph(persistedGraph),
+    resolved_open_question_ids: ["OQ-001"],
+  };
+
+  assert.equal(
+    buildPersistentNodes({
+      ...persistedGraph,
+      resolved_open_question_ids: ["OQ-001"],
+    }).some((node) => node.id === "OQ-001"),
+    false,
+  );
+  assert.deepEqual(
+    mergeProductContextSnapshotWithPersistedGraph(
+      snapshot,
+      persistedGraph,
+    ).open_questions,
+    [],
+  );
 });
 
 test("preserves stable lifecycle state after resource snapshot reload", async (t) => {

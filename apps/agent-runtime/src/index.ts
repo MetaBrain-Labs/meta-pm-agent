@@ -16,6 +16,9 @@ export {
   streamConversation,
 } from "./agents/conversation/stream";
 export {
+  resolveAnsweredGraphOpenQuestions,
+} from "./agents/conversation/workflow-resume";
+export {
   createRequestAgent,
   formatRequestAnalysisBlock,
   runRequestAgent,

@@ -69,6 +69,31 @@ test("uses a supplement form when a graph blocking question remains", () => {
   assert.doesNotMatch(form ?? "", /设计结果确认/);
 });
 
+test("does not restore resolved graph questions into the proposal form", () => {
+  const result = createWorkflowResult({
+    proposalQuestions: [],
+    executorResults: [],
+  });
+  result.knowledge_graph_update.open_questions = [
+    {
+      id: "OQ-resolved",
+      text: "确认部署环境？",
+      blocking: true,
+    },
+  ];
+  result.knowledge_graph_update.resolved_open_question_ids = ["OQ-resolved"];
+
+  assert.deepEqual(
+    reconcileProposalQuestions(
+      [],
+      [],
+      result.knowledge_graph_update,
+      result.planner,
+    ),
+    [],
+  );
+});
+
 test("allows warning-only completion and recognizes explicit acceptance", () => {
   const result = createWorkflowResult({
     proposalQuestions: [],

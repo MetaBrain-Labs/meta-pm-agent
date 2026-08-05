@@ -270,9 +270,9 @@ function resolveAnsweredOpenQuestions(
 
 /**
  * 从本轮运行态移除已经由表单回答的同源问题，避免 Executor 再次把旧问题当成未决输入。
- * 数据库只持久化实体和关系，因此这里不会删除持久化业务事实。
+ * 同时保留精确 ID tombstone，供 API 归档和后续恢复过滤。
  */
-function resolveAnsweredGraphOpenQuestions(
+export function resolveAnsweredGraphOpenQuestions(
   knowledgeGraph: ProductKnowledgeGraph | null | undefined,
   answeredOpenQuestionIds: string[],
   workflowAnswerResolution?: WorkflowAnswerResolution | null,

@@ -2584,6 +2584,9 @@ function createFallbackGraphProposalQuestions(
       result.open_questions.map((question) => question.id),
     ),
   );
+  const resolvedQuestionIds = new Set(
+    knowledgeGraph.resolved_open_question_ids ?? [],
+  );
   const sourceAgentByTask = new Map<
     string,
     ProductWorkflowProposalQuestion["sources"][number]["source_agent"]
@@ -2597,7 +2600,13 @@ function createFallbackGraphProposalQuestions(
   ]);
 
   return knowledgeGraph.open_questions.flatMap((question, index) => {
-    if (!question.blocking || executorQuestionIds.has(question.id)) return [];
+    if (
+      !question.blocking ||
+      executorQuestionIds.has(question.id) ||
+      resolvedQuestionIds.has(question.id)
+    ) {
+      return [];
+    }
     const fallbackTask = plan?.tasks[0];
     const sourceTaskId =
       question.source_task_id ?? fallbackTask?.task_id ?? "unknown-task";
