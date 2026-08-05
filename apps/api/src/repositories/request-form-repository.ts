@@ -392,10 +392,11 @@ export async function createDocumentEvidenceResolutionItem({
 }
 
 /**
- * 按 PRD run 查找已存在的专用会话，保证重复点击返回同一条未结束流程。
+ * 按 PRD run 与源图谱版本查找同一轮证据解决会话。
  */
-export async function findDocumentEvidenceResolutionByRunId(
+export async function findDocumentEvidenceResolutionCycle(
   runId: string,
+  sourceGraphVersion: number,
 ): Promise<DocumentEvidenceResolutionRecord | null> {
   const rows = await prisma.$queryRaw<DocumentEvidenceResolutionRow[]>`
     SELECT
@@ -410,6 +411,7 @@ export async function findDocumentEvidenceResolutionByRunId(
     JOIN "conversation" c ON c."id" = f."chat_id"
     WHERE i."type" = 'document_evidence_resolution'
       AND i."payload"->>'run_id' = ${runId}
+      AND i."payload"->>'source_graph_version' = ${String(sourceGraphVersion)}
       AND i."status" IN ('ready', 'collecting', 'supplement_running', 'completed')
     ORDER BY i."created_at" DESC
     LIMIT 1

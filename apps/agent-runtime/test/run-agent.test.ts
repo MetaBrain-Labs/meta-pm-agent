@@ -30,8 +30,9 @@ import {
 } from "../src/agents/common/model-profile";
 
 /** 构造不含 provider token 数据的解析上下文。 */
-const context = (text: string) => ({
+const context = (text: string, reasoningText = "") => ({
   text,
+  reasoningText,
   tokenUsage: null,
   maxTokens: 100,
 });
@@ -115,6 +116,32 @@ test("resolves valid JSON through the supplied schema", () => {
   });
 
   assert.deepEqual(result, { success: true, data: { ok: true } });
+});
+
+test("recovers schema-valid JSON from reasoning when final text is invalid", () => {
+  const schema = {
+    safeParse: (value: unknown) =>
+      typeof value === "object" &&
+      value !== null &&
+      (value as { ok?: unknown }).ok === true
+        ? { success: true as const, data: value as { ok: true } }
+        : { success: false as const, error: new Error("invalid") },
+  };
+
+  assert.deepEqual(
+    resolveJsonOutput(
+      context(
+        "",
+        'analysis before output\n```json\n{"ok":true}\n```\n',
+      ),
+      schema,
+    ),
+    { success: true, data: { ok: true } },
+  );
+  assert.equal(
+    resolveJsonOutput(context('{"ok":false}', '{"ok":true}'), schema).success,
+    false,
+  );
 });
 
 test("reports invalid JSON and schema failures", () => {
@@ -287,6 +314,7 @@ test("adapts native tool and SubAgent projections without parsing tool_calls", a
     ["planner result A", "planner result B"],
   );
   assert.equal(result.responseText, "coordinator output");
+  assert.equal(result.reasoningText, "coordinator reasoning");
   assert.deepEqual([...result.invokedSubagentTypes], ["planner"]);
   assert.equal(
     JSON.stringify(probe.toolResults).includes("private Skill instructions"),
@@ -402,8 +430,14 @@ test("emits structured tool errors and propagates projection failures", async ()
         new Error(String((toolResult as { error: unknown }).error)),
     },
   );
-  assert.equal((await promotedToolGenerator.next()).value.type, "tool-call");
-  assert.equal((await promotedToolGenerator.next()).value.type, "tool-result");
+  const promotedToolCall = await promotedToolGenerator.next();
+  assert.equal(promotedToolCall.done, false);
+  if (promotedToolCall.done) return;
+  assert.equal(promotedToolCall.value.type, "tool-call");
+  const promotedToolResult = await promotedToolGenerator.next();
+  assert.equal(promotedToolResult.done, false);
+  if (promotedToolResult.done) return;
+  assert.equal(promotedToolResult.value.type, "tool-result");
   await assert.rejects(
     promotedToolGenerator.next(),
     /provenance rejected/,

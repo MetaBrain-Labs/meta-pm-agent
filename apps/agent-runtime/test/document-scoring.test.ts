@@ -15,6 +15,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { resolveJsonOutput } from "../src/agents/common/run-agent";
 import {
   applyPrdCompletionGate,
   createDeterministicConsensusScore,
@@ -40,7 +41,7 @@ test("uses responsibility-based English reviewer names", () => {
       "Scope & Delivery Readiness Reviewer",
     ],
   );
-  assert.equal(DOCUMENT_REVIEWER_MODEL_OPTIONS.enableThinking, false);
+  assert.equal(DOCUMENT_REVIEWER_MODEL_OPTIONS.enableThinking, true);
   assert.equal(DOCUMENT_REVIEWER_MODEL_OPTIONS.maxTokens, 3072);
 });
 
@@ -200,18 +201,35 @@ test("consolidates 14 multilingual reviewer findings into traceable semantic gro
     reviewerName: `Reviewer ${index % reviewerIds.length}`,
     text: `Raw blocker ${index}`,
   }));
-  const grouping = normalizeEvidenceBlockerGrouping(
+  const modelOutput = {
+    groups: [
+      { title: "优先级", description: "需要确认优先级。", sourceIndexes: [0, 5, 9] },
+      { title: "范围决策", description: "需要确认范围决策。", sourceIndexes: [1, 6, 10] },
+      { title: "安全合规", description: "需要确认安全合规。", sourceIndexes: [2, 7, 11] },
+      { title: "性能基线", description: "需要补充性能基线。", sourceIndexes: [3, 8, 12] },
+      { title: "交付可行性", description: "需要确认交付可行性。", sourceIndexes: [4, 13] },
+    ],
+  };
+  const resolution = resolveJsonOutput(
     {
-      groups: [
-        { title: "优先级", description: "需要确认优先级。", sourceIndexes: [0, 5, 9] },
-        { title: "范围决策", description: "需要确认范围决策。", sourceIndexes: [1, 6, 10] },
-        { title: "安全合规", description: "需要确认安全合规。", sourceIndexes: [2, 7, 11] },
-        { title: "性能基线", description: "需要补充性能基线。", sourceIndexes: [3, 8, 12] },
-        { title: "交付可行性", description: "需要确认交付可行性。", sourceIndexes: [4, 13] },
-      ],
+      text: "",
+      reasoningText: JSON.stringify(modelOutput),
+      tokenUsage: null,
+      maxTokens: 3_072,
     },
-    findings,
+    {
+      safeParse: (value) =>
+        typeof value === "object" &&
+        value !== null &&
+        Array.isArray((value as { groups?: unknown }).groups)
+          ? { success: true as const, data: value }
+          : { success: false as const, error: new Error("invalid grouping") },
+    },
   );
+  assert.equal(resolution.success, true);
+  if (!resolution.success) return;
+
+  const grouping = normalizeEvidenceBlockerGrouping(resolution.data, findings);
 
   assert.equal(grouping.status, "grouped");
   assert.equal(grouping.groups.length, 5);

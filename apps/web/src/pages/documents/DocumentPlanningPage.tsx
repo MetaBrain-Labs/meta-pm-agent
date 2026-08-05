@@ -934,6 +934,11 @@ function ScoringResultPanel({
     currentStage === "scoreDraft" ||
     currentStage === "groupEvidenceBlockers" ||
     currentStage === "aggregateScore";
+  const selectedAttempt = qualityScore
+    ? attempts.find(
+        (attempt) => attempt.attempt === qualityScore.selectedAttempt,
+      )
+    : undefined;
 
   return (
     <section className="rounded border border-gray-200 bg-white p-4">
@@ -956,28 +961,24 @@ function ScoringResultPanel({
         <div className="rounded border border-blue-200 bg-blue-50 px-3 py-3 mb-3 text-sm">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-2">
-              <Tag color={qualityScore.passed ? "success" : "warning"}>
-                最终 {qualityScore.finalScore} / {qualityScore.threshold}
-              </Tag>
+              {selectedAttempt && !selectedAttempt.varianceAccepted ? (
+                <Tag color="warning">最终：评分分歧，未形成共识</Tag>
+              ) : (
+                <Tag color={qualityScore.passed ? "success" : "warning"}>
+                  最终 {qualityScore.finalScore} / {qualityScore.threshold}
+                </Tag>
+              )}
               <Tag color="processing">
                 推荐第 {qualityScore.selectedAttempt} 轮
               </Tag>
               <Tag>{getSelectionReasonLabel(qualityScore.selectionReason)}</Tag>
             </div>
-            {attempts.find(
-              (attempt) => attempt.attempt === qualityScore.selectedAttempt,
-            ) && (
+            {selectedAttempt && (
               <Button
                 type="primary"
                 size="small"
                 icon={<EyeOutlined />}
-                onClick={() => {
-                  const selectedAttempt = attempts.find(
-                    (attempt) =>
-                      attempt.attempt === qualityScore.selectedAttempt,
-                  );
-                  if (selectedAttempt) onViewAttempt(selectedAttempt);
-                }}
+                onClick={() => onViewAttempt(selectedAttempt)}
               >
                 查看最佳 PRD
               </Button>
@@ -1013,16 +1014,34 @@ function ScoringResultPanel({
                   <Tag color={attempt.varianceAccepted ? "success" : "error"}>
                     分差 {attempt.scoreSpread}
                   </Tag>
-                  <Tag color={attempt.aggregate.passed ? "success" : "warning"}>
-                    {attempt.varianceAccepted ? "共识" : "跳过共识"}{" "}
-                    {attempt.aggregate.score}
-                  </Tag>
+                  {attempt.varianceAccepted ? (
+                    <Tag
+                      color={attempt.aggregate.passed ? "success" : "warning"}
+                    >
+                      共识 {attempt.aggregate.score}
+                    </Tag>
+                  ) : (
+                    <Tag color="warning">评分分歧，未形成共识</Tag>
+                  )}
                   <Tooltip
-                    title={`70% × 三方平均分 ${attempt.aggregate.weights.averageScore} + 30% × 最低分 ${attempt.aggregate.weights.minimumScore} = ${attempt.aggregate.score}`}
+                    title={
+                      attempt.varianceAccepted
+                        ? `70% × 三方平均分 ${attempt.aggregate.weights.averageScore} + 30% × 最低分 ${attempt.aggregate.weights.minimumScore} = ${attempt.aggregate.score}`
+                        : `三方原始分：${attempt.reviewerScores
+                            .map(
+                              (review) =>
+                                `${getReviewerTabLabel(review.reviewerId)} ${review.score}`,
+                            )
+                            .join("、")}。分差 ${attempt.scoreSpread} 超过允许范围，未生成共识分。`
+                    }
                   >
                     <ExclamationCircleOutlined
                       tabIndex={0}
-                      aria-label="查看共识分计算详情"
+                      aria-label={
+                        attempt.varianceAccepted
+                          ? "查看共识分计算详情"
+                          : "查看三方原始评分"
+                      }
                       className="cursor-help text-blue-500"
                     />
                   </Tooltip>

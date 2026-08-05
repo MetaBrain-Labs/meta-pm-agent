@@ -27,7 +27,6 @@ import type {
   DocumentReasoningLogEntry,
   DocumentScoreAttempt,
   DocumentTodo,
-  DocumentWorkflowStage,
   KnowledgeGraphEntity,
   KnowledgeGraphRelation,
   ModelUsageProfile,
@@ -53,7 +52,7 @@ import {
 } from "../repositories/chat-repository";
 import {
   createDocumentEvidenceResolutionItem,
-  findDocumentEvidenceResolutionByRunId,
+  findDocumentEvidenceResolutionCycle,
 } from "../repositories/request-form-repository";
 import {
   getLocalModelProfile,
@@ -103,6 +102,8 @@ export class DocumentGenerationServiceError extends Error {
 }
 
 const activeDocumentRuns = new Map<string, AbortController>();
+/** reasoning 日志批量持久化的最短间隔。 */
+export const DOCUMENT_REASONING_PERSIST_INTERVAL_MS = 1_000;
 
 /**
  * 启动指定工作区的文档生成任务。
@@ -132,15 +133,21 @@ export async function startDocumentGeneration({
 
   const existingRun = await getActiveDocumentGenerationRun(workspaceId, kind);
   if (existingRun) {
+    const artifact = existingRun.documentArtifactId
+      ? await getDocumentArtifactByRunId(existingRun.id)
+      : null;
+    const sourceGraphVersion = artifact?.content?.sourceGraphStats.version;
     const evidenceResolution =
-      existingRun.status === "awaiting_input"
-        ? await findDocumentEvidenceResolutionByRunId(existingRun.id)
+      existingRun.status === "awaiting_input" &&
+      typeof sourceGraphVersion === "number"
+        ? await findDocumentEvidenceResolutionCycle(
+            existingRun.id,
+            sourceGraphVersion,
+          )
         : null;
     return {
       run: existingRun,
-      artifact: existingRun.documentArtifactId
-        ? await getDocumentArtifactByRunId(existingRun.id)
-        : null,
+      artifact,
       evidenceResolution: toEvidenceResolutionSummary(evidenceResolution),
     };
   }
@@ -176,12 +183,14 @@ export async function getLatestDocumentGenerationStatus({
 }): Promise<DocumentGenerationStatusDto> {
   const run = await getLatestDocumentGenerationRun(workspaceId, kind);
   if (!run) return { run: null, artifact: null };
-  const [artifact, evidenceResolution] = await Promise.all([
-    run.documentArtifactId ? getDocumentArtifactByRunId(run.id) : null,
-    run.status === "awaiting_input"
-      ? findDocumentEvidenceResolutionByRunId(run.id)
-      : null,
-  ]);
+  const artifact = run.documentArtifactId
+    ? await getDocumentArtifactByRunId(run.id)
+    : null;
+  const sourceGraphVersion = artifact?.content?.sourceGraphStats.version;
+  const evidenceResolution =
+    run.status === "awaiting_input" && typeof sourceGraphVersion === "number"
+      ? await findDocumentEvidenceResolutionCycle(run.id, sourceGraphVersion)
+      : null;
 
   return {
     run,
@@ -198,12 +207,14 @@ export async function getDocumentGenerationStatusByRunId(
 ): Promise<DocumentGenerationStatusDto> {
   const run = await getDocumentGenerationRunById(runId);
   if (!run) return { run: null, artifact: null };
-  const [artifact, evidenceResolution] = await Promise.all([
-    run.documentArtifactId ? getDocumentArtifactByRunId(run.id) : null,
-    run.status === "awaiting_input"
-      ? findDocumentEvidenceResolutionByRunId(run.id)
-      : null,
-  ]);
+  const artifact = run.documentArtifactId
+    ? await getDocumentArtifactByRunId(run.id)
+    : null;
+  const sourceGraphVersion = artifact?.content?.sourceGraphStats.version;
+  const evidenceResolution =
+    run.status === "awaiting_input" && typeof sourceGraphVersion === "number"
+      ? await findDocumentEvidenceResolutionCycle(run.id, sourceGraphVersion)
+      : null;
 
   return {
     run,
@@ -243,7 +254,28 @@ export async function createDocumentEvidenceResolutionConversation({
     );
   }
 
-  const existing = await findDocumentEvidenceResolutionByRunId(runId);
+  const artifact = await getDocumentArtifactByRunId(runId);
+  let sourceGraphVersion = artifact?.content?.sourceGraphStats.version;
+  if (typeof sourceGraphVersion !== "number") {
+    const currentGraph = await loadDocumentSourceGraph(run.workspaceId);
+    sourceGraphVersion =
+      await ensureDocumentArtifactSourceGraphVersion({
+        runId,
+        workspaceId: run.workspaceId,
+        sourceGraphVersion: currentGraph.version,
+      });
+  }
+  if (typeof sourceGraphVersion !== "number") {
+    throw new DocumentGenerationServiceError(
+      "无法为当前文档产物补齐源知识图谱版本，请刷新后重试。",
+      409,
+    );
+  }
+
+  const existing = await findDocumentEvidenceResolutionCycle(
+    runId,
+    sourceGraphVersion,
+  );
   if (existing) {
     const conversation = await getConversationById(existing.conversationId);
     if (conversation && conversation.workspaceId === run.workspaceId) {
@@ -271,23 +303,6 @@ export async function createDocumentEvidenceResolutionConversation({
     throw error;
   }
 
-  const artifact = await getDocumentArtifactByRunId(runId);
-  let sourceGraphVersion = artifact?.content?.sourceGraphStats.version;
-  if (typeof sourceGraphVersion !== "number") {
-    const currentGraph = await loadDocumentSourceGraph(run.workspaceId);
-    sourceGraphVersion =
-      await ensureDocumentArtifactSourceGraphVersion({
-        runId,
-        workspaceId: run.workspaceId,
-        sourceGraphVersion: currentGraph.version,
-      });
-  }
-  if (typeof sourceGraphVersion !== "number") {
-    throw new DocumentGenerationServiceError(
-      "无法为当前文档产物补齐源知识图谱版本，请刷新后重试。",
-      409,
-    );
-  }
   const latestAttempt = run.scoringAttempts.at(-1);
   const blockers: DocumentEvidenceBlocker[] =
     latestAttempt?.evidenceBlockerGroups?.length
@@ -365,7 +380,10 @@ export async function resumeDocumentGeneration({
   const artifact = await getDocumentArtifactByRunId(runId);
   const sourceVersion = artifact?.content?.sourceGraphStats.version;
   const graph = await loadDocumentSourceGraph(run.workspaceId);
-  const evidenceResolution = await findDocumentEvidenceResolutionByRunId(runId);
+  const evidenceResolution =
+    typeof sourceVersion === "number"
+      ? await findDocumentEvidenceResolutionCycle(runId, sourceVersion)
+      : null;
   if (
     typeof sourceVersion !== "number" ||
     evidenceResolution?.status !== "completed" ||
@@ -413,7 +431,7 @@ export async function resumeDocumentGeneration({
 
 /** 将内部 request-form 记录压缩为文档页只读状态。 */
 function toEvidenceResolutionSummary(
-  resolution: Awaited<ReturnType<typeof findDocumentEvidenceResolutionByRunId>>,
+  resolution: Awaited<ReturnType<typeof findDocumentEvidenceResolutionCycle>>,
 ): DocumentGenerationStatusDto["evidenceResolution"] {
   return resolution
     ? {
@@ -524,6 +542,8 @@ async function executeDocumentGenerationRun(
     });
 
     let next = await stream.next();
+    let reasoningDirty = false;
+    let reasoningPersistedAt = Date.now();
     while (!next.done) {
       if (controller.signal.aborted) {
         throw createAbortError();
@@ -531,32 +551,43 @@ async function executeDocumentGenerationRun(
 
       const event = next.value;
       if (event.type === "document-stage" && event.status === "started") {
-        await updateRunStage(run.id, event.stage);
         latestReasoning = appendReasoningLog(latestReasoning, {
           agentType: "document-workflow",
           content: `进入阶段：${event.label}`,
         });
         await updateDocumentGenerationRunProgress({
           runId: run.id,
+          currentStage: event.stage,
           reasoningLog: latestReasoning,
         });
+        reasoningDirty = false;
+        reasoningPersistedAt = Date.now();
       }
       if (event.type === "todo-update") {
         latestTodos = event.todos;
         await updateDocumentGenerationRunProgress({
           runId: run.id,
           todos: latestTodos,
+          ...(reasoningDirty ? { reasoningLog: latestReasoning } : {}),
         });
+        reasoningDirty = false;
+        reasoningPersistedAt = Date.now();
       }
       if (event.type === "reasoning") {
         latestReasoning = appendReasoningLog(latestReasoning, {
           agentType: event.agentType,
           content: event.content,
         });
-        await updateDocumentGenerationRunProgress({
-          runId: run.id,
-          reasoningLog: latestReasoning,
-        });
+        reasoningDirty = true;
+        const now = Date.now();
+        if (shouldPersistDocumentReasoning(reasoningPersistedAt, now)) {
+          await updateDocumentGenerationRunProgress({
+            runId: run.id,
+            reasoningLog: latestReasoning,
+          });
+          reasoningDirty = false;
+          reasoningPersistedAt = now;
+        }
       }
       if (event.type === "document-score-attempt") {
         latestScoringAttempts = upsertScoreAttempt(
@@ -566,7 +597,10 @@ async function executeDocumentGenerationRun(
         await updateDocumentGenerationRunProgress({
           runId: run.id,
           scoringAttempts: latestScoringAttempts,
+          ...(reasoningDirty ? { reasoningLog: latestReasoning } : {}),
         });
+        reasoningDirty = false;
+        reasoningPersistedAt = Date.now();
       }
       if (event.type === "document-complete") {
         result = event.result;
@@ -578,6 +612,13 @@ async function executeDocumentGenerationRun(
 
     result = result ?? next.value.result;
     latestTodos = next.value.todos.length > 0 ? next.value.todos : latestTodos;
+
+    if (reasoningDirty) {
+      await updateDocumentGenerationRunProgress({
+        runId: run.id,
+        reasoningLog: latestReasoning,
+      });
+    }
 
     if (controller.signal.aborted) {
       throw createAbortError();
@@ -660,28 +701,21 @@ function shouldMergeReasoningEntry(
   );
 }
 
-/**
- * 写入或替换同一轮评分结果。
- */
+/** 判断合并后的 reasoning 是否达到下一次持久化时间。 */
+export function shouldPersistDocumentReasoning(
+  lastPersistedAt: number,
+  now: number,
+): boolean {
+  return now - lastPersistedAt >= DOCUMENT_REASONING_PERSIST_INTERVAL_MS;
+}
+
+/** 写入或替换同一轮评分结果。 */
 function upsertScoreAttempt(
   attempts: DocumentScoreAttempt[],
   next: DocumentScoreAttempt,
 ): DocumentScoreAttempt[] {
   const filtered = attempts.filter((attempt) => attempt.attempt !== next.attempt);
   return [...filtered, next].sort((a, b) => a.attempt - b.attempt);
-}
-
-/**
- * 同步当前文档工作流阶段。
- */
-async function updateRunStage(
-  runId: string,
-  stage: DocumentWorkflowStage,
-): Promise<void> {
-  await markDocumentGenerationRunRunning({
-    runId,
-    currentStage: stage,
-  });
 }
 
 /**

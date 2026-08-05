@@ -102,9 +102,10 @@ export type AgentRunEvent<AgentType extends string> =
 
 /** Agent 最终输出解析上下文。 */
 export interface AgentOutputContext {
-  text: string;
-  tokenUsage: ReturnType<typeof getTokenUsage>;
-  maxTokens?: number;
+  readonly text: string;
+  readonly reasoningText: string;
+  readonly tokenUsage: ReturnType<typeof getTokenUsage>;
+  readonly maxTokens?: number;
 }
 
 /** Agent 最终输出解析结果。 */
@@ -174,24 +175,35 @@ export function resolveJsonOutput<T>(
   },
 ): AgentOutputResolution<T> {
   const parsed = parseJsonObject(context.text);
-  if (parsed === null) {
-    return {
-      success: false,
-      reason: formatInvalidJsonReason(
-        context.text,
-        context.tokenUsage,
-        context.maxTokens,
-      ),
-    };
+  if (parsed !== null) {
+    const result = schema.safeParse(parsed);
+    return result.success
+      ? result
+      : {
+          success: false,
+          reason: `schema-validation: ${formatSchemaError(result.error)}`,
+        };
   }
 
-  const result = schema.safeParse(parsed);
-  return result.success
-    ? result
-    : {
-        success: false,
-        reason: `schema-validation: ${formatSchemaError(result.error)}`,
-      };
+  const reasoningParsed = parseJsonObject(context.reasoningText);
+  if (reasoningParsed !== null) {
+    const result = schema.safeParse(reasoningParsed);
+    return result.success
+      ? result
+      : {
+          success: false,
+          reason: `schema-validation: ${formatSchemaError(result.error)}`,
+        };
+  }
+
+  return {
+    success: false,
+    reason: formatInvalidJsonReason(
+      context.text,
+      context.tokenUsage,
+      context.maxTokens,
+    ),
+  };
 }
 
 /**
@@ -258,9 +270,10 @@ export interface AgentEventStreamProjection {
 
 /** Event Streaming 汇流完成后交给结果解析器的状态。 */
 export interface AgentEventStreamResult {
-  responseText: string;
-  tokenUsage: ReturnType<typeof getTokenUsage>;
-  invokedSubagentTypes: Set<string>;
+  readonly responseText: string;
+  readonly reasoningText: string;
+  readonly tokenUsage: ReturnType<typeof getTokenUsage>;
+  readonly invokedSubagentTypes: Set<string>;
 }
 
 interface AgentEventStreamAdapterOptions<AgentType extends string> {
@@ -290,6 +303,7 @@ export async function* adaptAgentEventStream<AgentType extends string>(
   let completed = false;
   let failure: unknown;
   let responseText = "";
+  let reasoningText = "";
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
   const invokedSubagentTypes = new Set<string>();
 
@@ -307,6 +321,7 @@ export async function* adaptAgentEventStream<AgentType extends string>(
           options.summaryRecorder.recordOutput(content);
         }),
         consumeTextChunks(message.reasoning, (content) => {
+          reasoningText += content;
           options.summaryRecorder.recordThinking(content);
           push({
             type: "reasoning",
@@ -462,6 +477,7 @@ export async function* adaptAgentEventStream<AgentType extends string>(
 
   return {
     responseText,
+    reasoningText,
     tokenUsage,
     invokedSubagentTypes,
   };
@@ -670,7 +686,7 @@ export async function* runAgent<T, AgentType extends string>(
         getToolResultError: options.getToolResultError,
       },
     );
-    const { responseText, invokedSubagentTypes } = streamResult;
+    const { responseText, reasoningText, invokedSubagentTypes } = streamResult;
     tokenUsage = streamResult.tokenUsage;
 
     const tokenUsageSummary = tokenUsage
@@ -707,6 +723,7 @@ export async function* runAgent<T, AgentType extends string>(
 
     const resolution = options.resolveOutput({
       text: responseText,
+      reasoningText,
       tokenUsage,
       maxTokens:
         modelSelection?.model.maxTokens ?? options.modelOptions?.maxTokens,

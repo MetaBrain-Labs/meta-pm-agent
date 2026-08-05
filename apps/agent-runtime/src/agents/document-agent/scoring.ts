@@ -39,7 +39,7 @@ export const DOCUMENT_SCORE_MAX_SPREAD = 8;
 export const DOCUMENT_SCORE_MAX_ATTEMPTS = 3;
 export const DOCUMENT_REVIEWER_MODEL_OPTIONS = {
   ...JSON_AGENT_MODEL_OPTIONS,
-  enableThinking: false,
+  enableThinking: true,
   maxTokens: 3072,
 } as const;
 
