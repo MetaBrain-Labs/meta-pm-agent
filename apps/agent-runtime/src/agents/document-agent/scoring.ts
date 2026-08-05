@@ -524,17 +524,17 @@ export function validatePrdSourceGrounding({
 export function shouldRetryDocumentScoreAttempt({
   attemptCount,
   passed,
-  varianceAccepted,
   evidenceBlocked,
 }: {
   attemptCount: number;
   passed: boolean;
-  varianceAccepted: boolean;
   evidenceBlocked: boolean;
 }): boolean {
-  if (passed || attemptCount >= DOCUMENT_SCORE_MAX_ATTEMPTS) return false;
-  if (!varianceAccepted) return true;
-  return !evidenceBlocked;
+  return (
+    !passed &&
+    !evidenceBlocked &&
+    attemptCount < DOCUMENT_SCORE_MAX_ATTEMPTS
+  );
 }
 
 /**

@@ -28,6 +28,7 @@ export type DocumentWorkflowStage =
   | "draftSection"
   | "crossCheck"
   | "scoreDraft"
+  | "groupEvidenceBlockers"
   | "aggregateScore"
   | "humanReview"
   | "exportPrd";

@@ -75,21 +75,11 @@ test("records high-spread attempts as failed without consensus pass", () => {
   assert.equal(21 > DOCUMENT_SCORE_MAX_SPREAD, true);
 });
 
-test("retries high-spread drafts before stopping for evidence gaps", () => {
+test("stops for evidence gaps before retrying a failed draft", () => {
   assert.equal(
     shouldRetryDocumentScoreAttempt({
       attemptCount: 1,
       passed: false,
-      varianceAccepted: false,
-      evidenceBlocked: true,
-    }),
-    true,
-  );
-  assert.equal(
-    shouldRetryDocumentScoreAttempt({
-      attemptCount: 1,
-      passed: false,
-      varianceAccepted: true,
       evidenceBlocked: true,
     }),
     false,
@@ -98,7 +88,6 @@ test("retries high-spread drafts before stopping for evidence gaps", () => {
     shouldRetryDocumentScoreAttempt({
       attemptCount: 1,
       passed: false,
-      varianceAccepted: true,
       evidenceBlocked: false,
     }),
     true,
@@ -107,8 +96,7 @@ test("retries high-spread drafts before stopping for evidence gaps", () => {
     shouldRetryDocumentScoreAttempt({
       attemptCount: 3,
       passed: false,
-      varianceAccepted: false,
-      evidenceBlocked: true,
+      evidenceBlocked: false,
     }),
     false,
   );

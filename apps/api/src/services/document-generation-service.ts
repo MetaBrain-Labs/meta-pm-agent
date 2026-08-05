@@ -586,8 +586,7 @@ async function executeDocumentGenerationRun(
     const latestAttempt = result.qualityScore.attempts.at(-1);
     const awaitingInput = Boolean(
       latestAttempt?.evidenceBlocked &&
-        !result.qualityScore.passed &&
-        result.qualityScore.attempts.length < result.qualityScore.maxAttempts,
+        !result.qualityScore.passed,
     );
     await completeDocumentGenerationRun({
       runId: run.id,

@@ -203,12 +203,16 @@ test("does not accept document evidence with an unconsumed Evidence issue", () =
   assert.equal(isAcceptedDocumentEvidenceWorkflowResult(result), true);
 });
 
-test("routes all five document scoring outcomes", () => {
+test("routes document scoring outcomes with evidence blockers first", () => {
   assert.equal(selectRoute({ passed: true }), "review");
   assert.equal(selectRoute({ varianceAccepted: false }), "retry");
+  assert.equal(
+    selectRoute({ varianceAccepted: false, evidenceBlocked: true }),
+    "export",
+  );
   assert.equal(selectRoute({ evidenceBlocked: false }), "retry");
   assert.equal(selectRoute({ evidenceBlocked: true }), "export");
-  assert.equal(selectRoute({ evidenceBlocked: true }, 3), "export");
+  assert.equal(selectRoute({ evidenceBlocked: false }, 3), "export");
 });
 
 function selectRoute(

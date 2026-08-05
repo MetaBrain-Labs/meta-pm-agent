@@ -61,6 +61,7 @@ export const DocumentWorkflowStageSchema = z.enum([
   "draftSection",
   "crossCheck",
   "scoreDraft",
+  "groupEvidenceBlockers",
   "aggregateScore",
   "humanReview",
   "exportPrd",

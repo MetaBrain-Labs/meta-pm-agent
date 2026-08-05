@@ -3,7 +3,8 @@
  *
  * 构建独立于产品知识图谱生产链路的 Document Agent 图，固定阶段为
  * parseKg → normalizeGraph → buildSectionDossiers → draftSection →
- * crossCheck → scoreDraft → aggregateScore → humanReview → exportPrd。图状态由 checkpointer 保存，
+ * crossCheck → scoreDraft → groupEvidenceBlockers → aggregateScore →
+ * humanReview → exportPrd。图状态由 checkpointer 保存，
  * 便于后续恢复、回放与 thread 级连续性扩展。
  *
  * Responsibilities:
@@ -126,6 +127,7 @@ const STAGE_LABELS: Record<DocumentWorkflowStage, string> = {
   draftSection: "Document Agent 生成 PRD",
   crossCheck: "交叉检查文档一致性",
   scoreDraft: "三方评分 Agent 打分",
+  groupEvidenceBlockers: "合并三方证据阻断",
   aggregateScore: "分差合格后共识评分",
   humanReview: "人工审核节点",
   exportPrd: "导出 PRD 文档",
@@ -142,6 +144,7 @@ function createDocumentWorkflowGraph(checkpointer: BaseCheckpointSaver) {
     .addNode("draftSection", draftSectionNode)
     .addNode("crossCheck", crossCheckNode)
     .addNode("scoreDraft", scoreDraftNode)
+    .addNode("groupEvidenceBlockers", groupEvidenceBlockersNode)
     .addNode("rejectScore", rejectScoreNode)
     .addNode("aggregateScore", aggregateScoreNode)
     .addNode("humanReview", humanReviewNode)
@@ -153,10 +156,15 @@ function createDocumentWorkflowGraph(checkpointer: BaseCheckpointSaver) {
     .addEdge("buildSectionDossiers", "draftSection")
     .addEdge("draftSection", "crossCheck")
     .addEdge("crossCheck", "scoreDraft")
-    .addConditionalEdges("scoreDraft", selectNextNodeAfterReviewerScore, {
-      reject: "rejectScore",
-      aggregate: "aggregateScore",
-    })
+    .addEdge("scoreDraft", "groupEvidenceBlockers")
+    .addConditionalEdges(
+      "groupEvidenceBlockers",
+      selectNextNodeAfterReviewerScore,
+      {
+        reject: "rejectScore",
+        aggregate: "aggregateScore",
+      },
+    )
     .addConditionalEdges("rejectScore", selectNextNodeAfterScore, {
       retry: "draftSection",
       review: "humanReview",
@@ -452,21 +460,37 @@ async function scoreDraftNode(
     signal: config?.signal,
     onEvent: (event) => writer?.(event),
   });
-  const blockerGrouping = await groupPrdEvidenceBlockers({
-    reviewerScores,
-    modelProfile: getModelProfileFromRunnableConfig(config),
-    signal: config?.signal,
-    onEvent: (event) => writer?.(event),
-  });
 
   emitStage(config, "scoreDraft", "completed");
   const todos = createWorkflowTodos("scoreDraft", true);
   emitTodoUpdate(config, todos);
   return {
     scoreReviewerReports: reviewerScores,
-    scoreEvidenceBlockerGrouping: blockerGrouping,
     todos,
   };
+}
+
+/**
+ * 在三位评分 Agent 全部完成后合并完整的证据阻断意见。
+ */
+async function groupEvidenceBlockersNode(
+  state: DocumentWorkflowGraphStateValue,
+  config?: LangGraphRunnableConfig,
+) {
+  emitStage(config, "groupEvidenceBlockers", "started");
+  emitTodoUpdate(config, createWorkflowTodos("groupEvidenceBlockers"));
+  const writer = getWriter(config);
+  const blockerGrouping = await groupPrdEvidenceBlockers({
+    reviewerScores: state.scoreReviewerReports,
+    modelProfile: getModelProfileFromRunnableConfig(config),
+    signal: config?.signal,
+    onEvent: (event) => writer?.(event),
+  });
+
+  emitStage(config, "groupEvidenceBlockers", "completed");
+  const todos = createWorkflowTodos("groupEvidenceBlockers", true);
+  emitTodoUpdate(config, todos);
+  return { scoreEvidenceBlockerGrouping: blockerGrouping, todos };
 }
 
 /**
@@ -505,7 +529,6 @@ function rejectScoreNode(
   const shouldRetry = shouldRetryDocumentScoreAttempt({
     attemptCount: scoreAttempts.length,
     passed: attempt.passed,
-    varianceAccepted: attempt.varianceAccepted,
     evidenceBlocked: attempt.evidenceBlocked,
   });
   const persistedAttempt = {
@@ -569,7 +592,6 @@ async function aggregateScoreNode(
   const shouldRetry = shouldRetryDocumentScoreAttempt({
     attemptCount: scoreAttempts.length,
     passed: attempt.passed,
-    varianceAccepted: attempt.varianceAccepted,
     evidenceBlocked: attempt.evidenceBlocked,
   });
   const persistedAttempt = {
@@ -614,9 +636,8 @@ export function selectNextNodeAfterScore(
   const latestAttempt = state.scoreAttempts.at(-1);
   if (!latestAttempt) return "retry";
   if (latestAttempt.passed) return "review";
-  if (state.scoreAttempts.length >= DOCUMENT_SCORE_MAX_ATTEMPTS) return "export";
-  if (!latestAttempt.varianceAccepted) return "retry";
   if (latestAttempt.evidenceBlocked) return "export";
+  if (state.scoreAttempts.length >= DOCUMENT_SCORE_MAX_ATTEMPTS) return "export";
   return "retry";
 }
 
@@ -756,6 +777,7 @@ const WORKFLOW_TODO_STAGES: DocumentWorkflowStage[] = [
   "draftSection",
   "crossCheck",
   "scoreDraft",
+  "groupEvidenceBlockers",
   "aggregateScore",
   "humanReview",
   "exportPrd",

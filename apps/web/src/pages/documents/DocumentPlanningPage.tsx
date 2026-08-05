@@ -88,6 +88,7 @@ const STAGE_LABELS: Record<DocumentWorkflowStage, string> = {
   draftSection: "Document Agent 生成 PRD",
   crossCheck: "交叉检查",
   scoreDraft: "三方评分 Agent 打分",
+  groupEvidenceBlockers: "合并三方证据阻断",
   aggregateScore: "分差合格后共识评分",
   humanReview: "人工审核节点",
   exportPrd: "导出 PRD",
@@ -930,7 +931,9 @@ function ScoringResultPanel({
     DocumentScoreAttempt["reviewerScores"][number] | null
   >(null);
   const scoringActive =
-    currentStage === "scoreDraft" || currentStage === "aggregateScore";
+    currentStage === "scoreDraft" ||
+    currentStage === "groupEvidenceBlockers" ||
+    currentStage === "aggregateScore";
 
   return (
     <section className="rounded border border-gray-200 bg-white p-4">
