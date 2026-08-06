@@ -23,6 +23,7 @@ import {
   extractQuestionFormId,
   getFormAnswerId,
   isAcceptedDocumentEvidenceWorkflowResult,
+  isProductWorkflowAcceptanceAnswer,
   isProductWorkflowOptionalStopAnswer,
   isPreOrchGraphConflictFormId,
   parseGraphConflictAction,
@@ -1200,8 +1201,7 @@ function isProductWorkflowFinalConfirmationAnswer(
     .filter((message) => message.role === "user")
     .at(-1);
   return (
-    getFormAnswerId(latestUserMessage?.content ?? "") ===
-      "product-workflow-confirmation" ||
+    isProductWorkflowAcceptanceAnswer(latestUserMessage?.content ?? "") ||
     isProductWorkflowOptionalStopAnswer(latestUserMessage?.content ?? "")
   );
 }

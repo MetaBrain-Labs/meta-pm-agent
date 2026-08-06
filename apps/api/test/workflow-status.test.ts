@@ -12,7 +12,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ProductWorkflowResult } from "@repo/shared";
-import { collectWorkflowAnswerResolution } from "../src/repositories/request-form-repository";
+import {
+  collectConfirmationWorkflowResolution,
+  collectWorkflowAnswerResolution,
+} from "../src/repositories/request-form-repository";
 import { ChatRequestSchema } from "../src/schemas/request.schema";
 import {
   isPersistedExecutorRetryFailureRetryable,
@@ -104,6 +107,24 @@ test("keeps exact question sources and only marks submitted fields answered", ()
       { answered: true, openQuestionId: "OQ-roles" },
       { answered: false, openQuestionId: "OQ-deployment" },
     ],
+  );
+});
+
+test("restores the persisted workflow from a final confirmation decision", () => {
+  const workflow = createWorkflowResult();
+  const resolution = collectConfirmationWorkflowResolution(
+    { workflow },
+    "product-workflow-confirmation",
+  );
+
+  assert.deepEqual(resolution.workflow, workflow);
+  assert.throws(
+    () =>
+      collectConfirmationWorkflowResolution(
+        { workflow: { status: "invalid" } },
+        "product-workflow-confirmation",
+      ),
+    /persisted product workflow result/i,
   );
 });
 

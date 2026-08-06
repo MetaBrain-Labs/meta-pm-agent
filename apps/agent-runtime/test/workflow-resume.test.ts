@@ -513,6 +513,60 @@ test("stopping optional questions completes without another form or orchestrator
   );
 });
 
+test("accepts a persisted final workflow without client workflow history", async () => {
+  const messages = createMessages(
+    "[form answers - product-workflow-confirmation]\n- 你希望如何处理当前结果？: 确认接受\n- 补充说明: (skipped)",
+  );
+  const events = [];
+
+  for await (const event of streamConversation(messages, {
+    mode: "project",
+    workflowAnswerResolution: {
+      formId: "product-workflow-confirmation",
+      questions: [],
+      workflow: createProductWorkflowResult(),
+    },
+  })) {
+    events.push(event);
+  }
+
+  const completed = events.find((event) => event.type === "complete");
+  assert.equal(completed?.type === "complete" && completed.result.status, "completed");
+  assert.equal(
+    events.some(
+      (event) => event.type === "agent-status" && event.agentType === "request",
+    ),
+    false,
+  );
+});
+
+test("does not send final acceptance to Request Agent when persisted workflow is missing", async () => {
+  const messages = createMessages(
+    "[form answers - product-workflow-confirmation]\n- 你希望如何处理当前结果？: 确认接受",
+  );
+  const events = [];
+
+  for await (const event of streamConversation(messages, { mode: "project" })) {
+    events.push(event);
+  }
+
+  assert.equal(
+    events.some(
+      (event) =>
+        event.type === "error" &&
+        event.agentType === "conversation_confirmation" &&
+        event.terminal,
+    ),
+    true,
+  );
+  assert.equal(
+    events.some(
+      (event) => event.type === "agent-status" && event.agentType === "request",
+    ),
+    false,
+  );
+});
+
 function createMessages(latestAnswer: string): ChatMessage[] {
   return [
     message("u1", "user", "Build MVP"),
@@ -587,6 +641,14 @@ function createSupplementTaskExecutionBlock(): string {
 function createProductWorkflowBlock(
   confirmationId = "product-workflow-confirmation",
 ): string {
+  return `<product-workflow>\n${JSON.stringify(
+    createProductWorkflowResult(confirmationId),
+  )}\n</product-workflow>`;
+}
+
+function createProductWorkflowResult(
+  confirmationId = "product-workflow-confirmation",
+): ProductWorkflowResult {
   const result: ProductWorkflowResult = {
     status: "pending_user_confirmation",
     confirmation_id: confirmationId,
@@ -695,7 +757,7 @@ function createProductWorkflowBlock(
     confirmation_message: "Please confirm correction.",
   };
 
-  return `<product-workflow>\n${JSON.stringify(result)}\n</product-workflow>`;
+  return result;
 }
 
 function createMessagesWithRequestAnalysisOnly(

@@ -196,6 +196,8 @@ export interface ConversationStreamOptions {
  */
 export interface WorkflowAnswerResolution {
   formId: string;
+  /** 最终确认由服务端持久化记录恢复，避免依赖客户端回传完整工作流历史。 */
+  workflow?: ProductWorkflowResult;
   questions: Array<{
     label: string;
     answered: boolean;

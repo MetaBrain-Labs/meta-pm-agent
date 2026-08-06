@@ -764,18 +764,29 @@ async function* streamWorkflowResumeAfterFormAnswer(
     knowledgeGraph: options.knowledgeGraph,
     workflowAnswerResolution: options.workflowAnswerResolution,
   });
+  const latestUserMessage = messages.at(-1);
+  const acceptsCurrentResult = Boolean(
+    latestUserMessage &&
+      isProductWorkflowAcceptanceAnswer(latestUserMessage.content),
+  );
+
+  if (acceptsCurrentResult && !resumeContext?.productWorkflow) {
+    yield {
+      type: "error",
+      error:
+        "无法完成确认：服务端未找到对应的持久化产品工作流结果。请刷新后重试，不会将该确认作为新请求处理。",
+      agentType: "conversation_confirmation",
+      terminal: true,
+    };
+    return;
+  }
 
   if (!resumeContext) {
     yield* streamUserInputIntegration(messages, options);
     return;
   }
 
-  const latestUserMessage = messages.at(-1);
-  if (
-    latestUserMessage &&
-    resumeContext.productWorkflow &&
-    isProductWorkflowAcceptanceAnswer(latestUserMessage.content)
-  ) {
+  if (acceptsCurrentResult && resumeContext.productWorkflow) {
     const result = {
       ...resumeContext.productWorkflow,
       status: "completed" as const,

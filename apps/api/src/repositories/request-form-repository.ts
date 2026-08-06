@@ -27,6 +27,7 @@ import type {
   ProductWorkflowResult,
   RequestAnalysis,
 } from "@repo/shared";
+import { ProductWorkflowResultSchema } from "@repo/shared";
 
 /**
  * 更新请求表单的阶段状态，用于前端和后续调度判断当前表单被哪个阶段消费。
@@ -302,6 +303,11 @@ export async function finishAnsweredDecisionItems(
     `;
     const row = rows[0];
     if (!row) return null;
+    const payload = parsePayload(row.payload);
+    const confirmationResolution =
+      row.type === "decision"
+        ? null
+        : collectConfirmationWorkflowResolution(payload, answer.formId);
 
     const answeredAt = new Date().toISOString();
     const answerPatch = {
@@ -319,11 +325,8 @@ export async function finishAnsweredDecisionItems(
     `;
 
     // 补充信息确认表单提交后，同步关闭它汇总的 Executor proposal 条目。
-    if (row.type !== "decision") {
-      return { formId: answer.formId, questions: [] };
-    }
+    if (confirmationResolution) return confirmationResolution;
 
-    const payload = parsePayload(row.payload);
     const resolution = collectWorkflowAnswerResolution(payload, answer);
     const taskIds = extractProposalTaskIds(payload);
     for (const taskId of taskIds) {
@@ -345,6 +348,24 @@ export async function finishAnsweredDecisionItems(
 
     return resolution;
   });
+}
+
+/** 从服务端确认记录恢复权威工作流结果，供“确认接受”直接完成当前轮次。 */
+export function collectConfirmationWorkflowResolution(
+  payload: Record<string, unknown> | null,
+  formId: string,
+): WorkflowAnswerResolution {
+  const workflow = ProductWorkflowResultSchema.safeParse(payload?.workflow);
+  if (!workflow.success) {
+    throw new Error(
+      "The persisted product workflow result for final confirmation is unavailable.",
+    );
+  }
+  return {
+    formId,
+    questions: [],
+    workflow: workflow.data,
+  };
 }
 
 /** request_form_item JSONB 中的证据解决流程上下文。 */

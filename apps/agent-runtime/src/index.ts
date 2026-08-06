@@ -96,6 +96,7 @@ export type {
 export {
   getFormAnswerId,
   isFormAnswer,
+  isProductWorkflowAcceptanceAnswer,
   isProductWorkflowOptionalStopAnswer,
 } from "./utils/form-parser";
 export { parseGraphConflictAction, isPreOrchGraphConflictFormId } from "./agents/product-workflow/orchestrator-agent/pre-orchestrator-subagent";

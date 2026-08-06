@@ -139,12 +139,13 @@ function createWorkflowResumeContext({
       "requestAnalysis",
       RequestAnalysisSchema,
     );
-  const productWorkflow = findLatestTaggedPayload(
-    messages,
-    "<product-workflow",
-    "</product-workflow>",
-    ProductWorkflowResultSchema,
-  );
+  const productWorkflow =
+    findLatestTaggedPayload(
+      messages,
+      "<product-workflow",
+      "</product-workflow>",
+      ProductWorkflowResultSchema,
+    ) ?? workflowAnswerResolution?.workflow ?? null;
   const plan =
     findLatestTaggedPayload(
       messages,
