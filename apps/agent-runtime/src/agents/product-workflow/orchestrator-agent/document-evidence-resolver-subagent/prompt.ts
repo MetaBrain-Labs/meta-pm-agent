@@ -33,7 +33,10 @@ Rules:
 11. relatedNodeIds may only contain IDs present in the supplied knowledge graph context.
 12. Never ask the user to restate, categorize, prioritize, map, or choose a resolution method for blockers already present in the payload. Do not ask which requirements, metrics, or decisions a blocker relates to; derive that from the trusted blocker sources and graph context.
 13. Do not ask about time or budget unless a persisted blocker explicitly requires that decision.
-14. Do not write a PRD and do not propose direct document edits. The answers will be converted into a supplement product workflow that updates the authoritative knowledge graph.`;
+14. Every question must include help with exactly two user-facing sections: "当前已知资料：" and "阻断原因：". Summarize only facts present in the supplied blockers or knowledge graph. Never expose Agent names, task IDs, OpenQuestion IDs, or internal reasoning.
+15. Expand symbolic references such as FR-01~05 with their supplied names or descriptions in help. Never leave an identifier range unexplained when matching graph nodes are available.
+16. Split independent decisions into separate questions even when one blocker sentence combines them.
+17. Do not write a PRD and do not propose direct document edits. The answers will be converted into a supplement product workflow that updates the authoritative knowledge graph.`;
 
 export const DOCUMENT_EVIDENCE_RESOLUTION_OUTPUT_SHAPE = `{
   "summary": "Short Simplified Chinese summary",
@@ -43,6 +46,7 @@ export const DOCUMENT_EVIDENCE_RESOLUTION_OUTPUT_SHAPE = `{
       "label": "Required user-facing question in Simplified Chinese",
       "type": "radio | select | text | textarea",
       "required": true,
+      "help": "当前已知资料：...\\n阻断原因：...",
       "placeholder": "Optional guidance",
       "options": ["Required for radio/select only"],
       "blockerIndexes": [0],
@@ -58,6 +62,11 @@ export const DOCUMENT_EVIDENCE_RESOLUTION_OUTPUT_SHAPE = `{
 export function createDocumentEvidenceResolutionPayload(
   input: DocumentEvidenceResolutionInput,
 ) {
+  const activeEntities = input.knowledgeGraph.entities.filter(
+    (entity) => entity.status !== "deprecated",
+  );
+  const activeEntityIds = new Set(activeEntities.map((entity) => entity.id));
+
   return {
     run_id: input.runId,
     source_graph_version: input.sourceGraphVersion,
@@ -65,14 +74,28 @@ export function createDocumentEvidenceResolutionPayload(
     knowledge_graph: {
       current_state: input.knowledgeGraph.current_state,
       description: input.knowledgeGraph.description,
-      entities: input.knowledgeGraph.entities.slice(-40).map((entity) => ({
+      entities: activeEntities.map((entity) => ({
         id: entity.id,
         type: entity.type,
         name: entity.name,
+        description: entity.description,
         status: entity.status,
       })),
-      risks: input.knowledgeGraph.risks.slice(-20),
-      open_questions: input.knowledgeGraph.open_questions.slice(-20),
+      relations: input.knowledgeGraph.relations
+        .filter(
+          (relation) =>
+            activeEntityIds.has(relation.source) &&
+            activeEntityIds.has(relation.target),
+        )
+        .map((relation) => ({
+          id: relation.id,
+          type: relation.type,
+          source: relation.source,
+          target: relation.target,
+          description: relation.description,
+        })),
+      risks: input.knowledgeGraph.risks,
+      open_questions: input.knowledgeGraph.open_questions,
     },
   };
 }

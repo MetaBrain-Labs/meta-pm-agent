@@ -241,6 +241,8 @@ export function formatDocumentEvidenceQuestionForm({
         label: question.label,
         type: question.type,
         required: true,
+        help: question.help,
+        helpMode: "modal",
         ...(question.placeholder ? { placeholder: question.placeholder } : {}),
         ...(question.options ? { options: question.options } : {}),
       })),

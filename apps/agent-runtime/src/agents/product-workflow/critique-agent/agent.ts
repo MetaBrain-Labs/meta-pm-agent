@@ -2349,9 +2349,72 @@ export function reconcileProposalQuestions(
     },
   );
 
-  return [...verified, ...missing].sort(
-    (left, right) => right.priority - left.priority,
+  return ensureBlockingQuestionHelp(
+    [...verified, ...missing].sort(
+      (left, right) => right.priority - left.priority,
+    ),
+    executorResults,
+    plan,
   );
+}
+
+/**
+ * 为阻断问题补齐用户可读资料，并把非结构化 help 归一为固定的两个展示段落。
+ */
+function ensureBlockingQuestionHelp(
+  questions: ProductWorkflowProposalQuestion[],
+  executorResults: ExecutorAgentResult[],
+  plan?: TaskExecutionPlan,
+): ProductWorkflowProposalQuestion[] {
+  const resultByTaskId = new Map(
+    executorResults.map((result) => [result.task_id, result]),
+  );
+  const taskById = new Map(
+    (plan?.tasks ?? []).map((task) => [task.task_id, task]),
+  );
+
+  return questions.map((question) => {
+    if (!question.required) return question;
+    const existingHelp = question.help?.trim();
+    if (
+      existingHelp?.includes("当前已知资料：") &&
+      existingHelp.includes("阻断原因：")
+    ) {
+      return { ...question, help: existingHelp };
+    }
+
+    const sources =
+      question.sources.length > 0
+        ? question.sources
+        : question.source_task_id
+          ? [
+              {
+                source_task_id: question.source_task_id,
+                source_agent: question.source_agent ?? ("critique" as const),
+              },
+            ]
+          : [];
+    const context = mergeTextList(
+      sources.flatMap((source) => {
+        const result = resultByTaskId.get(source.source_task_id);
+        const task = taskById.get(source.source_task_id);
+        return [
+          ...(result?.summary ? [truncateText(result.summary, 240)] : []),
+          ...(task
+            ? [truncateText(`${task.title}：${task.expected_output}`, 240)]
+            : []),
+        ];
+      }),
+    ).slice(0, 3);
+
+    return {
+      ...question,
+      help: [
+        `当前已知资料：${existingHelp || context.join("；") || "暂无更多已确认资料。"}`,
+        `阻断原因：${question.label}`,
+      ].join("\n"),
+    };
+  });
 }
 
 /**
@@ -2375,15 +2438,19 @@ function createFallbackCritiqueAgentOutput(
     input.plan,
     validationReport,
   );
-  const proposalQuestions = [
-    ...(retryQuestion ? [retryQuestion] : []),
-    ...createFallbackProposalQuestions(input.executorResults),
-    ...createFallbackGraphProposalQuestions(
-      input.knowledgeGraph,
-      input.plan,
-      input.executorResults,
-    ),
-  ];
+  const proposalQuestions = ensureBlockingQuestionHelp(
+    [
+      ...(retryQuestion ? [retryQuestion] : []),
+      ...createFallbackProposalQuestions(input.executorResults),
+      ...createFallbackGraphProposalQuestions(
+        input.knowledgeGraph,
+        input.plan,
+        input.executorResults,
+      ),
+    ],
+    input.executorResults,
+    input.plan,
+  );
   const hasRetry = validationReport.retry_task_ids.length > 0;
   const status = hasRetry
     ? "requires_executor_retry"

@@ -128,13 +128,21 @@ export function formatProductWorkflowProposalQuestionForm(
 
   const form = {
     description: hasBlockingQuestions
-      ? "Planner SubAgent 汇总了 Executor Agent 需要你补充确认的信息。必填问题默认展开，选填问题默认折叠。"
+      ? "Planner SubAgent 汇总了需要你补充确认的信息。必填问题始终显示，可通过“查看相关资料”了解上下文；选填问题默认折叠。"
       : "以下问题均为可选优化项。你可以填写任意一项后继续下一轮 DAG，也可以选择“不再继续”并直接确认当前已有设计成果。",
-    questions: questions.map((question) => ({
-      ...question,
-      collapsible: true,
-      defaultCollapsed: hasBlockingQuestions && !question.required,
-    })),
+    questions: questions.map((question) =>
+      question.required
+        ? {
+            ...question,
+            collapsible: false,
+            helpMode: "modal",
+          }
+        : {
+            ...question,
+            collapsible: true,
+            defaultCollapsed: hasBlockingQuestions,
+          },
+    ),
     submitLabel: "提交补充信息",
     ...(!hasBlockingQuestions
       ? {
@@ -170,6 +178,25 @@ function getProposalFormQuestions(result: ProductWorkflowResult) {
  */
 function toQuestionFormQuestion(question: ProductWorkflowProposalQuestion) {
   const type = normalizeQuestionFormType(question);
+  const help =
+    question.help?.trim() ||
+    (question.required
+      ? [
+          "当前已知资料：暂无更多已确认资料。",
+          `阻断原因：${question.label}`,
+        ].join("\n")
+      : formatProposalQuestionSources(
+          question.sources.length > 0
+            ? question.sources
+            : question.source_task_id && question.source_agent
+              ? [
+                  {
+                    source_task_id: question.source_task_id,
+                    source_agent: question.source_agent,
+                  },
+                ]
+              : [],
+        ));
 
   return {
     id: question.id,
@@ -181,20 +208,7 @@ function toQuestionFormQuestion(question: ProductWorkflowProposalQuestion) {
       : {}),
     ...(question.placeholder ? { placeholder: question.placeholder } : {}),
     ...(question.maxSelections ? { maxSelections: question.maxSelections } : {}),
-    help:
-      question.help ??
-      formatProposalQuestionSources(
-        question.sources.length > 0
-          ? question.sources
-          : question.source_task_id && question.source_agent
-            ? [
-                {
-                  source_task_id: question.source_task_id,
-                  source_agent: question.source_agent,
-                },
-              ]
-            : [],
-      ),
+    ...(help ? { help } : {}),
   };
 }
 

@@ -7,7 +7,7 @@
  * Responsibilities:
  * - 覆盖 Critique Agent 结构化 proposal_questions 的去重
  * - 覆盖旧版 Executor open_questions 降级表单的去重
- * - 校验来源 help 文案仍保留所有相关 Executor/task
+ * - 校验阻断问题资料通过 Modal 展示且不暴露内部来源
  */
 
 import { test } from "node:test";
@@ -169,6 +169,10 @@ test("rejects fabricated question sources and restores actual blocking questions
     questions.some((question) => question.id === "fabricated"),
     false,
   );
+  assert.equal(
+    questions.every((question) => question.help?.includes("当前已知资料：")),
+    true,
+  );
 });
 
 test("merges duplicate planner proposal questions and preserves sources", () => {
@@ -181,6 +185,7 @@ test("merges duplicate planner proposal questions and preserves sources", () => 
             label: "请确认首批目标用户是谁？",
             type: "textarea",
             required: true,
+            help: "当前已知资料：首批目标用户尚未确定。\n阻断原因：目标用户会影响 MVP 范围。",
             source_task_id: "task-01",
             source_agent: "executor-product-strategy",
             sources: [
@@ -214,11 +219,10 @@ test("merges duplicate planner proposal questions and preserves sources", () => 
 
   assert.equal(form.questions.length, 1);
   assert.equal(form.questions[0]?.label, "请确认首批目标用户是谁？");
-  assert.match(
-    form.questions[0]?.help ?? "",
-    /executor-product-strategy \/ task-01/,
-  );
-  assert.match(form.questions[0]?.help ?? "", /executor-gtm \/ task-02/);
+  assert.match(form.questions[0]?.help ?? "", /首批目标用户尚未确定/);
+  assert.equal(form.questions[0]?.helpMode, "modal");
+  assert.equal(form.questions[0]?.collapsible, false);
+  assert.doesNotMatch(form.questions[0]?.help ?? "", /executor-|task-/);
 });
 
 test("merges legacy executor open questions by actual question text", () => {
@@ -242,11 +246,11 @@ test("merges legacy executor open questions by actual question text", () => {
 
   assert.equal(form.questions.length, 1);
   assert.equal(form.questions[0]?.label, "请确认首批目标用户是谁？");
-  assert.match(
-    form.questions[0]?.help ?? "",
-    /executor-product-strategy \/ task-01/,
-  );
-  assert.match(form.questions[0]?.help ?? "", /executor-gtm \/ task-02/);
+  assert.match(form.questions[0]?.help ?? "", /当前已知资料：/);
+  assert.match(form.questions[0]?.help ?? "", /阻断原因：/);
+  assert.equal(form.questions[0]?.helpMode, "modal");
+  assert.equal(form.questions[0]?.collapsible, false);
+  assert.doesNotMatch(form.questions[0]?.help ?? "", /executor-|task-/);
 });
 
 test("shows blocking and optional questions in one mixed form", () => {
@@ -273,6 +277,15 @@ test("shows blocking and optional questions in one mixed form", () => {
   assert.equal(
     form.questions.filter((question) => question.defaultCollapsed).length,
     7,
+  );
+  assert.equal(
+    form.questions
+      .filter((question) => question.required)
+      .every(
+        (question) =>
+          question.helpMode === "modal" && question.collapsible === false,
+      ),
+    true,
   );
   assert.equal(form.requireAnyAnswer, undefined);
 });
@@ -316,7 +329,9 @@ interface ParsedQuestionForm {
   questions: Array<{
     label: string;
     help?: string;
+    helpMode?: "inline" | "modal";
     required?: boolean;
+    collapsible?: boolean;
     defaultCollapsed?: boolean;
   }>;
   requireAnyAnswer?: boolean;

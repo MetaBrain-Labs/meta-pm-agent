@@ -60,6 +60,8 @@ export interface FormQuestion {
   placeholder?: string;
   required?: boolean;
   help?: string;
+  /** help 的展示方式；缺省时保持题目下方内联展示。 */
+  helpMode?: "inline" | "modal";
   defaultValue?: string | string[];
   /** Only applies when `type === 'checkbox'`. Caps the number of selected options. */
   maxSelections?: number;
@@ -220,6 +222,8 @@ function tryParseForm(
     const placeholder =
       typeof qo.placeholder === "string" ? qo.placeholder : undefined;
     const help = typeof qo.help === "string" ? qo.help : undefined;
+    const helpMode: FormQuestion["helpMode"] =
+      qo.helpMode === "modal" ? "modal" : undefined;
     const required = qo.required === true;
     const maxSelections =
       typeof qo.maxSelections === "number" &&
@@ -245,6 +249,7 @@ function tryParseForm(
       ...(options ? { options } : {}),
       ...(placeholder ? { placeholder } : {}),
       ...(help ? { help } : {}),
+      ...(helpMode ? { helpMode } : {}),
       ...(required ? { required } : {}),
       ...(defaultValue !== undefined ? { defaultValue } : {}),
       ...(maxSelections !== undefined && type === "checkbox"

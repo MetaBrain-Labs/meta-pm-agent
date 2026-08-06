@@ -16,6 +16,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  formatDocumentEvidenceQuestionForm,
   isAcceptedDocumentEvidenceWorkflowResult,
   normalizeDocumentEvidenceResolution,
   selectNextNodeAfterScore,
@@ -90,6 +91,8 @@ test("keeps merged resolver questions required and covers every blocker", () => 
   assert.equal(result.questions.length, 1);
   assert.equal(result.questions[0]?.required, true);
   assert.deepEqual(result.questions[0]?.blockerIndexes, [0, 1]);
+  assert.match(result.questions[0]?.help ?? "", /当前已知资料：/);
+  assert.match(result.questions[0]?.help ?? "", /Missing source citation/);
 });
 
 test("falls back to one required textarea when blocker coverage is invalid", () => {
@@ -215,6 +218,31 @@ test("injects every trusted blocker and the exact label contract into Resolver c
     ...input,
     knowledgeGraph: {
       ...input.knowledgeGraph,
+      entities: [
+        {
+          id: "FR-01",
+          type: "Requirement" as const,
+          name: "用户登录",
+          description: "用户可使用企业账号登录 MVP。",
+          status: "confirmed" as const,
+        },
+        {
+          id: "GOAL-01",
+          type: "Goal" as const,
+          name: "三个月交付",
+          description: "计划在三个月内交付首版。",
+          status: "proposed" as const,
+        },
+      ],
+      relations: [
+        {
+          id: "REL-01",
+          type: "Satisfies" as const,
+          source: "FR-01",
+          target: "GOAL-01",
+          description: "登录能力属于首版交付范围。",
+        },
+      ],
       risks: [{ id: "RISK-1", text: "Certification is not confirmed." }],
     },
   };
@@ -222,12 +250,48 @@ test("injects every trusted blocker and the exact label contract into Resolver c
   const prompt = createDocumentEvidenceResolverPrompt(resolutionInput);
 
   assert.deepEqual(payload.blockers, input.blockers);
+  assert.equal(
+    payload.knowledge_graph.entities[0]?.description,
+    "用户可使用企业账号登录 MVP。",
+  );
+  assert.equal(payload.knowledge_graph.relations[0]?.target, "GOAL-01");
   assert.equal(payload.knowledge_graph.risks[0]?.id, "RISK-1");
   assert.match(prompt, /Missing source citation/);
   assert.match(prompt, /"label":/);
   assert.match(prompt, /never "question"/);
   assert.match(prompt, /Never ask the user to restate, categorize, prioritize, map/);
   assert.match(prompt, /Do not ask which requirements, metrics, or decisions/);
+  assert.match(prompt, /Expand symbolic references such as FR-01~05/);
+});
+
+test("formats evidence blockers with modal help while keeping the question visible", () => {
+  const resolution = normalizeDocumentEvidenceResolution(
+    {
+      summary: "确认 MVP 范围",
+      questions: [
+        {
+          id: "mvp-scope",
+          label: "请确认 MVP 范围是否最终确定。",
+          type: "radio",
+          required: true,
+          help: "当前已知资料：FR-01 用户登录。\n阻断原因：范围尚未最终确认。",
+          options: ["已确定", "尚未确定"],
+          blockerIndexes: [0, 1],
+          suggestedAgentTypes: ["executor-product-strategy"],
+          relatedNodeIds: [],
+        },
+      ],
+    },
+    input,
+  );
+  const form = formatDocumentEvidenceQuestionForm({
+    runId: "run-1",
+    resolution,
+  });
+
+  assert.match(form, /"helpMode": "modal"/);
+  assert.match(form, /FR-01 用户登录/);
+  assert.doesNotMatch(form, /"collapsible": true/);
 });
 
 test("preserves source graph version while normalizing document graph", () => {

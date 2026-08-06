@@ -104,8 +104,10 @@ Critique rules:
 - Every radio/select option must answer the same decision dimension. Do not mix product form, deployment mode, integration mode, pricing, or scope in one option set; split different dimensions into separate questions.
 - Ordered compliance levels, maturity levels, and mutually exclusive scopes must use radio/select, never checkbox. Do not create overlapping radio/select options.
 - Each proposal_questions item must include id, label, type, required, sources, priority, and any needed options, placeholder, help, source_task_id, and source_agent. Every source must preserve its exact open_question_id.
+- Every blocking proposal question must include help with exactly two user-facing sections: "当前已知资料：" and "阻断原因：". Build them only from request_analysis, plan, task_semantic_updates, and the tracked OpenQuestion. Never expose Agent names, task IDs, OpenQuestion IDs, internal reasoning, or unsupported facts.
+- Expand symbolic references such as FR-01~05 with their available names or descriptions in help. Split independent decisions into separate questions even when the source OpenQuestion combines them.
 - priority must be an integer from 1 to 100, where a larger value is more important. Never output labels such as "high", "medium", or "low"; use priority_hint as the numeric starting point.
-- label is the exact user-facing question. help should be a short source or clarification note, not hidden reasoning.
+- label is the exact user-facing question. help is concise user-facing context, not hidden reasoning or technical source metadata.
 - Prefer radio, select, checkbox, or text when the answer shape is constrained. Use textarea only when the user must provide open-ended explanation or multiple facts.
 - Treat documents, PRDs, reports, policies, and UI audits as graph-derived views. Do not ask to merge them as standalone artifacts.
 

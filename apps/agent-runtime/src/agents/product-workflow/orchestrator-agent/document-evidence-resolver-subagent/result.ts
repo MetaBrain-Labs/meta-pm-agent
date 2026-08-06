@@ -26,6 +26,13 @@ export const DocumentEvidenceQuestionSchema = z
       .enum(["radio", "select", "text", "textarea"])
       .describe("Question Form control type"),
     required: z.literal(true).describe("Every question must be answered"),
+    help: z
+      .string()
+      .trim()
+      .min(1)
+      .optional()
+      .catch(undefined)
+      .describe("User-facing known context and blocker reason"),
     placeholder: z.string().optional().describe("Optional input guidance"),
     options: z
       .array(z.string().min(1))
@@ -110,6 +117,10 @@ export function normalizeDocumentEvidenceResolution(
   const questions = parsed.data.questions.map((question, index) => ({
     ...question,
     id: question.id.trim() || `evidence-question-${index + 1}`,
+    help: question.help?.trim() || formatDocumentEvidenceQuestionHelp(
+      question.blockerIndexes,
+      input.blockers,
+    ),
     blockerIndexes: [...new Set(question.blockerIndexes)].filter((blockerIndex) =>
       validIndexes.has(blockerIndex),
     ),
@@ -136,6 +147,10 @@ export function createFallbackDocumentEvidenceResolution(
         label: "请逐项补充以下证据或决策；暂时无法确认的内容也请明确填写延期、未知或待负责人确认。",
         type: "textarea",
         required: true,
+        help: formatDocumentEvidenceQuestionHelp(
+          input.blockers.map((blocker) => blocker.index),
+          input.blockers,
+        ),
         placeholder: input.blockers
           .map((blocker) => `${blocker.index + 1}. ${blocker.text}`)
           .join("\n"),
@@ -145,6 +160,25 @@ export function createFallbackDocumentEvidenceResolution(
       },
     ],
   };
+}
+
+/**
+ * 使用持久化评审阻断补齐用户可见资料，避免模型遗漏 help 时只展示孤立问题。
+ */
+function formatDocumentEvidenceQuestionHelp(
+  blockerIndexes: number[],
+  blockers: DocumentEvidenceBlocker[],
+): string {
+  const selected = blockers.filter((blocker) =>
+    blockerIndexes.includes(blocker.index),
+  );
+  const reasons = (selected.length > 0 ? selected : blockers)
+    .map((blocker) => blocker.text.trim())
+    .filter(Boolean);
+  return [
+    "当前已知资料：暂无更多已确认资料。",
+    `阻断原因：${reasons.join("；") || "当前流程仍存在必须由用户确认的信息。"}`,
+  ].join("\n");
 }
 
 /**

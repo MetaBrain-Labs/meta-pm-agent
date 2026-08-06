@@ -1221,13 +1221,22 @@ function buildDecisionQuestionForm(payload: Record<string, unknown>): string | n
           parseQuestionType(record.type),
           options,
         );
+        const required =
+          typeof record.required === "boolean" ? record.required : true;
+        const help = typeof record.help === "string" && record.help.trim()
+          ? record.help.trim()
+          : required
+            ? [
+                "当前已知资料：暂无更多已确认资料。",
+                `阻断原因：${record.question}`,
+              ].join("\n")
+            : `来源：${formatQuestionSources(record)}`;
         return [
           {
             id: record.id,
             label: record.question,
             type,
-            required:
-              typeof record.required === "boolean" ? record.required : true,
+            required,
             ...(options && type !== "text" && type !== "textarea"
               ? { options }
               : {}),
@@ -1239,7 +1248,7 @@ function buildDecisionQuestionForm(payload: Record<string, unknown>): string | n
             record.maxSelections > 0
               ? { maxSelections: record.maxSelections }
               : {}),
-            help: `来源：${formatQuestionSources(record)}`,
+            help,
           },
         ];
       })
@@ -1247,17 +1256,25 @@ function buildDecisionQuestionForm(payload: Record<string, unknown>): string | n
 
   if (!questionId || questions.length === 0) return null;
   const hasBlockingQuestions = questions.some((question) => question.required);
-  const displayQuestions = questions.map((question) => ({
-    ...question,
-    collapsible: true,
-    defaultCollapsed: hasBlockingQuestions && !question.required,
-  }));
+  const displayQuestions = questions.map((question) =>
+    question.required
+      ? {
+          ...question,
+          collapsible: false,
+          helpMode: "modal",
+        }
+      : {
+          ...question,
+          collapsible: true,
+          defaultCollapsed: hasBlockingQuestions,
+        },
+  );
 
   return `<question-form id="${escapeAttribute(questionId)}" title="${hasBlockingQuestions ? "补充信息确认" : "可选优化问题"}">
 ${JSON.stringify(
   {
     description: hasBlockingQuestions
-      ? "Planner SubAgent 汇总了 Executor Agent 需要你补充确认的信息。必填问题默认展开，选填问题默认折叠。"
+      ? "Planner SubAgent 汇总了需要你补充确认的信息。必填问题始终显示，可通过“查看相关资料”了解上下文；选填问题默认折叠。"
       : "以下问题均为可选优化项。你可以填写任意一项后继续下一轮 DAG，也可以选择“不再继续”并直接确认当前已有设计成果。",
     questions: displayQuestions,
     submitLabel: "提交补充信息",
