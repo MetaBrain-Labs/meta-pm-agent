@@ -14,7 +14,11 @@ import test from "node:test";
 import type { ProductWorkflowResult } from "@repo/shared";
 import { collectWorkflowAnswerResolution } from "../src/repositories/request-form-repository";
 import { ChatRequestSchema } from "../src/schemas/request.schema";
-import { shouldPersistProductWorkflowConfirmation } from "../src/services/chat-service";
+import {
+  isPersistedExecutorRetryFailureRetryable,
+  shouldPersistProductWorkflowConfirmation,
+  shouldRejectStaleWorkflowFormSubmission,
+} from "../src/services/chat-service";
 
 test("persists final handling confirmation only for pending results without proposals", () => {
   const result = createWorkflowResult();
@@ -136,6 +140,48 @@ test("accepts executor retry separately from HITL resume", () => {
       },
     }).success,
     false,
+  );
+});
+
+test("does not treat a historical workflow form answer as a new retry submission", () => {
+  assert.equal(
+    shouldRejectStaleWorkflowFormSubmission({
+      isWorkflowRetry: true,
+      submittedFormId: "review-proposal-decision",
+      answerResolved: false,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRejectStaleWorkflowFormSubmission({
+      isWorkflowRetry: false,
+      submittedFormId: "review-proposal-decision",
+      answerResolved: false,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldRejectStaleWorkflowFormSubmission({
+      isWorkflowRetry: false,
+      submittedFormId: "review-proposal-decision",
+      answerResolved: true,
+    }),
+    false,
+  );
+});
+
+test("does not accept stale graph references as persisted retry targets", () => {
+  assert.equal(
+    isPersistedExecutorRetryFailureRetryable(
+      "Structured graph write validation failed: OQ-short:missing_deprecation_target",
+    ),
+    false,
+  );
+  assert.equal(
+    isPersistedExecutorRetryFailureRetryable(
+      "Node provenance validation failed: unsupported_numeric_claims:2026",
+    ),
+    true,
   );
 });
 

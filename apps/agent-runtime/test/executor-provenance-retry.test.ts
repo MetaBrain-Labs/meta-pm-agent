@@ -15,10 +15,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createWebSearchEvidenceRegistry } from "../src/agents/common/web-search-tool";
 import {
+  EXECUTOR_CORRECTION_TOOL_CALL_LIMIT,
   createNodeProvenanceRetryInstruction,
   formatExecutorAttemptErrors,
+  getExecutorMaxAttempts,
   getStructuredWriteError,
+  isExecutorCorrectionAttempt,
   isNodeProvenanceValidationFailure,
+  isSameTaskExecutorRetryable,
 } from "../src/agents/product-workflow/executor-agent/agent";
 
 test("provenance validation failure produces a retry instruction with exact verified sources", () => {
@@ -75,5 +79,29 @@ test("promotes rejected structured writes but ignores duplicate skips", () => {
       }),
     ),
     null,
+  );
+});
+
+test("manual Executor retry is one bounded correction attempt", () => {
+  assert.equal(isExecutorCorrectionAttempt(1, true), true);
+  assert.equal(isExecutorCorrectionAttempt(1, false), false);
+  assert.equal(isExecutorCorrectionAttempt(2, false), true);
+  assert.equal(getExecutorMaxAttempts(true), 1);
+  assert.equal(getExecutorMaxAttempts(false), 2);
+  assert.equal(EXECUTOR_CORRECTION_TOOL_CALL_LIMIT, 8);
+});
+
+test("does not offer same-task retry for a missing deprecation target", () => {
+  assert.equal(
+    isSameTaskExecutorRetryable(
+      "Structured graph write validation failed: OQ-short:missing_deprecation_target",
+    ),
+    false,
+  );
+  assert.equal(
+    isSameTaskExecutorRetryable(
+      "Node provenance validation failed: unsupported_numeric_claims:2026",
+    ),
+    true,
   );
 });

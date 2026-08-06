@@ -147,6 +147,8 @@ export interface RunAgentOptions<T, AgentType extends string> {
     toolName: string,
     toolResult: unknown,
   ) => Error | null;
+  /** 覆盖单次运行的工具调用硬上限；未设置时沿用通用默认值。 */
+  toolCallRunLimit?: number;
   signal?: AbortSignal;
 }
 
@@ -660,7 +662,9 @@ export async function* runAgent<T, AgentType extends string>(
             ...allowedBuiltinToolNames,
           ],
         }),
-        ...createDefaultAgentMiddleware(),
+        ...createDefaultAgentMiddleware({
+          toolCallRunLimit: options.toolCallRunLimit,
+        }),
         ...createAgentRunSummaryMiddleware(summaryRecorder),
       ] as any,
     });

@@ -52,6 +52,7 @@ import {
   persistAgentTokenUsage,
   persistConversationResult,
   persistConversationStart,
+  shouldRejectStaleWorkflowFormSubmission,
 } from "../services/chat-service";
 import { loadProductRuntimeContextForConversation } from "../services/product-context-service";
 import {
@@ -354,16 +355,19 @@ export async function chatStreamHandler(c: Context) {
             effectiveRequestFormId,
             parsed.data.messages,
           );
-      const submittedWorkflowFormId = getFormAnswerId(
-        parsed.data.messages
-          .filter((message) => message.role === "user")
-          .at(-1)?.content ?? "",
-      );
+      const submittedWorkflowFormId = parsed.data.workflowRetry
+        ? null
+        : getFormAnswerId(
+            parsed.data.messages
+              .filter((message) => message.role === "user")
+              .at(-1)?.content ?? "",
+          );
       // 产品工作流表单必须命中服务端待处理决策，禁止过期答案退回普通编排。
-      if (
-        submittedWorkflowFormId?.endsWith("-proposal-decision") &&
-        !workflowAnswerResolution
-      ) {
+      if (shouldRejectStaleWorkflowFormSubmission({
+        isWorkflowRetry: Boolean(parsed.data.workflowRetry),
+        submittedFormId: submittedWorkflowFormId,
+        answerResolved: Boolean(workflowAnswerResolution),
+      })) {
         throw new Error(
           "The submitted product workflow question form is stale or does not match a pending decision.",
         );
@@ -374,6 +378,11 @@ export async function chatStreamHandler(c: Context) {
             parsed.data.workflowRetry.taskId,
           )
         : undefined;
+      if (parsed.data.workflowRetry && !workflowRetryFailure) {
+        throw new Error(
+          "The Executor retry target is stale or no longer has a persisted retryable failure.",
+        );
+      }
       await markStatus(
         parsed.data.workflowRetry ? "workflow_running" : "received",
       );
@@ -792,7 +801,12 @@ export async function chatStreamHandler(c: Context) {
           });
         }
 
-        if (requestFormStatus !== "pending_user_confirmation") {
+        const pendingDecisionAfterRetry = parsed.data.workflowRetry
+          ? await loadPendingDecisionQuestionForm(effectiveRequestFormId)
+          : null;
+        if (pendingDecisionAfterRetry) {
+          await markStatus("pending_user_confirmation");
+        } else if (requestFormStatus !== "pending_user_confirmation") {
           await markStatus("completed");
         }
       }

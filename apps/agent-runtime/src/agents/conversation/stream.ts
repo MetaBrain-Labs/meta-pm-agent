@@ -53,6 +53,7 @@ import { updateProductContextMetadata } from "../product-workflow/common/context
 import {
   isExecutorHumanInputRequiredError,
   isExecutorRetryRequiredError,
+  isSameTaskExecutorRetryable,
   type ExecutorHumanInputRequired,
 } from "../product-workflow/executor-agent/agent";
 import {
@@ -954,19 +955,29 @@ async function* streamPlanningAfterUserInput(
     }
   } catch (error) {
     if (isExecutorRetryRequiredError(error)) {
+      const sameTaskRetryable = isSameTaskExecutorRetryable(error.details);
       yield {
         type: "error",
         error: [
           `来源：${error.displayName} / ${error.taskId}`,
-          "原因：requires_executor_retry（Executor 当前运行未能完成）",
+          sameTaskRetryable
+            ? "原因：requires_executor_retry（Executor 当前运行未能完成）"
+            : "原因：invalid_plan_reference（计划引用的图谱目标已失效，原任务无法重放修复）",
           `关键详情：${error.details}`,
+          ...(sameTaskRetryable
+            ? []
+            : ["下一步：请重新启动“解决证据阻断”流程生成新的补充计划。"]),
         ].join("\n"),
         agentType: error.agentType,
-        retryAction: {
-          type: "resume_executor_task",
-          taskId: error.taskId,
-          agentType: error.agentType,
-        },
+        ...(sameTaskRetryable
+          ? {
+              retryAction: {
+                type: "resume_executor_task" as const,
+                taskId: error.taskId,
+                agentType: error.agentType,
+              },
+            }
+          : {}),
         terminal: true,
       };
       return;

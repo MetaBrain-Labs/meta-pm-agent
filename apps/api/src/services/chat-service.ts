@@ -206,7 +206,36 @@ export async function loadExecutorRetryFailure(
 ): Promise<{ taskId: string; error: string } | undefined> {
   if (!conversationId || !taskId) return undefined;
   const error = await findLatestExecutorRetryError(conversationId, taskId);
-  return error ? { taskId, error } : undefined;
+  return error && isPersistedExecutorRetryFailureRetryable(error)
+    ? { taskId, error }
+    : undefined;
+}
+
+/** 失效的废弃目标无法通过重放同一任务修复，不应继续作为可信重试入口。 */
+export function isPersistedExecutorRetryFailureRetryable(
+  error: string,
+): boolean {
+  return !error.includes("missing_deprecation_target");
+}
+
+/**
+ * 仅把当前请求真正提交但未命中待处理记录的产品工作流表单判定为过期。
+ * Executor 重试携带的是只读历史消息，不得把其中的旧表单答案再次消费。
+ */
+export function shouldRejectStaleWorkflowFormSubmission({
+  isWorkflowRetry,
+  submittedFormId,
+  answerResolved,
+}: {
+  isWorkflowRetry: boolean;
+  submittedFormId: string | null;
+  answerResolved: boolean;
+}): boolean {
+  return (
+    !isWorkflowRetry &&
+    Boolean(submittedFormId?.endsWith("-proposal-decision")) &&
+    !answerResolved
+  );
 }
 
 /**

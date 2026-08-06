@@ -186,6 +186,23 @@ export async function persistProposalDecisionItem(
 
   const slots = collectProposalSlots(result);
   if (slots.length === 0) return;
+  const questionId = getProposalDecisionId(result);
+  const payload = JSON.stringify({
+    question_id: questionId,
+    questions: slots,
+  });
+  const updated = await prisma.$executeRaw`
+    UPDATE "request_form_item"
+    SET
+      "priority" = ${slots[0]?.priority ?? 0},
+      "payload" = ${payload}::jsonb,
+      "updated_at" = CURRENT_TIMESTAMP
+    WHERE "form_id" = ${requestFormId}
+      AND "type" = 'decision'
+      AND "status" = 'pending'
+      AND "payload"->>'question_id' = ${questionId}
+  `;
+  if (updated > 0) return;
 
   await prisma.$executeRaw`
     INSERT INTO "request_form_item" (
@@ -204,10 +221,7 @@ export async function persistProposalDecisionItem(
       'pending',
       'planner',
       ${slots[0]?.priority ?? 0},
-      ${JSON.stringify({
-        question_id: getProposalDecisionId(result),
-        questions: slots,
-      })}::jsonb
+      ${payload}::jsonb
     )
   `;
 }

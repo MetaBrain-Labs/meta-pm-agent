@@ -75,6 +75,29 @@ const STRUCTURED_WRITE_FAILURE_PREFIXES = [
 ] as const;
 
 const BLOCKER_TOOL_NAME = "kg_file_raise_blocker";
+export const EXECUTOR_CORRECTION_TOOL_CALL_LIMIT = 8;
+
+/**
+ * 判断当前调用是否为受限修正尝试；手动重试从第一次调用起即属于修正模式。
+ */
+export function isExecutorCorrectionAttempt(
+  attempt: number,
+  manualRetry: boolean,
+): boolean {
+  return manualRetry || attempt > 1;
+}
+
+/** 手动重试本身已经是修正机会，不再嵌套第二次模型重试。 */
+export function getExecutorMaxAttempts(manualRetry: boolean): number {
+  return manualRetry ? 1 : 2;
+}
+
+/**
+ * 判断失败是否还能通过原任务重放修复；缺失的废弃目标属于失效计划引用。
+ */
+export function isSameTaskExecutorRetryable(details: string): boolean {
+  return !details.includes("missing_deprecation_target");
+}
 
 /**
  * Executor 上报的硬阻塞信息，用于由 Conversation Agent 释放 HITL 表单。
@@ -173,10 +196,16 @@ export async function* streamExecutorAgent(
   // 手动迭代生成器以在透传事件给上游的同时收集结构化数据。
   let patch = "";
   let retryInstruction = input.retryInstruction ?? "";
+  const manualRetry = Boolean(input.retryInstruction?.trim());
+  const maxAttempts = getExecutorMaxAttempts(manualRetry);
   const attemptErrors: string[] = [];
   try {
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       // 重试时基于同一工作副本继续执行，保留首次已完成的工具写入。
+      const correctionAttempt = isExecutorCorrectionAttempt(
+        attempt,
+        manualRetry,
+      );
       const graphContextSummary = createGraphContextSummary(toolKnowledgeGraph);
       const recentNodeIds = new Set(
         graphContextSummary.recent_nodes.map((node) => node.id),
@@ -189,7 +218,7 @@ export async function* streamExecutorAgent(
       });
       const tools = createToolsForAgent(
         definition.agentType,
-        attempt > 1
+        correctionAttempt
           ? getExecutorRetryToolNames(input.plan.status === "supplement")
           : getExecutorDefaultToolNames(
               definition.agentType,
@@ -242,6 +271,9 @@ export async function* streamExecutorAgent(
         suppressFallbackReasoning: true,
         signal: input.signal,
         throwOnError: true,
+        toolCallRunLimit: correctionAttempt
+          ? EXECUTOR_CORRECTION_TOOL_CALL_LIMIT
+          : undefined,
         getToolResultError: getStructuredWriteError,
       });
 
@@ -271,7 +303,7 @@ export async function* streamExecutorAgent(
         }
         attemptErrors.push(getErrorMessage(error));
         if (
-          attempt === 1 &&
+          attempt < maxAttempts &&
           (isNodeProvenanceValidationFailure(error) ||
             isStructuredWriteValidationFailure(error))
         ) {
@@ -307,7 +339,7 @@ export async function* streamExecutorAgent(
         requiredBlockingCount,
       });
       if (!validationError) break;
-      if (attempt === 2) {
+      if (attempt === maxAttempts) {
         throw new Error(
           `Executor output validation failed after retry: ${validationError}`,
         );
