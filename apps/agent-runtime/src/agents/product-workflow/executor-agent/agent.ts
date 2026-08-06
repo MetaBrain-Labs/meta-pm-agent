@@ -262,16 +262,6 @@ export async function* streamExecutorAgent(
               toolResult: event.toolResult,
             });
           }
-          if (
-            event.type === "tool-result" &&
-            STRUCTURED_TOOL_NAMES.has(event.toolName)
-          ) {
-            // 结构化写入工具完成后立即发出累计图谱快照，避免后续中断丢失已完成工具产物。
-            yield {
-              type: "knowledge-graph-update",
-              knowledgeGraph: cloneKnowledgeGraph(toolKnowledgeGraph),
-            };
-          }
           genResult = await textGen.next();
         }
         patch = genResult.value;

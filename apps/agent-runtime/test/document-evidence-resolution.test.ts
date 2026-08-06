@@ -25,7 +25,10 @@ import {
   createDocumentEvidenceResolutionPayload,
   createDocumentEvidenceResolverPrompt,
 } from "../src/agents/product-workflow/orchestrator-agent/document-evidence-resolver-subagent/prompt";
-import { createFormAnswerUserInputBlock } from "../src/agents/conversation/stream";
+import {
+  createDocumentEvidenceSupplementContext,
+  createFormAnswerUserInputBlock,
+} from "../src/agents/conversation/stream";
 import { parseUserInputBlock } from "../src/agents/request/user-input";
 import { normalizeDocumentWorkflowGraph } from "../src/graph/document-workflow";
 
@@ -114,7 +117,7 @@ test("falls back to one required textarea when blocker coverage is invalid", () 
   assert.deepEqual(result.questions[0]?.blockerIndexes, [0, 1]);
 });
 
-test("keeps trusted active Risk IDs and removes invented related nodes", () => {
+test("keeps trusted active Risk and OpenQuestion IDs and removes invented related nodes", () => {
   const result = normalizeDocumentEvidenceResolution(
     {
       summary: "Resolve the certification risk",
@@ -126,7 +129,7 @@ test("keeps trusted active Risk IDs and removes invented related nodes", () => {
           required: true,
           blockerIndexes: [0, 1],
           suggestedAgentTypes: ["executor-product-strategy"],
-          relatedNodeIds: ["RISK-1", "RISK-invented"],
+          relatedNodeIds: ["RISK-1", "OQ-1", "RISK-invented"],
         },
       ],
     },
@@ -135,11 +138,76 @@ test("keeps trusted active Risk IDs and removes invented related nodes", () => {
       knowledgeGraph: {
         ...input.knowledgeGraph,
         risks: [{ id: "RISK-1", text: "Certification is not confirmed." }],
+        open_questions: [
+          {
+            id: "OQ-1",
+            text: "Who approves the certification evidence?",
+            source_task_id: "task-1",
+            blocking: true,
+          },
+        ],
       },
     },
   );
 
-  assert.deepEqual(result.questions[0]?.relatedNodeIds, ["RISK-1"]);
+  assert.deepEqual(result.questions[0]?.relatedNodeIds, ["RISK-1", "OQ-1"]);
+});
+
+test("closes evidence-linked OpenQuestions before planning and removes them from Executor mappings", () => {
+  const resolution = {
+    summary: "Resolve approval evidence",
+    questions: [
+      {
+        id: "approval",
+        label: "Confirm the approver and source.",
+        type: "text" as const,
+        required: true,
+        blockerIndexes: [0, 1],
+        suggestedAgentTypes: ["executor-product-strategy"],
+        relatedNodeIds: ["OQ-full-id", "RISK-1"],
+      },
+    ],
+  };
+  const context = createDocumentEvidenceSupplementContext(
+    {
+      runId: "run-1",
+      sourceGraphVersion: 3,
+      answerText: "The product owner approved it in decision record DR-1.",
+      resolution,
+      suggestedAgentTypes: ["executor-product-strategy"],
+      relatedNodeIds: ["OQ-full-id", "RISK-1"],
+    },
+    {
+      ...input.knowledgeGraph,
+      risks: [{ id: "RISK-1", text: "Approval is not confirmed." }],
+      open_questions: [
+        {
+          id: "OQ-full-id",
+          text: "Who approved the scope?",
+          source_task_id: "task-1",
+          blocking: true,
+        },
+        {
+          id: "OQ-unrelated",
+          text: "What is the launch date?",
+          source_task_id: "task-2",
+          blocking: true,
+        },
+      ],
+    },
+  );
+
+  assert.deepEqual(context.answeredOpenQuestionIds, ["OQ-full-id"]);
+  assert.deepEqual(context.knowledgeGraph.resolved_open_question_ids, [
+    "OQ-full-id",
+  ]);
+  assert.deepEqual(
+    context.knowledgeGraph.open_questions.map((question) => question.id),
+    ["OQ-unrelated"],
+  );
+  assert.deepEqual(context.blockerQuestionMapping[0]?.relatedNodeIds, [
+    "RISK-1",
+  ]);
 });
 
 test("injects every trusted blocker and the exact label contract into Resolver context", () => {

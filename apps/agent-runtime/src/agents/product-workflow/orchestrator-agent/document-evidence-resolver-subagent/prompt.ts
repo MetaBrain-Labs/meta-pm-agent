@@ -29,7 +29,7 @@ Rules:
 7. radio/select questions must provide at least two options.
 8. suggestedAgentTypes must use executor agent names when possible, such as executor-product-strategy, executor-market-research, executor-product-discovery, executor-product-execution, executor-data-analytics, or executor-interface-craft.
 9. suggestedAgentTypes are recommendations, not an exhaustive executor allowlist. Include executor-market-research when the user must supply or authorize external benchmark, standard, certification, or vendor-capability evidence.
-10. relatedNodeIds must include every active Risk node that the answer would directly resolve or invalidate, so the supplement workflow can close it explicitly.
+10. relatedNodeIds must include every active Risk or OpenQuestion that the answer would directly resolve or invalidate. OpenQuestions are closed before planning; Risks are closed by the supplement workflow.
 11. relatedNodeIds may only contain IDs present in the supplied knowledge graph context.
 12. Never ask the user to restate, categorize, prioritize, map, or choose a resolution method for blockers already present in the payload. Do not ask which requirements, metrics, or decisions a blocker relates to; derive that from the trusted blocker sources and graph context.
 13. Do not ask about time or budget unless a persisted blocker explicitly requires that decision.

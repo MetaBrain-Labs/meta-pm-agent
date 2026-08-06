@@ -59,6 +59,7 @@ import {
   createWorkflowContinuationResumeContextFromMessages,
   createWorkflowExecutorRetryResumeContextFromMessages,
   createWorkflowResumeContextFromMessages,
+  resolveAnsweredGraphOpenQuestions,
 } from "./workflow-resume";
 import {
   hasRetryableWorkflowTaskCheckpoint,
@@ -364,16 +365,15 @@ async function* streamDocumentEvidenceResolutionAnswer(
   if (!answer || !options.knowledgeGraph) {
     throw new Error("Document evidence resolution interrupt was not resumed.");
   }
+  const supplementContext = createDocumentEvidenceSupplementContext(
+    answer,
+    options.knowledgeGraph,
+  );
   const userInputBlock = createFormAnswerUserInputBlock([
     `Resolve persisted PRD evidence blockers for document run ${answer.runId}.`,
     answer.answerText,
-    `Blocker-to-question mapping: ${JSON.stringify(
-      answer.resolution.questions.map((question) => ({
-        questionId: question.id,
-        blockerIndexes: question.blockerIndexes,
-        relatedNodeIds: question.relatedNodeIds,
-      })),
-    )}`,
+    `Resolved OpenQuestion IDs: ${JSON.stringify(supplementContext.answeredOpenQuestionIds)}. These questions are already closed and must not be assigned to an Executor.`,
+    `Blocker-to-question mapping: ${JSON.stringify(supplementContext.blockerQuestionMapping)}`,
   ].join("\n\n"));
   yield { type: "user-input-start" };
   yield { type: "user-input-complete", content: userInputBlock };
@@ -391,10 +391,11 @@ async function* streamDocumentEvidenceResolutionAnswer(
     {
       resumeContext: {
         userInputBlock,
-        knowledgeGraph: options.knowledgeGraph,
+        knowledgeGraph: supplementContext.knowledgeGraph,
         forceSupplementPlan: true,
         supplementAgentTypes: selectedAgentTypes,
         supplementSourceTaskIds: [`document-evidence:${answer.runId}`],
+        answeredOpenQuestionIds: supplementContext.answeredOpenQuestionIds,
       },
       suppressRestoredRequestAnalysis: true,
     },
@@ -411,6 +412,38 @@ async function* streamDocumentEvidenceResolutionAnswer(
       };
     }
   }
+}
+
+/**
+ * 在补证答案进入 Planner 前精确关闭其关联的活动问题，并从 Executor 映射中移除问题 ID。
+ * Resolver 负责语义关联；此处只对图中存在的完整 ID 做确定性交集。
+ */
+export function createDocumentEvidenceSupplementContext(
+  answer: NonNullable<ConversationStreamOptions["documentEvidenceAnswer"]>,
+  knowledgeGraph: ProductKnowledgeGraph,
+) {
+  const activeOpenQuestionIds = new Set(
+    knowledgeGraph.open_questions.map((question) => question.id),
+  );
+  const answeredOpenQuestionIds = answer.relatedNodeIds.filter((nodeId) =>
+    activeOpenQuestionIds.has(nodeId),
+  );
+  const answeredIdSet = new Set(answeredOpenQuestionIds);
+  return {
+    answeredOpenQuestionIds,
+    knowledgeGraph:
+      resolveAnsweredGraphOpenQuestions(
+        knowledgeGraph,
+        answeredOpenQuestionIds,
+      ) ?? knowledgeGraph,
+    blockerQuestionMapping: answer.resolution.questions.map((question) => ({
+      questionId: question.id,
+      blockerIndexes: question.blockerIndexes,
+      relatedNodeIds: question.relatedNodeIds.filter(
+        (nodeId) => !answeredIdSet.has(nodeId),
+      ),
+    })),
+  };
 }
 
 /**

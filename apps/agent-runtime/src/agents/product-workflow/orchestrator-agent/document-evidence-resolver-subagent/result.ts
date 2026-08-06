@@ -105,6 +105,7 @@ export function normalizeDocumentEvidenceResolution(
   const validNodeIds = new Set([
     ...input.knowledgeGraph.entities.map((entity) => entity.id),
     ...input.knowledgeGraph.risks.map((risk) => risk.id),
+    ...input.knowledgeGraph.open_questions.map((question) => question.id),
   ]);
   const questions = parsed.data.questions.map((question, index) => ({
     ...question,

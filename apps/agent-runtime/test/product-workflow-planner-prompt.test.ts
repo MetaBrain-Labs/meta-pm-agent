@@ -44,6 +44,14 @@ test("planner prompt preserves graph-semantics guardrails", () => {
   assert.match(PLANNER_AGENT_PROMPT, /runtime allocates actual OQ-\* IDs atomically/);
   assert.match(
     PLANNER_AGENT_PROMPT,
+    /OpenQuestions listed in answered_open_question_ids are already closed before Planner runs/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /never ask an Executor to deprecate or otherwise operate on those OpenQuestion IDs/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
     /normally no more than 8 new entities total/,
   );
   assert.match(
