@@ -312,6 +312,7 @@ export async function createDocumentEvidenceResolutionConversation({
           reviewerName: "PRD Evidence Blocker Consolidator",
           text: `${group.title}: ${group.description}`,
           sources: group.sources,
+          relatedNodeIds: group.relatedNodeIds,
         }))
       : latestAttempt?.reviewerScores.flatMap((reviewer) =>
           (reviewer.evidenceBlockers ?? []).map((text, index) => ({
@@ -319,6 +320,8 @@ export async function createDocumentEvidenceResolutionConversation({
             reviewerId: reviewer.reviewerId,
             reviewerName: reviewer.reviewerName,
             text,
+            relatedNodeIds:
+              reviewer.evidenceBlockerDetails?.[index]?.relatedNodeIds ?? [],
           })),
         ) ?? [];
   blockers.forEach((blocker, index) => {

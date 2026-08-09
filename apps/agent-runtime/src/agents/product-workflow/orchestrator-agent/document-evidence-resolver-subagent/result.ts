@@ -74,10 +74,12 @@ export interface DocumentEvidenceBlocker {
   reviewerId: string;
   reviewerName: string;
   text: string;
+  relatedNodeIds?: string[];
   sources?: Array<{
     reviewerId: string;
     reviewerName: string;
     text: string;
+    relatedNodeIds?: string[];
   }>;
 }
 

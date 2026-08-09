@@ -27,6 +27,7 @@ import {
   createDocumentEvidenceResolverPrompt,
 } from "../src/agents/product-workflow/orchestrator-agent/document-evidence-resolver-subagent/prompt";
 import {
+  createDocumentEvidenceRequestAnalysis,
   createDocumentEvidenceSupplementContext,
   createFormAnswerUserInputBlock,
 } from "../src/agents/conversation/stream";
@@ -67,6 +68,25 @@ test("serializes evidence-resolution answers as valid Request Agent user_input",
       type: "表单答复",
     },
   ]);
+});
+
+test("uses trusted request analysis for evidence answers without adding missing information", () => {
+  assert.deepEqual(createDocumentEvidenceRequestAnalysis(), {
+    business_model: [
+      {
+        index: 1,
+        user_goal:
+          "Resolve persisted PRD evidence blockers with the submitted authoritative answers.",
+        goal_constraints: [
+          "Update only the related product knowledge graph facts and decisions.",
+        ],
+        missing_information: [],
+        covered_user_input_indexes: [1],
+      },
+    ],
+    questions: [],
+    chitchat: [],
+  });
 });
 
 test("keeps merged resolver questions required and covers every blocker", () => {
@@ -164,7 +184,7 @@ test("closes evidence-linked OpenQuestions before planning and removes them from
         id: "approval",
         label: "Confirm the approver and source.",
         type: "text" as const,
-        required: true,
+        required: true as const,
         blockerIndexes: [0, 1],
         suggestedAgentTypes: ["executor-product-strategy"],
         relatedNodeIds: ["OQ-full-id", "RISK-1"],
@@ -201,6 +221,7 @@ test("closes evidence-linked OpenQuestions before planning and removes them from
   );
 
   assert.deepEqual(context.answeredOpenQuestionIds, ["OQ-full-id"]);
+  assert.deepEqual(context.relatedNodeIds, ["OQ-full-id", "RISK-1"]);
   assert.deepEqual(context.knowledgeGraph.resolved_open_question_ids, [
     "OQ-full-id",
   ]);
@@ -216,6 +237,10 @@ test("closes evidence-linked OpenQuestions before planning and removes them from
 test("injects every trusted blocker and the exact label contract into Resolver context", () => {
   const resolutionInput = {
     ...input,
+    blockers: input.blockers.map((blocker) => ({
+      ...blocker,
+      relatedNodeIds: ["FR-01"],
+    })),
     knowledgeGraph: {
       ...input.knowledgeGraph,
       entities: [
@@ -231,6 +256,13 @@ test("injects every trusted blocker and the exact label contract into Resolver c
           type: "Goal" as const,
           name: "三个月交付",
           description: "计划在三个月内交付首版。",
+          status: "proposed" as const,
+        },
+        {
+          id: "M-UNRELATED",
+          type: "Metric" as const,
+          name: "Unrelated metric",
+          description: "Must not be copied into the detailed Resolver subgraph.",
           status: "proposed" as const,
         },
       ],
@@ -249,12 +281,21 @@ test("injects every trusted blocker and the exact label contract into Resolver c
   const payload = createDocumentEvidenceResolutionPayload(resolutionInput);
   const prompt = createDocumentEvidenceResolverPrompt(resolutionInput);
 
-  assert.deepEqual(payload.blockers, input.blockers);
+  assert.deepEqual(payload.blockers, resolutionInput.blockers);
   assert.equal(
     payload.knowledge_graph.entities[0]?.description,
     "用户可使用企业账号登录 MVP。",
   );
   assert.equal(payload.knowledge_graph.relations[0]?.target, "GOAL-01");
+  assert.deepEqual(
+    payload.knowledge_graph.entities.map((entity) => entity.id),
+    ["FR-01", "GOAL-01"],
+  );
+  assert.deepEqual(
+    payload.knowledge_graph.node_index.map((entity) => entity.id),
+    ["FR-01", "GOAL-01", "M-UNRELATED"],
+  );
+  assert.equal("description" in payload.knowledge_graph, false);
   assert.equal(payload.knowledge_graph.risks[0]?.id, "RISK-1");
   assert.match(prompt, /Missing source citation/);
   assert.match(prompt, /"label":/);

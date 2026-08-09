@@ -113,6 +113,12 @@ export const WorkflowGraphState = Annotation.Root({
     default: () => [],
   }),
 
+  // 专用补证 Resolver 已确认的节点关联，供 Planner 精确选择子图。
+  supplementRelatedNodeIds: Annotation<string[]>({
+    reducer: (_current, update) => update,
+    default: () => [],
+  }),
+
   // 用户已通过 Critique 表单回答的问题，Supplement Planner 不得重新创建。
   answeredOpenQuestionIds: Annotation<string[]>({
     reducer: (_current, update) => update,

@@ -110,9 +110,8 @@ export function buildPreOrchPayload(input: PreOrchestratorInput) {
         }
       : null,
     graph_stats: graph
-      ? {
+        ? {
           current_state: graph.current_state ?? null,
-          description: graph.description ?? "",
           entities: graph.entities.length,
           relations: graph.relations.length,
           decisions: graph.decisions.length,

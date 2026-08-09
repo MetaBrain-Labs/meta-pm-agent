@@ -26,7 +26,6 @@ import type { ProductWorkflowStreamEvent } from "../../types";
 import { resolveToolMessageContent } from "../planner-subagent/agent";
 import {
   DOCUMENT_EVIDENCE_ORCHESTRATOR_PROMPT,
-  createDocumentEvidenceResolutionPayload,
   createDocumentEvidenceResolverPrompt,
 } from "./prompt";
 import {
@@ -90,6 +89,7 @@ export async function* streamOrchestratorEvidenceResolution(
       responseFormat: "json_object",
       temperature: 0,
       maxTokens: 16_384,
+      timeout: 120_000,
     },
     modelProfile: input.modelProfile,
     modelGroup: "orchestrator",
@@ -104,8 +104,9 @@ export async function* streamOrchestratorEvidenceResolution(
     requiredSubagentType: "document-evidence-resolver",
     payload: {
       mode: "evidence-resolution",
-      evidence_resolution_payload:
-        createDocumentEvidenceResolutionPayload(input),
+      run_id: input.runId,
+      source_graph_version: input.sourceGraphVersion,
+      blocker_count: input.blockers.length,
     },
     resolveOutput: (context) =>
       resolveJsonOutput(context, DocumentEvidenceResolutionSchema),

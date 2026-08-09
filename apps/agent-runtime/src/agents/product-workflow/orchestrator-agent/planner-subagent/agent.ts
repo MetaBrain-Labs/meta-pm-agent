@@ -25,7 +25,7 @@ import {
   type OrchestratorAgentInput,
 } from "../../types";
 import type { ExecutorAgentType } from "../../executor-agent/definitions";
-import { PLANNER_SUBAGENT_PROMPT } from "./prompt";
+import { createPlannerSubagentPrompt } from "./prompt";
 import {
   CONCEPT_FOUNDATION_NOTICE,
   normalizeTaskExecutionPlan,
@@ -45,6 +45,7 @@ const BROAD_PRODUCT_DESIGN_REQUIRED_AGENTS = [
  */
 export function createPlannerSubagent(
   modelProfile?: ModelUsageProfile,
+  plannerContext = "{}",
 ): SubAgent {
   const subagentToolAllowlistMiddleware =
     createDeepAgentToolAllowlistMiddleware({
@@ -56,7 +57,7 @@ export function createPlannerSubagent(
     name: "planner",
     description:
       "Generates executable TaskExecutionPlan DAG from product request analysis and knowledge graph context. Returns JSON matching TaskExecutionPlanSchema.",
-    systemPrompt: PLANNER_SUBAGENT_PROMPT,
+    systemPrompt: createPlannerSubagentPrompt(plannerContext),
     model: createChatModel(
       {
         enableThinking: true,

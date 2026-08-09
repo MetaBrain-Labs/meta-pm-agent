@@ -56,7 +56,9 @@ const knowledgeGraph: ProductKnowledgeGraph = {
   ],
   decisions: [],
   risks: [],
-  open_questions: [{ id: "oq-1", text: "Which segment is primary?" }],
+  open_questions: [
+    { id: "oq-1", text: "Which segment is primary?", blocking: false },
+  ],
   summary: ["Initial context", "Strategy summary"],
   markdown: "",
   notes: [],
@@ -125,6 +127,7 @@ test("creates compact graph summary without full graph arrays", () => {
   ]);
   assert.equal(summary.recent_nodes.length, 2);
   assert.equal("relations" in summary, false);
+  assert.equal("description" in summary, false);
 });
 
 test("selects task dependency graph context by source task", () => {

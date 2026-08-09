@@ -19,6 +19,7 @@ import type {
   ChatMessage,
   ProductKnowledgeGraph,
   ProductWorkflowResult,
+  RequestAnalysis,
 } from "@repo/shared";
 import { calculateCost } from "../../config";
 import { createAgentRunSummaryRecorder } from "../common/agent-run-summary";
@@ -392,10 +393,12 @@ async function* streamDocumentEvidenceResolutionAnswer(
     {
       resumeContext: {
         userInputBlock,
+        requestAnalysis: createDocumentEvidenceRequestAnalysis(),
         knowledgeGraph: supplementContext.knowledgeGraph,
         forceSupplementPlan: true,
         supplementAgentTypes: selectedAgentTypes,
         supplementSourceTaskIds: [`document-evidence:${answer.runId}`],
+        supplementRelatedNodeIds: supplementContext.relatedNodeIds,
         answeredOpenQuestionIds: supplementContext.answeredOpenQuestionIds,
       },
       suppressRestoredRequestAnalysis: true,
@@ -426,11 +429,20 @@ export function createDocumentEvidenceSupplementContext(
   const activeOpenQuestionIds = new Set(
     knowledgeGraph.open_questions.map((question) => question.id),
   );
-  const answeredOpenQuestionIds = answer.relatedNodeIds.filter((nodeId) =>
+  const validRelatedNodeIds = new Set([
+    ...knowledgeGraph.entities.map((entity) => entity.id),
+    ...knowledgeGraph.risks.map((risk) => risk.id),
+    ...knowledgeGraph.open_questions.map((question) => question.id),
+  ]);
+  const relatedNodeIds = answer.relatedNodeIds.filter((nodeId) =>
+    validRelatedNodeIds.has(nodeId),
+  );
+  const answeredOpenQuestionIds = relatedNodeIds.filter((nodeId) =>
     activeOpenQuestionIds.has(nodeId),
   );
   const answeredIdSet = new Set(answeredOpenQuestionIds);
   return {
+    relatedNodeIds,
     answeredOpenQuestionIds,
     knowledgeGraph:
       resolveAnsweredGraphOpenQuestions(
@@ -444,6 +456,28 @@ export function createDocumentEvidenceSupplementContext(
         (nodeId) => !answeredIdSet.has(nodeId),
       ),
     })),
+  };
+}
+
+/**
+ * 专用补证表单已完成语义解析，直接构造可信业务请求，避免 Request Agent 二次改写答案。
+ */
+export function createDocumentEvidenceRequestAnalysis(): RequestAnalysis {
+  return {
+    business_model: [
+      {
+        index: 1,
+        user_goal:
+          "Resolve persisted PRD evidence blockers with the submitted authoritative answers.",
+        goal_constraints: [
+          "Update only the related product knowledge graph facts and decisions.",
+        ],
+        missing_information: [],
+        covered_user_input_indexes: [1],
+      },
+    ],
+    questions: [],
+    chitchat: [],
   };
 }
 

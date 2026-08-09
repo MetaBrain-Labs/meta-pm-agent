@@ -262,6 +262,7 @@ function createWorkflowInitialState(input: WorkflowGraphInput) {
     supplementAgentTypes: resume?.supplementAgentTypes ?? [],
     supplementSourceTaskIds: resume?.supplementSourceTaskIds ?? [],
     supplementAffectedTaskIds: resume?.supplementAffectedTaskIds ?? [],
+    supplementRelatedNodeIds: resume?.supplementRelatedNodeIds ?? [],
     answeredOpenQuestionIds: resume?.answeredOpenQuestionIds ?? [],
     executorResults,
     knowledgeGraph: resume?.knowledgeGraph ?? input.knowledgeGraph ?? null,

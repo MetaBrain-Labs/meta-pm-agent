@@ -200,6 +200,7 @@ test("consolidates 14 multilingual reviewer findings into traceable semantic gro
     reviewerId: reviewerIds[index % reviewerIds.length]!,
     reviewerName: `Reviewer ${index % reviewerIds.length}`,
     text: `Raw blocker ${index}`,
+    relatedNodeIds: [`R-${String(index).padStart(8, "0")}`],
   }));
   const modelOutput = {
     groups: [
@@ -238,6 +239,11 @@ test("consolidates 14 multilingual reviewer findings into traceable semantic gro
     grouping.groups.flatMap((group) => group.sourceIndexes).sort((a, b) => a - b),
     findings.map((finding) => finding.index),
   );
+  assert.deepEqual(grouping.groups[0]?.relatedNodeIds, [
+    "R-00000000",
+    "R-00000005",
+    "R-00000009",
+  ]);
 });
 
 test("falls back to one group per finding when semantic coverage is invalid", () => {
@@ -361,5 +367,6 @@ function createReview(
     revisionAdvice: ["Improve PRD evidence."],
     evidenceBlocked: false,
     evidenceBlockers: [],
+    evidenceBlockerDetails: [],
   };
 }

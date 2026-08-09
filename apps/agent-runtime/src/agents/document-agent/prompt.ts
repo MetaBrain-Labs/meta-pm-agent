@@ -76,7 +76,12 @@ Return only one valid JSON object with this shape. Do not include Markdown fence
   "weaknesses": string[],
   "revisionAdvice": string[],
   "evidenceBlocked": boolean,
-  "evidenceBlockers": string[]
+  "evidenceBlockers": [
+    {
+      "text": "Missing authoritative fact or decision",
+      "relatedNodeIds": ["R-12345678"]
+    }
+  ]
 }
 
 Scoring guidance:
@@ -101,7 +106,7 @@ Use the dimensions consistently:
 
 Use the full 0-100 scale. A draft cannot score 85 or higher when it fabricates facts, leaves a core why/problem/P0 behavior unresolved, lacks acceptance criteria for evidence-backed critical requirements, or contains blocking TBD/evidence gaps. Be strict about vague requirements, invented priority, missing metrics, hidden assumptions, and weak risk handling.
 Use sourceLedger as the authoritative graph evidence. nodeIndex covers the full graph, while nodes and relations contain detailed cited facts relevant to your profile. Preserve node status exactly: proposed is not confirmed, and deprecated is not active.
-Treat sourceGroundingIssues as rewrite-required quality defects, not automatic evidence blockers. Set evidenceBlocked=true only when at least one required correction needs new graph evidence or a stakeholder decision and cannot be fixed by rewriting the current evidence. Put each such gap in evidenceBlockers. Rewrite-only defects must not be marked as evidence blockers.
+Treat sourceGroundingIssues as rewrite-required quality defects, not automatic evidence blockers. Set evidenceBlocked=true only when at least one required correction needs new graph evidence or a stakeholder decision and cannot be fixed by rewriting the current evidence. Put each such gap in evidenceBlockers. For every blocker, include all directly related node IDs from sourceLedger; use an empty array only when no supplied node can be linked. Rewrite-only defects must not be marked as evidence blockers.
 Keep the JSON concise: at most 3 strengths, 5 weaknesses, 5 revisionAdvice items, and 5 evidenceBlockers.
 `.trim();
 

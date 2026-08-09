@@ -61,6 +61,10 @@ export async function* streamOrchestratorAgent(
   void
 > {
   const isPreCheck = isPreOrchestratorInput(input);
+  const preCheckContext = isPreCheck
+    ? JSON.stringify(buildPreOrchPayload(input))
+    : undefined;
+  const plannerContext = isPreCheck ? undefined : createPlannerContext(input);
 
   let preOrchSubagentResult: unknown = undefined;
   let plannerSubagentResult: unknown = undefined;
@@ -68,7 +72,7 @@ export async function* streamOrchestratorAgent(
   let plannerInvocationStarted = false;
 
   const payload = isPreCheck
-    ? { mode: "pre-check", pre_check_payload: buildPreOrchPayload(input) }
+    ? { mode: "pre-check", has_existing_project: input.hasExistingProject }
     : createOrchestratorPayload(input);
   const outputSchema = isPreCheck
     ? PreOrchResultSchema
@@ -83,7 +87,12 @@ export async function* streamOrchestratorAgent(
       name: "orchestrator-agent",
       // json_object 会导致模型跳过 task 工具调用直接生成 JSON 输出，
       // 因此两种模式都不能使用 responseFormat: "json_object"。
-      modelOptions: { enableThinking: true, temperature: 0, maxTokens: 16384 },
+      modelOptions: {
+        enableThinking: true,
+        temperature: 0,
+        maxTokens: 16384,
+        timeout: 120_000,
+      },
       modelProfile: input.modelProfile,
       modelGroup: "orchestrator",
       modelSummary: {
@@ -101,8 +110,8 @@ export async function* streamOrchestratorAgent(
       // pre-check 模式只需 Pre-Orchestrator SubAgent；full 模式只需 Planner SubAgent。
       // 不混用可避免 LLM 在同一轮次中调用不该出现的 SubAgent。
       subagents: isPreCheck
-        ? [createPreOrchestratorSubagent(input.modelProfile)]
-        : [createPlannerSubagent(input.modelProfile)],
+        ? [createPreOrchestratorSubagent(input.modelProfile, preCheckContext)]
+        : [createPlannerSubagent(input.modelProfile, plannerContext)],
       subagentModelGroups: isPreCheck
         ? { "pre-orchestrator": "pre-orchestrator" }
         : { planner: "planner" },
@@ -330,27 +339,16 @@ function isPreOrchestratorInput(
   return "hasExistingProject" in input && "userMessage" in input;
 }
 
-function createOrchestratorPayload(input: OrchestratorAgentInput) {
-  const compactGraph = compactGraphForPlanner(
-    input.knowledgeGraph,
-    isWorkflowSupplementInput(input),
-    input.supplementSourceTaskIds,
-    input.supplementAffectedTaskIds,
-  );
-
+export function createOrchestratorPayload(input: OrchestratorAgentInput) {
   return {
     mode: "full",
     workspace_id: input.workspaceId ?? null,
     context_source: input.contextSource ?? "none",
-    product_context:
-      input.productContext?.trim() || "No product context provided.",
-    request_analysis: input.requestAnalysis,
-    user_input: input.userInput,
-    supplement_agents: input.supplementAgentTypes ?? [],
-    answered_open_question_ids: input.answeredOpenQuestionIds ?? [],
+    has_business_request: input.requestAnalysis.business_model.length > 0,
+    has_project_context: hasMeaningfulProjectContext(input),
+    is_supplement: isWorkflowSupplementInput(input),
     graph_stats: {
       current_state: input.knowledgeGraph.current_state ?? null,
-      description: input.knowledgeGraph.description ?? "",
       entities: input.knowledgeGraph.entities.length,
       relations: input.knowledgeGraph.relations.length,
       decisions: input.knowledgeGraph.decisions.length,
@@ -358,23 +356,31 @@ function createOrchestratorPayload(input: OrchestratorAgentInput) {
       open_questions: input.knowledgeGraph.open_questions.length,
       summary_items: input.knowledgeGraph.summary.length,
     },
-    recent_graph_nodes: input.knowledgeGraph.entities.slice(-6).map((node) => ({
-      id: node.id,
-      type: node.type,
-      name: node.name,
-      status: node.status,
-    })),
-    planner_context: JSON.stringify({
-      product_context: input.productContext || "No product context provided.",
-      product_knowledge_graph: compactGraph,
-      request_analysis: input.requestAnalysis,
-      user_input: input.userInput,
-      supplement_agents: input.supplementAgentTypes ?? [],
-      supplement_source_task_ids: input.supplementSourceTaskIds ?? [],
-      supplement_affected_task_ids: input.supplementAffectedTaskIds ?? [],
-      answered_open_question_ids: input.answeredOpenQuestionIds ?? [],
-    }),
   };
+}
+
+/**
+ * 构造仅绑定给 Planner SubAgent 的权威规划上下文。
+ */
+export function createPlannerContext(input: OrchestratorAgentInput): string {
+  const compactGraph = compactGraphForPlanner(
+    input.knowledgeGraph,
+    isWorkflowSupplementInput(input),
+    input.supplementSourceTaskIds,
+    input.supplementAffectedTaskIds,
+    input.supplementRelatedNodeIds,
+  );
+  return JSON.stringify({
+    product_context: input.productContext || "No product context provided.",
+    product_knowledge_graph: compactGraph,
+    request_analysis: input.requestAnalysis,
+    user_input: input.userInput,
+    supplement_agents: input.supplementAgentTypes ?? [],
+    supplement_source_task_ids: input.supplementSourceTaskIds ?? [],
+    supplement_affected_task_ids: input.supplementAffectedTaskIds ?? [],
+    supplement_related_node_ids: input.supplementRelatedNodeIds ?? [],
+    answered_open_question_ids: input.answeredOpenQuestionIds ?? [],
+  });
 }
 
 /**
@@ -387,6 +393,7 @@ export function compactGraphForPlanner(
   supplement = false,
   sourceTaskIds: string[] = [],
   affectedTaskIds: string[] = [],
+  relatedNodeIds: string[] = [],
 ) {
   const MAX_ENTITY_NAME = 120;
   const MAX_ENTITY_DESCRIPTION = 240;
@@ -397,6 +404,7 @@ export function compactGraphForPlanner(
         knowledgeGraph,
         sourceTaskIds,
         affectedTaskIds,
+        relatedNodeIds,
       )
     : knowledgeGraph.entities;
   const entityIds = new Set(entities.map((entity) => entity.id));
@@ -431,7 +439,6 @@ export function compactGraphForPlanner(
 
   return {
     current_state: knowledgeGraph.current_state,
-    description: (knowledgeGraph.description ?? "").slice(0, 800),
     counts: {
       entities: knowledgeGraph.entities.length,
       relations: knowledgeGraph.relations.length,
@@ -496,12 +503,18 @@ function selectSupplementPlannerEntities(
   knowledgeGraph: OrchestratorAgentInput["knowledgeGraph"],
   sourceTaskIds: string[],
   affectedTaskIds: string[],
+  relatedNodeIds: string[],
 ) {
   const entities = knowledgeGraph.entities;
   const sourceTasks = new Set(sourceTaskIds);
   const affectedTasks = new Set([...sourceTaskIds, ...affectedTaskIds]);
   const entityById = new Map(entities.map((entity) => [entity.id, entity]));
   const selected = new Map<string, (typeof entities)[number]>();
+
+  for (const nodeId of relatedNodeIds) {
+    const entity = entityById.get(nodeId);
+    if (entity) selected.set(entity.id, entity);
+  }
 
   for (const entity of entities) {
     if (entity.source_task_id && sourceTasks.has(entity.source_task_id)) {

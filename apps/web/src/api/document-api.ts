@@ -53,6 +53,10 @@ export interface DocumentScoreAttempt {
     revisionAdvice: string[];
     evidenceBlocked?: boolean;
     evidenceBlockers?: string[];
+    evidenceBlockerDetails?: Array<{
+      text: string;
+      relatedNodeIds: string[];
+    }>;
   }>;
   scoreSpread: number;
   varianceAccepted: boolean;
@@ -82,10 +86,12 @@ export interface DocumentEvidenceBlockerGroup {
   title: string;
   description: string;
   sourceIndexes: number[];
+  relatedNodeIds: string[];
   sources: Array<{
     reviewerId: string;
     reviewerName: string;
     text: string;
+    relatedNodeIds: string[];
   }>;
 }
 

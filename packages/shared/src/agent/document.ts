@@ -94,6 +94,15 @@ export const DocumentEvidenceBlockerSourceSchema = z.object({
   reviewerId: DocumentScoringReviewerIdSchema,
   reviewerName: z.string().min(1),
   text: z.string().min(1),
+  relatedNodeIds: z.array(z.string().min(1)).default([]),
+});
+
+/**
+ * Reviewer 在产生证据阻断时同步记录的知识图谱节点来源。
+ */
+export const DocumentEvidenceBlockerDetailSchema = z.object({
+  text: z.string().min(1),
+  relatedNodeIds: z.array(z.string().min(1)).default([]),
 });
 
 /**
@@ -105,6 +114,7 @@ export const DocumentEvidenceBlockerGroupSchema = z.object({
   description: z.string().min(1),
   sourceIndexes: z.array(z.number().int().nonnegative()).min(1),
   sources: z.array(DocumentEvidenceBlockerSourceSchema).min(1),
+  relatedNodeIds: z.array(z.string().min(1)).default([]),
 });
 
 /**
@@ -130,6 +140,9 @@ export const DocumentScoreAttemptSchema = z.object({
       revisionAdvice: z.array(z.string()),
       evidenceBlocked: z.boolean().default(false),
       evidenceBlockers: z.array(z.string()).default([]),
+      evidenceBlockerDetails: z
+        .array(DocumentEvidenceBlockerDetailSchema)
+        .default([]),
     }),
   ),
   scoreSpread: z.number().min(0).max(100),
@@ -197,6 +210,9 @@ export type DocumentReasoningLogEntry = z.infer<
 export type DocumentWorkflowStage = z.infer<typeof DocumentWorkflowStageSchema>;
 export type DocumentSectionDraft = z.infer<typeof DocumentSectionDraftSchema>;
 export type DocumentScoreAttempt = z.infer<typeof DocumentScoreAttemptSchema>;
+export type DocumentEvidenceBlockerDetail = z.infer<
+  typeof DocumentEvidenceBlockerDetailSchema
+>;
 export type DocumentEvidenceBlockerGroup = z.infer<
   typeof DocumentEvidenceBlockerGroupSchema
 >;

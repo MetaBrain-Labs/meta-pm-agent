@@ -17,6 +17,7 @@
 
 import { z } from "zod";
 import type {
+  DocumentEvidenceBlockerDetail,
   DocumentEvidenceBlockerGroup,
   DocumentSectionDraft,
   KnowledgeGraphEntity,
@@ -71,6 +72,7 @@ export interface DocumentScoreReview {
   revisionAdvice: string[];
   evidenceBlocked: boolean;
   evidenceBlockers: string[];
+  evidenceBlockerDetails: DocumentEvidenceBlockerDetail[];
 }
 
 /**
@@ -116,6 +118,7 @@ export interface DocumentEvidenceBlockerFinding {
   reviewerId: DocumentScoringReviewerId;
   reviewerName: string;
   text: string;
+  relatedNodeIds?: string[];
 }
 
 /**
@@ -138,6 +141,14 @@ export interface DocumentScoreSelection {
     | "highest_score_then_lowest_spread";
 }
 
+const ReviewerEvidenceBlockerSchema = z.union([
+  z.string().min(1),
+  z.object({
+    text: z.string().min(1),
+    relatedNodeIds: z.array(z.string().min(1)).default([]),
+  }),
+]);
+
 const ReviewerScoreSchema = z.object({
   score: z.number().min(0).max(100),
   dimensions: z.object({
@@ -151,7 +162,7 @@ const ReviewerScoreSchema = z.object({
   weaknesses: z.array(z.string()).default([]),
   revisionAdvice: z.array(z.string()).default([]),
   evidenceBlocked: z.boolean().default(false),
-  evidenceBlockers: z.array(z.string()).default([]),
+  evidenceBlockers: z.array(ReviewerEvidenceBlockerSchema).default([]),
 });
 
 const EvidenceBlockerGroupingSchema = z.object({
@@ -262,6 +273,10 @@ export async function runPrdScoringReviewers({
       });
 
       const parsed = await consumeJsonAgentStream(stream, onEvent);
+      const evidenceBlockerDetails = normalizeReviewerEvidenceBlockers(
+        parsed.evidenceBlockers,
+        sourceGraph,
+      );
       return {
         reviewerId: reviewer.id,
         reviewerName: reviewer.name,
@@ -277,7 +292,8 @@ export async function runPrdScoringReviewers({
         weaknesses: parsed.weaknesses,
         revisionAdvice: parsed.revisionAdvice,
         evidenceBlocked: parsed.evidenceBlocked,
-        evidenceBlockers: parsed.evidenceBlockers,
+        evidenceBlockers: evidenceBlockerDetails.map((item) => item.text),
+        evidenceBlockerDetails,
       };
     }),
   );
@@ -333,11 +349,13 @@ export function flattenEvidenceBlockerFindings(
           : reviewer.evidenceBlocked
             ? [`${reviewer.reviewerName} identified a blocking evidence gap.`]
             : [];
-      return blockers.map((text) => ({
+      return blockers.map((text, index) => ({
         index: 0,
         reviewerId: reviewer.reviewerId,
         reviewerName: reviewer.reviewerName,
         text,
+        relatedNodeIds:
+          reviewer.evidenceBlockerDetails?.[index]?.relatedNodeIds ?? [],
       }));
     })
     .map((finding, index) => ({ ...finding, index }));
@@ -370,6 +388,7 @@ export function normalizeEvidenceBlockerGrouping(
         description: finding.text,
         sourceIndexes: [finding.index],
         sources: [toEvidenceBlockerSource(finding)],
+        relatedNodeIds: finding.relatedNodeIds ?? [],
       })),
     };
   }
@@ -379,15 +398,21 @@ export function normalizeEvidenceBlockerGrouping(
   );
   return {
     status: "grouped",
-    groups: parsed.data.groups.map((group, index) => ({
-      id: `evidence-blocker-group-${index + 1}`,
-      title: group.title.trim(),
-      description: group.description.trim(),
-      sourceIndexes: group.sourceIndexes,
-      sources: group.sourceIndexes.map((sourceIndex) =>
+    groups: parsed.data.groups.map((group, index) => {
+      const sources = group.sourceIndexes.map((sourceIndex) =>
         toEvidenceBlockerSource(findingByIndex.get(sourceIndex)!),
-      ),
-    })),
+      );
+      return {
+        id: `evidence-blocker-group-${index + 1}`,
+        title: group.title.trim(),
+        description: group.description.trim(),
+        sourceIndexes: group.sourceIndexes,
+        sources,
+        relatedNodeIds: [
+          ...new Set(sources.flatMap((source) => source.relatedNodeIds)),
+        ],
+      };
+    }),
   };
 }
 
@@ -399,7 +424,39 @@ function toEvidenceBlockerSource(finding: DocumentEvidenceBlockerFinding) {
     reviewerId: finding.reviewerId,
     reviewerName: finding.reviewerName,
     text: finding.text,
+    relatedNodeIds: finding.relatedNodeIds ?? [],
   };
+}
+
+/**
+ * 将 Reviewer 声明或阻断文本中引用的短 ID 恢复为权威图谱节点 ID。
+ */
+function normalizeReviewerEvidenceBlockers(
+  blockers: Array<z.infer<typeof ReviewerEvidenceBlockerSchema>>,
+  sourceGraph: { nodes: KnowledgeGraphEntity[] },
+) {
+  const nodeIdByReference = new Map<string, string>();
+  for (const node of sourceGraph.nodes) {
+    nodeIdByReference.set(node.id.toUpperCase(), node.id);
+    nodeIdByReference.set(shortenGraphId(node.id).toUpperCase(), node.id);
+  }
+
+  return blockers.map((blocker) => {
+    const text = typeof blocker === "string" ? blocker : blocker.text;
+    const declaredIds = typeof blocker === "string" ? [] : blocker.relatedNodeIds;
+    const citedIds = text.match(/\b[A-Z][A-Z0-9]*-[0-9a-f]{8}\b/gi) ?? [];
+    return {
+      text,
+      relatedNodeIds: [
+        ...new Set(
+          [...declaredIds, ...citedIds].flatMap((nodeId) => {
+            const resolved = nodeIdByReference.get(nodeId.toUpperCase());
+            return resolved ? [resolved] : [];
+          }),
+        ),
+      ],
+    };
+  });
 }
 
 /**

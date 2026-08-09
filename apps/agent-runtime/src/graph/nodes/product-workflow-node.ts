@@ -157,6 +157,7 @@ export async function orchestratorAgentNode(
       supplementAgentTypes: state.supplementAgentTypes,
       supplementSourceTaskIds: state.supplementSourceTaskIds,
       supplementAffectedTaskIds: state.supplementAffectedTaskIds,
+      supplementRelatedNodeIds: state.supplementRelatedNodeIds,
       answeredOpenQuestionIds: state.answeredOpenQuestionIds,
       signal: config?.signal,
     }),

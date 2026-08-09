@@ -38,6 +38,8 @@ import {
 } from "../src/agents/product-workflow/orchestrator-agent/planner-subagent/agent";
 import {
   compactGraphForPlanner,
+  createOrchestratorPayload,
+  createPlannerContext,
   createPlannerDelegationSummary,
   requireDelegatedPlannerPlan,
   shouldRetryPlannerDelegation,
@@ -254,6 +256,64 @@ test("supplement Planner context includes affected neighbor descriptions", () =>
     "Use AES-256 for data encryption.",
   );
   assert.equal(compact.relations[0]?.description, undefined);
+});
+
+test("uses Resolver related node IDs even when synthetic source tasks match no graph nodes", () => {
+  const graph = createEmptyKnowledgeGraph();
+  graph.entities = Array.from({ length: 20 }, (_, index) => ({
+    id: index === 0 ? "R-related" : `R-${index}`,
+    type: "Requirement" as const,
+    name: `Requirement ${index}`,
+    description: `Description ${index}`,
+    status: "confirmed" as const,
+  }));
+
+  const compact = compactGraphForPlanner(
+    graph,
+    true,
+    ["document-evidence:run-1"],
+    [],
+    ["R-related"],
+  );
+
+  assert.equal(
+    compact.entities.find((entity) => entity.id === "R-related")?.description,
+    "Description 0",
+  );
+  assert.equal("description" in compact, false);
+});
+
+test("keeps authoritative Planner context out of the outer Orchestrator payload", () => {
+  const graph = createEmptyKnowledgeGraph();
+  graph.description = "historical agent audit entry".repeat(100);
+  const input = {
+    requestAnalysis: {
+      business_model: [
+        {
+          index: 1,
+          user_goal: "Resolve evidence blockers",
+          goal_constraints: [],
+          missing_information: [],
+          covered_user_input_indexes: [1],
+        },
+      ],
+      questions: [],
+      chitchat: [],
+    },
+    userInput: [{ index: 1, content: "Confirmed", type: "form-answer" }],
+    knowledgeGraph: graph,
+    supplementSourceTaskIds: ["document-evidence:run-1"],
+  };
+
+  const outerPayload = createOrchestratorPayload(input);
+  assert.equal("planner_context" in outerPayload, false);
+  assert.equal("request_analysis" in outerPayload, false);
+  assert.equal("user_input" in outerPayload, false);
+  assert.equal("description" in outerPayload.graph_stats, false);
+
+  const plannerContext = JSON.parse(createPlannerContext(input));
+  assert.equal(plannerContext.request_analysis.business_model.length, 1);
+  assert.equal("description" in plannerContext.product_knowledge_graph, false);
 });
 
 test("fails when Orchestrator does not actually delegate to Planner", () => {

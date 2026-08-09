@@ -66,6 +66,31 @@ export function createDocumentEvidenceResolutionPayload(
     (entity) => entity.status !== "deprecated",
   );
   const activeEntityIds = new Set(activeEntities.map((entity) => entity.id));
+  const relatedNodeIds = new Set(
+    input.blockers.flatMap((blocker) => [
+      ...(blocker.relatedNodeIds ?? []),
+      ...(blocker.sources?.flatMap((source) => source.relatedNodeIds ?? []) ?? []),
+    ]),
+  );
+  const directlyRelatedEntityIds = new Set(
+    [...relatedNodeIds].filter((nodeId) => activeEntityIds.has(nodeId)),
+  );
+  const selectedEntityIds = new Set(directlyRelatedEntityIds);
+  if (directlyRelatedEntityIds.size > 0) {
+    for (const relation of input.knowledgeGraph.relations) {
+      if (
+        directlyRelatedEntityIds.has(relation.source) ||
+        directlyRelatedEntityIds.has(relation.target)
+      ) {
+        if (activeEntityIds.has(relation.source)) selectedEntityIds.add(relation.source);
+        if (activeEntityIds.has(relation.target)) selectedEntityIds.add(relation.target);
+      }
+    }
+  }
+  const useLegacyFullGraph = relatedNodeIds.size === 0;
+  const detailedEntities = useLegacyFullGraph
+    ? activeEntities
+    : activeEntities.filter((entity) => selectedEntityIds.has(entity.id));
 
   return {
     run_id: input.runId,
@@ -73,8 +98,13 @@ export function createDocumentEvidenceResolutionPayload(
     blockers: input.blockers,
     knowledge_graph: {
       current_state: input.knowledgeGraph.current_state,
-      description: input.knowledgeGraph.description,
-      entities: activeEntities.map((entity) => ({
+      node_index: activeEntities.map((entity) => ({
+        id: entity.id,
+        type: entity.type,
+        name: entity.name,
+        status: entity.status,
+      })),
+      entities: detailedEntities.map((entity) => ({
         id: entity.id,
         type: entity.type,
         name: entity.name,
@@ -85,7 +115,10 @@ export function createDocumentEvidenceResolutionPayload(
         .filter(
           (relation) =>
             activeEntityIds.has(relation.source) &&
-            activeEntityIds.has(relation.target),
+            activeEntityIds.has(relation.target) &&
+            (useLegacyFullGraph ||
+              directlyRelatedEntityIds.has(relation.source) ||
+              directlyRelatedEntityIds.has(relation.target)),
         )
         .map((relation) => ({
           id: relation.id,
@@ -113,7 +146,7 @@ Use the exact output shape below. The user-facing question field is "label", nev
 ${DOCUMENT_EVIDENCE_RESOLUTION_OUTPUT_SHAPE}
 
 The following payload is authoritative. Cover every blocker index and do not replace it with hypothetical examples:
-${JSON.stringify(createDocumentEvidenceResolutionPayload(input), null, 2)}`;
+${JSON.stringify(createDocumentEvidenceResolutionPayload(input))}`;
 }
 
 export const DOCUMENT_EVIDENCE_ORCHESTRATOR_PROMPT = `You are the Orchestrator Agent in evidence-resolution mode.

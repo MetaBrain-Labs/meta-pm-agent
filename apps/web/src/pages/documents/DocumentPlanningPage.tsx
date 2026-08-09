@@ -668,6 +668,11 @@ export function DocumentPlanningPage({
                 >
                   <Text strong>{group.title}</Text>
                   <Text className="mt-1 block">{group.description}</Text>
+                  {group.relatedNodeIds.length > 0 ? (
+                    <Text type="secondary" className="mt-1 block text-xs">
+                      关联节点：{group.relatedNodeIds.join("、")}
+                    </Text>
+                  ) : null}
                   <div className="mt-2 flex flex-col gap-1.5 border-t border-red-100 pt-2">
                     {group.sources.map((source, sourceIndex) => (
                       <div key={`${source.reviewerId}-${sourceIndex}`}>
@@ -744,10 +749,12 @@ function getEvidenceBlockerGroups(
   }
   return (
     attempt?.reviewerScores.flatMap((reviewer) =>
-      (reviewer.evidenceBlockers ?? []).map((text) => ({
+      (reviewer.evidenceBlockers ?? []).map((text, index) => ({
         reviewerId: reviewer.reviewerId,
         reviewerName: reviewer.reviewerName,
         text,
+        relatedNodeIds:
+          reviewer.evidenceBlockerDetails?.[index]?.relatedNodeIds ?? [],
       })),
     ) ?? []
   ).map((source, index) => ({
@@ -756,6 +763,7 @@ function getEvidenceBlockerGroups(
     description: source.text,
     sourceIndexes: [index],
     sources: [source],
+    relatedNodeIds: source.relatedNodeIds,
   }));
 }
 
