@@ -17,12 +17,14 @@ import type { Context } from "hono";
 import { stream } from "hono/streaming";
 import {
   createDocumentEvidenceAnswerResult,
+  createDocumentEvidenceResolutionFormId,
   createDocumentEvidenceResolutionThreadId,
   createHumanInTheLoopThreadId,
   createWorkflowThreadId,
   extractQuestionFormId,
   getFormAnswerId,
   isAcceptedDocumentEvidenceWorkflowResult,
+  isDocumentEvidenceResolutionFormId,
   isProductWorkflowAcceptanceAnswer,
   isProductWorkflowOptionalStopAnswer,
   isPreOrchGraphConflictFormId,
@@ -131,6 +133,57 @@ export function resolveDocumentEvidenceResolutionContext({
   return {
     resolution,
     effectiveRequestFormId: resolution?.requestFormId ?? requestFormId,
+  };
+}
+
+/**
+ * 从持久化后重新展示的补证表单答案重建 LangGraph resume 命令。
+ *
+ * 浏览器刷新后 Question Form 仍可由消息历史恢复，但瞬态 human-interrupt 不会落入消息正文；
+ * 因此以服务端专用会话记录和精确的 run/form 关联作为恢复依据。
+ */
+export function createDocumentEvidenceResumeFromFormAnswer({
+  messages,
+  resolution,
+}: {
+  messages: Array<{ role: string; content: string }>;
+  resolution: DocumentEvidenceResolutionRecord;
+}) {
+  const latestUserMessage = messages
+    .filter((message) => message.role === "user")
+    .at(-1);
+  if (!latestUserMessage) return null;
+
+  const submittedFormId = getFormAnswerId(latestUserMessage.content);
+  if (!submittedFormId) return null;
+
+  const expectedFormId = createDocumentEvidenceResolutionFormId(
+    resolution.runId,
+  );
+  if (submittedFormId !== expectedFormId) {
+    if (isDocumentEvidenceResolutionFormId(submittedFormId)) {
+      throw new Error(
+        "Document evidence resolution form does not belong to the current document run.",
+      );
+    }
+    return null;
+  }
+  if (resolution.status !== "collecting" || !resolution.resolution) {
+    throw new Error(
+      "Document evidence resolution form is not awaiting an answer.",
+    );
+  }
+
+  return {
+    threadId: createDocumentEvidenceResolutionThreadId({
+      conversationId: resolution.conversationId,
+      runId: resolution.runId,
+    }),
+    response: {
+      decisions: [
+        { type: "respond" as const, message: latestUserMessage.content },
+      ],
+    },
   };
 }
 
@@ -333,6 +386,20 @@ export async function chatStreamHandler(c: Context) {
           );
         } else {
           await resumeQuestionFormHumanInterrupt(parsed.data.hitlResume);
+        }
+      } else if (documentEvidenceResolution?.status === "collecting") {
+        // 历史消息不保存瞬态 interrupt；刷新后依据专用会话及精确表单 ID 重建恢复命令。
+        const restoredResume = createDocumentEvidenceResumeFromFormAnswer({
+          messages: parsed.data.messages,
+          resolution: documentEvidenceResolution,
+        });
+        if (restoredResume) {
+          documentEvidenceAnswer =
+            await resumeDocumentEvidenceResolutionWorkflow(restoredResume);
+          await markDocumentEvidenceSupplementRunning(
+            effectiveRequestFormId,
+            documentEvidenceAnswer.answerText,
+          );
         }
       } else if (
         documentEvidenceResolution?.status === "supplement_running" &&

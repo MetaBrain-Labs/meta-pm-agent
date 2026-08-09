@@ -56,6 +56,7 @@ export {
 } from "./agents/document-agent/scoring";
 export {
   createDocumentEvidenceAnswerResult,
+  createDocumentEvidenceResolutionFormId,
   createDocumentEvidenceResolutionThreadId,
   formatDocumentEvidenceQuestionForm,
   isDocumentEvidenceResolutionFormId,

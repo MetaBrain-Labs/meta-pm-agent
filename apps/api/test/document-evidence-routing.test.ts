@@ -16,7 +16,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { prisma } from "@repo/database";
-import { resolveDocumentEvidenceResolutionContext } from "../src/controllers/chat-controller";
+import {
+  createDocumentEvidenceResumeFromFormAnswer,
+  resolveDocumentEvidenceResolutionContext,
+} from "../src/controllers/chat-controller";
 import {
   findDocumentEvidenceResolutionCycle,
   type DocumentEvidenceResolutionRecord,
@@ -68,6 +71,76 @@ test("rejects a request form belonging to another conversation", () => {
         resolutionByRequestForm: resolution,
       }),
     /does not belong to this conversation/,
+  );
+});
+
+test("rebuilds the evidence interrupt resume from a persisted form answer", () => {
+  const answer =
+    "[form answers - document-evidence-resolution-run-1]\n- q1: confirmed";
+  const collectingResolution: DocumentEvidenceResolutionRecord = {
+    ...resolution,
+    status: "collecting",
+    resolution: {
+      summary: "Resolve blockers",
+      questions: [
+        {
+          id: "q1",
+          label: "Confirm the missing fact",
+          type: "text",
+          required: true,
+          blockerIndexes: [0],
+          suggestedAgentTypes: [],
+          relatedNodeIds: [],
+        },
+      ],
+    },
+  };
+
+  assert.deepEqual(
+    createDocumentEvidenceResumeFromFormAnswer({
+      messages: [{ role: "user", content: answer }],
+      resolution: collectingResolution,
+    }),
+    {
+      threadId: "document-evidence:chat-1:run-1",
+      response: {
+        decisions: [{ type: "respond", message: answer }],
+      },
+    },
+  );
+});
+
+test("rejects a persisted evidence answer from another document run", () => {
+  assert.throws(
+    () =>
+      createDocumentEvidenceResumeFromFormAnswer({
+        messages: [
+          {
+            role: "user",
+            content:
+              "[form answers - document-evidence-resolution-run-stale]\n- q1: confirmed",
+          },
+        ],
+        resolution: {
+          ...resolution,
+          status: "collecting",
+          resolution: {
+            summary: "Resolve blockers",
+            questions: [
+              {
+                id: "q1",
+                label: "Confirm the missing fact",
+                type: "text",
+                required: true,
+                blockerIndexes: [0],
+                suggestedAgentTypes: [],
+                relatedNodeIds: [],
+              },
+            ],
+          },
+        },
+      }),
+    /does not belong to the current document run/,
   );
 });
 

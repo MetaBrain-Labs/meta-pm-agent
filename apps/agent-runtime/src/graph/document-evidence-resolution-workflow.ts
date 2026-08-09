@@ -231,8 +231,8 @@ export function formatDocumentEvidenceQuestionForm({
   runId: string;
   resolution: DocumentEvidenceResolution;
 }): string {
-  return `<question-form id="${DOCUMENT_EVIDENCE_FORM_PREFIX}-${escapeAttribute(
-    runId,
+  return `<question-form id="${escapeAttribute(
+    createDocumentEvidenceResolutionFormId(runId),
   )}" title="解决 PRD 证据阻断">\n${JSON.stringify(
     {
       description: resolution.summary,
@@ -251,6 +251,13 @@ export function formatDocumentEvidenceQuestionForm({
     null,
     2,
   )}\n</question-form>`;
+}
+
+/**
+ * 构造与 PRD run 一一对应的证据补全表单 ID，供 UI 输出与服务端恢复共同校验。
+ */
+export function createDocumentEvidenceResolutionFormId(runId: string): string {
+  return `${DOCUMENT_EVIDENCE_FORM_PREFIX}-${runId}`;
 }
 
 /**
@@ -338,7 +345,7 @@ function requestRequiredAnswersNode(
         name: "question_form",
         args: {
           questionForm,
-          formId: `${DOCUMENT_EVIDENCE_FORM_PREFIX}-${state.runId}`,
+          formId: createDocumentEvidenceResolutionFormId(state.runId),
           agentType: "orchestrator",
         },
         description: "Required facts or decisions are needed to resolve persisted PRD evidence blockers.",

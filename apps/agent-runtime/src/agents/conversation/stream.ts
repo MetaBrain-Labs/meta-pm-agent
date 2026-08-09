@@ -14,7 +14,12 @@
  * - 在工作流完成后格式化并输出最终结果 block 和确认表单
  */
 
-import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "langchain";
+import {
+  AIMessage,
+  HumanMessage,
+  ToolMessage,
+  type BaseMessage,
+} from "langchain";
 import type {
   ChatMessage,
   ProductKnowledgeGraph,
@@ -89,9 +94,7 @@ import {
   formatPreOrchGraphConflictForm,
   type PreOrchResult,
 } from "../product-workflow/orchestrator-agent/pre-orchestrator-subagent";
-import {
-  streamOrchestratorPreCheck,
-} from "../product-workflow/orchestrator-agent/agent";
+import { streamOrchestratorPreCheck } from "../product-workflow/orchestrator-agent/agent";
 import { isExecutorAgentType } from "../product-workflow/executor-agent/definitions";
 
 const PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID = "product-workflow-confirmation";
@@ -279,7 +282,10 @@ export async function* streamConversation(
     return;
   }
 
-  if (options.documentEvidenceResolution && !isFormAnswer(lastMessage.content)) {
+  if (
+    options.documentEvidenceResolution &&
+    !isFormAnswer(lastMessage.content)
+  ) {
     yield* streamDocumentEvidenceResolutionStart(options);
     return;
   }
@@ -346,7 +352,8 @@ async function* streamDocumentEvidenceResolutionStart(
   const interrupt = next.value;
   const action = interrupt.value.actionRequests[0];
   const questionForm = action?.args.questionForm;
-  if (!questionForm) throw new Error("Evidence resolution form is unavailable.");
+  if (!questionForm)
+    throw new Error("Evidence resolution form is unavailable.");
   yield { type: "question-form-start", agentType: "orchestrator" };
   yield {
     type: "question-form-complete",
@@ -364,6 +371,7 @@ async function* streamDocumentEvidenceResolutionAnswer(
   options: ConversationStreamOptions,
 ): AsyncGenerator<ConversationStreamEvent> {
   const answer = options.documentEvidenceAnswer;
+
   if (!answer || !options.knowledgeGraph) {
     throw new Error("Document evidence resolution interrupt was not resumed.");
   }
@@ -371,21 +379,23 @@ async function* streamDocumentEvidenceResolutionAnswer(
     answer,
     options.knowledgeGraph,
   );
-  const userInputBlock = createFormAnswerUserInputBlock([
-    `Resolve persisted PRD evidence blockers for document run ${answer.runId}.`,
-    answer.answerText,
-    `Resolved OpenQuestion IDs: ${JSON.stringify(supplementContext.answeredOpenQuestionIds)}. These questions are already closed and must not be assigned to an Executor.`,
-    `Blocker-to-question mapping: ${JSON.stringify(supplementContext.blockerQuestionMapping)}`,
-  ].join("\n\n"));
+  const userInputBlock = createFormAnswerUserInputBlock(
+    [
+      `Resolve persisted PRD evidence blockers for document run ${answer.runId}.`,
+      answer.answerText,
+      `Resolved OpenQuestion IDs: ${JSON.stringify(supplementContext.answeredOpenQuestionIds)}. These questions are already closed and must not be assigned to an Executor.`,
+      `Blocker-to-question mapping: ${JSON.stringify(supplementContext.blockerQuestionMapping)}`,
+    ].join("\n\n"),
+  );
   yield { type: "user-input-start" };
   yield { type: "user-input-complete", content: userInputBlock };
 
-  const supplementAgentTypes = answer.suggestedAgentTypes.filter(
-    isExecutorAgentType,
-  );
-  const selectedAgentTypes = supplementAgentTypes.length > 0
-    ? supplementAgentTypes
-    : ["executor-product-discovery" as const];
+  const supplementAgentTypes =
+    answer.suggestedAgentTypes.filter(isExecutorAgentType);
+  const selectedAgentTypes =
+    supplementAgentTypes.length > 0
+      ? supplementAgentTypes
+      : ["executor-product-discovery" as const];
   for await (const event of streamPlanningAfterUserInput(
     userInputBlock,
     options,
@@ -543,7 +553,10 @@ async function* streamWithPreOrchestrator(
   // 恢复判断优先于意图分类：Pre-Orchestrator 判定需要从 checkpoint 恢复中断的工作流。
   if (preOrchResult.decision === "RESUME_WORKFLOW") {
     let emitted = false;
-    for await (const event of streamWorkflowCheckpointResume(options, messages)) {
+    for await (const event of streamWorkflowCheckpointResume(
+      options,
+      messages,
+    )) {
       emitted = true;
       yield event;
     }
@@ -605,10 +618,10 @@ async function* streamChatOnlyFlow(
   messages: ChatMessage[],
   options: ConversationStreamOptions,
 ): AsyncGenerator<ConversationStreamEvent> {
-  for await (const event of streamAgentEvents(
-    toLangChainMessages(messages),
-    { ...options, mode: "chat" },
-  )) {
+  for await (const event of streamAgentEvents(toLangChainMessages(messages), {
+    ...options,
+    mode: "chat",
+  })) {
     yield event;
   }
 }
@@ -801,7 +814,7 @@ async function* streamWorkflowResumeAfterFormAnswer(
   const latestUserMessage = messages.at(-1);
   const acceptsCurrentResult = Boolean(
     latestUserMessage &&
-      isProductWorkflowAcceptanceAnswer(latestUserMessage.content),
+    isProductWorkflowAcceptanceAnswer(latestUserMessage.content),
   );
 
   if (acceptsCurrentResult && !resumeContext?.productWorkflow) {
@@ -897,12 +910,12 @@ async function* streamPlanningAfterUserInput(
   try {
     const resumeContext = resumeOptions.resumeFromCheckpoint
       ? undefined
-      : resumeOptions.resumeContext ??
+      : (resumeOptions.resumeContext ??
         createWorkflowResumeContextFromMessages({
           messages,
           knowledgeGraph: options.knowledgeGraph,
         }) ??
-        undefined;
+        undefined);
 
     for await (const event of streamWorkflowGraph({
       modelProfile: options.modelProfile,
@@ -954,12 +967,14 @@ async function* streamPlanningAfterUserInput(
       if (event.type === "complete") {
         // 将结构化工作流结果转发给 API 持久化层，供知识图谱归档
         // Critique 的结构化状态是唯一完成依据，表单是否存在只决定交互形式。
-        const proposalForm = formatProductWorkflowProposalQuestionForm(event.result);
+        const proposalForm = formatProductWorkflowProposalQuestionForm(
+          event.result,
+        );
         const shouldFinalize = isAcceptedWorkflowResult(event.result);
         const questionForm = shouldFinalize
           ? null
-          : proposalForm ??
-            formatProductWorkflowConfirmationQuestionForm(event.result);
+          : (proposalForm ??
+            formatProductWorkflowConfirmationQuestionForm(event.result));
 
         yield { type: "complete", result: event.result };
 
@@ -1096,12 +1111,11 @@ async function* streamWorkflowExecutorRetry(
     return;
   }
 
-  const resumeContext =
-    createWorkflowExecutorRetryResumeContextFromMessages({
-      messages,
-      knowledgeGraph: options.knowledgeGraph,
-      taskId: retry.taskId,
-    });
+  const resumeContext = createWorkflowExecutorRetryResumeContextFromMessages({
+    messages,
+    knowledgeGraph: options.knowledgeGraph,
+    taskId: retry.taskId,
+  });
   if (!resumeContext) {
     yield {
       type: "error",
@@ -1215,9 +1229,10 @@ export function isAcceptedWorkflowResult(
   return (
     result.status === "completed" &&
     (result.review.retry_task_ids?.length ?? 0) === 0 &&
-    ![...(result.review.issues ?? []), ...(result.knowledge_graph_review?.issues ?? [])].some(
-      (issue) => issue.severity === "error",
-    )
+    ![
+      ...(result.review.issues ?? []),
+      ...(result.knowledge_graph_review?.issues ?? []),
+    ].some((issue) => issue.severity === "error")
   );
 }
 
@@ -1254,7 +1269,8 @@ function formatExecutorHumanInputQuestionForm(
         label: interrupt.neededUserInput,
         type: "textarea",
         required: true,
-        placeholder: "请补充事实、取舍或修正信息，提交后系统会基于已有上下文继续运行。",
+        placeholder:
+          "请补充事实、取舍或修正信息，提交后系统会基于已有上下文继续运行。",
       },
     ],
     submitLabel: "提交并继续运行",
@@ -1273,11 +1289,12 @@ function formatExecutorHumanInputQuestionForm(
  * 压缩展示给用户的阻塞详情，只保留关键一行。
  */
 function compactUserVisibleText(text: string, maxLength = 180): string {
-  const compacted = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find(Boolean)
-    ?.replace(/\s+/g, " ") ?? "";
+  const compacted =
+    text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean)
+      ?.replace(/\s+/g, " ") ?? "";
   return compacted.length > maxLength
     ? `${compacted.slice(0, maxLength).trimEnd()}...`
     : compacted;
@@ -1429,4 +1446,3 @@ function createEmptyUserInputBlock(): string {
     2,
   )}\n</user-input>`;
 }
-
