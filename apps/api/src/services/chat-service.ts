@@ -15,10 +15,18 @@
 
 import type {
   ChatMessage,
+  ExecutorAgentResult,
   ProductWorkflowResult,
   WorkflowRetryAction,
 } from "@repo/shared";
-import { isProductWorkflowOptionalStopAnswer } from "@repo/agent-runtime";
+import {
+  createRecoveredRequestAnalysis,
+  isProductWorkflowCorrectionRetryAnswer,
+  isProductWorkflowOptionalStopAnswer,
+  isProductWorkflowStopWithIssuesAnswer,
+  type WorkflowAnswerResolution,
+  type WorkflowRecoveryContext,
+} from "@repo/agent-runtime";
 import {
   createConversationWithInitialRequestForm,
   listActiveConversations,
@@ -26,9 +34,11 @@ import {
 } from "../repositories/chat-repository";
 import {
   findLatestExecutorRetryError,
+  findLatestProductWorkflowForForm,
   listConversationMessages,
   persistAssistantMessage,
   persistConversationMessages,
+  type MessageDto,
   type SubagentTraceDto,
 } from "../repositories/message-repository";
 import {
@@ -176,13 +186,39 @@ export async function persistConversationStart(
   conversationId: string | undefined,
   requestFormId: string | undefined,
   messages: ChatMessage[],
-): Promise<Awaited<ReturnType<typeof finishAnsweredDecisionItems>>> {
+): Promise<WorkflowAnswerResolution | null> {
   if (!conversationId) return null;
 
   const workflowAnswerResolution = await finishAnsweredDecisionItems(
     requestFormId,
     messages,
   );
+  const persistedWorkflow =
+    workflowAnswerResolution && !workflowAnswerResolution.workflow
+      ? await findLatestProductWorkflowForForm(
+          conversationId,
+          workflowAnswerResolution.formId,
+        )
+      : null;
+  const authoritativeWorkflow =
+    workflowAnswerResolution?.workflow ?? persistedWorkflow;
+  const serverRecoveryContext =
+    workflowAnswerResolution && authoritativeWorkflow
+      ? createServerWorkflowRecoveryContext({
+          messages: await listConversationMessages(conversationId),
+          workflow: authoritativeWorkflow,
+          resolution: workflowAnswerResolution,
+        })
+      : null;
+  const resolvedWorkflowAnswer = workflowAnswerResolution
+    ? {
+        ...workflowAnswerResolution,
+        ...(authoritativeWorkflow ? { workflow: authoritativeWorkflow } : {}),
+        ...(serverRecoveryContext
+          ? { serverRecoveryContext }
+          : {}),
+      }
+    : null;
 
   // 只持久化用户消息，助手回复由 persistConversationResult 统一写入。
   await persistConversationMessages(
@@ -190,11 +226,61 @@ export async function persistConversationStart(
     messages.filter(
       (message) =>
         message.role === "user" &&
-        !isProductWorkflowOptionalStopAnswer(message.content),
+        !isProductWorkflowCorrectionRetryAnswer(message.content) &&
+        !isProductWorkflowOptionalStopAnswer(message.content) &&
+        !isProductWorkflowStopWithIssuesAnswer(message.content),
     ),
   );
 
-  return workflowAnswerResolution;
+  return resolvedWorkflowAnswer;
+}
+
+/**
+ * 从服务端消息快照组装表单恢复所需的最小权威上下文。
+ *
+ * 图谱正文不进入该对象；运行时仍从工作区图谱存储读取最新版本。
+ */
+export function createServerWorkflowRecoveryContext({
+  messages,
+  workflow,
+  resolution,
+}: {
+  messages: MessageDto[];
+  workflow: ProductWorkflowResult;
+  resolution: WorkflowAnswerResolution;
+}): WorkflowRecoveryContext {
+  const requestAnalysis =
+    messages
+      .map((message) => message.requestAnalysis)
+      .filter((analysis) => analysis !== null && analysis !== undefined)
+      .at(-1) ?? createRecoveredRequestAnalysis(workflow);
+  const planner =
+    messages
+      .map((message) => message.taskExecutionPlan)
+      .filter((plan) => plan !== null && plan !== undefined)
+      .at(-1) ?? workflow.planner;
+  const executorByTaskId = new Map<string, ExecutorAgentResult>();
+  for (const message of messages) {
+    if (message.executorResult) {
+      executorByTaskId.set(message.executorResult.task_id, message.executorResult);
+    }
+    for (const result of message.executorResults ?? []) {
+      executorByTaskId.set(result.task_id, result);
+    }
+  }
+
+  return {
+    requestAnalysis,
+    planner,
+    executorResults: [...executorByTaskId.values()],
+    critique: workflow,
+    correctionSource: {
+      formId: resolution.formId,
+      action: resolution.action,
+      retryTaskIds:
+        resolution.correctionTaskIds ?? workflow.review.retry_task_ids ?? [],
+    },
+  };
 }
 
 /**

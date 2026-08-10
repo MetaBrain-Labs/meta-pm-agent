@@ -16,7 +16,6 @@
 import { randomUUID } from "node:crypto";
 import { getWriter, type LangGraphRunnableConfig } from "@langchain/langgraph";
 import type { ProductWorkflowResult, TaskExecutionNode } from "@repo/shared";
-import { inferSupplementAffectedTaskIds } from "../../agents/conversation/workflow-resume";
 import type { UserInputRecord } from "../../agents/request/user-input";
 import type { ProductWorkflowStreamEvent } from "../../agents/product-workflow/agent";
 import {
@@ -39,9 +38,6 @@ import { getModelProfileFromRunnableConfig } from "../../agents/common/model-pro
 import { updateProductContextMetadata } from "../../agents/product-workflow/common/context-metadata";
 import { isDocumentEvidenceSupplement } from "../../agents/product-workflow/types";
 import type { WorkflowGraphStateValue } from "../state";
-
-const AUTOMATIC_CRITIQUE_CORRECTION_MARKER =
-  "[automatic critique correction]";
 
 /**
  * Planner 节点：显示 Orchestrator 的 Planner SubAgent 生成的 DAG，
@@ -485,133 +481,12 @@ async function executeCritiqueAgentReview(
     knowledgeGraph: reviewedKnowledgeGraph,
   });
 
-  if (shouldAutomaticallyPlanCorrection(nextWorkflowResult, state)) {
-    const correctionInput = createAutomaticCorrectionUserInput(
-      nextWorkflowResult,
-      state.originalUserInput,
-      state.userInput,
-    );
-    const priorCritiqueIssues = [
-      ...(nextWorkflowResult.review.issues ?? []),
-      ...(nextWorkflowResult.knowledge_graph_review?.issues ?? []),
-    ];
-    const retryTaskIds = nextWorkflowResult.review.retry_task_ids ?? [];
-    const supplementSourceTaskIds = isDocumentEvidenceSupplement(
-      state.supplementSourceTaskIds,
-    )
-      ? [...new Set([...state.supplementSourceTaskIds, ...retryTaskIds])]
-      : retryTaskIds;
-    const supplementAffectedTaskIds = inferSupplementAffectedTaskIds(
-      supplementSourceTaskIds,
-      state.plan,
-      reviewedKnowledgeGraph,
-    );
-    const planningResult = await orchestratorAgentNode(
-      {
-        ...state,
-        userInput: correctionInput,
-        plan: null,
-        orchestratorDecision: null,
-        executorResults: [],
-        knowledgeGraph: reviewedKnowledgeGraph,
-        priorCritiqueIssues,
-        productWorkflow: null,
-        supplementAgentTypes: EXECUTOR_DEFINITIONS.map(
-          (definition) => definition.agentType,
-        ),
-        supplementSourceTaskIds,
-        supplementAffectedTaskIds,
-      },
-      config,
-    );
-
-    return {
-      ...planningResult,
-      userInput: correctionInput,
-      executorResults: [],
-      priorCritiqueIssues,
-      productWorkflow: null,
-      supplementAgentTypes: EXECUTOR_DEFINITIONS.map(
-        (definition) => definition.agentType,
-      ),
-      supplementSourceTaskIds,
-      supplementAffectedTaskIds,
-    };
-  }
-
   writer?.({ type: "complete", result: nextWorkflowResult });
 
   return {
     productWorkflow: nextWorkflowResult,
     knowledgeGraph: reviewedKnowledgeGraph,
   };
-}
-
-/**
- * 判断 Critique 缺口是否可在无需用户输入时自动进入一次补充规划。
- */
-export function shouldAutomaticallyPlanCorrection(
-  workflowResult: ProductWorkflowResult,
-  state: Pick<WorkflowGraphStateValue, "userInput">,
-): boolean {
-  return (
-    (workflowResult.review.retry_task_ids?.length ?? 0) > 0 &&
-    workflowResult.proposal_questions.length === 0 &&
-    !workflowResult.knowledge_graph_update.open_questions.some(
-      (question) => question.blocking,
-    ) &&
-    !state.userInput.some((item) =>
-      item.content.includes(AUTOMATIC_CRITIQUE_CORRECTION_MARKER),
-    )
-  );
-}
-
-/**
- * 将 Critique 的确定性缺口转换为 Planner 可消费的自动修正输入。
- */
-function createAutomaticCorrectionInput(
-  workflowResult: ProductWorkflowResult,
-): string {
-  const issues = [
-    ...(workflowResult.review.issues ?? []),
-    ...(workflowResult.knowledge_graph_review?.issues ?? []),
-  ];
-  return [
-    AUTOMATIC_CRITIQUE_CORRECTION_MARKER,
-    "Create a supplement DAG that corrects the deterministic Critique issues below. Do not ask the user unless a genuinely blocking product decision is missing.",
-    `Retry tasks: ${workflowResult.review.retry_task_ids?.join(", ") || "none"}`,
-    ...issues.map(
-      (issue) =>
-        `- ${issue.code}${issue.task_id ? ` (${issue.task_id})` : ""}: ${issue.message}`,
-    ),
-  ].join("\n");
-}
-
-/**
- * 合并原始输入、当前表单答案和自动修正指令，原始输入索引始终保持稳定。
- */
-export function createAutomaticCorrectionUserInput(
-  workflowResult: ProductWorkflowResult,
-  originalUserInput: UserInputRecord[],
-  currentUserInput: UserInputRecord[],
-): UserInputRecord[] {
-  const records = originalUserInput.map((item) => ({ ...item }));
-  const seenContent = new Set(records.map((item) => item.content.trim()));
-  let nextIndex = Math.max(0, ...records.map((item) => item.index)) + 1;
-
-  for (const item of currentUserInput) {
-    const content = item.content.trim();
-    if (!content || seenContent.has(content)) continue;
-    records.push({ ...item, index: nextIndex++ });
-    seenContent.add(content);
-  }
-
-  records.push({
-    index: nextIndex,
-    type: "自动审查修正",
-    content: createAutomaticCorrectionInput(workflowResult),
-  });
-  return records;
 }
 
 /**
@@ -643,7 +518,10 @@ export function requireMissingInputConfirmation(
 
   return {
     ...workflowResult,
-    status: "pending_user_confirmation",
+    status:
+      (workflowResult.review.retry_task_ids?.length ?? 0) > 0
+        ? "requires_executor_retry"
+        : "pending_user_confirmation",
     proposal_questions: [
       ...workflowResult.proposal_questions,
       ...missingIndexes.map((index) => {

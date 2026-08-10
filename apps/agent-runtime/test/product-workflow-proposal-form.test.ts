@@ -17,6 +17,7 @@ import type {
   ProductWorkflowResult,
 } from "@repo/shared";
 import {
+  formatProductWorkflowCorrectionQuestionForm,
   formatProductWorkflowConfirmationQuestionForm,
   formatProductWorkflowProposalQuestionForm,
 } from "../src/agents/product-workflow/agent";
@@ -24,14 +25,17 @@ import { reconcileProposalQuestions } from "../src/agents/product-workflow/criti
 import { isAcceptedWorkflowResult } from "../src/agents/conversation/stream";
 import {
   isProductWorkflowAcceptanceAnswer,
+  isProductWorkflowCorrectionRetryAnswer,
   isProductWorkflowOptionalStopAnswer,
+  isProductWorkflowStopWithIssuesAnswer,
 } from "../src/utils/form-parser";
 
-test("uses final confirmation when retry has no proposal question", () => {
+test("uses a correction decision when retry has no proposal question", () => {
   const result = createWorkflowResult({
     proposalQuestions: [],
     executorResults: [],
   });
+  result.status = "requires_executor_retry";
   result.review.retry_task_ids = ["task-01"];
   result.review.issues = [
     {
@@ -44,9 +48,24 @@ test("uses final confirmation when retry has no proposal question", () => {
 
   assert.equal(isAcceptedWorkflowResult(result), false);
   assert.equal(formatProductWorkflowProposalQuestionForm(result), null);
-  assert.match(
-    formatProductWorkflowConfirmationQuestionForm(result),
-    /id="product-workflow-confirmation"/,
+  const form = formatProductWorkflowCorrectionQuestionForm(result);
+  assert.match(form, /title="审查错误处理"/);
+  assert.match(form, /生成补充修正任务/);
+  assert.match(form, /停止并保留问题结果/);
+});
+
+test("recognizes explicit Critique correction control actions", () => {
+  assert.equal(
+    isProductWorkflowCorrectionRetryAnswer(
+      "[form answers - review-proposal-decision]\n- 请选择如何处理审查错误？: 生成补充修正任务",
+    ),
+    true,
+  );
+  assert.equal(
+    isProductWorkflowStopWithIssuesAnswer(
+      "[form answers - review-proposal-decision]\n- 请选择如何处理审查错误？: 停止并保留问题结果",
+    ),
+    true,
   );
 });
 

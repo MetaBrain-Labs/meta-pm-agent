@@ -973,7 +973,7 @@ test("critique rejects research gaps when expected_output requires verified Evid
   );
 });
 
-test("supplement critique rejects active scope conflicts until the old node is deprecated", () => {
+test("supplement critique leaves natural-language scope conflicts to the model", () => {
   const task = createTask("task-10", 1, "executor-product-execution");
   const oldFeature: ProductKnowledgeGraph["entities"][number] = {
     id: "F-001",
@@ -1068,13 +1068,10 @@ test("supplement critique rejects active scope conflicts until the old node is d
   });
   assert.equal(
     conflicting.issues.some(
-      (issue) =>
-        issue.code === "ACTIVE_SCOPE_CONFLICT" &&
-        issue.task_id === task.task_id,
+      (issue) => issue.code === "ACTIVE_SCOPE_CONFLICT",
     ),
-    true,
+    false,
   );
-  assert.deepEqual(conflicting.retry_task_ids, [task.task_id]);
 
   const deprecatedFeature = {
     ...oldFeature,
@@ -1153,19 +1150,19 @@ test("supplement critique rejects active scope conflicts until the old node is d
   );
 });
 
-test("critique reports explicit user inputs not consumed by a decision contract", () => {
+test("critique does not infer conflicts or missing coverage from negative wording", () => {
   const task = createTask("task-10b", 1, "executor-product-strategy");
   const requirement = createRequirement(
     "R-010",
     task.task_id,
-    "Workspace authoring",
-    "Provide collaborative workspace authoring.",
+    "MVP analytics instrumentation",
+    "Establish the instrumentation collection plan during MVP development.",
   );
   const executorResult: ExecutorAgentResult = {
     task_id: task.task_id,
     agent_type: task.assigned_agent,
     focus_layer: "Requirement",
-    summary: "Captured the authoring requirement.",
+    summary: "Captured the future instrumentation requirement.",
     entities: [requirement],
     relations: [],
     decisions: [],
@@ -1177,55 +1174,32 @@ test("critique reports explicit user inputs not consumed by a decision contract"
     requestAnalysis: createRequestAnalysis(),
     plan: {
       status: "initial" as const,
-      request_summary: "Design a collaborative workspace.",
+      request_summary: "Plan MVP analytics instrumentation.",
       dag: { nodes: [task.task_id], edges: [] },
       tasks: [task],
       assumptions: [],
     },
     executorResults: [executorResult],
     userInput: [
-      { index: 1, content: "Collaborative authoring is required.", type: "requirement" },
-      { index: 2, content: "Role-based permissions are required.", type: "requirement" },
+      {
+        index: 1,
+        content: "暂无数据，将在 MVP 开发阶段建立埋点采集方案",
+        type: "constraint",
+      },
     ],
   };
 
-  const missing = createCritiqueValidationReport({
+  const report = createCritiqueValidationReport({
     ...baseInput,
     knowledgeGraph: createGraph({ entities: [requirement] }),
   });
-  assert.deepEqual(
-    missing.semantic_integrity.uncovered_user_input_indexes,
-    [2],
-  );
   assert.equal(
-    missing.issues.some((issue) => issue.code === "UNCOVERED_USER_INPUT"),
-    true,
-  );
-
-  const permissionDecision: ProductKnowledgeGraph["entities"][number] = {
-    id: "D-010",
-    type: "Decision",
-    name: "Role-based permissions",
-    description: "Use role-based permissions for workspace access.",
-    provenance: [{ kind: "user_input", user_input_index: 2 }],
-    source_task_id: task.task_id,
-    status: "confirmed",
-  };
-  const covered = createCritiqueValidationReport({
-    ...baseInput,
-    executorResults: [
-      {
-        ...executorResult,
-        entities: [requirement, permissionDecision],
-      },
-    ],
-    knowledgeGraph: createGraph({
-      entities: [requirement, permissionDecision],
-    }),
-  });
-  assert.deepEqual(
-    covered.semantic_integrity.uncovered_user_input_indexes,
-    [],
+    report.issues.some(
+      (issue) =>
+        issue.code === "ACTIVE_SCOPE_CONFLICT" ||
+        issue.code === "UNCOVERED_USER_INPUT",
+    ),
+    false,
   );
 });
 

@@ -226,13 +226,17 @@ export async function* streamWorkflowGraph(
 /**
  * 根据 Orchestrator Agent 的路由决策，决定是否进入 Planner SubAgent 计划回放节点。
  */
-function selectNextNodeAfterOrchestrator(state: WorkflowGraphStateValue) {
+export function selectNextNodeAfterOrchestrator(
+  state: WorkflowGraphStateValue,
+) {
   if (state.productWorkflow) return "end";
-  if (state.plan) return "planner_agent";
-
-  return state.orchestratorDecision?.route === "product_workflow"
-    ? "planner_agent"
-    : "end";
+  if (state.orchestratorDecision?.route !== "product_workflow") return "end";
+  if (!state.plan) {
+    throw new Error(
+      "Orchestrator routed to product_workflow without a valid delegated Planner plan.",
+    );
+  }
+  return "planner_agent";
 }
 
 /**

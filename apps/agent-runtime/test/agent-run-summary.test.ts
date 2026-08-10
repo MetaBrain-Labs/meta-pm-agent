@@ -141,7 +141,7 @@ test("writes enabled summary sections as markdown after finish", async () => {
             validation_report: {
               issues: [],
               semantic_integrity: {
-                uncovered_user_input_indexes: [],
+                stale_deprecated_downstream_node_ids: [],
               },
             },
             knowledge_graph_update: {

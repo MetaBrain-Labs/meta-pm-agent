@@ -18,15 +18,50 @@ import {
 } from "../src/repositories/request-form-repository";
 import { ChatRequestSchema } from "../src/schemas/request.schema";
 import {
+  createServerWorkflowRecoveryContext,
   isPersistedExecutorRetryFailureRetryable,
   shouldPersistProductWorkflowConfirmation,
   shouldRejectStaleWorkflowFormSubmission,
 } from "../src/services/chat-service";
 
-test("persists final handling confirmation only for pending results without proposals", () => {
+test("builds an authoritative correction context from persisted snapshots", () => {
+  const workflow = createWorkflowResult();
+  const recovery = createServerWorkflowRecoveryContext({
+    messages: [],
+    workflow,
+    resolution: {
+      action: "retry_correction",
+      formId: "review-1-proposal-decision",
+      questions: [],
+    },
+  });
+
+  assert.equal(recovery.requestAnalysis.business_model[0]?.user_goal, workflow.request_summary);
+  assert.deepEqual(recovery.planner, workflow.planner);
+  assert.deepEqual(recovery.executorResults, []);
+  assert.deepEqual(recovery.correctionSource, {
+    formId: "review-1-proposal-decision",
+    action: "retry_correction",
+    retryTaskIds: ["task-01"],
+  });
+});
+
+test("uses correction decisions instead of final handling for hard Critique errors", () => {
   const result = createWorkflowResult();
 
-  assert.equal(shouldPersistProductWorkflowConfirmation(result), true);
+  assert.equal(shouldPersistProductWorkflowConfirmation(result), false);
+  assert.equal(
+    shouldPersistProductWorkflowConfirmation({
+      ...result,
+      status: "pending_user_confirmation",
+      review: {
+        ...result.review,
+        rejected_task_ids: [],
+        retry_task_ids: [],
+      },
+    }),
+    true,
+  );
   assert.equal(
     shouldPersistProductWorkflowConfirmation({ ...result, status: "completed" }),
     false,
@@ -108,6 +143,34 @@ test("keeps exact question sources and only marks submitted fields answered", ()
       { answered: false, openQuestionId: "OQ-deployment" },
     ],
   );
+  assert.equal(resolution.action, "submit_answers");
+});
+
+test("parses Critique correction decisions as control actions", () => {
+  const retry = collectWorkflowAnswerResolution(
+    {
+      decision_kind: "critique_correction",
+      questions: [],
+      retry_task_ids: ["task-01"],
+    },
+    {
+      formId: "review-proposal-decision",
+      content:
+        "[form answers - review-proposal-decision]\n- 请选择如何处理审查错误？: 生成补充修正任务",
+    },
+  );
+  const stop = collectWorkflowAnswerResolution(
+    { decision_kind: "critique_correction", questions: [] },
+    {
+      formId: "review-proposal-decision",
+      content:
+        "[form answers - review-proposal-decision]\n- 请选择如何处理审查错误？: 停止并保留问题结果",
+    },
+  );
+
+  assert.equal(retry.action, "retry_correction");
+  assert.deepEqual(retry.correctionTaskIds, ["task-01"]);
+  assert.equal(stop.action, "stop_with_issues");
 });
 
 test("restores the persisted workflow from a final confirmation decision", () => {
@@ -211,7 +274,7 @@ test("does not accept stale graph references as persisted retry targets", () => 
  */
 function createWorkflowResult(): ProductWorkflowResult {
   return {
-    status: "pending_user_confirmation",
+    status: "requires_executor_retry",
     confirmation_id: "review-1",
     request_summary: "Review correction.",
     planner: {

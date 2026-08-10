@@ -120,6 +120,30 @@ interface ArchivedProductWorkflowRow {
 }
 
 /**
+ * 按会话与 Question Form ID 恢复服务端持久化的 Critique 快照。
+ *
+ * 表单恢复不能依赖客户端是否回传完整历史；proposal-decision 的前缀即原 confirmation_id。
+ */
+export async function findLatestProductWorkflowForForm(
+  conversationId: string,
+  formId: string,
+): Promise<ProductWorkflowResult | null> {
+  const confirmationId = formId.endsWith("-proposal-decision")
+    ? formId.slice(0, -"-proposal-decision".length)
+    : formId;
+  const rows = await prisma.$queryRaw<ArchivedProductWorkflowRow[]>`
+    SELECT "meta"->'productWorkflow' AS "workflow"
+    FROM "message"
+    WHERE "conversation_id" = ${conversationId}
+      AND "meta"->'productWorkflow'->>'confirmation_id' = ${confirmationId}
+    ORDER BY "created_at" DESC, "id" DESC
+    LIMIT 1
+  `;
+  const parsed = ProductWorkflowResultSchema.safeParse(rows[0]?.workflow);
+  return parsed.success ? parsed.data : null;
+}
+
+/**
  * 读取指定任务最近一次由服务端持久化的可重试错误。
  */
 export async function findLatestExecutorRetryError(

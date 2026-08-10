@@ -22,9 +22,13 @@ import {
   type ExecutorAgentResult,
   type ProductKnowledgeGraph,
   type ProductWorkflowResult,
+  type RequestAnalysis,
 } from "@repo/shared";
 import { getFormAnswerId } from "../../utils/form-parser";
-import type { WorkflowAnswerResolution } from "../../types";
+import type {
+  WorkflowAnswerResolution,
+  WorkflowRecoveryContext,
+} from "../../types";
 import type { WorkflowResumeContext } from "../product-workflow/types";
 import { parseUserInputBlock } from "../request/user-input";
 import {
@@ -42,10 +46,12 @@ export function createWorkflowResumeContextFromMessages({
   messages,
   knowledgeGraph,
   workflowAnswerResolution,
+  serverWorkflowRecoveryContext,
 }: {
   messages: ChatMessage[];
   knowledgeGraph?: ProductKnowledgeGraph | null;
   workflowAnswerResolution?: WorkflowAnswerResolution | null;
+  serverWorkflowRecoveryContext?: Readonly<WorkflowRecoveryContext>;
 }): WorkflowResumeContext | null {
   const formId = parseLatestFormAnswerId(messages);
   if (!formId) return null;
@@ -55,6 +61,7 @@ export function createWorkflowResumeContextFromMessages({
     knowledgeGraph,
     messages,
     workflowAnswerResolution,
+    serverWorkflowRecoveryContext,
   });
 }
 
@@ -121,13 +128,26 @@ function createWorkflowResumeContext({
   messages,
   knowledgeGraph,
   workflowAnswerResolution,
+  serverWorkflowRecoveryContext,
 }: {
   formId: string | null;
   messages: ChatMessage[];
   knowledgeGraph?: ProductKnowledgeGraph | null;
   workflowAnswerResolution?: WorkflowAnswerResolution | null;
+  serverWorkflowRecoveryContext?: Readonly<WorkflowRecoveryContext>;
 }): WorkflowResumeContext | null {
+  const productWorkflow =
+    serverWorkflowRecoveryContext?.critique ??
+    workflowAnswerResolution?.workflow ??
+    findLatestTaggedPayload(
+      messages,
+      "<product-workflow",
+      "</product-workflow>",
+      ProductWorkflowResultSchema,
+    ) ??
+    null;
   const requestAnalysis =
+    serverWorkflowRecoveryContext?.requestAnalysis ??
     findLatestTaggedPayload(
       messages,
       "<request-analysis",
@@ -138,15 +158,12 @@ function createWorkflowResumeContext({
       messages,
       "requestAnalysis",
       RequestAnalysisSchema,
-    );
-  const productWorkflow =
-    findLatestTaggedPayload(
-      messages,
-      "<product-workflow",
-      "</product-workflow>",
-      ProductWorkflowResultSchema,
-    ) ?? workflowAnswerResolution?.workflow ?? null;
+    ) ??
+    (productWorkflow
+      ? createRecoveredRequestAnalysis(productWorkflow)
+      : null);
   const plan =
+    serverWorkflowRecoveryContext?.planner ??
     findLatestTaggedPayload(
       messages,
       "<task-execution",
@@ -155,7 +172,11 @@ function createWorkflowResumeContext({
     ) ??
     productWorkflow?.planner ??
     null;
-  const executorResults = collectExecutorResults(messages, productWorkflow);
+  const executorResults = collectExecutorResults(
+    messages,
+    productWorkflow,
+    serverWorkflowRecoveryContext?.executorResults,
+  );
   const originalUserInput = findOriginalUserInput(messages);
 
   if (!requestAnalysis) {
@@ -230,6 +251,40 @@ function createWorkflowResumeContext({
     supplementAgentTypes: forceSupplementPlan
       ? inferSupplementAgentTypes(supplementAffectedTaskIds, plan)
       : [],
+  };
+}
+
+/**
+ * 从已归档工作流确定性恢复最小业务分析。
+ *
+ * 专用补证流程可能有意隐藏 Request Agent 展示，但后续表单恢复仍需一个稳定业务请求，
+ * 因此只复用工作流摘要和原 DAG 已覆盖的输入索引，不重新解释控制动作。
+ */
+export function createRecoveredRequestAnalysis(
+  workflow: ProductWorkflowResult,
+): RequestAnalysis {
+  const coveredIndexes = [
+    ...new Set(
+      workflow.planner.tasks.flatMap(
+        (task) => task.covered_business_model_indexes,
+      ),
+    ),
+  ];
+  return {
+    business_model: [
+      {
+        index: 1,
+        user_goal: workflow.request_summary,
+        goal_constraints: [
+          "Correct only the persisted Critique issues and preserve accepted graph content.",
+        ],
+        missing_information: [],
+        covered_user_input_indexes:
+          coveredIndexes.length > 0 ? coveredIndexes : [1],
+      },
+    ],
+    questions: [],
+    chitchat: [],
   };
 }
 
@@ -595,6 +650,7 @@ function inferOpenQuestionTaskIds(
 function collectExecutorResults(
   messages: ChatMessage[],
   productWorkflow: unknown,
+  serverExecutorResults: readonly ExecutorAgentResult[] = [],
 ): ExecutorAgentResult[] {
   const results = new Map<string, ExecutorAgentResult>();
   const workflowResult = ProductWorkflowResultSchema.safeParse(productWorkflow);
@@ -617,6 +673,11 @@ function collectExecutorResults(
         results.set(result.data.task_id, result.data);
       }
     }
+  }
+
+  // 服务端持久化快照是权威来源，覆盖客户端可能携带的旧任务结果。
+  for (const result of serverExecutorResults) {
+    results.set(result.task_id, result);
   }
 
   return [...results.values()];

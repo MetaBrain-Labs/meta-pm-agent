@@ -27,6 +27,7 @@ import {
   isDocumentEvidenceResolutionFormId,
   isProductWorkflowAcceptanceAnswer,
   isProductWorkflowOptionalStopAnswer,
+  isProductWorkflowStopWithIssuesAnswer,
   isPreOrchGraphConflictFormId,
   parseGraphConflictAction,
   releaseQuestionFormHumanInterrupt,
@@ -461,8 +462,9 @@ export async function chatStreamHandler(c: Context) {
         : await loadPendingDecisionQuestionForm(effectiveRequestFormId);
       if (pendingDecisionForm) {
         await markStatus("pending_user_confirmation");
-        const promptText =
-          "Conversation Agent 正在根据 Planner SubAgent 的决策项向你确认信息。";
+        const promptText = pendingDecisionForm.includes('title="审查错误处理"')
+          ? "Critique Agent 已完成审查，工作流正在等待你选择修正或停止。"
+          : "Conversation Agent 正在根据 Planner SubAgent 的决策项向你确认信息。";
         const output = getAgentOutput(
           agentOutputs,
           "conversation_confirmation",
@@ -574,6 +576,8 @@ export async function chatStreamHandler(c: Context) {
           knowledgeGraph: runtimeContext.knowledgeGraph,
           modelProfile,
           workflowAnswerResolution,
+          serverWorkflowRecoveryContext:
+            workflowAnswerResolution?.serverRecoveryContext,
           workflowRetry: parsed.data.workflowRetry,
           workflowRetryFailure,
           documentEvidenceResolution:
@@ -610,7 +614,9 @@ export async function chatStreamHandler(c: Context) {
         if (event.type === "complete") {
           // 捕获工作流完整结构化结果，供最终知识图谱归档使用
           productWorkflowResult = event.result;
-          autoFinalizedWorkflowRound = event.result.status === "completed";
+          autoFinalizedWorkflowRound =
+            event.result.status === "completed" ||
+            event.result.status === "discarded";
           if (
             documentEvidenceResolution?.status === "supplement_running" &&
             isAcceptedDocumentEvidenceWorkflowResult(event.result)
@@ -826,7 +832,9 @@ export async function chatStreamHandler(c: Context) {
           workspaceId: runtimeContext.workspaceId,
           conversationId: parsed.data.chatId,
           requestFormId: effectiveRequestFormId,
-          advanceVersion: true,
+          advanceVersion:
+            !isProductWorkflowResult(productWorkflowResult) ||
+            productWorkflowResult.status !== "discarded",
           // 最终归档优先使用运行时累计快照，避免 Critique Agent 的模型汇总覆盖成局部图谱。
           knowledgeGraph:
             latestKnowledgeGraph ??
@@ -1269,7 +1277,8 @@ function isProductWorkflowFinalConfirmationAnswer(
     .at(-1);
   return (
     isProductWorkflowAcceptanceAnswer(latestUserMessage?.content ?? "") ||
-    isProductWorkflowOptionalStopAnswer(latestUserMessage?.content ?? "")
+    isProductWorkflowOptionalStopAnswer(latestUserMessage?.content ?? "") ||
+    isProductWorkflowStopWithIssuesAnswer(latestUserMessage?.content ?? "")
   );
 }
 

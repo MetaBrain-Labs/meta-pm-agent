@@ -152,9 +152,7 @@ type CritiqueValidationReport = {
     orphan_feature_ids: string[];
   };
   semantic_integrity: {
-    active_semantic_conflict_node_ids: string[];
     stale_deprecated_downstream_node_ids: string[];
-    uncovered_user_input_indexes: number[];
     untraceable_node_ids: string[];
     unverified_evidence_ids: string[];
     broken_delivery_chain_requirement_ids: string[];
@@ -178,7 +176,8 @@ function createCritiqueAgentPayload(input: CritiqueAgentInput) {
     user_input: (input.userInput ?? []).map((item) => ({
       index: item.index,
       type: item.type,
-      content: truncateText(item.content, 300),
+      // 表单答案是语义审查的权威来源，不能只保留前几个答案。
+      content: truncateText(item.content, 2400),
     })),
     planner_summary: compactPlanForReview(input.plan),
     final_graph_summary: createFinalGraphSummary(input.knowledgeGraph),
@@ -670,10 +669,6 @@ function inspectSemanticIntegrity(
         ),
     )
     .map((entity) => entity.id);
-  const uncoveredUserInputIndexes = findUncoveredUserInputIndexes(
-    input,
-    activeEntities,
-  );
   const deliveryRequirements = selectDeliveryChainRequirements(
     input,
     activeEntities,
@@ -706,15 +701,10 @@ function inspectSemanticIntegrity(
       : [];
 
   return {
-    active_semantic_conflict_node_ids: findActiveScopeConflictNodeIds(
-      input.userInput ?? [],
-      activeEntities,
-    ),
     stale_deprecated_downstream_node_ids: findStaleDeprecatedDownstreamNodeIds(
       input.knowledgeGraph.entities,
       input.knowledgeGraph.relations,
     ),
-    uncovered_user_input_indexes: uncoveredUserInputIndexes,
     untraceable_node_ids: [...new Set(untraceableNodeIds)],
     unverified_evidence_ids: [...new Set(unverifiedEvidenceIds)],
     broken_delivery_chain_requirement_ids: [
@@ -760,27 +750,6 @@ function createSemanticIntegrityIssues(
         severity: "error",
         taskId: findCurrentOwnerTaskId(input, entity),
         message: `Evidence ${evidenceId} is not backed by explicit user input or a verified web-search source.`,
-      }),
-    );
-  }
-  for (const inputIndex of integrity.uncovered_user_input_indexes) {
-    issues.push(
-      createReviewIssue({
-        code: "UNCOVERED_USER_INPUT",
-        severity: "error",
-        taskId: findUserInputOwnerTaskId(input, inputIndex),
-        message: `Explicit user input ${inputIndex} is not represented by an active Requirement, Decision, Risk, or OpenQuestion.`,
-      }),
-    );
-  }
-  for (const nodeId of integrity.active_semantic_conflict_node_ids) {
-    const entity = entityById.get(nodeId);
-    issues.push(
-      createReviewIssue({
-        code: "ACTIVE_SCOPE_CONFLICT",
-        severity: "error",
-        taskId: findCurrentOwnerTaskId(input, entity),
-        message: `Active node ${nodeId} conflicts with an explicit exclusion in the current user input and must be deprecated or corrected.`,
       }),
     );
   }
@@ -906,71 +875,6 @@ function hasRequirementMetricCoverage(
 }
 
 /**
- * 找出尚未进入业务图谱或风险/问题记录的明确用户输入。
- */
-function findUncoveredUserInputIndexes(
-  input: CritiqueAgentInput,
-  activeEntities: KnowledgeGraphEntity[],
-): number[] {
-  const userInput = input.userInput ?? [];
-  if (userInput.length === 0) return [];
-  const directlyCovered = new Set(
-    activeEntities.flatMap((entity) =>
-      ["Requirement", "Decision", "Risk", "OpenQuestion"].includes(entity.type)
-        ? (entity.provenance ?? []).flatMap((source) =>
-            source.kind === "user_input" ? [source.user_input_index] : [],
-          )
-        : [],
-    ),
-  );
-  const artifactTexts = [
-    ...activeEntities
-      .filter(
-        (entity) =>
-          entity.type === "Requirement" || entity.type === "Decision",
-      )
-      .map((entity) => `${entity.name} ${entity.description ?? ""}`),
-    ...input.knowledgeGraph.risks.map((risk) => risk.text),
-    ...input.knowledgeGraph.open_questions.map((question) => question.text),
-  ];
-
-  return userInput
-    .filter(
-      (item) =>
-        !directlyCovered.has(item.index) &&
-        !artifactTexts.some((text) =>
-          hasMeaningfulTextOverlap(item.content, text),
-        ),
-    )
-    .map((item) => item.index);
-}
-
-/**
- * 从用户否定或排除语句中找出仍被活跃节点肯定表达的范围。
- */
-function findActiveScopeConflictNodeIds(
-  userInput: Array<{ content: string }>,
-  activeEntities: KnowledgeGraphEntity[],
-): string[] {
-  const deniedPhrases = userInput.flatMap((item) =>
-    extractDeniedPhrases(item.content),
-  );
-  if (deniedPhrases.length === 0) return [];
-
-  return activeEntities
-    .filter((entity) => {
-      const text = `${entity.name} ${entity.description ?? ""}`;
-      const normalized = normalizeSemanticText(text);
-      return deniedPhrases.some(
-        (phrase) =>
-          normalized.includes(phrase) &&
-          !isPhraseExplicitlyNegated(text, phrase),
-      );
-    })
-    .map((entity) => entity.id);
-}
-
-/**
  * 找出只依赖已废弃 Requirement/Feature 分支的活跃 Feature、Component 与 Metric。
  */
 function findStaleDeprecatedDownstreamNodeIds(
@@ -1058,105 +962,6 @@ function findStaleDeprecatedDownstreamNodeIds(
 }
 
 /**
- * 提取中英文否定短语，面向“无全文搜索”“不包含 WYSIWYG”等明确范围回答。
- */
-function extractDeniedPhrases(value: string): string[] {
-  const phrases: string[] = [];
-  for (const clause of value.split(/[，。；;\n]/)) {
-    const chinese =
-      /(?:不包含|不支持|不需要|不考虑|禁止|排除|无)([^，。；;]{2,40})/i.exec(
-        clause,
-      )?.[1];
-    const english =
-      /(?:does\s+not\s+include|do\s+not\s+support|without|exclude|no)\s+([^,.;]{2,40})/i.exec(
-        clause,
-      )?.[1];
-    for (const phrase of [chinese, english]) {
-      if (!phrase) continue;
-      const normalized = normalizeSemanticText(
-        phrase.replace(/^(?:任何|相关|the|any|a|an)\s+/i, ""),
-      );
-      if (normalized.length >= 2) phrases.push(normalized);
-    }
-  }
-  return [...new Set(phrases)];
-}
-
-/**
- * 判断节点自身是否也在明确表达否定，避免把“禁用全文搜索”当成冲突节点。
- */
-function isPhraseExplicitlyNegated(text: string, normalizedPhrase: string): boolean {
-  const normalized = normalizeSemanticText(text);
-  return [
-    "不包含",
-    "不支持",
-    "不需要",
-    "不考虑",
-    "禁止",
-    "排除",
-    "无",
-    "without",
-    "exclude",
-    "no",
-  ].some((marker) =>
-    normalized.includes(`${normalizeSemanticText(marker)}${normalizedPhrase}`),
-  );
-}
-
-/**
- * 使用轻量关键词交集兼容中英文表述，不引入额外相似度依赖。
- */
-function hasMeaningfulTextOverlap(left: string, right: string): boolean {
-  const normalizedLeft = normalizeSemanticText(left);
-  const normalizedRight = normalizeSemanticText(right);
-  if (
-    normalizedLeft.length >= 4 &&
-    normalizedRight.includes(normalizedLeft)
-  ) {
-    return true;
-  }
-  const leftTokens = extractSemanticTokens(left);
-  const rightTokens = new Set(extractSemanticTokens(right));
-  const overlap = leftTokens.filter((token) => rightTokens.has(token)).length;
-  return overlap >= Math.min(2, Math.max(1, leftTokens.length));
-}
-
-/**
- * 提取英文关键词和中文双字片段。
- */
-function extractSemanticTokens(value: string): string[] {
-  const normalized = value.normalize("NFKC").toLowerCase();
-  const latin =
-    normalized
-      .match(/[a-z0-9][a-z0-9_-]{1,}/g)
-      ?.filter(
-        (token) =>
-          !["the", "and", "for", "with", "user", "用户", "需要"].includes(
-            token,
-          ),
-      ) ?? [];
-  const han = normalized.match(/[\p{Script=Han}]+/gu) ?? [];
-  const hanPairs = han.flatMap((sequence) => {
-    const pairs: string[] = [];
-    for (let index = 0; index < sequence.length - 1; index += 1) {
-      pairs.push(sequence.slice(index, index + 2));
-    }
-    return pairs;
-  });
-  return [...new Set([...latin, ...hanPairs])];
-}
-
-/**
- * 统一语义比较文本。
- */
-function normalizeSemanticText(value: string): string {
-  return value
-    .normalize("NFKC")
-    .toLowerCase()
-    .replace(/[\s"'`“”‘’()[\]{}<>《》【】:_-]+/g, "");
-}
-
-/**
  * 为语义问题找到本轮可执行的领域所有者。
  */
 function findCurrentOwnerTaskId(
@@ -1180,25 +985,6 @@ function findCurrentOwnerTaskId(
     if (domainOwner) return domainOwner.task_id;
   }
   return input.plan.tasks[0]?.task_id;
-}
-
-/**
- * 根据 Request Agent 的业务覆盖映射找到遗漏输入的本轮任务。
- */
-function findUserInputOwnerTaskId(
-  input: CritiqueAgentInput,
-  userInputIndex: number,
-): string | undefined {
-  const businessIndexes = input.requestAnalysis.business_model
-    .filter((item) => item.covered_user_input_indexes.includes(userInputIndex))
-    .map((item) => item.index);
-  return (
-    input.plan.tasks.find((task) =>
-      task.covered_business_model_indexes.some((index) =>
-        businessIndexes.includes(index),
-      ),
-    )?.task_id ?? input.plan.tasks[0]?.task_id
-  );
 }
 
 /**
@@ -2160,15 +1946,17 @@ export function composeProductWorkflowResult(
   const unresolvedBlockingQuestionCount = input.knowledgeGraph.open_questions.filter(
     (question) => question.blocking,
   ).length;
+  const requiresExecutorRetry =
+    rejectedTaskIds.length > 0 || retryTaskIds.length > 0 || hasError;
   const needsConfirmation =
-    proposalQuestions.length > 0 ||
-    rejectedTaskIds.length > 0 ||
-    retryTaskIds.length > 0 ||
-    hasError ||
-    unresolvedBlockingQuestionCount > 0;
+    proposalQuestions.length > 0 || unresolvedBlockingQuestionCount > 0;
 
   return {
-    status: needsConfirmation ? "pending_user_confirmation" : "completed",
+    status: requiresExecutorRetry
+      ? "requires_executor_retry"
+      : needsConfirmation
+        ? "pending_user_confirmation"
+        : "completed",
     confirmation_id: review.confirmation_id,
     request_summary: review.request_summary,
     planner: input.plan,
@@ -2199,11 +1987,13 @@ export function composeProductWorkflowResult(
       issues: graphIssues,
     },
     proposal_questions: proposalQuestions,
-    confirmation_message: needsConfirmation
-      ? unresolvedBlockingQuestionCount > 0 && proposalQuestions.length === 0
-        ? `仍有 ${unresolvedBlockingQuestionCount} 个阻塞问题未关闭，本轮不能标记为完成。`
-        : review.confirmation_message
-      : `本轮任务已完成：${truncateText(review.product_context_update, 240)}`,
+    confirmation_message: requiresExecutorRetry
+      ? review.confirmation_message
+      : needsConfirmation
+        ? unresolvedBlockingQuestionCount > 0 && proposalQuestions.length === 0
+          ? `仍有 ${unresolvedBlockingQuestionCount} 个阻塞问题未关闭，本轮不能标记为完成。`
+          : review.confirmation_message
+        : `本轮任务已完成：${truncateText(review.product_context_update, 240)}`,
   };
 }
 

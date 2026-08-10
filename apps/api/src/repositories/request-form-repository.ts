@@ -186,16 +186,20 @@ export async function persistProposalDecisionItem(
   if (!requestFormId || !result) return;
 
   const slots = collectProposalSlots(result);
-  if (slots.length === 0) return;
+  const correctionRequired = result.status === "requires_executor_retry";
+  const correctionTaskIds = collectCorrectionTaskIds(result);
+  if (slots.length === 0 && !correctionRequired) return;
   const questionId = getProposalDecisionId(result);
   const payload = JSON.stringify({
     question_id: questionId,
     questions: slots,
+    decision_kind: correctionRequired ? "critique_correction" : "proposal",
+    retry_task_ids: correctionTaskIds,
   });
   const updated = await prisma.$executeRaw`
     UPDATE "request_form_item"
     SET
-      "priority" = ${slots[0]?.priority ?? 0},
+      "priority" = ${correctionRequired ? 100 : (slots[0]?.priority ?? 0)},
       "payload" = ${payload}::jsonb,
       "updated_at" = CURRENT_TIMESTAMP
     WHERE "form_id" = ${requestFormId}
@@ -221,10 +225,32 @@ export async function persistProposalDecisionItem(
       'decision',
       'pending',
       'planner',
-      ${slots[0]?.priority ?? 0},
+      ${correctionRequired ? 100 : (slots[0]?.priority ?? 0)},
       ${payload}::jsonb
     )
   `;
+}
+
+/**
+ * 收集 Critique 修正的稳定任务引用；全局硬错误回退到原 DAG。
+ */
+function collectCorrectionTaskIds(result: ProductWorkflowResult): string[] {
+  const plannedTaskIds = new Set(
+    result.planner.tasks.map((task) => task.task_id),
+  );
+  const referencedTaskIds = [
+    ...(result.review.retry_task_ids ?? []),
+    ...(result.review.issues ?? []).flatMap((issue) =>
+      issue.severity === "error" && issue.task_id ? [issue.task_id] : [],
+    ),
+    ...(result.knowledge_graph_review?.issues ?? []).flatMap((issue) =>
+      issue.severity === "error" && issue.task_id ? [issue.task_id] : [],
+    ),
+  ].filter((taskId) => plannedTaskIds.has(taskId));
+  if (referencedTaskIds.length > 0) return [...new Set(referencedTaskIds)];
+  return result.status === "requires_executor_retry"
+    ? result.planner.tasks.map((task) => task.task_id)
+    : [];
 }
 
 /**
@@ -363,6 +389,7 @@ export function collectConfirmationWorkflowResolution(
   }
   return {
     formId,
+    action: "submit_answers",
     questions: [],
     workflow: workflow.data,
   };
@@ -963,7 +990,32 @@ export function collectWorkflowAnswerResolution(
     sources: question.sources,
   }));
 
-  return { formId: answer.formId, questions };
+  const decisionKind = payload?.decision_kind;
+  const action =
+    decisionKind === "critique_correction" &&
+    /^-\s*请选择如何处理审查错误？:\s*生成补充修正任务\s*$/m.test(
+      answer.content,
+    )
+      ? "retry_correction"
+      : decisionKind === "critique_correction" &&
+          /^-\s*请选择如何处理审查错误？:\s*停止并保留问题结果\s*$/m.test(
+            answer.content,
+          )
+        ? "stop_with_issues"
+        : /^-\s*workflow_action:\s*stop_optional_questions\s*$/m.test(
+              answer.content,
+            )
+          ? "stop_optional_questions"
+          : "submit_answers";
+
+  return {
+    formId: answer.formId,
+    action,
+    questions,
+    ...(decisionKind === "critique_correction"
+      ? { correctionTaskIds: parseStringArray(payload?.retry_task_ids) ?? [] }
+      : {}),
+  };
 }
 
 /**
@@ -1254,7 +1306,11 @@ function buildDecisionQuestionForm(payload: Record<string, unknown>): string | n
       })
     : [];
 
-  if (!questionId || questions.length === 0) return null;
+  if (!questionId) return null;
+  if (payload.decision_kind === "critique_correction") {
+    return buildCorrectionQuestionForm(questionId, questions, payload);
+  }
+  if (questions.length === 0) return null;
   const hasBlockingQuestions = questions.some((question) => question.required);
   const displayQuestions = questions.map((question) =>
     question.required
@@ -1286,6 +1342,53 @@ ${JSON.stringify(
           secondaryActionValue: "stop_optional_questions",
         }
       : {}),
+  },
+  null,
+  2,
+)}
+</question-form>`;
+}
+
+/**
+ * 从持久化 decision 恢复 Critique 硬错误处理表单。
+ */
+function buildCorrectionQuestionForm(
+  questionId: string,
+  questions: Array<Record<string, unknown>>,
+  payload: Record<string, unknown>,
+): string {
+  const retryTaskIds = parseStringArray(payload.retry_task_ids) ?? [];
+  return `<question-form id="${escapeAttribute(questionId)}" title="审查错误处理">
+${JSON.stringify(
+  {
+    description:
+      "Critique Agent 发现当前结果存在必须修正的错误。请选择生成补充修正任务，或停止流程并保留当前问题报告；未经确认不会继续生成 DAG。",
+    questions: [
+      {
+        id: "workflow_action",
+        label: "请选择如何处理审查错误？",
+        type: "radio",
+        required: true,
+        options: ["生成补充修正任务", "停止并保留问题结果"],
+        help: `待修正任务：${retryTaskIds.join("、") || "未指定"}`,
+        collapsible: false,
+      },
+      ...questions.map((question) => ({
+        ...question,
+        collapsible: true,
+        defaultCollapsed: true,
+      })),
+      {
+        id: "correction_notes",
+        label: "补充修正要求",
+        type: "textarea",
+        required: false,
+        placeholder: "可选：补充本轮修正需要遵守的事实或约束。",
+        collapsible: true,
+        defaultCollapsed: true,
+      },
+    ],
+    submitLabel: "提交处理决定",
   },
   null,
   2,

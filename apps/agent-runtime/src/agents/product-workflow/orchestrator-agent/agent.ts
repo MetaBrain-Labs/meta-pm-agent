@@ -299,6 +299,8 @@ export function requireDelegatedPlannerPlan(
   capturedPlan: TaskExecutionPlan | undefined,
   plannerInvocationStarted: boolean,
 ): TaskExecutionPlan | undefined {
+  // conversation 路由是权威终止信号；即使模型误调用 Planner 也不得执行其计划。
+  if (route !== "product_workflow") return undefined;
   if (route === "product_workflow" && !capturedPlan) {
     throw new Error(
       plannerInvocationStarted

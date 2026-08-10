@@ -46,37 +46,36 @@ import {
 } from "../src/agents/product-workflow/orchestrator-agent/agent";
 import { getMissingRequiredSubagentError } from "../src/agents/common/run-agent";
 import {
-  createAutomaticCorrectionUserInput,
   createWorkflowRoundStartEvent,
   isSupplementWorkflow,
   requireMissingInputConfirmation,
   selectNextExecutorRouterTargets,
-  shouldAutomaticallyPlanCorrection,
 } from "../src/graph/nodes/product-workflow-node";
 import type { WorkflowGraphStateValue } from "../src/graph/state";
+import { selectNextNodeAfterOrchestrator } from "../src/graph/workflow";
 
-test("automatically replans one retry-only Critique result", () => {
-  const result = {
-    review: { retry_task_ids: ["supplement-task-01"] },
-    proposal_questions: [],
-    knowledge_graph_update: { open_questions: [] },
-  } as unknown as ProductWorkflowResult;
+test("discards a delegated Planner plan when Orchestrator routes to conversation", () => {
+  const plan = createPlan([
+    createTask("task-01", 1, "executor-product-strategy", []),
+  ]);
 
+  assert.equal(requireDelegatedPlannerPlan("conversation", plan, true), undefined);
   assert.equal(
-    shouldAutomaticallyPlanCorrection(result, { userInput: [] }),
-    true,
+    selectNextNodeAfterOrchestrator({
+      productWorkflow: null,
+      plan,
+      orchestratorDecision: { route: "conversation" },
+    } as unknown as WorkflowGraphStateValue),
+    "end",
   );
-  assert.equal(
-    shouldAutomaticallyPlanCorrection(result, {
-      userInput: [
-        {
-          index: 1,
-          type: "自动审查修正",
-          content: "[automatic critique correction]",
-        },
-      ],
-    }),
-    false,
+  assert.throws(
+    () =>
+      selectNextNodeAfterOrchestrator({
+        productWorkflow: null,
+        plan: null,
+        orchestratorDecision: { route: "product_workflow" },
+      } as unknown as WorkflowGraphStateValue),
+    /without a valid delegated Planner plan/,
   );
 });
 
@@ -86,34 +85,6 @@ test("assigns a distinct round ID to each new Planner DAG", () => {
 
   assert.equal(first.type, "workflow-round-start");
   assert.notEqual(first.roundId, second.roundId);
-});
-
-test("automatic Critique correction preserves original input indexes and meaning", () => {
-  const workflow = createRetryWorkflowResult();
-  const correctedInput = createAutomaticCorrectionUserInput(
-    workflow,
-    [
-      { index: 1, type: "request", content: "设计文档协同工具" },
-      {
-        index: 5,
-        type: "constraint",
-        content: "无特殊技术或平台约束",
-      },
-    ],
-    [
-      {
-        index: 1,
-        type: "form",
-        content: "[form answers - proposal] 保持当前范围",
-      },
-    ],
-  );
-
-  assert.equal(correctedInput[1]?.index, 5);
-  assert.equal(correctedInput[1]?.content, "无特殊技术或平台约束");
-  assert.equal(correctedInput[2]?.index, 6);
-  assert.equal(correctedInput[3]?.index, 7);
-  assert.match(correctedInput[3]?.content ?? "", /automatic critique correction/);
 });
 
 test("missing referenced input asks for confirmation instead of automatic planning", () => {
@@ -130,13 +101,9 @@ test("missing referenced input asks for confirmation instead of automatic planni
 
   const guarded = requireMissingInputConfirmation(workflow, []);
 
-  assert.equal(guarded.status, "pending_user_confirmation");
+  assert.equal(guarded.status, "requires_executor_retry");
   assert.equal(guarded.proposal_questions[0]?.source_task_id, "task-01");
   assert.match(guarded.proposal_questions[0]?.label ?? "", /5/);
-  assert.equal(
-    shouldAutomaticallyPlanCorrection(guarded, { userInput: [] }),
-    false,
-  );
 });
 
 test("removes answered open questions from supplement tasks only", () => {
@@ -1104,14 +1071,14 @@ function assertNoDagCycle(plan: TaskExecutionPlan): void {
 }
 
 /**
- * 构造会触发自动补充规划的最小 Critique 结果。
+ * 构造等待用户选择修正动作的最小 Critique 结果。
  */
 function createRetryWorkflowResult(): ProductWorkflowResult {
   const planner = createPlan([
     createTask("task-01", 1, "executor-product-strategy", []),
   ]);
   return {
-    status: "pending_user_confirmation",
+    status: "requires_executor_retry",
     confirmation_id: "critique-retry",
     request_summary: "Correct uncovered input.",
     planner,

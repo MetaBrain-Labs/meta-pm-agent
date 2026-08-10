@@ -731,7 +731,12 @@ export const PlannerWorkflowReviewOutputSchema = CritiqueAgentOutputSchema;
  * 产品工作流的运行时汇总结果。
  */
 export const ProductWorkflowResultSchema = z.object({
-  status: z.enum(["pending_user_confirmation", "completed", "discarded"]),
+  status: z.enum([
+    "pending_user_confirmation",
+    "requires_executor_retry",
+    "completed",
+    "discarded",
+  ]),
   confirmation_id: z.string().min(1),
   request_summary: z.string().min(1),
   planner: TaskExecutionPlanSchema,

@@ -42,3 +42,25 @@ export function isProductWorkflowOptionalStopAnswer(text: string): boolean {
       /^-\s*workflow_action:\s*stop_optional_questions\s*$/m.test(text),
   );
 }
+
+/**
+ * 判断用户是否明确停止包含硬错误的工作流，并保留当前审查结果。
+ */
+export function isProductWorkflowStopWithIssuesAnswer(text: string): boolean {
+  const formId = getFormAnswerId(text);
+  return Boolean(
+    formId?.endsWith("-proposal-decision") &&
+      /^-\s*请选择如何处理审查错误？:\s*停止并保留问题结果\s*$/m.test(text),
+  );
+}
+
+/**
+ * 判断用户是否确认基于 Critique 结论生成补充修正任务。
+ */
+export function isProductWorkflowCorrectionRetryAnswer(text: string): boolean {
+  const formId = getFormAnswerId(text);
+  return Boolean(
+    formId?.endsWith("-proposal-decision") &&
+      /^-\s*请选择如何处理审查错误？:\s*生成补充修正任务\s*$/m.test(text),
+  );
+}

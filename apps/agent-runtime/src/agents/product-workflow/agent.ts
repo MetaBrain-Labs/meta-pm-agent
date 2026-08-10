@@ -9,6 +9,7 @@
  * - formatExecutorResultBlock()：格式化 Executor 结果块
  * - formatProductWorkflowBlock()：格式化完整产出块
  * - formatProductWorkflowConfirmationQuestionForm / ProposalQuestionForm：生成确认表单
+ * - formatProductWorkflowCorrectionQuestionForm：生成 Critique 硬错误处理表单
  * - 聚合导出子模块（knowledge-graph、tasks、executor-agent、critique-agent）
  *
  * Notes:
@@ -157,6 +158,53 @@ export function formatProductWorkflowProposalQuestionForm(
   return `<question-form id="${escapeAttribute(
     getProposalDecisionId(result),
   )}" title="${hasBlockingQuestions ? "补充信息确认" : "可选优化问题"}">\n${JSON.stringify(form, null, 2)}\n</question-form>`;
+}
+
+/**
+ * 生成 Critique 硬错误的显式处理表单。
+ *
+ * 用户必须先选择修正或停止；可选问题只作为修正补充，不得把硬错误降级成普通优化项。
+ */
+export function formatProductWorkflowCorrectionQuestionForm(
+  result: ProductWorkflowResult,
+): string {
+  const supplementalQuestions = getProposalFormQuestions(result).map(
+    (question) => ({
+      ...question,
+      collapsible: true,
+      defaultCollapsed: true,
+    }),
+  );
+  const form = {
+    description:
+      "Critique Agent 发现当前结果存在必须修正的错误。请选择生成补充修正任务，或停止流程并保留当前问题报告；未经确认不会继续生成 DAG。",
+    questions: [
+      {
+        id: "workflow_action",
+        label: "请选择如何处理审查错误？",
+        type: "radio",
+        required: true,
+        options: ["生成补充修正任务", "停止并保留问题结果"],
+        help: `待修正任务：${result.review.retry_task_ids?.join("、") || "未指定"}`,
+        collapsible: false,
+      },
+      ...supplementalQuestions,
+      {
+        id: "correction_notes",
+        label: "补充修正要求",
+        type: "textarea",
+        required: false,
+        placeholder: "可选：补充本轮修正需要遵守的事实或约束。",
+        collapsible: true,
+        defaultCollapsed: true,
+      },
+    ],
+    submitLabel: "提交处理决定",
+  };
+
+  return `<question-form id="${escapeAttribute(
+    getProposalDecisionId(result),
+  )}" title="审查错误处理">\n${JSON.stringify(form, null, 2)}\n</question-form>`;
 }
 
 /**

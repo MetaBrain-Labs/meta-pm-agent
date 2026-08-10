@@ -16,6 +16,7 @@ export {
   streamConversation,
 } from "./agents/conversation/stream";
 export {
+  createRecoveredRequestAnalysis,
   resolveAnsweredGraphOpenQuestions,
 } from "./agents/conversation/workflow-resume";
 export {
@@ -27,6 +28,7 @@ export {
   formatProductWorkflowBlock,
   formatProductWorkflowConfirmationQuestionForm,
   formatProductWorkflowProposalQuestionForm,
+  formatProductWorkflowCorrectionQuestionForm,
   getProposalDecisionId,
 } from "./agents/product-workflow/agent";
 export {
@@ -93,11 +95,14 @@ export type {
   ConversationStreamOptions,
   StreamChunk,
   WorkflowAnswerResolution,
+  WorkflowRecoveryContext,
 } from "./types";
 export {
   getFormAnswerId,
   isFormAnswer,
   isProductWorkflowAcceptanceAnswer,
+  isProductWorkflowCorrectionRetryAnswer,
   isProductWorkflowOptionalStopAnswer,
+  isProductWorkflowStopWithIssuesAnswer,
 } from "./utils/form-parser";
 export { parseGraphConflictAction, isPreOrchGraphConflictFormId } from "./agents/product-workflow/orchestrator-agent/pre-orchestrator-subagent";

@@ -267,6 +267,7 @@ test("closes all answered form questions without restored product workflow paylo
     ),
     knowledgeGraph,
     workflowAnswerResolution: {
+      action: "submit_answers",
       formId: "review-proposal-decision",
       questions: knowledgeGraph.open_questions.map((question) => ({
         label: question.text,
@@ -307,6 +308,7 @@ test("keeps skipped questions open and preserves their source agent", () => {
     ),
     knowledgeGraph,
     workflowAnswerResolution: {
+      action: "submit_answers",
       formId: "review-proposal-decision",
       questions: [
         {
@@ -358,6 +360,7 @@ test("uses unique task and text matching for legacy form sources", () => {
     ),
     knowledgeGraph,
     workflowAnswerResolution: {
+      action: "submit_answers",
       formId: "review-proposal-decision",
       questions: [
         {
@@ -390,6 +393,7 @@ test("does not close ambiguous legacy text matches", () => {
     ),
     knowledgeGraph,
     workflowAnswerResolution: {
+      action: "submit_answers",
       formId: "review-proposal-decision",
       questions: [
         {
@@ -470,10 +474,18 @@ test("stopping optional questions completes without another form or orchestrator
   const messages = createMessages(
     "[form answers - critique-result-proposal-decision]\n- workflow_action: stop_optional_questions",
   );
+  const workflow = createProductWorkflowResult("critique-result");
+  workflow.review.rejected_task_ids = [];
+  workflow.review.retry_task_ids = [];
+  workflow.review.issues = [];
   messages.splice(
     messages.length - 1,
     0,
-    message("a5", "assistant", createProductWorkflowBlock("critique-result")),
+    message(
+      "a5",
+      "assistant",
+      `<product-workflow>\n${JSON.stringify(workflow)}\n</product-workflow>`,
+    ),
   );
   const events = [];
 
@@ -513,6 +525,42 @@ test("stopping optional questions completes without another form or orchestrator
   );
 });
 
+test("stopping a hard Critique error discards without starting another workflow round", async () => {
+  const workflow = createProductWorkflowResult("critique-result");
+  workflow.status = "requires_executor_retry";
+  const messages = createMessages(
+    "[form answers - critique-result-proposal-decision]\n- 请选择如何处理审查错误？: 停止并保留问题结果",
+  );
+  const events = [];
+
+  for await (const event of streamConversation(messages, {
+    mode: "project",
+    workflowAnswerResolution: {
+      action: "stop_with_issues",
+      formId: "critique-result-proposal-decision",
+      questions: [],
+      workflow,
+    },
+  })) {
+    events.push(event);
+  }
+
+  const completed = events.find((event) => event.type === "complete");
+  assert.equal(completed?.type === "complete" && completed.result.status, "discarded");
+  assert.equal(
+    events.some((event) => event.type === "workflow-round-start"),
+    false,
+  );
+  assert.equal(
+    events.some(
+      (event) =>
+        event.type === "agent-status" &&
+        ["request", "planner", "orchestrator"].includes(event.agentType ?? ""),
+    ),
+    false,
+  );
+});
+
 test("accepts a persisted final workflow without client workflow history", async () => {
   const messages = createMessages(
     "[form answers - product-workflow-confirmation]\n- 你希望如何处理当前结果？: 确认接受\n- 补充说明: (skipped)",
@@ -522,6 +570,7 @@ test("accepts a persisted final workflow without client workflow history", async
   for await (const event of streamConversation(messages, {
     mode: "project",
     workflowAnswerResolution: {
+      action: "submit_answers",
       formId: "product-workflow-confirmation",
       questions: [],
       workflow: createProductWorkflowResult(),

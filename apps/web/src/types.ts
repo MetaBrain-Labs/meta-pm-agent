@@ -306,7 +306,11 @@ export interface ExecutorAgentResult {
 }
 
 export interface ProductWorkflowResult {
-  status: "pending_user_confirmation" | "completed" | "discarded";
+  status:
+    | "pending_user_confirmation"
+    | "requires_executor_retry"
+    | "completed"
+    | "discarded";
   confirmation_id: string;
   request_summary: string;
   planner: TaskExecutionPlan;
