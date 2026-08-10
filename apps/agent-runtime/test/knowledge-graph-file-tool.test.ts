@@ -12,7 +12,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ProductKnowledgeGraph } from "@repo/shared";
-import { createKnowledgeGraphTools } from "../src/agents/common/knowledge-graph-file-tool";
+import {
+  NodeProvenanceValidationError,
+  createKnowledgeGraphTools,
+} from "../src/agents/common/knowledge-graph-file-tool";
 
 test("atomically allocates graph IDs and skips missing relation endpoints", async () => {
   const state = createKnowledgeGraph();
@@ -386,6 +389,62 @@ test("requires auditable Evidence provenance and verified search sources", async
     ],
   });
   assert.equal(state.entities.filter((item) => item.type === "Evidence").length, 2);
+});
+
+test("candidate graph values require an explicit user confirmation before numeric Evidence", async () => {
+  const candidateId = "D-cfafdde1-ed04-4a40-bfaa-fdef8487d71f";
+  const state = createKnowledgeGraph();
+  state.entities.push({
+    id: candidateId,
+    type: "Decision",
+    name: "Candidate latency baseline",
+    description:
+      "Candidate p95=600ms, p99=1200ms, conflict rate=0.8%, and anchor drift=0.3%.",
+    source_task_id: "task-old",
+    status: "proposed",
+  });
+  const createTool = (content: string) =>
+    getTool(
+      createKnowledgeGraphTools(state, {
+        allowedEntityTypes: ["Evidence"],
+        sourceTaskId: "task-02",
+        userInput: [{ index: 1, content }],
+      }),
+      "kg_file_add_nodes",
+    );
+  const node = {
+    ...createTypedNode("E-candidate", "Evidence"),
+    name: "Measured latency",
+    description:
+      "Measured p95=600ms, p99=1200ms, conflict rate=0.8%, and anchor drift=0.3%.",
+    provenance: [
+      { kind: "user_input" as const, user_input_index: 1 },
+      { kind: "existing_graph" as const, node_id: candidateId },
+    ],
+  };
+
+  await assert.rejects(
+    createTool("A measurement exists in pre-production.").invoke({
+      nodes: [node],
+    }),
+    (error: unknown) =>
+      error instanceof NodeProvenanceValidationError &&
+      ["600ms", "1200ms", "0.8", "0.3"].every((claim) =>
+        error.numericClaimIssues[0]?.claims.includes(claim),
+      ) &&
+      error.numericClaimIssues[0]?.existingGraphNodeIds.includes(candidateId) ===
+        true,
+  );
+
+  await createTool(
+    "The user explicitly confirms adopting p95=600ms, p99=1200ms, conflict rate=0.8%, and anchor drift=0.3% as the measured baseline.",
+  ).invoke({ nodes: [node] });
+  assert.equal(
+    state.entities.some(
+      (entity) => entity.type === "Evidence" && entity.name === "Measured latency",
+    ),
+    true,
+  );
 });
 
 test("deprecates owned nodes only during supplement workflows", async () => {

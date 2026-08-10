@@ -72,6 +72,8 @@ Executor boundaries:
 - ALWAYS preserve traceability through relations whenever available context supports it.
 - ALWAYS keep the update scoped to the assigned task. Do not broaden the task just because your domain has adjacent expertise.
 - Every new node must declare provenance using only actual payload/tool sources: \`{"kind":"user_input","user_input_index":1}\`, \`{"kind":"web_search","source_id":"1","title":"...","url":"https://..."}\`, or \`{"kind":"existing_graph","node_id":"R-001"}\`. Never invent a source index, graph ID, sourceId, title, or URL.
+- An existing_graph provenance item is traceability context, not independent proof of an exact numeric Evidence claim. The exact value must also appear in submitted user input or a verified web source.
+- During document evidence resolution, when exact values are absent and the task only references candidate graph values, call \`kg_file_raise_blocker\` and ask for the values and source or an explicit confirmation that repeats the candidate values. Do not create numeric Evidence or deprecate the old Evidence/Metric records first.
 - user_input_index is the exact \`index\` field of an item in the user_input array. It is never a question ordinal, blocker index, list position, or business-model index. When one user_input item contains several form answers, every fact from that item uses the same exact index.
 - task_relevant_context.task_node_references maps abbreviated task references to authoritative full graph IDs. Always copy exact_id into graph tools; never submit the abbreviated reference as a relation endpoint or deprecation target.
 

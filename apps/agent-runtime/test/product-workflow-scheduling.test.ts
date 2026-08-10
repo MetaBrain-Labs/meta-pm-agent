@@ -44,6 +44,7 @@ import {
   createPlannerContext,
   createPlannerDelegationSummary,
   requireDelegatedPlannerPlan,
+  sanitizeOrchestratorModelOutput,
   shouldRetryPlannerDelegation,
 } from "../src/agents/product-workflow/orchestrator-agent/agent";
 import {
@@ -347,6 +348,21 @@ test("fails when Orchestrator does not actually delegate to Planner", () => {
     ),
     false,
   );
+});
+
+test("truncates Orchestrator display prose before schema validation", () => {
+  const sanitized = sanitizeOrchestratorModelOutput({
+    intent: "project_evolution",
+    route: "product_workflow",
+    reason_summary: "x".repeat(900),
+    planner_delegation_summary: "model-owned summary",
+    warnings: ["keep warning"],
+  }) as Record<string, unknown>;
+
+  assert.equal((sanitized.reason_summary as string).length, 800);
+  assert.equal("planner_delegation_summary" in sanitized, false);
+  assert.deepEqual(sanitized.warnings, ["keep warning"]);
+  assert.equal(sanitized.route, "product_workflow");
 });
 
 test("waits for dependencies before selecting downstream executor", () => {

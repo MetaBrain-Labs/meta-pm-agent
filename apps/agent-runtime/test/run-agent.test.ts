@@ -17,6 +17,7 @@ import {
   AgentSubagentExecutionError,
   adaptAgentEventStream,
   getMissingRequiredSubagentError,
+  getMissingRequiredSuccessfulToolError,
   resolveJsonOutput,
   resolveTextOutput,
   type AgentEventStreamProjection,
@@ -317,6 +318,10 @@ test("adapts native tool and SubAgent projections without parsing tool_calls", a
   assert.equal(result.responseText, "coordinator output");
   assert.equal(result.reasoningText, "coordinator reasoning");
   assert.deepEqual([...result.invokedSubagentTypes], ["planner"]);
+  assert.deepEqual([...result.successfulToolNames].sort(), [
+    "kg_file_add_nodes",
+    "kg_file_raise_blocker",
+  ]);
   assert.equal(
     JSON.stringify(probe.toolResults).includes("private Skill instructions"),
     false,
@@ -333,6 +338,21 @@ test("adapts native tool and SubAgent projections without parsing tool_calls", a
   assert.deepEqual(
     probe.subagentCalls.map((record) => record.input),
     [{ description: "Plan A" }, { description: "Plan B" }],
+  );
+});
+
+test("requires at least one successful correction write tool", () => {
+  const required = new Set(["kg_file_add_nodes", "kg_file_add_relations"]);
+  assert.equal(
+    getMissingRequiredSuccessfulToolError(required, new Set()),
+    "required-structured-write-not-invoked",
+  );
+  assert.equal(
+    getMissingRequiredSuccessfulToolError(
+      required,
+      new Set(["kg_file_add_relations"]),
+    ),
+    null,
   );
 });
 

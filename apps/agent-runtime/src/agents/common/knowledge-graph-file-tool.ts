@@ -734,6 +734,29 @@ export function createKnowledgeGraphTools(
 
 type NodeWriteInput = z.infer<typeof nodeInputSchema>;
 
+/** 数值 Evidence 来源校验的结构化问题，供运行时转为定点 HITL。 */
+export interface UnsupportedNumericClaimsIssue {
+  code: "unsupported_numeric_claims";
+  nodeName: string;
+  claims: string[];
+  userInputIndexes: number[];
+  existingGraphNodeIds: string[];
+}
+
+/** 保留兼容错误文本，同时向同进程调用方暴露结构化 provenance 问题。 */
+export class NodeProvenanceValidationError extends Error {
+  readonly numericClaimIssues: UnsupportedNumericClaimsIssue[];
+
+  constructor(
+    errors: string[],
+    numericClaimIssues: UnsupportedNumericClaimsIssue[],
+  ) {
+    super(`Node provenance validation failed: ${errors.join("; ")}`);
+    this.name = "NodeProvenanceValidationError";
+    this.numericClaimIssues = numericClaimIssues;
+  }
+}
+
 /**
  * 在状态写入前校验来源真实性和用户未声明的基础设施细节。
  */
@@ -748,6 +771,7 @@ function validateNodeWrites(
   const entityById = new Map(state.entities.map((entity) => [entity.id, entity]));
   const allUserInput = [...userInputByIndex.values()].join("\n");
   const errors: string[] = [];
+  const numericClaimIssues: UnsupportedNumericClaimsIssue[] = [];
 
   for (const node of nodes) {
     if (node.status === "deprecated") {
@@ -830,10 +854,20 @@ function validateNodeWrites(
         (value) => !sourceNumbers.has(value),
       );
       if (unsupportedNumbers.length > 0) {
+        const uniqueUnsupportedNumbers = [...new Set(unsupportedNumbers)];
+        numericClaimIssues.push({
+          code: "unsupported_numeric_claims",
+          nodeName: node.name,
+          claims: uniqueUnsupportedNumbers,
+          userInputIndexes: node.provenance.flatMap((item) =>
+            item.kind === "user_input" ? [item.user_input_index] : [],
+          ),
+          existingGraphNodeIds: node.provenance.flatMap((item) =>
+            item.kind === "existing_graph" ? [item.node_id] : [],
+          ),
+        });
         errors.push(
-          `Evidence "${node.name}": unsupported_numeric_claims:${[
-            ...new Set(unsupportedNumbers),
-          ].join(",")}`,
+          `Evidence "${node.name}": unsupported_numeric_claims:${uniqueUnsupportedNumbers.join(",")}`,
         );
       }
     }
@@ -850,7 +884,7 @@ function validateNodeWrites(
   }
 
   if (errors.length > 0) {
-    throw new Error(`Node provenance validation failed: ${errors.join("; ")}`);
+    throw new NodeProvenanceValidationError(errors, numericClaimIssues);
   }
 }
 

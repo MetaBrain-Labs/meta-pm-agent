@@ -14,16 +14,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createWebSearchEvidenceRegistry } from "../src/agents/common/web-search-tool";
+import { createProductWorkflowKnowledgeGraph } from "../src/agents/product-workflow/common/knowledge-graph";
 import {
   EXECUTOR_CORRECTION_TOOL_CALL_LIMIT,
+  createDocumentEvidenceNumericInputRequired,
   createNodeProvenanceRetryInstruction,
+  extractUnsupportedNumericClaims,
   formatExecutorAttemptErrors,
   getExecutorMaxAttempts,
   getStructuredWriteError,
   isExecutorCorrectionAttempt,
   isNodeProvenanceValidationFailure,
+  isRequiredStructuredWriteMissing,
   isSameTaskExecutorRetryable,
   restrictExecutorCorrectionToolNames,
+  shouldRetryEmptyExternalCorrection,
 } from "../src/agents/product-workflow/executor-agent/agent";
 
 test("provenance validation failure produces a retry instruction with exact verified sources", () => {
@@ -106,6 +111,86 @@ test("manual Executor retry is one bounded correction attempt", () => {
   assert.equal(getExecutorMaxAttempts(true), 1);
   assert.equal(getExecutorMaxAttempts(false), 2);
   assert.equal(EXECUTOR_CORRECTION_TOOL_CALL_LIMIT, 8);
+});
+
+test("document numeric provenance gap becomes a targeted same-task HITL", () => {
+  const candidateId = "D-cfafdde1-ed04-4a40-bfaa-fdef8487d71f";
+  const knowledgeGraph = createProductWorkflowKnowledgeGraph();
+  knowledgeGraph.entities.push({
+    id: candidateId,
+    type: "Decision",
+    name: "Candidate performance baseline",
+    description:
+      "Candidate values are p95=600ms, p99=1200ms, conflict rate 0.8%, and anchor drift 0.3%.",
+    source_task_id: "task-old",
+    status: "proposed",
+    provenance: [{ kind: "existing_graph", node_id: "D-source" }],
+  });
+  const error = new Error(
+    'Attempt 1: Node provenance validation failed: Evidence "Performance baseline": unsupported_numeric_claims:600ms,1200ms,0.8,0.3',
+  );
+  const inputRequired = createDocumentEvidenceNumericInputRequired({
+    details: error,
+    task: {
+      sequence: 4,
+      task_id: "task-04",
+      title: "Confirm performance baseline",
+      description: `Use candidate ${candidateId} only after confirmation.`,
+      assigned_agent: "executor-data-analytics",
+      depends_on: [],
+      covered_business_model_indexes: [1],
+      expected_output: "Confirmed Evidence and Metrics",
+      required_open_question_count: 0,
+      quality_check: { criteria: ["Use confirmed values only"] },
+    },
+    agentType: "executor-data-analytics",
+    displayName: "Data Analytics Executor",
+    knowledgeGraph,
+  });
+
+  assert.ok(inputRequired);
+  assert.equal(inputRequired.interrupt.taskId, "task-04");
+  assert.match(inputRequired.interrupt.details, new RegExp(candidateId));
+  assert.match(inputRequired.interrupt.details, /600ms/);
+  assert.doesNotMatch(inputRequired.interrupt.neededUserInput, /600ms/);
+  assert.match(inputRequired.interrupt.neededUserInput, /完整写出四项数值/);
+  assert.deepEqual(extractUnsupportedNumericClaims(error), [
+    "600ms",
+    "1200ms",
+    "0.8",
+    "0.3",
+  ]);
+  assert.deepEqual(
+    extractUnsupportedNumericClaims(
+      new Error(
+        "Attempt 1: Node provenance validation failed: unsupported_numeric_claims:600ms,1200ms | Attempt 2: Node provenance validation failed: unsupported_numeric_claims:0.8,0.3",
+      ),
+    ),
+    ["600ms", "1200ms", "0.8", "0.3"],
+  );
+});
+
+test("detects a correction response that invoked no structured write", () => {
+  const noWriteError = new Error("required-structured-write-not-invoked");
+  assert.equal(
+    isRequiredStructuredWriteMissing(noWriteError),
+    true,
+  );
+  assert.equal(
+    isRequiredStructuredWriteMissing(new Error("invalid_relation_direction")),
+    false,
+  );
+  assert.equal(shouldRetryEmptyExternalCorrection(true, 1, noWriteError), true);
+  assert.equal(shouldRetryEmptyExternalCorrection(true, 2, noWriteError), false);
+  assert.equal(shouldRetryEmptyExternalCorrection(false, 1, noWriteError), false);
+  assert.equal(
+    shouldRetryEmptyExternalCorrection(
+      true,
+      1,
+      new Error("invalid_relation_direction"),
+    ),
+    false,
+  );
 });
 
 test("pure unconsumed Evidence correction keeps relation and deprecation tools only", () => {

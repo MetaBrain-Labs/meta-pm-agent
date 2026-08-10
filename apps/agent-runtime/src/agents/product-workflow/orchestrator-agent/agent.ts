@@ -138,7 +138,12 @@ export async function* streamOrchestratorAgent(
               },
             },
       resolveOutput: (context) =>
-        resolveJsonOutput(context, outputSchema as any),
+        resolveJsonOutput(context, {
+          safeParse: (value: unknown) =>
+            (outputSchema as any).safeParse(
+              isPreCheck ? value : sanitizeOrchestratorModelOutput(value),
+            ),
+        }),
       requiredSubagentType:
         !isPreCheck && input.requestAnalysis.business_model.length > 0
           ? "planner"
@@ -286,6 +291,23 @@ export function shouldRetryPlannerDelegation(
       error.message === "required-subagent-not-invoked: planner" ||
       error.message.startsWith("document-evidence-planner-invalid:"))
   );
+}
+
+/**
+ * 在业务 schema 校验前收口 Orchestrator 的展示字段。
+ *
+ * Planner 摘要始终由运行时依据最终 DAG 重建，因此丢弃模型副本不会改变路由或计划语义。
+ */
+export function sanitizeOrchestratorModelOutput(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  const record = { ...(value as Record<string, unknown>) };
+  if (typeof record.reason_summary === "string") {
+    record.reason_summary = record.reason_summary.slice(0, 800);
+  }
+  delete record.planner_delegation_summary;
+  return record;
 }
 
 /**

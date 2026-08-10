@@ -58,6 +58,14 @@ test("planner prompt preserves graph-semantics guardrails", () => {
     PLANNER_AGENT_PROMPT,
     /reuse compatible active Feature, Component, Metric, Evidence, and constraint nodes/,
   );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /active graph records as context or candidates, never as proof/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /answer says a measurement exists but omits its exact numeric values/,
+  );
   assert.match(PLANNER_AGENT_PROMPT, /A relation-only correction task is valid/);
   assert.match(
     PLANNER_AGENT_PROMPT,
@@ -341,6 +349,14 @@ test("executor prompt preserves append-only graph writing semantics", () => {
   assert.match(
     prompt,
     /Only explicit statements in user_input may be written as new Evidence/,
+  );
+  assert.match(
+    prompt,
+    /existing_graph provenance item is traceability context, not independent proof/,
+  );
+  assert.match(
+    prompt,
+    /when exact values are absent.*call `kg_file_raise_blocker`/,
   );
   assert.match(prompt, /Unverified assumption/);
   assert.match(

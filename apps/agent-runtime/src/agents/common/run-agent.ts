@@ -144,6 +144,8 @@ export interface RunAgentOptions<T, AgentType extends string> {
   throwOnError?: boolean;
   /** SubAgent 运行失败时跳过业务 fallback，由调用方执行定点重试或错误恢复。 */
   throwOnSubagentError?: boolean;
+  /** 至少一个指定工具必须成功完成；用于禁止 correction mode 仅返回说明文本。 */
+  requiredSuccessfulToolNames?: ReadonlySet<string>;
   /** 将调用方指定的工具失败结果提升为运行异常。 */
   getToolResultError?: (
     toolName: string,
@@ -315,6 +317,7 @@ export interface AgentEventStreamResult {
   readonly reasoningText: string;
   readonly tokenUsage: ReturnType<typeof getTokenUsage>;
   readonly invokedSubagentTypes: Set<string>;
+  readonly successfulToolNames: Set<string>;
 }
 
 interface AgentEventStreamAdapterOptions<AgentType extends string> {
@@ -347,6 +350,7 @@ export async function* adaptAgentEventStream<AgentType extends string>(
   let reasoningText = "";
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
   const invokedSubagentTypes = new Set<string>();
+  const successfulToolNames = new Set<string>();
 
   const push = (event: AgentRunEvent<AgentType>) => {
     events.push(event);
@@ -453,6 +457,7 @@ export async function* adaptAgentEventStream<AgentType extends string>(
       });
       const toolError = options.getToolResultError?.(call.name, toolResult);
       if (toolError) throw toolError;
+      if (status === "finished") successfulToolNames.add(call.name);
     }
   };
 
@@ -541,6 +546,7 @@ export async function* adaptAgentEventStream<AgentType extends string>(
     reasoningText,
     tokenUsage,
     invokedSubagentTypes,
+    successfulToolNames,
   };
 }
 
@@ -794,7 +800,12 @@ export async function* runAgent<T, AgentType extends string>(
         getToolResultError: options.getToolResultError,
       },
     );
-    const { responseText, reasoningText, invokedSubagentTypes } = streamResult;
+    const {
+      responseText,
+      reasoningText,
+      invokedSubagentTypes,
+      successfulToolNames,
+    } = streamResult;
     tokenUsage = streamResult.tokenUsage;
 
     const tokenUsageSummary = tokenUsage
@@ -827,6 +838,19 @@ export async function* runAgent<T, AgentType extends string>(
         tokenUsage: tokenUsageSummary,
       });
       throw new Error(missingSubagent);
+    }
+
+    const missingSuccessfulTool = getMissingRequiredSuccessfulToolError(
+      options.requiredSuccessfulToolNames,
+      successfulToolNames,
+    );
+    if (missingSuccessfulTool) {
+      await summaryRecorder.finish({
+        error: missingSuccessfulTool,
+        status: "failed",
+        tokenUsage: tokenUsageSummary,
+      });
+      throw new Error(missingSuccessfulTool);
     }
 
     const resolution = options.resolveOutput({
@@ -898,6 +922,18 @@ export async function* runAgent<T, AgentType extends string>(
   } finally {
     runAbortController.abort();
   }
+}
+
+/** correction mode 至少成功执行一个受控写入工具，否则不能把纯文本承诺视为完成。 */
+export function getMissingRequiredSuccessfulToolError(
+  requiredToolNames: ReadonlySet<string> | undefined,
+  successfulToolNames: ReadonlySet<string>,
+): string | null {
+  if (!requiredToolNames?.size) return null;
+  for (const toolName of requiredToolNames) {
+    if (successfulToolNames.has(toolName)) return null;
+  }
+  return "required-structured-write-not-invoked";
 }
 
 /**

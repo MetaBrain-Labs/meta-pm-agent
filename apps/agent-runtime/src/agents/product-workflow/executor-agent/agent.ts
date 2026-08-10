@@ -76,6 +76,8 @@ const STRUCTURED_WRITE_FAILURE_PREFIXES = [
 ] as const;
 
 const BLOCKER_TOOL_NAME = "kg_file_raise_blocker";
+const REQUIRED_STRUCTURED_WRITE_ERROR =
+  "required-structured-write-not-invoked";
 export const EXECUTOR_CORRECTION_TOOL_CALL_LIMIT = 8;
 
 /**
@@ -212,9 +214,23 @@ export async function* streamExecutorAgent(
   const critiqueCorrection = Boolean(input.correctionInstruction?.trim());
   const externalCorrection = manualRetry || critiqueCorrection;
   const maxAttempts = getExecutorMaxAttempts(externalCorrection);
+  // 外部 correction 仍只有一次真实执行机会；仅当第一次完全没有调用写入工具时，
+  // 才允许一次不增加工具预算的纯空执行修正。
+  const runAttemptLimit = externalCorrection ? maxAttempts + 1 : maxAttempts;
   const attemptErrors: string[] = [];
+  const persistedNumericGap =
+    input.documentEvidenceResolution && manualRetry
+      ? createDocumentEvidenceNumericInputRequired({
+          details: retryInstruction,
+          task: input.task,
+          agentType: definition.agentType,
+          displayName: definition.displayName,
+          knowledgeGraph: input.knowledgeGraph,
+        })
+      : null;
+  if (persistedNumericGap) throw persistedNumericGap;
   try {
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    for (let attempt = 1; attempt <= runAttemptLimit; attempt += 1) {
       // 重试时基于同一工作副本继续执行，保留首次已完成的工具写入。
       const correctionAttempt = isExecutorCorrectionAttempt(
         attempt,
@@ -298,6 +314,9 @@ export async function* streamExecutorAgent(
         suppressFallbackReasoning: true,
         signal: input.signal,
         throwOnError: true,
+        requiredSuccessfulToolNames: correctionAttempt
+          ? STRUCTURED_TOOL_NAMES
+          : undefined,
         toolCallRunLimit: correctionAttempt
           ? EXECUTOR_CORRECTION_TOOL_CALL_LIMIT
           : undefined,
@@ -329,6 +348,34 @@ export async function* streamExecutorAgent(
           throw error;
         }
         attemptErrors.push(getErrorMessage(error));
+        const numericInputRequired = input.documentEvidenceResolution
+          ? createDocumentEvidenceNumericInputRequired({
+              details: error,
+              task: input.task,
+              agentType: definition.agentType,
+              displayName: definition.displayName,
+              knowledgeGraph: input.knowledgeGraph,
+            })
+          : null;
+        if (numericInputRequired) throw numericInputRequired;
+        if (
+          shouldRetryEmptyExternalCorrection(
+            externalCorrection,
+            attempt,
+            error,
+          )
+        ) {
+          retryInstruction = [
+            "Your previous correction response called no structured graph write tool.",
+            "This is the only no-op correction retry. Call the minimum required write tool immediately; do not describe future work.",
+          ].join(" ");
+          yield {
+            type: "reasoning",
+            agentType: definition.agentType,
+            content: `${definition.displayName} 未执行任何结构化写入，正在进行唯一一次空执行修正。\n`,
+          };
+          continue;
+        }
         if (
           attempt < maxAttempts &&
           (isNodeProvenanceValidationFailure(error) ||
@@ -602,6 +649,91 @@ function getErrorMessage(error: unknown): string {
  */
 export function isNodeProvenanceValidationFailure(error: unknown): boolean {
   return getErrorMessage(error).includes("Node provenance validation failed:");
+}
+
+/** 判断 correction mode 是否只返回了承诺文本而没有成功执行写入工具。 */
+export function isRequiredStructuredWriteMissing(error: unknown): boolean {
+  return getErrorMessage(error).includes(REQUIRED_STRUCTURED_WRITE_ERROR);
+}
+
+/** 仅允许外部 correction 的第一次纯空执行获得一次定向重试。 */
+export function shouldRetryEmptyExternalCorrection(
+  externalCorrection: boolean,
+  attempt: number,
+  error: unknown,
+): boolean {
+  return (
+    externalCorrection &&
+    attempt === 1 &&
+    isRequiredStructuredWriteMissing(error)
+  );
+}
+
+/** 从当前及历史 provenance 错误中提取未被用户输入支持的精确数值声明。 */
+export function extractUnsupportedNumericClaims(error: unknown): string[] {
+  const claims = [...getErrorMessage(error).matchAll(
+    /unsupported_numeric_claims:([^;\r\n]*?)(?=\s+\|\s+Attempt\s+\d+:|;|$)/g,
+  )].flatMap((match) =>
+    (match[1] ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+  return [...new Set(claims)];
+}
+
+/**
+ * 将 Document 补证中的精确数值来源缺口提升为定点 HITL。
+ *
+ * 候选图谱值仅展示在表单说明中；用户必须在答案中重新写出并明确确认，
+ * 从而避免 QuestionForm 标签本身被错误计入 user_input provenance。
+ */
+export function createDocumentEvidenceNumericInputRequired({
+  details,
+  task,
+  agentType,
+  displayName,
+  knowledgeGraph,
+}: {
+  details: unknown;
+  task: TaskExecutionNode;
+  agentType: ExecutorAgentType;
+  displayName: string;
+  knowledgeGraph: ProductKnowledgeGraph;
+}): ExecutorHumanInputRequiredError | null {
+  const claims = extractUnsupportedNumericClaims(details);
+  if (claims.length === 0) return null;
+
+  const taskText = JSON.stringify(task);
+  const normalizedClaims = claims.map(normalizeExactClaim);
+  const candidateNodeIds = knowledgeGraph.entities
+    .filter((node) => {
+      if (node.status === "deprecated" || !taskText.includes(node.id)) {
+        return false;
+      }
+      const nodeText = normalizeExactClaim(`${node.name} ${node.description}`);
+      return normalizedClaims.some((claim) => nodeText.includes(claim));
+    })
+    .map((node) => node.id);
+  const candidateSummary = candidateNodeIds.length
+    ? `关联候选节点：${candidateNodeIds.join(", ")}；候选值：${claims.join(", ")}。`
+    : `待确认候选值：${claims.join(", ")}。`;
+
+  return new ExecutorHumanInputRequiredError({
+    taskId: task.task_id,
+    agentType,
+    displayName,
+    category: "hard_conflict",
+    title: "性能实测数值尚未得到用户确认",
+    details: `${candidateSummary}关联图谱中的候选值不能单独作为本次实测证据。`,
+    neededUserInput:
+      "请填写 p95、p99、冲突率、锚点漂移率的具体值及监控/日志来源；如采用上方候选基线，请在答案中完整写出四项数值并明确确认采用。",
+  });
+}
+
+/** 对精确数值及单位做最小归一化，仅用于候选节点 ID 的确定性定位。 */
+function normalizeExactClaim(value: string): string {
+  return value.normalize("NFKC").toLowerCase().replace(/\s+/g, "");
 }
 
 /**
