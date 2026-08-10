@@ -580,7 +580,7 @@ test("blocks completion while graph blocking questions remain", () => {
           relations: [],
           decisions: [],
           risks: [],
-          open_questions: [],
+          open_questions: [graph.open_questions[0]!],
           quality_result: { passed: true, notes: "ok" },
         },
       ],

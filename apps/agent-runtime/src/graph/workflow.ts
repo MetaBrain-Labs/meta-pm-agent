@@ -28,7 +28,10 @@ import type {
 } from "@repo/shared";
 import type { UserInputRecord } from "../agents/request/user-input";
 import type { ProductWorkflowStreamEvent } from "../agents/product-workflow/agent";
-import type { WorkflowResumeContext } from "../agents/product-workflow/types";
+import type {
+  WorkflowPurpose,
+  WorkflowResumeContext,
+} from "../agents/product-workflow/types";
 import {
   aiShippingExecutorNode,
   dataAnalyticsExecutorNode,
@@ -51,6 +54,8 @@ import { WorkflowGraphState, type WorkflowGraphStateValue } from "./state";
 import { getWorkflowCheckpointer } from "./workflow-checkpointer";
 
 export interface WorkflowGraphInput {
+  /** 服务端可信工作流用途；checkpoint 恢复时由图状态继续持有。 */
+  workflowPurpose?: WorkflowPurpose;
   /** API 在本次请求或恢复前重新解析的会话当前模型快照。 */
   modelProfile?: ModelUsageProfile;
   workspaceId?: string;
@@ -255,6 +260,8 @@ function createWorkflowInitialState(input: WorkflowGraphInput) {
       );
 
   return {
+    workflowPurpose:
+      resume?.workflowPurpose ?? input.workflowPurpose ?? "standard",
     productContext: input.productContext ?? "",
     contextSource: input.contextSource ?? "none",
     workspaceId: input.workspaceId,

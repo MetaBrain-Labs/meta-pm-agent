@@ -23,6 +23,7 @@ import {
   isExecutorCorrectionAttempt,
   isNodeProvenanceValidationFailure,
   isSameTaskExecutorRetryable,
+  restrictExecutorCorrectionToolNames,
 } from "../src/agents/product-workflow/executor-agent/agent";
 
 test("provenance validation failure produces a retry instruction with exact verified sources", () => {
@@ -89,6 +90,22 @@ test("manual Executor retry is one bounded correction attempt", () => {
   assert.equal(getExecutorMaxAttempts(true), 1);
   assert.equal(getExecutorMaxAttempts(false), 2);
   assert.equal(EXECUTOR_CORRECTION_TOOL_CALL_LIMIT, 8);
+});
+
+test("pure unconsumed Evidence correction keeps relation and deprecation tools only", () => {
+  const tools = restrictExecutorCorrectionToolNames(
+    [
+      "kg_file_add_nodes",
+      "kg_file_deprecate_nodes",
+      "kg_file_add_relations",
+    ],
+    true,
+  );
+
+  assert.deepEqual(tools, [
+    "kg_file_deprecate_nodes",
+    "kg_file_add_relations",
+  ]);
 });
 
 test("does not offer same-task retry for a missing deprecation target", () => {

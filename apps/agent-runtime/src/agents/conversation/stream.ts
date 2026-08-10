@@ -100,6 +100,7 @@ import {
   type PreOrchResult,
 } from "../product-workflow/orchestrator-agent/pre-orchestrator-subagent";
 import { streamOrchestratorPreCheck } from "../product-workflow/orchestrator-agent/agent";
+import type { WorkflowPurpose } from "../product-workflow/types";
 
 const PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID = "product-workflow-confirmation";
 const EXECUTOR_BLOCKER_FORM_PREFIX = "executor-blocker-";
@@ -406,6 +407,7 @@ async function* streamDocumentEvidenceResolutionAnswer(
     messages,
     {
       resumeContext: {
+        workflowPurpose: "document_evidence_resolution",
         userInputBlock,
         requestAnalysis: createDocumentEvidenceRequestAnalysis(),
         knowledgeGraph: supplementContext.knowledgeGraph,
@@ -419,16 +421,6 @@ async function* streamDocumentEvidenceResolutionAnswer(
     },
   )) {
     yield event;
-    if (
-      event.type === "complete" &&
-      isAcceptedDocumentEvidenceWorkflowResult(event.result)
-    ) {
-      yield {
-        type: "document-evidence-resolution-complete",
-        runId: answer.runId,
-        workspaceId: options.workspaceId ?? "",
-      };
-    }
   }
 }
 
@@ -987,6 +979,11 @@ async function* streamWorkflowResumeAfterFormAnswer(
       {
         resumeContext: {
           ...resumeContext,
+          workflowPurpose:
+            resumeContext.workflowPurpose ??
+            (options.documentEvidenceResolution
+              ? "document_evidence_resolution"
+              : "standard"),
           userInputBlock,
           plan: workflowResult.planner,
           productWorkflow: workflowResult,
@@ -1043,7 +1040,7 @@ async function* streamPlanningAfterUserInput(
   } = {},
 ): AsyncGenerator<ConversationStreamEvent> {
   try {
-    const resumeContext = resumeOptions.resumeFromCheckpoint
+    const recoveredResumeContext = resumeOptions.resumeFromCheckpoint
       ? undefined
       : (resumeOptions.resumeContext ??
         createWorkflowResumeContextFromMessages({
@@ -1053,8 +1050,15 @@ async function* streamPlanningAfterUserInput(
           serverWorkflowRecoveryContext: options.serverWorkflowRecoveryContext,
         }) ??
         undefined);
+    const workflowPurpose = options.documentEvidenceResolution
+      ? "document_evidence_resolution"
+      : (recoveredResumeContext?.workflowPurpose ?? "standard");
+    const resumeContext = recoveredResumeContext
+      ? { ...recoveredResumeContext, workflowPurpose }
+      : undefined;
 
     for await (const event of streamWorkflowGraph({
+      workflowPurpose,
       modelProfile: options.modelProfile,
       workspaceId: options.workspaceId,
       productContext: options.productContext,
@@ -1104,22 +1108,31 @@ async function* streamPlanningAfterUserInput(
       if (event.type === "complete") {
         // 将结构化工作流结果转发给 API 持久化层，供知识图谱归档
         // Critique 的结构化状态是唯一完成依据，表单是否存在只决定交互形式。
+        const workflowResult =
+          workflowPurpose === "document_evidence_resolution"
+            ? normalizeDocumentEvidenceWorkflowResult(event.result)
+            : event.result;
         const correctionForm =
-          event.result.status === "requires_executor_retry"
-            ? formatProductWorkflowCorrectionQuestionForm(event.result)
+          workflowResult.status === "requires_executor_retry"
+            ? formatProductWorkflowCorrectionQuestionForm(workflowResult)
             : null;
         const proposalForm = correctionForm
           ? null
-          : formatProductWorkflowProposalQuestionForm(event.result);
-        const shouldFinalize = isAcceptedWorkflowResult(event.result);
+          : formatProductWorkflowProposalQuestionForm(workflowResult);
+        const shouldFinalize = isAcceptedWorkflowResultForPurpose(
+          workflowResult,
+          workflowPurpose,
+        );
         const questionForm = shouldFinalize
           ? null
           : (correctionForm ?? proposalForm ??
-            formatProductWorkflowConfirmationQuestionForm(event.result));
+            formatProductWorkflowConfirmationQuestionForm(workflowResult));
 
-        yield { type: "complete", result: event.result };
+        yield { type: "complete", result: workflowResult };
 
         if (shouldFinalize) {
+          // Document 补证必须等 API 完成图谱归档和版本递增后再展示专用成功卡。
+          if (workflowPurpose === "document_evidence_resolution") continue;
           yield {
             type: "text",
             content:
@@ -1446,13 +1459,107 @@ function getCritiqueCorrectionTaskIds(
 export function isAcceptedDocumentEvidenceWorkflowResult(
   result: ProductWorkflowResult,
 ): boolean {
-  return (
-    isAcceptedWorkflowResult(result) &&
-    ![
-      ...(result.review.issues ?? []),
-      ...(result.knowledge_graph_review?.issues ?? []),
-    ].some((issue) => issue.code === "UNCONSUMED_EVIDENCE")
+  return isAcceptedWorkflowResultForPurpose(
+    result,
+    "document_evidence_resolution",
   );
+}
+
+/** 根据可信工作流用途选择唯一的终态验收策略。 */
+export function isAcceptedWorkflowResultForPurpose(
+  result: ProductWorkflowResult,
+  workflowPurpose: WorkflowPurpose,
+): boolean {
+  if (!isAcceptedWorkflowResult(result)) return false;
+  if (workflowPurpose === "standard") return true;
+  return ![
+    ...(result.review.issues ?? []),
+    ...(result.knowledge_graph_review?.issues ?? []),
+  ].some((issue) => issue.code === "UNCONSUMED_EVIDENCE");
+}
+
+/**
+ * 将历史或异常模型输出中的 Document 证据消费问题归一化为硬修正状态。
+ *
+ * 该函数只提升确定性的证据消费问题，不对证据语义重复做后端判断。
+ */
+export function normalizeDocumentEvidenceWorkflowResult(
+  result: ProductWorkflowResult,
+): ProductWorkflowResult {
+  const normalizeIssues = (
+    issues: NonNullable<ProductWorkflowResult["review"]["issues"]>,
+  ) =>
+    issues.map((issue) =>
+      issue.code === "UNCONSUMED_EVIDENCE"
+        ? { ...issue, severity: "error" as const }
+        : issue,
+    );
+  const reviewIssues = normalizeIssues(result.review.issues ?? []);
+  const graphReview = result.knowledge_graph_review ?? {
+    notes: [],
+    accepted_task_ids: result.review.accepted_task_ids,
+    rejected_task_ids: result.review.rejected_task_ids,
+    retry_task_ids: result.review.retry_task_ids,
+    issues: [],
+  };
+  const graphIssues = normalizeIssues(graphReview.issues ?? []);
+  const unconsumedIssues = [...reviewIssues, ...graphIssues].filter(
+    (issue) => issue.code === "UNCONSUMED_EVIDENCE",
+  );
+  if (unconsumedIssues.length === 0) return result;
+
+  const plannedTaskIds = new Set(
+    result.planner.tasks.map((task) => task.task_id),
+  );
+  const retryTaskIds = [
+    ...new Set([
+      ...(result.review.retry_task_ids ?? []),
+      ...(result.knowledge_graph_review?.retry_task_ids ?? []),
+      ...unconsumedIssues.flatMap((issue) =>
+        issue.task_id && plannedTaskIds.has(issue.task_id)
+          ? [issue.task_id]
+          : [],
+      ),
+    ]),
+  ];
+  const retryTaskIdSet = new Set(retryTaskIds);
+  const acceptedTaskIds = result.review.accepted_task_ids.filter(
+    (taskId) => !retryTaskIdSet.has(taskId),
+  );
+  const rejectedTaskIds = [
+    ...new Set([
+      ...result.review.rejected_task_ids,
+      ...retryTaskIds,
+    ]),
+  ];
+
+  return {
+    ...result,
+    status: "requires_executor_retry",
+    review: {
+      ...result.review,
+      accepted_task_ids: acceptedTaskIds,
+      rejected_task_ids: rejectedTaskIds,
+      retry_task_ids: retryTaskIds,
+      issues: reviewIssues,
+    },
+    knowledge_graph_review: {
+      ...graphReview,
+      accepted_task_ids: graphReview.accepted_task_ids.filter(
+        (taskId) => !retryTaskIdSet.has(taskId),
+      ),
+      rejected_task_ids: [
+        ...new Set([
+          ...graphReview.rejected_task_ids,
+          ...retryTaskIds,
+        ]),
+      ],
+      retry_task_ids: retryTaskIds,
+      issues: graphIssues,
+    },
+    confirmation_message:
+      "证据补充结果仍包含未被需求、决策或功能关系消费的 Evidence，需要生成定点修正任务。",
+  };
 }
 
 /**

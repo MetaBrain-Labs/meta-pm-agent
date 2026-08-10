@@ -19,6 +19,7 @@
  */
 
 import {
+  type AgentRuntimeTool,
   type ExecutorAgentResult,
   type TaskExecutionNode,
   type KnowledgeGraphEntity,
@@ -82,14 +83,24 @@ export const EXECUTOR_CORRECTION_TOOL_CALL_LIMIT = 8;
  */
 export function isExecutorCorrectionAttempt(
   attempt: number,
-  manualRetry: boolean,
+  externalCorrection: boolean,
 ): boolean {
-  return manualRetry || attempt > 1;
+  return externalCorrection || attempt > 1;
 }
 
-/** 手动重试本身已经是修正机会，不再嵌套第二次模型重试。 */
-export function getExecutorMaxAttempts(manualRetry: boolean): number {
-  return manualRetry ? 1 : 2;
+/** 外部确认的修正本身已经是修正机会，不再嵌套第二次模型重试。 */
+export function getExecutorMaxAttempts(externalCorrection: boolean): number {
+  return externalCorrection ? 1 : 2;
+}
+
+/** 纯孤立证据修正禁止创建节点，但保留关系写入和受控废弃能力。 */
+export function restrictExecutorCorrectionToolNames(
+  toolNames: AgentRuntimeTool[],
+  forbidNewEvidence: boolean,
+): AgentRuntimeTool[] {
+  return forbidNewEvidence
+    ? toolNames.filter((toolName) => toolName !== "kg_file_add_nodes")
+    : toolNames;
 }
 
 /**
@@ -195,16 +206,19 @@ export async function* streamExecutorAgent(
   const webSearchEvidenceRegistry = createWebSearchEvidenceRegistry();
   // 手动迭代生成器以在透传事件给上游的同时收集结构化数据。
   let patch = "";
-  let retryInstruction = input.retryInstruction ?? "";
+  let retryInstruction =
+    input.retryInstruction ?? input.correctionInstruction ?? "";
   const manualRetry = Boolean(input.retryInstruction?.trim());
-  const maxAttempts = getExecutorMaxAttempts(manualRetry);
+  const critiqueCorrection = Boolean(input.correctionInstruction?.trim());
+  const externalCorrection = manualRetry || critiqueCorrection;
+  const maxAttempts = getExecutorMaxAttempts(externalCorrection);
   const attemptErrors: string[] = [];
   try {
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       // 重试时基于同一工作副本继续执行，保留首次已完成的工具写入。
       const correctionAttempt = isExecutorCorrectionAttempt(
         attempt,
-        manualRetry,
+        externalCorrection,
       );
       const graphContextSummary = createGraphContextSummary(toolKnowledgeGraph);
       const recentNodeIds = new Set(
@@ -216,14 +230,18 @@ export async function* streamExecutorAgent(
         previousResults: input.previousResults,
         excludeNodeIds: recentNodeIds,
       });
+      const selectedToolNames = correctionAttempt
+        ? getExecutorRetryToolNames(input.plan.status === "supplement")
+        : getExecutorDefaultToolNames(
+            definition.agentType,
+            input.plan.status === "supplement",
+          );
       const tools = createToolsForAgent(
         definition.agentType,
-        correctionAttempt
-          ? getExecutorRetryToolNames(input.plan.status === "supplement")
-          : getExecutorDefaultToolNames(
-              definition.agentType,
-              input.plan.status === "supplement",
-            ),
+        restrictExecutorCorrectionToolNames(
+          selectedToolNames,
+          input.forbidNewEvidence === true,
+        ),
         {
           knowledgeGraph: toolKnowledgeGraph,
           allowedEntityTypes: definition.allowedEntityTypes,
@@ -258,6 +276,14 @@ export async function* streamExecutorAgent(
             "No product context provided.",
           graph_context_summary: graphContextSummary,
           task_relevant_context: taskRelevantContext,
+          ...(input.correctionTargetNodeIds?.length
+            ? {
+                correction_target_context: createCorrectionTargetContext(
+                  toolKnowledgeGraph,
+                  input.correctionTargetNodeIds,
+                ),
+              }
+            : {}),
           user_input: input.userInput,
           task: input.task,
           ...(retryInstruction
@@ -400,6 +426,28 @@ export async function* streamExecutorAgent(
     risks: graphDelta.risks,
     openQuestions: graphDelta.open_questions,
   });
+}
+
+/**
+ * 为定点修正提供目标节点及其一跳关系，避免 Executor 重复执行全图查询。
+ */
+function createCorrectionTargetContext(
+  knowledgeGraph: ProductKnowledgeGraph,
+  targetNodeIds: string[],
+) {
+  const targetIdSet = new Set(targetNodeIds);
+  const relations = knowledgeGraph.relations.filter(
+    (relation) =>
+      targetIdSet.has(relation.source) || targetIdSet.has(relation.target),
+  );
+  const relatedIds = new Set([
+    ...targetNodeIds,
+    ...relations.flatMap((relation) => [relation.source, relation.target]),
+  ]);
+  return {
+    nodes: knowledgeGraph.entities.filter((entity) => relatedIds.has(entity.id)),
+    relations,
+  };
 }
 
 /**

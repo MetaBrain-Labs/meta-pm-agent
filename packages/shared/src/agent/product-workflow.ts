@@ -799,9 +799,16 @@ export const OrchestratorAgentResultSchema = z.object({
   reason_summary: z.string().min(1).max(800).describe(
     "Compact explanation of the routing decision for runtime logs.",
   ),
-  planner_delegation_summary: z.string().max(1200).optional().describe(
-    "Optional summary returned after delegating planning readiness to the Planner subagent.",
-  ),
+  planner_delegation_summary: z
+    .preprocess(
+      (value) =>
+        typeof value === "string" ? value.slice(0, 1200) : value,
+      z.string().max(1200),
+    )
+    .optional()
+    .describe(
+      "Optional summary returned after delegating planning readiness to the Planner subagent.",
+    ),
   warnings: z.array(z.string().min(1)).default([]).describe(
     "Operational warnings that should be logged but not shown as stack traces.",
   ),

@@ -18,6 +18,7 @@ import test from "node:test";
 import {
   formatDocumentEvidenceQuestionForm,
   isAcceptedDocumentEvidenceWorkflowResult,
+  normalizeDocumentEvidenceWorkflowResult,
   normalizeDocumentEvidenceResolution,
   selectNextNodeAfterScore,
   type DocumentEvidenceResolutionInput,
@@ -374,6 +375,66 @@ test("does not accept document evidence with an unconsumed Evidence issue", () =
   assert.equal(isAcceptedDocumentEvidenceWorkflowResult(result), false);
   result.review.issues = [];
   assert.equal(isAcceptedDocumentEvidenceWorkflowResult(result), true);
+});
+
+test("normalizes historical document completion with unconsumed Evidence into correction", () => {
+  const result = {
+    status: "completed",
+    confirmation_id: "critique-document-1",
+    request_summary: "Resolve evidence",
+    planner: {
+      status: "supplement",
+      request_summary: "Resolve evidence",
+      dag: { nodes: ["supplement-task-01"], edges: [] },
+      tasks: [
+        {
+          task_id: "supplement-task-01",
+          sequence: 1,
+          title: "Repair evidence",
+          description: "Repair exact evidence",
+          assigned_agent: "executor-product-strategy",
+          depends_on: [],
+          covered_business_model_indexes: [1],
+          expected_output: "Consumed Evidence",
+          quality_check: { status: "pending", criteria: ["traceable"] },
+        },
+      ],
+      assumptions: [],
+    },
+    executor_results: [],
+    review: {
+      accepted_task_ids: ["supplement-task-01"],
+      rejected_task_ids: [],
+      retry_task_ids: [],
+      issues: [
+        {
+          code: "UNCONSUMED_EVIDENCE",
+          severity: "warning",
+          task_id: "supplement-task-01",
+          message: "Evidence E-orphan is not consumed.",
+        },
+      ],
+      notes: "Model considered the warning non-blocking.",
+    },
+    product_context_update: "Evidence added.",
+    knowledge_graph_update: input.knowledgeGraph,
+    knowledge_graph_review: {
+      accepted_task_ids: ["supplement-task-01"],
+      rejected_task_ids: [],
+      retry_task_ids: [],
+      issues: [],
+      notes: [],
+    },
+    proposal_questions: [],
+    confirmation_message: "Completed.",
+  } as any;
+
+  const normalized = normalizeDocumentEvidenceWorkflowResult(result);
+  assert.equal(normalized.status, "requires_executor_retry");
+  assert.deepEqual(normalized.review.retry_task_ids, ["supplement-task-01"]);
+  assert.deepEqual(normalized.review.accepted_task_ids, []);
+  assert.equal(normalized.review.issues[0]?.severity, "error");
+  assert.equal(isAcceptedDocumentEvidenceWorkflowResult(normalized), false);
 });
 
 test("routes document scoring outcomes with evidence blockers first", () => {

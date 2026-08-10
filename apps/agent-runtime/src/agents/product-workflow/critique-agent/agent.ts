@@ -168,6 +168,7 @@ function createCritiqueAgentPayload(input: CritiqueAgentInput) {
   const validationReport = createCritiqueValidationReport(input);
 
   return {
+    workflow_purpose: input.workflowPurpose ?? "standard",
     product_context: truncateText(
       input.productContext || "No product context provided.",
       800,

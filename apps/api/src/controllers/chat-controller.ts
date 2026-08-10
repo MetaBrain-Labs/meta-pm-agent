@@ -23,11 +23,12 @@ import {
   createWorkflowThreadId,
   extractQuestionFormId,
   getFormAnswerId,
-  isAcceptedDocumentEvidenceWorkflowResult,
+  isAcceptedWorkflowResultForPurpose,
   isDocumentEvidenceResolutionFormId,
   isProductWorkflowAcceptanceAnswer,
   isProductWorkflowOptionalStopAnswer,
   isProductWorkflowStopWithIssuesAnswer,
+  normalizeDocumentEvidenceWorkflowResult,
   isPreOrchGraphConflictFormId,
   parseGraphConflictAction,
   releaseQuestionFormHumanInterrupt,
@@ -56,6 +57,7 @@ import {
   persistAgentTokenUsage,
   persistConversationResult,
   persistConversationStart,
+  recoverDocumentEvidenceCorrectionDecision,
   shouldRejectStaleWorkflowFormSubmission,
 } from "../services/chat-service";
 import { loadProductRuntimeContextForConversation } from "../services/product-context-service";
@@ -419,10 +421,13 @@ export async function chatStreamHandler(c: Context) {
       // 持久化用户发送的消息
       const workflowAnswerResolution = parsed.data.workflowRetry
         ? null
-        : await persistConversationStart(
+          : await persistConversationStart(
             parsed.data.chatId,
             effectiveRequestFormId,
             parsed.data.messages,
+            documentEvidenceResolution
+              ? "document_evidence_resolution"
+              : "standard",
           );
       const submittedWorkflowFormId = parsed.data.workflowRetry
         ? null
@@ -455,6 +460,17 @@ export async function chatStreamHandler(c: Context) {
       await markStatus(
         parsed.data.workflowRetry ? "workflow_running" : "received",
       );
+
+      if (
+        !parsed.data.workflowRetry &&
+        !workflowAnswerResolution &&
+        documentEvidenceResolution?.status === "supplement_running"
+      ) {
+        await recoverDocumentEvidenceCorrectionDecision({
+          conversationId: chatId,
+          requestFormId: effectiveRequestFormId,
+        });
+      }
 
       const pendingDecisionForm =
         shouldFinalizeWorkflowRound || parsed.data.workflowRetry
@@ -613,13 +629,19 @@ export async function chatStreamHandler(c: Context) {
         }
         if (event.type === "complete") {
           // 捕获工作流完整结构化结果，供最终知识图谱归档使用
-          productWorkflowResult = event.result;
+          const workflowResult = documentEvidenceResolution
+            ? normalizeDocumentEvidenceWorkflowResult(event.result)
+            : event.result;
+          productWorkflowResult = workflowResult;
           autoFinalizedWorkflowRound =
-            event.result.status === "completed" ||
-            event.result.status === "discarded";
+            workflowResult.status === "completed" ||
+            workflowResult.status === "discarded";
           if (
             documentEvidenceResolution?.status === "supplement_running" &&
-            isAcceptedDocumentEvidenceWorkflowResult(event.result)
+            isAcceptedWorkflowResultForPurpose(
+              workflowResult,
+              "document_evidence_resolution",
+            )
           ) {
             documentEvidenceCompletionPending = true;
           }
@@ -847,7 +869,10 @@ export async function chatStreamHandler(c: Context) {
           documentEvidenceCompletionPending &&
           documentEvidenceResolution &&
           isProductWorkflowResult(productWorkflowResult) &&
-          isAcceptedDocumentEvidenceWorkflowResult(productWorkflowResult)
+          isAcceptedWorkflowResultForPurpose(
+            productWorkflowResult,
+            "document_evidence_resolution",
+          )
         ) {
           const resolvedGraph = await getWorkspaceKnowledgeGraph(
             runtimeContext.workspaceId!,

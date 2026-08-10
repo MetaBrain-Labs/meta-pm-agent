@@ -136,6 +136,8 @@ function createWorkflowResumeContext({
   workflowAnswerResolution?: WorkflowAnswerResolution | null;
   serverWorkflowRecoveryContext?: Readonly<WorkflowRecoveryContext>;
 }): WorkflowResumeContext | null {
+  const workflowPurpose =
+    serverWorkflowRecoveryContext?.workflowPurpose ?? "standard";
   const productWorkflow =
     serverWorkflowRecoveryContext?.critique ??
     workflowAnswerResolution?.workflow ??
@@ -180,12 +182,15 @@ function createWorkflowResumeContext({
   const originalUserInput = findOriginalUserInput(messages);
 
   if (!requestAnalysis) {
-    return knowledgeGraph ? { knowledgeGraph, rerunTaskIds: [] } : null;
+    return knowledgeGraph
+      ? { workflowPurpose, knowledgeGraph, rerunTaskIds: [] }
+      : null;
   }
 
   // 允许“继续之前中断的对话”在只有 Request Analysis、还没有 DAG 的情况下从 Planner 继续。
   if (!plan) {
     return {
+      workflowPurpose,
       requestAnalysis,
       originalUserInput,
       executorResults,
@@ -237,6 +242,7 @@ function createWorkflowResumeContext({
     : [];
 
   return {
+    workflowPurpose,
     requestAnalysis,
     originalUserInput,
     plan,

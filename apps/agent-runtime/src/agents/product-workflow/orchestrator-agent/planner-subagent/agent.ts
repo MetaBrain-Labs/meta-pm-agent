@@ -20,10 +20,7 @@ import { createDeepAgentToolAllowlistMiddleware } from "../../../common/deep-age
 import { createChatModel } from "../../../common/model";
 import { resolveAgentModelSelection } from "../../../common/model-profile";
 import { parseJsonObject } from "../../../../utils/json";
-import {
-  isDocumentEvidenceSupplement,
-  type OrchestratorAgentInput,
-} from "../../types";
+import type { OrchestratorAgentInput } from "../../types";
 import type { ExecutorAgentType } from "../../executor-agent/definitions";
 import { createPlannerSubagentPrompt } from "./prompt";
 import {
@@ -108,7 +105,7 @@ export function extractPlanFromSubagentResult(
   if (result.success) {
     const candidate =
       input.supplementAgentTypes?.length &&
-      !isDocumentEvidenceSupplement(input.supplementSourceTaskIds)
+      input.workflowPurpose !== "document_evidence_resolution"
       ? scopeSupplementPlan(result.data, input.supplementAgentTypes)
       : scopeInitialDecisionPlan(result.data, input);
     if (candidate.tasks.length > 0) {
@@ -138,7 +135,7 @@ function fallbackOrRejectPlan(
   input: OrchestratorAgentInput,
   reason: string,
 ): TaskExecutionPlan {
-  if (isDocumentEvidenceSupplement(input.supplementSourceTaskIds)) {
+  if (input.workflowPurpose === "document_evidence_resolution") {
     throw new Error(`document-evidence-planner-invalid:${reason}`);
   }
   return finalizePlan(createFallbackPlan(input, reason), input);

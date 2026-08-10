@@ -13,8 +13,11 @@
 
 export {
   isAcceptedDocumentEvidenceWorkflowResult,
+  isAcceptedWorkflowResultForPurpose,
+  normalizeDocumentEvidenceWorkflowResult,
   streamConversation,
 } from "./agents/conversation/stream";
+export type { WorkflowPurpose } from "./agents/product-workflow/types";
 export {
   createRecoveredRequestAnalysis,
   resolveAnsweredGraphOpenQuestions,

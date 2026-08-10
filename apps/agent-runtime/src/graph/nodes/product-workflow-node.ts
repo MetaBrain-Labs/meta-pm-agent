@@ -36,7 +36,6 @@ import {
 } from "../../agents/product-workflow/agent";
 import { getModelProfileFromRunnableConfig } from "../../agents/common/model-profile";
 import { updateProductContextMetadata } from "../../agents/product-workflow/common/context-metadata";
-import { isDocumentEvidenceSupplement } from "../../agents/product-workflow/types";
 import type { WorkflowGraphStateValue } from "../state";
 
 /**
@@ -143,6 +142,7 @@ export async function orchestratorAgentNode(
   });
   const { decision, plan } = (await consumeProductWorkflowStream(
     streamOrchestratorAgent({
+      workflowPurpose: state.workflowPurpose,
       modelProfile: getModelProfileFromRunnableConfig(config),
       workspaceId: state.workspaceId,
       productContext: state.productContext,
@@ -357,9 +357,11 @@ async function executeExecutorAgentTask(
           `Previous failure details:\n${retryError}`,
         ].join("\n")
       : undefined;
+  const critiqueCorrection = createCritiqueCorrectionContext(state, task);
 
   const result = await consumeProductWorkflowStream(
     streamExecutorAgent({
+      workflowPurpose: state.workflowPurpose,
       modelProfile: getModelProfileFromRunnableConfig(config),
       task,
       plan: state.plan,
@@ -370,9 +372,12 @@ async function executeExecutorAgentTask(
       userInput: state.userInput,
       previousResults: state.executorResults,
       retryInstruction,
-      documentEvidenceResolution: isDocumentEvidenceSupplement(
-        state.supplementSourceTaskIds,
-      ),
+      correctionInstruction: critiqueCorrection?.instruction,
+      correctionIssueCodes: critiqueCorrection?.issueCodes,
+      correctionTargetNodeIds: critiqueCorrection?.targetNodeIds,
+      forbidNewEvidence: critiqueCorrection?.forbidNewEvidence,
+      documentEvidenceResolution:
+        state.workflowPurpose === "document_evidence_resolution",
       signal: config?.signal,
     }),
     writer,
@@ -414,6 +419,85 @@ async function executeExecutorAgentTask(
 }
 
 /**
+ * 为 Critique 补充 DAG 提取确定性问题和精确节点目标。
+ *
+ * 这里只依据问题代码、任务 ID、节点类型及关系是否存在进行选择，不判断自然语言语义等价性。
+ */
+function createCritiqueCorrectionContext(
+  state: WorkflowGraphStateValue,
+  task: TaskExecutionNode,
+): {
+  instruction: string;
+  issueCodes: string[];
+  targetNodeIds: string[];
+  forbidNewEvidence: boolean;
+} | null {
+  if (state.plan?.status !== "supplement") return null;
+  const sourceTaskIds = new Set(state.supplementSourceTaskIds);
+  const hardIssues = state.priorCritiqueIssues.filter(
+    (issue) =>
+      issue.severity === "error" &&
+      (!issue.task_id || sourceTaskIds.has(issue.task_id)),
+  );
+  if (hardIssues.length === 0) return null;
+
+  const taskContract = [task.title, task.description, task.expected_output].join(
+    "\n",
+  );
+  const exactIssues = hardIssues.filter(
+    (issue) =>
+      taskContract.includes(issue.code) ||
+      Boolean(issue.task_id && taskContract.includes(issue.task_id)),
+  );
+  const selectedIssues = exactIssues.length > 0 ? exactIssues : hardIssues;
+  const unconsumedSourceTaskIds = new Set(
+    selectedIssues.flatMap((issue) =>
+      issue.code === "UNCONSUMED_EVIDENCE" && issue.task_id
+        ? [issue.task_id]
+        : [],
+    ),
+  );
+  const graph = state.knowledgeGraph;
+  const targetNodeIds = graph
+    ? graph.entities
+        .filter(
+          (entity) =>
+            entity.type === "Evidence" &&
+            entity.status !== "deprecated" &&
+            unconsumedSourceTaskIds.has(entity.source_task_id ?? "") &&
+            !graph.relations.some(
+              (relation) =>
+                relation.source === entity.id &&
+                ["Validates", "References"].includes(relation.type),
+            ),
+        )
+        .map((entity) => entity.id)
+    : [];
+  const issueCodes = [...new Set(selectedIssues.map((issue) => issue.code))];
+  const forbidNewEvidence =
+    issueCodes.length > 0 &&
+    issueCodes.every((code) => code === "UNCONSUMED_EVIDENCE");
+  const issueLines = selectedIssues.map(
+    (issue) =>
+      `- ${issue.code}${issue.task_id ? ` (${issue.task_id})` : ""}: ${issue.message}`,
+  );
+
+  return {
+    instruction: [
+      "This is a user-confirmed Critique correction task. Correct only the persisted issues and exact graph targets below.",
+      ...issueLines,
+      `Exact target node IDs: ${targetNodeIds.join(", ") || "none"}.`,
+      forbidNewEvidence
+        ? "Do not create Evidence nodes. Consume each exact target with a valid relation, or deprecate it with an existing active replacement."
+        : "Reuse active Evidence whenever it already represents the supplied answer; only the designated evidence owner may create a missing Evidence node.",
+    ].join("\n"),
+    issueCodes,
+    targetNodeIds,
+    forbidNewEvidence,
+  };
+}
+
+/**
  * 执行 Critique Agent 收尾阶段，审查 Executor 结果并生成待用户确认的更新。
  */
 async function executeCritiqueAgentReview(
@@ -433,6 +517,7 @@ async function executeCritiqueAgentReview(
   });
   const workflowResult = await consumeProductWorkflowStream(
     streamCritiqueAgent({
+      workflowPurpose: state.workflowPurpose,
       modelProfile: getModelProfileFromRunnableConfig(config),
       workspaceId: state.workspaceId,
       productContext: state.productContext,
@@ -442,9 +527,8 @@ async function executeCritiqueAgentReview(
       knowledgeGraph,
       priorIssues: state.priorCritiqueIssues,
       userInput: state.userInput,
-      documentEvidenceResolution: isDocumentEvidenceSupplement(
-        state.supplementSourceTaskIds,
-      ),
+      documentEvidenceResolution:
+        state.workflowPurpose === "document_evidence_resolution",
       signal: config?.signal,
     }),
     writer,

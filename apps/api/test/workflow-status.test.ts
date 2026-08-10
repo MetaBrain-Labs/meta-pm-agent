@@ -29,6 +29,7 @@ test("builds an authoritative correction context from persisted snapshots", () =
   const recovery = createServerWorkflowRecoveryContext({
     messages: [],
     workflow,
+    workflowPurpose: "document_evidence_resolution",
     resolution: {
       action: "retry_correction",
       formId: "review-1-proposal-decision",
@@ -36,6 +37,7 @@ test("builds an authoritative correction context from persisted snapshots", () =
     },
   });
 
+  assert.equal(recovery.workflowPurpose, "document_evidence_resolution");
   assert.equal(recovery.requestAnalysis.business_model[0]?.user_goal, workflow.request_summary);
   assert.deepEqual(recovery.planner, workflow.planner);
   assert.deepEqual(recovery.executorResults, []);

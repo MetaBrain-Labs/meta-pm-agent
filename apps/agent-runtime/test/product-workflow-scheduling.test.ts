@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   CritiqueAgentOutputSchema,
+  OrchestratorAgentResultSchema,
   TaskExecutionPlanSchema,
   type ProductKnowledgeGraph,
   type RequestAnalysis,
@@ -741,6 +742,7 @@ test("treats document evidence executor suggestions as advisory", () => {
     status: "supplement" as const,
   };
   const input = {
+    workflowPurpose: "document_evidence_resolution" as const,
     productContext: "Workspace: local test",
     knowledgeGraph: createEmptyKnowledgeGraph(),
     requestAnalysis: createCollaborativeDocumentRequestAnalysis(),
@@ -795,6 +797,20 @@ test("keeps minimum MVP execution while deferring detailed technical work", () =
   assert.match(summary, /with 3 tasks/);
   assert.match(summary, /task-03/);
   assert.doesNotMatch(summary, /task-04/);
+});
+
+test("truncates model planner delegation summaries before schema validation", () => {
+  const parsed = OrchestratorAgentResultSchema.parse({
+    intent: "project_evolution",
+    route: "product_workflow",
+    context_source: "product_knowledge_graph",
+    has_project_context: true,
+    reason_summary: "Continue the persisted product workflow.",
+    planner_delegation_summary: "x".repeat(1600),
+    warnings: [],
+  });
+
+  assert.equal(parsed.planner_delegation_summary?.length, 1200);
 });
 
 test("replaces an under-scoped broad model plan with evidence and MVP coverage", () => {

@@ -24,7 +24,9 @@ import {
   isProductWorkflowCorrectionRetryAnswer,
   isProductWorkflowOptionalStopAnswer,
   isProductWorkflowStopWithIssuesAnswer,
+  normalizeDocumentEvidenceWorkflowResult,
   type WorkflowAnswerResolution,
+  type WorkflowPurpose,
   type WorkflowRecoveryContext,
 } from "@repo/agent-runtime";
 import {
@@ -186,6 +188,7 @@ export async function persistConversationStart(
   conversationId: string | undefined,
   requestFormId: string | undefined,
   messages: ChatMessage[],
+  workflowPurpose: WorkflowPurpose = "standard",
 ): Promise<WorkflowAnswerResolution | null> {
   if (!conversationId) return null;
 
@@ -200,14 +203,19 @@ export async function persistConversationStart(
           workflowAnswerResolution.formId,
         )
       : null;
-  const authoritativeWorkflow =
+  const recoveredWorkflow =
     workflowAnswerResolution?.workflow ?? persistedWorkflow;
+  const authoritativeWorkflow =
+    recoveredWorkflow && workflowPurpose === "document_evidence_resolution"
+      ? normalizeDocumentEvidenceWorkflowResult(recoveredWorkflow)
+      : recoveredWorkflow;
   const serverRecoveryContext =
     workflowAnswerResolution && authoritativeWorkflow
       ? createServerWorkflowRecoveryContext({
           messages: await listConversationMessages(conversationId),
           workflow: authoritativeWorkflow,
           resolution: workflowAnswerResolution,
+          workflowPurpose,
         })
       : null;
   const resolvedWorkflowAnswer = workflowAnswerResolution
@@ -236,6 +244,45 @@ export async function persistConversationStart(
 }
 
 /**
+ * 将历史上误标 completed 的 Document 补证结果恢复为 Critique 修正决策。
+ *
+ * 只复用已持久化的 Critique 快照，不重新运行 Request Agent、Resolver 或 Executor。
+ */
+export async function recoverDocumentEvidenceCorrectionDecision({
+  conversationId,
+  requestFormId,
+}: {
+  conversationId: string | undefined;
+  requestFormId: string | undefined;
+}): Promise<ProductWorkflowResult | null> {
+  if (!conversationId || !requestFormId) return null;
+  const messages = await listConversationMessages(conversationId);
+  const latestWorkflow = messages
+    .map((message) => message.productWorkflow)
+    .filter((workflow) => workflow !== null && workflow !== undefined)
+    .at(-1);
+  if (!latestWorkflow) {
+    const claimedTerminalCompletion = messages.some(
+      (message) =>
+        message.type === "conversation_confirmation" &&
+        message.content.includes("本轮产品工作流已正式结束"),
+    );
+    if (claimedTerminalCompletion) {
+      throw new Error(
+        "Document evidence resolution cannot recover its persisted Critique result. The historical answer will not be replayed as a new product request.",
+      );
+    }
+    return null;
+  }
+
+  const normalized = normalizeDocumentEvidenceWorkflowResult(latestWorkflow);
+  if (normalized.status !== "requires_executor_retry") return null;
+  await persistProposalDecisionItem(requestFormId, normalized);
+  await updateRequestFormStatus(requestFormId, "pending_user_confirmation");
+  return normalized;
+}
+
+/**
  * 从服务端消息快照组装表单恢复所需的最小权威上下文。
  *
  * 图谱正文不进入该对象；运行时仍从工作区图谱存储读取最新版本。
@@ -244,10 +291,12 @@ export function createServerWorkflowRecoveryContext({
   messages,
   workflow,
   resolution,
+  workflowPurpose = "standard",
 }: {
   messages: MessageDto[];
   workflow: ProductWorkflowResult;
   resolution: WorkflowAnswerResolution;
+  workflowPurpose?: WorkflowPurpose;
 }): WorkflowRecoveryContext {
   const requestAnalysis =
     messages
@@ -270,6 +319,7 @@ export function createServerWorkflowRecoveryContext({
   }
 
   return {
+    workflowPurpose,
     requestAnalysis,
     planner,
     executorResults: [...executorByTaskId.values()],

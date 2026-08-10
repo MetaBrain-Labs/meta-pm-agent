@@ -561,6 +561,47 @@ test("stopping a hard Critique error discards without starting another workflow 
   );
 });
 
+test("preserves document evidence purpose when Critique correction replaces source task ids", () => {
+  const messages = createMessages(
+    "[form answers - critique-result-proposal-decision]\n- workflow_action: retry_correction",
+  );
+  const workflow = createProductWorkflowResult("critique-result");
+  const baseline = createWorkflowResumeContextFromMessages({ messages });
+  assert.ok(baseline?.requestAnalysis);
+
+  const context = createWorkflowResumeContextFromMessages({
+    messages,
+    serverWorkflowRecoveryContext: {
+      workflowPurpose: "document_evidence_resolution",
+      requestAnalysis: baseline.requestAnalysis,
+      planner: workflow.planner,
+      executorResults: [],
+      critique: workflow,
+      correctionSource: {
+        formId: "critique-result-proposal-decision",
+        action: "retry_correction",
+        retryTaskIds: ["task-02"],
+      },
+    },
+    workflowAnswerResolution: {
+      action: "retry_correction",
+      formId: "critique-result-proposal-decision",
+      workflow,
+      questions: [],
+    },
+  });
+
+  assert.equal(context?.workflowPurpose, "document_evidence_resolution");
+  assert.ok(context?.supplementSourceTaskIds?.includes("task-02"));
+  assert.equal(
+    context?.supplementSourceTaskIds?.some((taskId) =>
+      taskId.startsWith("document-evidence:"),
+    ),
+    false,
+  );
+  assert.equal(context?.forceSupplementPlan, true);
+});
+
 test("accepts a persisted final workflow without client workflow history", async () => {
   const messages = createMessages(
     "[form answers - product-workflow-confirmation]\n- 你希望如何处理当前结果？: 确认接受\n- 补充说明: (skipped)",

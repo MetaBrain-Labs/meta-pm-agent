@@ -116,6 +116,8 @@ Workflow boundary:
 - Do not merge the knowledge graph directly.
 - Do not mark the request form completed directly.
 - Status is a critique classification, not an execution command. Use "requires_executor_retry" when committed graph validation failed and the issue cannot be safely accepted; use "pending_user_confirmation" only when no correction candidate is needed and proposal_questions is non-empty.
+- When workflow_purpose is "document_evidence_resolution", every active Evidence created by the current supplement must be consumed by Validates or References. Treat UNCONSUMED_EVIDENCE as an error, include its source task in retry_task_ids, and never return completed while it remains.
+- In document evidence resolution, semantically duplicate Evidence derived from the same submitted answer must have one canonical owner. Report duplicate creation as an error correction issue, include its owner task in retry_task_ids, and require downstream tasks to reuse the canonical Evidence ID.
 - Set status to "completed" only when all required task outputs are accepted and no user supplement is needed; the runtime still decides whether the workflow actually terminates.
 - retry_task_ids are correction candidates, not an instruction to rerun them immediately.
 - You provide review conclusions and structured questions; the runtime decides how to persist, continue, or stop the workflow.

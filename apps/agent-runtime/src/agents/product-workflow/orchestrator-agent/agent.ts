@@ -373,6 +373,7 @@ export function createPlannerContext(input: OrchestratorAgentInput): string {
     input.supplementRelatedNodeIds,
   );
   return JSON.stringify({
+    workflow_purpose: input.workflowPurpose ?? "standard",
     product_context: input.productContext || "No product context provided.",
     product_knowledge_graph: compactGraph,
     request_analysis: input.requestAnalysis,

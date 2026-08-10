@@ -31,6 +31,7 @@ import type {
   DocumentEvidenceAnswerResult,
 } from "./graph/document-evidence-resolution-workflow";
 import type { DocumentEvidenceBlocker } from "./agents/product-workflow/orchestrator-agent/document-evidence-resolver-subagent";
+import type { WorkflowPurpose } from "./agents/product-workflow/types";
 
 /**
  * 标识当前流式内容所属的 Agent，便于 API 持久化和前端按阶段展示。
@@ -229,6 +230,8 @@ export interface WorkflowAnswerResolution {
  * 只保存稳定的业务分析、DAG、Executor 快照与 Critique 结论；完整图谱继续由独立图谱存储提供。
  */
 export interface WorkflowRecoveryContext {
+  /** 服务端恢复时确认的工作流用途。 */
+  readonly workflowPurpose: WorkflowPurpose;
   readonly requestAnalysis: RequestAnalysis;
   readonly planner: TaskExecutionPlan;
   readonly executorResults: readonly ExecutorAgentResult[];
