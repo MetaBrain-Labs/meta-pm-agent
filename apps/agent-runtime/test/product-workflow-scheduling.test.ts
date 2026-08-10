@@ -22,10 +22,10 @@ import {
   TaskExecutionPlanSchema,
   type ProductKnowledgeGraph,
   type RequestAnalysis,
-  ExecutorAgentResult,
-  ProductWorkflowResult,
-  TaskExecutionNode,
-  TaskExecutionPlan,
+  type ExecutorAgentResult,
+  type ProductWorkflowResult,
+  type TaskExecutionNode,
+  type TaskExecutionPlan,
 } from "@repo/shared";
 import {
   createFallbackPlan,
@@ -36,6 +36,7 @@ import {
   removeAnsweredOpenQuestions,
   scopeInitialDecisionPlan,
   scopeSupplementPlan,
+  validatePlannerTaskExecutability,
 } from "../src/agents/product-workflow/orchestrator-agent/planner-subagent/agent";
 import {
   compactGraphForPlanner,
@@ -45,7 +46,10 @@ import {
   requireDelegatedPlannerPlan,
   shouldRetryPlannerDelegation,
 } from "../src/agents/product-workflow/orchestrator-agent/agent";
-import { getMissingRequiredSubagentError } from "../src/agents/common/run-agent";
+import {
+  AgentSubagentExecutionError,
+  getMissingRequiredSubagentError,
+} from "../src/agents/common/run-agent";
 import {
   createWorkflowRoundStartEvent,
   isSupplementWorkflow,
@@ -321,6 +325,26 @@ test("fails when Orchestrator does not actually delegate to Planner", () => {
   );
   assert.equal(
     shouldRetryPlannerDelegation(new Error("provider unavailable"), 1),
+    false,
+  );
+  assert.equal(
+    shouldRetryPlannerDelegation(
+      new AgentSubagentExecutionError(
+        "planner",
+        new Error("Subagent planner failed"),
+      ),
+      1,
+    ),
+    true,
+  );
+  assert.equal(
+    shouldRetryPlannerDelegation(
+      new AgentSubagentExecutionError(
+        "pre-orchestrator",
+        new Error("Subagent pre-orchestrator failed"),
+      ),
+      1,
+    ),
     false,
   );
 });
@@ -767,6 +791,123 @@ test("treats document evidence executor suggestions as advisory", () => {
     ),
     true,
   );
+});
+
+test("rejects document evidence plans with unauthorized relations and abbreviated node IDs", () => {
+  const graph = createEmptyKnowledgeGraph();
+  graph.entities.push({
+    id: "R-9da6bd4d-45b6-4cfb-be2a-c20456e02ec0",
+    type: "Requirement",
+    name: "Security compliance",
+    description: "Private deployment compliance requirement",
+    source_task_id: "strategy-01",
+    status: "confirmed",
+  });
+  const task = createTask(
+    "task-s04",
+    1,
+    "executor-market-research",
+    [],
+  );
+  task.description = "Create Custom --Constrains--> R-9da6bd4d.";
+  task.quality_check.criteria = ["Evidence --Validates--> Custom"];
+  const plan = { ...createPlan([task]), status: "supplement" as const };
+  const input = {
+    workflowPurpose: "document_evidence_resolution" as const,
+    productContext: "Workspace: local test",
+    knowledgeGraph: graph,
+    requestAnalysis: createCollaborativeDocumentRequestAnalysis(),
+    userInput: [{ index: 1, content: "Resolve evidence blockers", type: "request" }],
+    supplementSourceTaskIds: ["document-evidence:run-1"],
+  };
+
+  const issues = validatePlannerTaskExecutability(plan, input);
+  assert.ok(issues.some((issue) => issue.includes("relation Constrains")));
+  assert.ok(
+    issues.some((issue) =>
+      issue.includes("Evidence --Validates--> Custom"),
+    ),
+  );
+  assert.ok(issues.some((issue) => issue.includes("use exact ID R-9da6bd4d-45b6")));
+  assert.throws(
+    () => extractPlanFromSubagentResult(JSON.stringify(plan), input),
+    /document-evidence-planner-invalid:Planner produced non-executable/,
+  );
+  assert.deepEqual(
+    validatePlannerTaskExecutability(plan, {
+      ...input,
+      workflowPurpose: "standard",
+    }),
+    [],
+  );
+});
+
+test("accepts authorized relation names written as natural-language task requirements", () => {
+  const strategyTask = createTask(
+    "supp-task-01",
+    1,
+    "executor-product-strategy",
+    [],
+  );
+  strategyTask.description = "Persist Produces and References relations.";
+  const discoveryTask = createTask(
+    "supp-task-02",
+    2,
+    "executor-product-discovery",
+    [],
+  );
+  discoveryTask.description = "Persist Satisfies and Measures relations.";
+  const analyticsTask = createTask(
+    "supp-task-03",
+    3,
+    "executor-data-analytics",
+    [],
+  );
+  analyticsTask.description = "Persist Measures and Validates relations.";
+  const plan = {
+    ...createPlan([strategyTask, discoveryTask, analyticsTask]),
+    status: "supplement" as const,
+  };
+  const input = {
+    workflowPurpose: "document_evidence_resolution" as const,
+    productContext: "Workspace: local test",
+    knowledgeGraph: createEmptyKnowledgeGraph(),
+    requestAnalysis: createCollaborativeDocumentRequestAnalysis(),
+    userInput: [{ index: 1, content: "Resolve evidence blockers", type: "request" }],
+    supplementSourceTaskIds: ["document-evidence:run-1"],
+  };
+
+  assert.deepEqual(validatePlannerTaskExecutability(plan, input), []);
+});
+
+test("serializes the selected manual retry before other ready tasks", () => {
+  const marketTask = createTask(
+    "task-market",
+    1,
+    "executor-market-research",
+    [],
+  );
+  const analyticsTask = createTask(
+    "task-analytics",
+    2,
+    "executor-data-analytics",
+    [],
+  );
+  const state = createState({ tasks: [marketTask, analyticsTask] });
+  const retryConfig = {
+    configurable: { retry_task_id: "task-market" },
+  } as any;
+
+  assert.deepEqual(selectNextExecutorRouterTargets(state, retryConfig), [
+    "executor-market-research",
+  ]);
+  const afterRetry = createState({
+    tasks: [marketTask, analyticsTask],
+    results: [createResult("task-market", "executor-market-research")],
+  });
+  assert.deepEqual(selectNextExecutorRouterTargets(afterRetry, retryConfig), [
+    "executor-data-analytics",
+  ]);
 });
 
 test("keeps minimum MVP execution while deferring detailed technical work", () => {

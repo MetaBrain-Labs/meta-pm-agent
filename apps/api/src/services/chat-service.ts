@@ -334,7 +334,7 @@ export function createServerWorkflowRecoveryContext({
 }
 
 /**
- * 为定点重试加载服务端可信的上一轮错误，避免接受客户端可篡改文本。
+ * 为定点重试加载服务端可信的历史错误，避免接受客户端可篡改文本并丢失早期约束。
  */
 export async function loadExecutorRetryFailure(
   conversationId: string | undefined,

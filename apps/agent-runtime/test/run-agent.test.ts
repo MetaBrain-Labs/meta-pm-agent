@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { AIMessage } from "langchain";
 import {
+  AgentSubagentExecutionError,
   adaptAgentEventStream,
   getMissingRequiredSubagentError,
   resolveJsonOutput,
@@ -333,6 +334,46 @@ test("adapts native tool and SubAgent projections without parsing tool_calls", a
     probe.subagentCalls.map((record) => record.input),
     [{ description: "Plan A" }, { description: "Plan B" }],
   );
+});
+
+test("observes a SubAgent output rejection before delayed task input resolves", async () => {
+  const probe = createSummaryProbe();
+  const plannerFailure = new Error("Subagent planner failed");
+  let rejectOutput!: (reason: unknown) => void;
+  const output = new Promise<unknown>((_resolve, reject) => {
+    rejectOutput = reject;
+  });
+  const taskInput = new Promise<string>((resolve) => {
+    setTimeout(() => resolve("Delayed planner task"), 20);
+  });
+  const run: AgentEventStreamProjection = {
+    messages: streamOf(),
+    toolCalls: streamOf(),
+    subagents: streamOf({
+      name: "planner",
+      taskInput,
+      messages: streamOf(),
+      output,
+    }),
+    output: Promise.resolve({ messages: [] }),
+  };
+
+  setTimeout(() => rejectOutput(plannerFailure), 0);
+
+  await assert.rejects(
+    collectEventStream(run, probe.recorder),
+    (error: unknown) =>
+      error instanceof AgentSubagentExecutionError &&
+      error.subagentType === "planner" &&
+      error.message === plannerFailure.message,
+  );
+  assert.deepEqual(probe.subagentResults, [
+    {
+      toolCallId: probe.subagentResults[0]?.toolCallId,
+      subagentType: "planner",
+      output: { error: "Subagent planner failed" },
+    },
+  ]);
 });
 
 test("prices SubAgent usage with its own responsibility model", async () => {

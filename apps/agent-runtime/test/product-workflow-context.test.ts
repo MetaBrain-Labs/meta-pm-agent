@@ -148,6 +148,44 @@ test("selects task dependency graph context by source task", () => {
   );
 });
 
+test("resolves abbreviated task node references to exact graph IDs", () => {
+  const graph: ProductKnowledgeGraph = {
+    ...knowledgeGraph,
+    entities: [
+      ...knowledgeGraph.entities,
+      {
+        id: "R-9da6bd4d-45b6-4cfb-be2a-c20456e02ec0",
+        type: "Requirement",
+        name: "Security compliance",
+        description: "Private deployment compliance requirement",
+        source_task_id: "strategy-01",
+        status: "confirmed",
+      },
+    ],
+  };
+  const referencedTask: TaskExecutionNode = {
+    ...task,
+    description: "Create Evidence that validates R-9da6bd4d.",
+  };
+
+  const context = createTaskRelevantGraphContext({
+    knowledgeGraph: graph,
+    task: referencedTask,
+    previousResults,
+  });
+
+  assert.deepEqual(context.task_node_references, [
+    {
+      reference: "R-9da6bd4d",
+      exact_id: "R-9da6bd4d-45b6-4cfb-be2a-c20456e02ec0",
+    },
+  ]);
+  assert.equal(
+    context.nodes[0]?.id,
+    "R-9da6bd4d-45b6-4cfb-be2a-c20456e02ec0",
+  );
+});
+
 test("compacts request analysis to current task coverage", () => {
   const compacted = compactRequestAnalysisForTask(requestAnalysis, task);
 

@@ -285,6 +285,7 @@ export async function* streamExecutorAgent(
               }
             : {}),
           user_input: input.userInput,
+          valid_user_input_indexes: input.userInput.map((item) => item.index),
           task: input.task,
           ...(retryInstruction
             ? {
@@ -337,6 +338,7 @@ export async function* streamExecutorAgent(
             ? createNodeProvenanceRetryInstruction(
                 error,
                 webSearchEvidenceRegistry,
+                input.userInput.map((item) => item.index),
               )
             : createStructuredWriteRetryInstruction(error);
           yield {
@@ -673,6 +675,7 @@ function parseStructuredToolResult(
 export function createNodeProvenanceRetryInstruction(
   error: unknown,
   registry: ReturnType<typeof createWebSearchEvidenceRegistry>,
+  validUserInputIndexes: number[] = [],
 ): string {
   const verifiedSources = [...registry.sources.values()].sort(
     (left, right) =>
@@ -682,8 +685,9 @@ export function createNodeProvenanceRetryInstruction(
   return [
     "The previous graph write failed node provenance validation. This is the only local correction attempt; do not repeat web research.",
     `Validation error: ${getErrorMessage(error)}`,
+    `Valid user_input indexes from this payload: ${JSON.stringify(validUserInputIndexes)}. These are payload indexes, not question ordinals or blocker indexes. If the rejected fact came from a submitted form answer, keep the Evidence and rewrite its provenance with the exact matching index from this list.`,
     `Verified web sources from this run: ${JSON.stringify(verifiedSources)}`,
-    "Rewrite invalid Evidence with an exact sourceId, title, and URL from this list. If no listed source supports a claim, omit that Evidence and record the uncertainty as a Risk or unverified assumption.",
+    "For web-backed Evidence, rewrite provenance with an exact sourceId, title, and URL from this list. If neither submitted user input nor a listed source supports a claim, omit that Evidence and record the uncertainty as a Risk or unverified assumption.",
     "For unsupported_infrastructure_scope, omit the rejected infrastructure detail and record it as a Risk or open question unless the exact scope appears in user input.",
   ].join(" ");
 }

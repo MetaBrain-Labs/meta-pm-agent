@@ -42,12 +42,28 @@ test("provenance validation failure produces a retry instruction with exact veri
     isNodeProvenanceValidationFailure({ error: error.message }),
     true,
   );
-  const instruction = createNodeProvenanceRetryInstruction(error, registry);
+  const instruction = createNodeProvenanceRetryInstruction(error, registry, [1]);
   assert.match(instruction, /"sourceId":"9"/);
   assert.match(instruction, /Verified collaboration source/);
   assert.match(instruction, /https:\/\/example\.com\/collaboration/);
   assert.match(instruction, /Risk or unverified assumption/);
   assert.match(instruction, /unsupported_infrastructure_scope/);
+  assert.match(instruction, /Valid user_input indexes from this payload: \[1\]/);
+  assert.match(instruction, /not question ordinals or blocker indexes/);
+});
+
+test("form-answer provenance retry preserves Evidence and uses payload index", () => {
+  const instruction = createNodeProvenanceRetryInstruction(
+    new Error(
+      'Node provenance validation failed: Evidence "性能基线测量计划": unknown_user_input_index:7',
+    ),
+    createWebSearchEvidenceRegistry(),
+    [1],
+  );
+
+  assert.match(instruction, /keep the Evidence/);
+  assert.match(instruction, /exact matching index from this list/);
+  assert.match(instruction, /\[1\]/);
 });
 
 test("terminal retry error preserves both executor attempts", () => {

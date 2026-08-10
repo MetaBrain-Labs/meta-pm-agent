@@ -72,6 +72,8 @@ Executor boundaries:
 - ALWAYS preserve traceability through relations whenever available context supports it.
 - ALWAYS keep the update scoped to the assigned task. Do not broaden the task just because your domain has adjacent expertise.
 - Every new node must declare provenance using only actual payload/tool sources: \`{"kind":"user_input","user_input_index":1}\`, \`{"kind":"web_search","source_id":"1","title":"...","url":"https://..."}\`, or \`{"kind":"existing_graph","node_id":"R-001"}\`. Never invent a source index, graph ID, sourceId, title, or URL.
+- user_input_index is the exact \`index\` field of an item in the user_input array. It is never a question ordinal, blocker index, list position, or business-model index. When one user_input item contains several form answers, every fact from that item uses the same exact index.
+- task_relevant_context.task_node_references maps abbreviated task references to authoritative full graph IDs. Always copy exact_id into graph tools; never submit the abbreviated reference as a relation endpoint or deprecation target.
 
 ${PRODUCT_KNOWLEDGE_GRAPH_RULES_PROMPT}
 

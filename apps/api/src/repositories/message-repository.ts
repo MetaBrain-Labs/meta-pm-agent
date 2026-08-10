@@ -144,7 +144,7 @@ export async function findLatestProductWorkflowForForm(
 }
 
 /**
- * 读取指定任务最近一次由服务端持久化的可重试错误。
+ * 读取并合并指定任务最近若干次由服务端持久化的可重试错误。
  */
 export async function findLatestExecutorRetryError(
   conversationId: string,
@@ -156,9 +156,34 @@ export async function findLatestExecutorRetryError(
     WHERE "conversation_id" = ${conversationId}
       AND "meta"->'agentError'->'retryAction'->>'taskId' = ${taskId}
     ORDER BY "created_at" DESC, "id" DESC
-    LIMIT 1
+    LIMIT 8
   `;
-  return rows[0]?.error_message ?? null;
+  return mergeExecutorRetryErrorHistory(rows.map((row) => row.error_message));
+}
+
+/**
+ * 合并同一任务的历史可重试错误，避免最新错误覆盖更早的约束并造成修正振荡。
+ */
+export function mergeExecutorRetryErrorHistory(
+  errors: Array<string | null | undefined>,
+  maxLength = 6000,
+): string | null {
+  const unique = [
+    ...new Set(
+      errors
+        .slice()
+        .reverse()
+        .map((error) => error?.trim())
+        .filter((error): error is string => Boolean(error)),
+    ),
+  ];
+  if (unique.length === 0) return null;
+  const merged = unique
+    .map((error, index) => `Persisted retry failure ${index + 1}:\n${error}`)
+    .join("\n\n");
+  return merged.length <= maxLength
+    ? merged
+    : merged.slice(merged.length - maxLength);
 }
 
 /**

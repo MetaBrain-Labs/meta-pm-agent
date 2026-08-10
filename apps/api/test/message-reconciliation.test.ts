@@ -19,10 +19,23 @@ import {
   attachArchivedProductWorkflowDisplays,
   attachExecutorResultsToPlannerMessages,
   mapMessageRow,
+  mergeExecutorRetryErrorHistory,
   type MessageDto,
 } from "../src/repositories/message-repository";
 import { createProductWorkflowDisplaySnapshot } from "../src/utils/product-workflow";
 import { parseTaskExecutionPlanPayload } from "../src/utils/task-execution";
+
+test("keeps distinct historical retry failures for the same task", () => {
+  const merged = mergeExecutorRetryErrorHistory([
+    "missing_relation_endpoint:R-short",
+    "unauthorized_relation_type:Constrains",
+    "missing_relation_endpoint:R-short",
+  ]);
+
+  assert.match(merged ?? "", /unauthorized_relation_type:Constrains/);
+  assert.match(merged ?? "", /missing_relation_endpoint:R-short/);
+  assert.equal((merged?.match(/missing_relation_endpoint/g) ?? []).length, 1);
+});
 
 test("restores the latest plan and lightweight Critique snapshot from message metadata", () => {
   const oldPlan = createPlan("task-01", "initial");

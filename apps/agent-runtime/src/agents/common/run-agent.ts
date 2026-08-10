@@ -142,6 +142,8 @@ export interface RunAgentOptions<T, AgentType extends string> {
   requiredSubagentType?: string;
   suppressFallbackReasoning?: boolean;
   throwOnError?: boolean;
+  /** SubAgent 运行失败时跳过业务 fallback，由调用方执行定点重试或错误恢复。 */
+  throwOnSubagentError?: boolean;
   /** 将调用方指定的工具失败结果提升为运行异常。 */
   getToolResultError?: (
     toolName: string,
@@ -260,6 +262,43 @@ export interface AgentSubagentProjection {
   taskInput: PromiseLike<string>;
   output: PromiseLike<unknown>;
   messages: AsyncIterable<AgentMessageProjection>;
+}
+
+/**
+ * 标识 DeepAgents SubAgent projection 的运行失败。
+ *
+ * 调用方可据此区分协调 Agent 自身失败与被委派 Agent 失败，并执行定点重试。
+ */
+export class AgentSubagentExecutionError extends Error {
+  readonly subagentType: string;
+
+  constructor(subagentType: string, cause: unknown) {
+    super(getErrorMessage(cause), { cause });
+    this.name = "AgentSubagentExecutionError";
+    this.subagentType = subagentType;
+  }
+}
+
+type PromiseSettlement<T> =
+  | { status: "fulfilled"; value: T }
+  | { status: "rejected"; reason: unknown };
+
+/** 立即为外部 Promise 安装拒绝处理器，避免稍后消费时出现未处理 rejection。 */
+function observePromise<T>(value: PromiseLike<T>): Promise<PromiseSettlement<T>> {
+  return Promise.resolve(value).then(
+    (resolved) => ({ status: "fulfilled", value: resolved }),
+    (reason: unknown) => ({ status: "rejected", reason }),
+  );
+}
+
+interface ObservedSubagentProjection {
+  output: Promise<PromiseSettlement<unknown>>;
+  messages: Promise<
+    PromiseSettlement<{
+      streamedText: string;
+      tokenUsage: ReturnType<typeof getTokenUsage>;
+    }>
+  >;
 }
 
 /** 公共运行器消费的 Event Streaming v3 投影集合。 */
@@ -422,7 +461,18 @@ export async function* adaptAgentEventStream<AgentType extends string>(
     for await (const subagent of run.subagents) {
       const toolCallId = `subagent:${randomUUID()}`;
       const subagentType = subagent.name;
-      const taskInput = await subagent.taskInput;
+      // DeepAgents 可能先拒绝 output、稍后才完成 taskInput。这里必须在任何 await
+      // 之前接管 Promise projection，避免 Node 将短暂无人处理的拒绝视为致命错误。
+      const taskInputPromise = observePromise(subagent.taskInput);
+      const outputPromise = observePromise(subagent.output);
+      const taskInputResult = await taskInputPromise;
+      if (taskInputResult.status === "rejected") {
+        throw new AgentSubagentExecutionError(
+          subagentType,
+          taskInputResult.reason,
+        );
+      }
+      const taskInput = taskInputResult.value;
       invokedSubagentTypes.add(subagentType);
       options.summaryRecorder.recordSubagentCall({
         toolCallId,
@@ -436,9 +486,17 @@ export async function* adaptAgentEventStream<AgentType extends string>(
         toolCallId,
       });
 
+      const observed: ObservedSubagentProjection = {
+        output: outputPromise,
+        // AsyncIterable 只有开始消费后才会产生拒绝；启动后立即转为 settlement。
+        messages: observePromise(
+          consumeSubagentMessages(subagent, toolCallId, options, push),
+        ),
+      };
       watchers.push(
         consumeSubagentProjection(
           subagent,
+          observed,
           toolCallId,
           options,
           push,
@@ -449,9 +507,10 @@ export async function* adaptAgentEventStream<AgentType extends string>(
   };
 
   const producer = Promise.all([
+    // 优先订阅 SubAgent 生命周期，尽早接管 DeepAgents 暴露的 output Promise。
+    consumeSubagents(),
     consumeMessages(),
     consumeToolCalls(),
-    consumeSubagents(),
     Promise.resolve(run.output).then(() => undefined),
   ])
     .then(() => {
@@ -488,48 +547,46 @@ export async function* adaptAgentEventStream<AgentType extends string>(
 /** 消费单个 SubAgent handle，并保持其 reasoning、文本和结果归属稳定。 */
 async function consumeSubagentProjection<AgentType extends string>(
   subagent: AgentSubagentProjection,
+  observed: ObservedSubagentProjection,
   toolCallId: string,
   options: AgentEventStreamAdapterOptions<AgentType>,
   push: (event: AgentRunEvent<AgentType>) => void,
 ): Promise<void> {
   const startedAt = Date.now();
-  let streamedText = "";
-  const subagentUsage: { value: ReturnType<typeof getTokenUsage> } = {
-    value: null,
-  };
-  const messages = (async () => {
-    for await (const message of subagent.messages) {
-      await Promise.all([
-        consumeTextChunks(message.text, (content) => {
-          streamedText += content;
-          options.summaryRecorder.recordSubagentRawOutput({
-            toolCallId,
-            subagentType: subagent.name,
-            content,
-          });
-        }),
-        consumeTextChunks(message.reasoning, (content) => {
-          options.summaryRecorder.recordSubagentThinking({
-            toolCallId,
-            subagentType: subagent.name,
-            content,
-          });
-          push({
-            type: "subagent-thinking",
-            agentType: options.agentType,
-            subagentType: subagent.name,
-            toolCallId,
-            content,
-          });
-        }),
-      ]);
-      subagentUsage.value =
-        getTokenUsage(await message.output) ?? subagentUsage.value;
-    }
-  })();
+  const [outputResult, messagesResult] = await Promise.all([
+    observed.output,
+    observed.messages,
+  ]);
+  if (outputResult.status === "rejected") {
+    const error = new AgentSubagentExecutionError(
+      subagent.name,
+      outputResult.reason,
+    );
+    options.summaryRecorder.recordSubagentResult({
+      toolCallId,
+      subagentType: subagent.name,
+      output: { error: error.message },
+    });
+    throw error;
+  }
+  if (messagesResult.status === "rejected") {
+    const error = new AgentSubagentExecutionError(
+      subagent.name,
+      messagesResult.reason,
+    );
+    options.summaryRecorder.recordSubagentResult({
+      toolCallId,
+      subagentType: subagent.name,
+      output: { error: error.message },
+    });
+    throw error;
+  }
 
-  const [output] = await Promise.all([subagent.output, messages]);
-  const result = extractSubagentOutput(output, streamedText);
+  const output = outputResult.value;
+  const result = extractSubagentOutput(
+    output,
+    messagesResult.value.streamedText,
+  );
   options.summaryRecorder.recordSubagentResult({
     toolCallId,
     subagentType: subagent.name,
@@ -543,7 +600,7 @@ async function consumeSubagentProjection<AgentType extends string>(
     result,
   });
   const selection = options.subagentSelections?.get(subagent.name);
-  const tokenUsage = subagentUsage.value;
+  const tokenUsage = messagesResult.value.tokenUsage;
   if (tokenUsage && selection) {
     const cost = calculateCost(
       tokenUsage.cacheMissInputTokens,
@@ -559,6 +616,53 @@ async function consumeSubagentProjection<AgentType extends string>(
       durationMs: Date.now() - startedAt,
     });
   }
+}
+
+/** 在 SubAgent 被发现时立即消费消息流，并将内容归属到对应 Agent。 */
+async function consumeSubagentMessages<AgentType extends string>(
+  subagent: AgentSubagentProjection,
+  toolCallId: string,
+  options: AgentEventStreamAdapterOptions<AgentType>,
+  push: (event: AgentRunEvent<AgentType>) => void,
+): Promise<{
+  streamedText: string;
+  tokenUsage: ReturnType<typeof getTokenUsage>;
+}> {
+  let streamedText = "";
+  let tokenUsage: ReturnType<typeof getTokenUsage> = null;
+  for await (const message of subagent.messages) {
+    const messageOutput = observePromise(message.output);
+    await Promise.all([
+      consumeTextChunks(message.text, (content) => {
+        streamedText += content;
+        options.summaryRecorder.recordSubagentRawOutput({
+          toolCallId,
+          subagentType: subagent.name,
+          content,
+        });
+      }),
+      consumeTextChunks(message.reasoning, (content) => {
+        options.summaryRecorder.recordSubagentThinking({
+          toolCallId,
+          subagentType: subagent.name,
+          content,
+        });
+        push({
+          type: "subagent-thinking",
+          agentType: options.agentType,
+          subagentType: subagent.name,
+          toolCallId,
+          content,
+        });
+      }),
+    ]);
+    const messageOutputResult = await messageOutput;
+    if (messageOutputResult.status === "rejected") {
+      throw messageOutputResult.reason;
+    }
+    tokenUsage = getTokenUsage(messageOutputResult.value) ?? tokenUsage;
+  }
+  return { streamedText, tokenUsage };
 }
 
 /** 消费可回放的文本 projection。 */
@@ -765,7 +869,11 @@ export async function* runAgent<T, AgentType extends string>(
     if (errorMessage.startsWith("required-subagent-not-invoked:")) {
       throw error;
     }
-    if (options.throwOnError) {
+    if (
+      options.throwOnError ||
+      (options.throwOnSubagentError &&
+        error instanceof AgentSubagentExecutionError)
+    ) {
       await summaryRecorder.finish({
         error: errorMessage,
         status: "failed",

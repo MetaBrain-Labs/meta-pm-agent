@@ -19,7 +19,11 @@ import {
   type TaskExecutionPlan,
 } from "@repo/shared";
 
-import { resolveJsonOutput, runAgent } from "../../common/run-agent";
+import {
+  AgentSubagentExecutionError,
+  resolveJsonOutput,
+  runAgent,
+} from "../../common/run-agent";
 import {
   createModelSummarySnapshot,
   resolveAgentModelSelection,
@@ -111,7 +115,14 @@ export async function* streamOrchestratorAgent(
       // 不混用可避免 LLM 在同一轮次中调用不该出现的 SubAgent。
       subagents: isPreCheck
         ? [createPreOrchestratorSubagent(input.modelProfile, preCheckContext)]
-        : [createPlannerSubagent(input.modelProfile, plannerContext)],
+        : [
+            createPlannerSubagent(
+              input.modelProfile,
+              attempt === 1
+                ? plannerContext
+                : `${plannerContext}\n\nRuntime validation feedback from the rejected plan:\n${retryError}\nReturn a corrected plan that resolves every listed issue.`,
+            ),
+          ],
       subagentModelGroups: isPreCheck
         ? { "pre-orchestrator": "pre-orchestrator" }
         : { planner: "planner" },
@@ -132,6 +143,8 @@ export async function* streamOrchestratorAgent(
         !isPreCheck && input.requestAnalysis.business_model.length > 0
           ? "planner"
           : undefined,
+      // Planner 失败必须由本层执行一次定点重试，不能降级为缺少 DAG 的 Orchestrator fallback。
+      throwOnSubagentError: !isPreCheck,
       fallback: (reason: string) =>
         isPreCheck
           ? createFallbackPreOrchResult(input)
@@ -268,7 +281,9 @@ export function shouldRetryPlannerDelegation(
   return (
     attempt === 1 &&
     error instanceof Error &&
-    (error.message === "required-subagent-not-invoked: planner" ||
+    ((error instanceof AgentSubagentExecutionError &&
+      error.subagentType === "planner") ||
+      error.message === "required-subagent-not-invoked: planner" ||
       error.message.startsWith("document-evidence-planner-invalid:"))
   );
 }

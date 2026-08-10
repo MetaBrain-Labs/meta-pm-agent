@@ -333,11 +333,11 @@ async function executeExecutorAgentTask(
   if (!state.requestAnalysis || !state.plan) return {};
 
   const writer = getWriter(config);
-  const task = findNextExecutableTaskForAgent(state, agentType);
+  const task = findNextExecutableTaskForAgent(state, agentType, config);
   if (!task) return {};
   const knowledgeGraph =
     state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
-  const parallelAgents = getCurrentParallelExecutorAgents(state);
+  const parallelAgents = getCurrentParallelExecutorAgents(state, config);
 
   writer?.({
     type: "agent-status",
@@ -736,20 +736,25 @@ function withParallelAgents(
 function findNextExecutableTaskForAgent(
   state: WorkflowGraphStateValue,
   agentType: ExecutorAgentType,
+  config?: LangGraphRunnableConfig,
 ) {
   if (!state.plan) return null;
 
   const completedTaskIds = new Set(
     state.executorResults.map((result) => result.task_id),
   );
-  return (
-    state.plan.tasks
+  const executableTasks = state.plan.tasks
     .filter((task) => task.assigned_agent === agentType)
     .sort((left, right) => left.sequence - right.sequence)
-    .find((task) => {
+    .filter((task) => {
       if (completedTaskIds.has(task.task_id)) return false;
       return task.depends_on.every((taskId) => completedTaskIds.has(taskId));
-    }) ?? null
+    });
+  const retryTaskId = getConfiguredRetryTaskId(config);
+  return (
+    executableTasks.find((task) => task.task_id === retryTaskId) ??
+    executableTasks[0] ??
+    null
   );
 }
 
@@ -758,8 +763,9 @@ function findNextExecutableTaskForAgent(
  */
 function getCurrentParallelExecutorAgents(
   state: WorkflowGraphStateValue,
+  config?: LangGraphRunnableConfig,
 ): ExecutorAgentType[] {
-  const targets = selectNextExecutorRouterTargets(state);
+  const targets = selectNextExecutorRouterTargets(state, config);
   if (!Array.isArray(targets)) return [];
 
   return targets.filter(isExecutorAgentType);
@@ -780,6 +786,7 @@ export function selectNextProductWorkflowNode(
  */
 export function selectNextExecutorRouterTargets(
   state: WorkflowGraphStateValue,
+  config?: LangGraphRunnableConfig,
 ): string | string[] {
   if (state.productWorkflow || !state.plan) return "end";
 
@@ -795,10 +802,23 @@ export function selectNextExecutorRouterTargets(
   const readyTasks = incompleteTasks.filter((task) =>
     task.depends_on.every((taskId) => completedTaskIds.has(taskId)),
   );
+  const retryTaskId = getConfiguredRetryTaskId(config);
+  if (retryTaskId && !completedTaskIds.has(retryTaskId)) {
+    const retryTask = readyTasks.find((task) => task.task_id === retryTaskId);
+    if (retryTask) return [retryTask.assigned_agent];
+  }
   const parallelTasks = packParallelExecutorTasks(readyTasks);
   if (parallelTasks.length === 0) return "orchestrator_agent";
 
   return parallelTasks.map((task) => task.assigned_agent);
+}
+
+/** 手动重试恢复时先串行完成目标任务，避免同批兄弟任务被失败信号连带取消。 */
+function getConfiguredRetryTaskId(
+  config?: LangGraphRunnableConfig,
+): string | undefined {
+  const value = config?.configurable?.retry_task_id;
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 /**

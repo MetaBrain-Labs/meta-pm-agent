@@ -21,8 +21,12 @@ import { createChatModel } from "../../../common/model";
 import { resolveAgentModelSelection } from "../../../common/model-profile";
 import { parseJsonObject } from "../../../../utils/json";
 import type { OrchestratorAgentInput } from "../../types";
-import type { ExecutorAgentType } from "../../executor-agent/definitions";
+import {
+  getExecutorDefinition,
+  type ExecutorAgentType,
+} from "../../executor-agent/definitions";
 import { createPlannerSubagentPrompt } from "./prompt";
+import { isKnowledgeGraphRelationDirectionValid } from "../../common/knowledge-graph";
 import {
   CONCEPT_FOUNDATION_NOTICE,
   normalizeTaskExecutionPlan,
@@ -109,6 +113,16 @@ export function extractPlanFromSubagentResult(
       ? scopeSupplementPlan(result.data, input.supplementAgentTypes)
       : scopeInitialDecisionPlan(result.data, input);
     if (candidate.tasks.length > 0) {
+      const executabilityIssues = validatePlannerTaskExecutability(
+        candidate,
+        input,
+      );
+      if (executabilityIssues.length > 0) {
+        return fallbackOrRejectPlan(
+          input,
+          `Planner produced non-executable graph operations: ${executabilityIssues.join("; ")}`,
+        );
+      }
       if (isUnderScopedBroadProductDesign(candidate, input)) {
         return finalizePlan(
           createFallbackPlan(
@@ -126,6 +140,102 @@ export function extractPlanFromSubagentResult(
     input,
     "Planner subagent output failed schema validation",
   );
+}
+
+const PLANNER_RELATION_TYPE_NAMES = [
+  "Drives",
+  "Satisfies",
+  "Promotes",
+  "Produces",
+  "Constrains",
+  "Implements",
+  "Measures",
+  "Validates",
+  "References",
+  "Composes",
+] as const;
+
+/**
+ * 在 Executor 启动前校验 Planner 的确定性可执行约束。
+ *
+ * 仅检查 Agent 权限和节点 ID 完整性，不使用关键词推断业务语义。
+ */
+export function validatePlannerTaskExecutability(
+  plan: TaskExecutionPlan,
+  input: OrchestratorAgentInput,
+): string[] {
+  if (input.workflowPurpose !== "document_evidence_resolution") return [];
+  const graphNodeIds = [
+    ...input.knowledgeGraph.entities.map((item) => item.id),
+    ...input.knowledgeGraph.decisions.map((item) => item.id),
+    ...input.knowledgeGraph.risks.map((item) => item.id),
+    ...input.knowledgeGraph.open_questions.map((item) => item.id),
+  ];
+  const issues: string[] = [];
+
+  for (const task of plan.tasks) {
+    const definition = getExecutorDefinition(task.assigned_agent);
+    const contract = [
+      task.description,
+      task.expected_output,
+      ...task.quality_check.criteria,
+    ].join(" ");
+    const mentionedRelations = PLANNER_RELATION_TYPE_NAMES.filter((type) =>
+      new RegExp(`\\b${type}\\b`).test(contract),
+    );
+    const explicitRelations = [
+      ...contract.matchAll(
+        /\b(Goal|Decision|Requirement|Feature|Component|Metric|Evidence|Custom|OpenQuestion|Risk)\s*--(Drives|Satisfies|Promotes|Produces|Constrains|Implements|Measures|Validates|References|Composes|Custom)-->\s*(Goal|Decision|Requirement|Feature|Component|Metric|Evidence|Custom|OpenQuestion|Risk)\b/g,
+      ),
+    ].map((match) => ({
+      source: match[1]!,
+      type: match[2]!,
+      target: match[3]!,
+    }));
+    for (const relationType of mentionedRelations) {
+      if (!definition.allowedRelationTypes.includes(relationType as never)) {
+        issues.push(
+          `${task.task_id} assigns relation ${relationType} to ${task.assigned_agent}, whose allowed relations are ${definition.allowedRelationTypes.join(", ")}`,
+        );
+      }
+    }
+    for (const relation of explicitRelations) {
+      if (
+        !isKnowledgeGraphRelationDirectionValid(
+          relation.type as never,
+          relation.source as never,
+          relation.target as never,
+        )
+      ) {
+        issues.push(
+          `${task.task_id} uses invalid relation direction ${relation.source} --${relation.type}--> ${relation.target}`,
+        );
+      }
+    }
+
+    const references = [
+      ...new Set(
+        contract.match(
+          /\b(?:COMP|RISK|CUS|OQ|G|D|R|E|F|M)-[A-Za-z0-9][A-Za-z0-9-]*/g,
+        ) ?? [],
+      ),
+    ];
+    for (const reference of references) {
+      if (graphNodeIds.includes(reference)) continue;
+      const matches = graphNodeIds.filter((id) => id.startsWith(`${reference}-`));
+      if (matches.length === 1) {
+        issues.push(
+          `${task.task_id} uses abbreviated node ID ${reference}; use exact ID ${matches[0]}`,
+        );
+      } else if (matches.length > 1) {
+        issues.push(
+          `${task.task_id} uses ambiguous node ID prefix ${reference}; use one exact existing ID`,
+        );
+      }
+    }
+  }
+
+  return [...new Set(issues)];
 }
 
 /**
