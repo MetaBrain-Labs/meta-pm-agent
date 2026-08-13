@@ -1,6 +1,16 @@
 /**
- * SSE 流写入接口，抽象 Hono stream writer 的写操作。
+ * Chat SSE 写入工具
+ *
+ * 在 API 网络边界校验公共事件，避免 runtime 内部事件或未声明字段静默进入浏览器。
+ *
+ * Responsibilities:
+ * - 写入经过 ChatSseEventSchema 校验的 JSON 事件
+ * - 写入 SSE 完成标记
  */
+
+import { ChatSseEventSchema, type ChatSseEvent } from "@repo/shared";
+
+/** SSE 流写入接口，抽象 Hono stream writer 的写操作。 */
 interface StreamWriter {
   write(data: string): Promise<unknown>;
 }
@@ -10,9 +20,9 @@ interface StreamWriter {
  */
 export async function writeSse(
   writer: StreamWriter,
-  data: unknown,
+  data: ChatSseEvent,
 ): Promise<void> {
-  await writer.write(`data: ${JSON.stringify(data)}\n\n`);
+  await writer.write(`data: ${JSON.stringify(ChatSseEventSchema.parse(data))}\n\n`);
 }
 
 /**

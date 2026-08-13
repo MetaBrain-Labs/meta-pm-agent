@@ -157,18 +157,6 @@ export function applyStreamEvent(
           analysis: event.analysis,
         },
       };
-    case "todo-update":
-      return {
-        ...message,
-        todos: (event.todos ?? []).map((todo) => ({
-          index: todo.index,
-          content: todo.content,
-          status: todo.status as
-            | "pending"
-            | "in_progress"
-            | "completed",
-        })),
-      };
     case "tool-call":
       return appendToolCall(message, event);
     case "tool-result":
@@ -190,13 +178,6 @@ export function applyStreamEvent(
       return applySubagentResult(message, event);
     case "token-usage":
       return appendTokenUsage(message, event);
-    case "finish":
-      return {
-        ...message,
-        usage: event.usage,
-        activeAgent: undefined,
-        activeAgents: [],
-      };
     case "error":
       {
         const failedAgentType = event.agentType ?? message.activeAgent;

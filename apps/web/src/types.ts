@@ -5,7 +5,7 @@
  * token 用量以 Agent 单次执行为粒度记录，实时流和历史恢复共用同一结构。
  *
  * Responsibilities:
- * - 描述 API/SSE 与前端状态之间的类型契约
+ * - 复用 shared 的 API/SSE 事件契约
  * - 定义产品工作流结构化卡片的数据模型
  * - 定义 token 用量实时展示和历史恢复字段
  *
@@ -13,33 +13,9 @@
  * - 本文件仅包含类型定义，不包含运行时逻辑。
  */
 
-export type StreamEventType =
-  | "start"
-  | "agent-status"
-  | "thinking"
-  | "thinking-done"
-  | "text"
-  | "human-interrupt"
-  | "question-form-start"
-  | "question-form-complete"
-  | "user-input-start"
-  | "user-input-complete"
-  | "request-analysis-start"
-  | "request-analysis-complete"
-  | "workflow-round-start"
-  | "todo-update"
-  | "tool-call"
-  | "tool-result"
-  | "subagent-start"
-  | "subagent-thinking"
-  | "subagent-result"
-  | "token-usage"
-  | "conversation-title"
-  | "document-evidence-resolution-complete"
-  | "step-finish"
-  | "finish"
-  | "error"
-  | "abort";
+import type { ChatSseEvent } from "@repo/shared";
+
+export type StreamEvent = ChatSseEvent;
 
 /** DeepSeek 模型使用列表中的单模型配置。 */
 export interface DeepSeekModelConfig {
@@ -84,46 +60,6 @@ export interface ModelUsageProfile {
     | { mode: "universal"; model: DeepSeekModelConfig };
   createdAt?: string;
   updatedAt?: string;
-}
-
-export interface StreamEvent {
-  type: StreamEventType;
-  roundId?: string;
-  id?: string;
-  content?: string;
-  agentType?: string;
-  status?: "started" | "completed";
-  phase?: "planning" | "execution" | "review";
-  parallelAgents?: string[];
-  taskId?: string;
-  toolCallId?: string;
-  toolName?: string;
-  toolArgs?: Record<string, unknown>;
-  toolResult?: unknown;
-  subagentType?: string;
-  description?: string;
-  result?: unknown;
-  usage?: Record<string, unknown>;
-  inputTokens?: number;
-  cacheHitInputTokens?: number;
-  cacheMissInputTokens?: number;
-  outputTokens?: number;
-  totalTokens?: number;
-  costInput?: number;
-  costOutput?: number;
-  costTotal?: number;
-  durationMs?: number;
-  createdAt?: string;
-  error?: unknown;
-  chatId?: string;
-  title?: string;
-  runId?: string;
-  workspaceId?: string;
-  todos?: Array<{ index: number; content: string; status: string }>;
-  analysis?: RequestAnalysis;
-  interrupt?: HumanInTheLoopInterrupt;
-  retryAction?: WorkflowRetryAction;
-  terminal?: boolean;
 }
 
 /**

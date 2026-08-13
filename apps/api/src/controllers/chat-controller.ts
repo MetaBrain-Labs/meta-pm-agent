@@ -635,7 +635,10 @@ export async function chatStreamHandler(c: Context) {
         }
         if (event.type === "workflow-round-start") {
           currentWorkflowRoundId = event.roundId;
-          await writeSse(writer, toApiEvent(event));
+          const apiEvent = toApiEvent(event);
+          if (apiEvent) {
+            await writeSse(writer, apiEvent);
+          }
           continue;
         }
         if (event.type === "complete") {
@@ -825,8 +828,12 @@ export async function chatStreamHandler(c: Context) {
             output.tokenUsageRecordIds.push(tokenUsageId);
           }
 
+          const apiEvent = toApiEvent(event);
+          if (!apiEvent) {
+            continue;
+          }
           await writeSse(writer, {
-            ...toApiEvent(event),
+            ...apiEvent,
             id: tokenUsageId ?? undefined,
             createdAt: new Date().toISOString(),
           });
@@ -844,7 +851,10 @@ export async function chatStreamHandler(c: Context) {
             currentWorkflowRoundId,
           ).content += event.content;
         }
-        await writeSse(writer, toApiEvent(event));
+        const apiEvent = toApiEvent(event);
+        if (apiEvent) {
+          await writeSse(writer, apiEvent);
+        }
       }
 
       // Agent 完成后持久化结果
@@ -900,7 +910,7 @@ export async function chatStreamHandler(c: Context) {
             await writeSse(writer, {
               type: "document-evidence-resolution-complete",
               runId: documentEvidenceResolution.runId,
-              workspaceId: runtimeContext.workspaceId,
+              workspaceId: runtimeContext.workspaceId!,
             });
           }
         }

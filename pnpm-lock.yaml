@@ -299,6 +299,9 @@ importers:
       '@antv/g6':
         specifier: ^5.1.1
         version: 5.1.1
+      '@repo/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       antd:
         specifier: ^6.4.4
         version: 6.4.4(luxon@3.7.2)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)

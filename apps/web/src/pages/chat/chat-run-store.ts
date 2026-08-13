@@ -14,6 +14,7 @@
  * - 本模块只保存运行期内存快照，历史权威数据仍来自 API 持久化消息。
  */
 
+import { ChatSseEventSchema } from "@repo/shared";
 import { stopChatGeneration as requestStopChatGeneration } from "../../api/chat-api";
 import type {
   HumanInTheLoopResume,
@@ -251,7 +252,9 @@ async function readChatStream(
       if (payload === "[DONE]") continue;
 
       try {
-        const event = JSON.parse(payload) as StreamEvent;
+        const parsedEvent = ChatSseEventSchema.safeParse(JSON.parse(payload));
+        if (!parsedEvent.success) continue;
+        const event: StreamEvent = parsedEvent.data;
         if (
           event.type === "conversation-title" &&
           event.chatId &&
