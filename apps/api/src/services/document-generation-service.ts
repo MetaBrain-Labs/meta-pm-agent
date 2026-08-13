@@ -668,11 +668,8 @@ async function executeDocumentGenerationRun(
       throw createAbortError();
     }
 
-    const latestAttempt = result.qualityScore.attempts.at(-1);
-    const awaitingInput = Boolean(
-      latestAttempt?.evidenceBlocked &&
-        !result.qualityScore.passed,
-    );
+    const awaitingInput =
+      result.qualityScore.disposition === "awaiting_input";
     await completeDocumentGenerationRun({
       runId: run.id,
       workspaceId: run.workspaceId,

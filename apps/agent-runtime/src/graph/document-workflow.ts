@@ -46,12 +46,12 @@ import {
   DOCUMENT_SCORE_THRESHOLD,
   calculateScoreSpread,
   createDeterministicConsensusScore,
-  createScoreRetryFeedback,
   createSkippedConsensusScore,
+  finalizeDocumentScoreAttempt,
   groupPrdEvidenceBlockers,
   runPrdScoringReviewers,
   selectFinalScoreAttempt,
-  shouldRetryDocumentScoreAttempt,
+  resolveDocumentScoreDisposition,
   validatePrdSourceGrounding,
   type DocumentScoreAttempt,
   type DocumentScoringStreamEvent,
@@ -524,29 +524,20 @@ function rejectScoreNode(
     evidenceBlockerGroupingStatus: state.scoreEvidenceBlockerGrouping.status,
     selected: false,
   };
-  const scoreAttempts = [...state.scoreAttempts, attempt];
-  const selected = selectFinalScoreAttempt(scoreAttempts);
-  const shouldRetry = shouldRetryDocumentScoreAttempt({
-    attemptCount: scoreAttempts.length,
-    passed: attempt.passed,
-    evidenceBlocked: attempt.evidenceBlocked,
+  const finalized = finalizeDocumentScoreAttempt({
+    priorAttempts: state.scoreAttempts,
+    attempt,
   });
-  const persistedAttempt = {
-    ...attempt,
-    selected: !shouldRetry && selected?.attempt.attempt === attempt.attempt,
-  };
 
   getWriter(config)?.({
     type: "document-score-attempt",
-    attempt: persistedAttempt,
+    attempt: finalized.persistedAttempt,
   });
 
   return {
-    scoreAttempts: [...state.scoreAttempts, persistedAttempt],
-    scoreFeedback: shouldRetry ? createScoreRetryFeedback(attempt) : "",
-    draftMarkdown: shouldRetry
-      ? state.draftMarkdown
-      : (selected?.attempt.markdown ?? state.draftMarkdown),
+    scoreAttempts: finalized.attempts,
+    scoreFeedback: finalized.scoreFeedback,
+    draftMarkdown: finalized.draftMarkdown,
   };
 }
 
@@ -587,32 +578,23 @@ async function aggregateScoreNode(
     evidenceBlockerGroupingStatus: state.scoreEvidenceBlockerGrouping.status,
     selected: false,
   };
-  const scoreAttempts = [...state.scoreAttempts, attempt];
-  const selected = selectFinalScoreAttempt(scoreAttempts);
-  const shouldRetry = shouldRetryDocumentScoreAttempt({
-    attemptCount: scoreAttempts.length,
-    passed: attempt.passed,
-    evidenceBlocked: attempt.evidenceBlocked,
+  const finalized = finalizeDocumentScoreAttempt({
+    priorAttempts: state.scoreAttempts,
+    attempt,
   });
-  const persistedAttempt = {
-    ...attempt,
-    selected: !shouldRetry && selected?.attempt.attempt === attempt.attempt,
-  };
   getWriter(config)?.({
     type: "document-score-attempt",
-    attempt: persistedAttempt,
+    attempt: finalized.persistedAttempt,
   });
 
   emitStage(config, "aggregateScore", "completed");
   const todos = createWorkflowTodos("aggregateScore", true);
   emitTodoUpdate(config, todos);
   return {
-    scoreAttempts: [...state.scoreAttempts, persistedAttempt],
-    scoreFeedback: shouldRetry ? createScoreRetryFeedback(attempt) : "",
+    scoreAttempts: finalized.attempts,
+    scoreFeedback: finalized.scoreFeedback,
     // 三轮后仍未通过时，将最终导出草稿回退为最终选择版本。
-    draftMarkdown: shouldRetry
-      ? state.draftMarkdown
-      : (selected?.attempt.markdown ?? state.draftMarkdown),
+    draftMarkdown: finalized.draftMarkdown,
     todos,
   };
 }
@@ -635,10 +617,12 @@ export function selectNextNodeAfterScore(
 ): "retry" | "review" | "export" {
   const latestAttempt = state.scoreAttempts.at(-1);
   if (!latestAttempt) return "retry";
-  if (latestAttempt.passed) return "review";
-  if (latestAttempt.evidenceBlocked) return "export";
-  if (state.scoreAttempts.length >= DOCUMENT_SCORE_MAX_ATTEMPTS) return "export";
-  return "retry";
+  const disposition = resolveDocumentScoreDisposition({
+    attempt: latestAttempt,
+    attemptCount: state.scoreAttempts.length,
+  });
+  if (disposition === "passed") return "review";
+  return disposition === "retry" ? "retry" : "export";
 }
 
 /**
@@ -677,6 +661,7 @@ function exportPrdNode(
   emitTodoUpdate(config, createWorkflowTodos("exportPrd"));
   const graph = requireNormalizedGraph(state);
   const selectedScoreAttempt = selectFinalScoreAttempt(state.scoreAttempts);
+  const latestScoreAttempt = state.scoreAttempts.at(-1);
   const finalMarkdown =
     selectedScoreAttempt?.attempt.markdown ?? state.draftMarkdown;
   const result: DocumentGenerationResult = {
@@ -700,6 +685,12 @@ function exportPrdNode(
       selectedAttempt: selectedScoreAttempt?.attempt.attempt ?? 1,
       finalScore: selectedScoreAttempt?.attempt.aggregate.score ?? 0,
       passed: selectedScoreAttempt?.attempt.passed ?? false,
+      disposition: latestScoreAttempt
+        ? resolveDocumentScoreDisposition({
+            attempt: latestScoreAttempt,
+            attemptCount: state.scoreAttempts.length,
+          })
+        : "export_best_attempt",
       selectionReason: selectedScoreAttempt?.reason ?? "highest_score",
       attempts: state.scoreAttempts.map((attempt) => ({
         attempt: attempt.attempt,

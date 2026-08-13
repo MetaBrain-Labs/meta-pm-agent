@@ -20,6 +20,7 @@ import type {
   DocumentEvidenceBlockerDetail,
   DocumentEvidenceBlockerGroup,
   DocumentSectionDraft,
+  DocumentScoreDisposition,
   KnowledgeGraphEntity,
   KnowledgeGraphRelation,
   ModelUsageProfile,
@@ -139,6 +140,15 @@ export interface DocumentScoreSelection {
     | "lowest_spread"
     | "highest_score"
     | "highest_score_then_lowest_spread";
+}
+
+/** 单次评分写入状态前的统一处置结果。 */
+export interface FinalizedDocumentScoreAttempt {
+  attempts: DocumentScoreAttempt[];
+  persistedAttempt: DocumentScoreAttempt;
+  disposition: DocumentScoreDisposition;
+  scoreFeedback: string;
+  draftMarkdown: string;
 }
 
 const ReviewerEvidenceBlockerSchema = z.union([
@@ -592,6 +602,61 @@ export function shouldRetryDocumentScoreAttempt({
     !evidenceBlocked &&
     attemptCount < DOCUMENT_SCORE_MAX_ATTEMPTS
   );
+}
+
+/**
+ * 根据最新一次评分与累计次数决定后续动作。
+ */
+export function resolveDocumentScoreDisposition({
+  attempt,
+  attemptCount,
+}: {
+  attempt: DocumentScoreAttempt;
+  attemptCount: number;
+}): DocumentScoreDisposition {
+  if (attempt.passed) return "passed";
+  if (attempt.evidenceBlocked) return "awaiting_input";
+  if (attemptCount >= DOCUMENT_SCORE_MAX_ATTEMPTS) {
+    return "export_best_attempt";
+  }
+  return "retry";
+}
+
+/**
+ * 统一追加、选择并标记评分 attempt，避免不同评分分支各自推导状态。
+ */
+export function finalizeDocumentScoreAttempt({
+  priorAttempts,
+  attempt,
+}: {
+  priorAttempts: DocumentScoreAttempt[];
+  attempt: DocumentScoreAttempt;
+}): FinalizedDocumentScoreAttempt {
+  const accumulatedAttempts = [...priorAttempts, attempt];
+  const disposition = resolveDocumentScoreDisposition({
+    attempt,
+    attemptCount: accumulatedAttempts.length,
+  });
+  const selected = selectFinalScoreAttempt(accumulatedAttempts);
+  const selectedAttemptNumber =
+    disposition === "retry" ? null : (selected?.attempt.attempt ?? null);
+  const attempts = accumulatedAttempts.map((item) => ({
+    ...item,
+    selected: item.attempt === selectedAttemptNumber,
+  }));
+  const persistedAttempt = attempts.at(-1)!;
+
+  return {
+    attempts: [...priorAttempts, persistedAttempt],
+    persistedAttempt,
+    disposition,
+    scoreFeedback:
+      disposition === "retry" ? createScoreRetryFeedback(attempt) : "",
+    draftMarkdown:
+      disposition === "retry"
+        ? attempt.markdown
+        : (selected?.attempt.markdown ?? attempt.markdown),
+  };
 }
 
 /**

@@ -32,6 +32,14 @@ export const DocumentGenerationStatusSchema = z.enum([
   "failed",
 ]);
 
+/** 文档评分完成后的权威处置。 */
+export const DocumentScoreDispositionSchema = z.enum([
+  "passed",
+  "retry",
+  "awaiting_input",
+  "export_best_attempt",
+]);
+
 /**
  * Document Agent 的任务规划条目，来源于 Deep Agents write_todos。
  */
@@ -194,6 +202,7 @@ export const DocumentGenerationResultSchema = z.object({
     selectedAttempt: z.number().int().positive(),
     finalScore: z.number().min(0).max(100),
     passed: z.boolean(),
+    disposition: DocumentScoreDispositionSchema,
     selectionReason: z.string(),
     attempts: z.array(DocumentScoreAttemptSchema),
   }),
@@ -202,6 +211,9 @@ export const DocumentGenerationResultSchema = z.object({
 export type DocumentKind = z.infer<typeof DocumentKindSchema>;
 export type DocumentGenerationStatus = z.infer<
   typeof DocumentGenerationStatusSchema
+>;
+export type DocumentScoreDisposition = z.infer<
+  typeof DocumentScoreDispositionSchema
 >;
 export type DocumentTodo = z.infer<typeof DocumentTodoSchema>;
 export type DocumentReasoningLogEntry = z.infer<

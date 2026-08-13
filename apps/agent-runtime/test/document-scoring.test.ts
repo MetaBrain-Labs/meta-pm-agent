@@ -25,6 +25,8 @@ import {
   DOCUMENT_REVIEWER_MODEL_OPTIONS,
   normalizeEvidenceBlockerGrouping,
   createSkippedConsensusScore,
+  finalizeDocumentScoreAttempt,
+  resolveDocumentScoreDisposition,
   selectFinalScoreAttempt,
   shouldRetryDocumentScoreAttempt,
   validatePrdSourceGrounding,
@@ -101,6 +103,35 @@ test("stops for evidence gaps before retrying a failed draft", () => {
     }),
     false,
   );
+});
+
+test("produces one authoritative final disposition for every score outcome", () => {
+  const retry = createAttempt(1, 80, 4, false);
+  const blocked = { ...retry, evidenceBlocked: true };
+  const passed = { ...retry, passed: true, aggregate: { ...retry.aggregate, passed: true } };
+  assert.equal(
+    resolveDocumentScoreDisposition({ attempt: passed, attemptCount: 1 }),
+    "passed",
+  );
+  assert.equal(
+    resolveDocumentScoreDisposition({ attempt: retry, attemptCount: 1 }),
+    "retry",
+  );
+  assert.equal(
+    resolveDocumentScoreDisposition({ attempt: blocked, attemptCount: 1 }),
+    "awaiting_input",
+  );
+  assert.equal(
+    resolveDocumentScoreDisposition({ attempt: retry, attemptCount: 3 }),
+    "export_best_attempt",
+  );
+  const finalized = finalizeDocumentScoreAttempt({
+    priorAttempts: [],
+    attempt: retry,
+  });
+  assert.equal(finalized.disposition, "retry");
+  assert.equal(finalized.persistedAttempt.selected, false);
+  assert.match(finalized.scoreFeedback, /did not pass/);
 });
 
 test("rejects unknown citations without line-level source status false positives", () => {
