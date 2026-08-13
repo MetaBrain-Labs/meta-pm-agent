@@ -9,7 +9,6 @@
  * - createToolsForAgent()：根据 agentType 和启用的用户工具构建工具数组
  * - getExecutorDefaultToolNames()：返回 Executor 内部默认启用的工具名称列表
  * - getExecutorRetryToolNames()：返回结构化重试阶段的最小写入工具列表
- * - getKnowledgeGraphFileToolNames()：返回知识图谱文件工具名称列表
  *
  * Notes:
  * - conversation 的 web_search 由前端 enabledTools 控制
@@ -21,6 +20,7 @@
 import type { StructuredTool } from "langchain";
 import type { AgentRuntimeTool, ProductKnowledgeGraph } from "@repo/shared";
 import type { AgentMessageType } from "../../types";
+import { EXECUTOR_DEFINITIONS } from "../product-workflow/executor-agent/definitions";
 import {
   createKnowledgeGraphTools,
   type StructuredToolCallResult,
@@ -50,28 +50,15 @@ const EXECUTOR_BLOCKER_TOOLS: AgentRuntimeTool[] = [
   "kg_file_raise_blocker",
 ];
 
-const EXECUTOR_AGENT_TYPES = [
-  "executor-product-strategy",
-  "executor-market-research",
-  "executor-gtm",
-  "executor-product-discovery",
-  "executor-product-execution",
-  "executor-marketing-growth",
-  "executor-data-analytics",
-  "executor-ai-shipping",
-  "executor-toolkit",
-  "executor-interface-craft",
-];
+const EXECUTOR_AGENT_TYPES = EXECUTOR_DEFINITIONS.map(
+  (definition) => definition.agentType,
+);
 
-const EXECUTOR_WEB_SEARCH_AGENT_TYPES = new Set([
-  "executor-market-research",
-  "executor-gtm",
-  "executor-marketing-growth",
-  "executor-data-analytics",
-  "executor-ai-shipping",
-  "executor-toolkit",
-  "executor-interface-craft",
-]);
+const EXECUTOR_WEB_SEARCH_AGENT_TYPES: ReadonlySet<string> = new Set(
+  EXECUTOR_DEFINITIONS.filter((definition) => definition.webSearchEnabled).map(
+    (definition) => definition.agentType,
+  ),
+);
 
 const AGENT_TOOL_ACCESS: Record<string, ReadonlySet<AgentRuntimeTool>> = {
   conversation: new Set(["web_search"]),
@@ -216,14 +203,10 @@ export function canAgentUseTool(
  * Toolkit、Interface Craft 需要外部事实验证，runtime 自动注入 web_search。
  */
 export function canExecutorUseWebSearch(agentType: ToolOwningAgent): boolean {
-  return EXECUTOR_WEB_SEARCH_AGENT_TYPES.has(agentType);
-}
-
-/**
- * Planner/Executor 内部默认启用的知识图谱文件工具名称列表。
- */
-export function getKnowledgeGraphFileToolNames(): AgentRuntimeTool[] {
-  return [...KNOWLEDGE_GRAPH_FILE_TOOLS, ...EXECUTOR_BLOCKER_TOOLS];
+  return EXECUTOR_DEFINITIONS.some(
+    (definition) =>
+      definition.agentType === agentType && definition.webSearchEnabled,
+  );
 }
 
 export type { StructuredToolCallResult };

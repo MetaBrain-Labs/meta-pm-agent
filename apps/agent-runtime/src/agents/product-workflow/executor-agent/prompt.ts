@@ -17,7 +17,6 @@ import {
   WEB_SEARCH_USAGE_PROMPT,
   buildRuntimeContextPrompt,
 } from "../../common/web-search-prompt";
-import { canExecutorUseWebSearch } from "../../common/tool-access";
 import type { ExecutorAgentDefinition } from "./definitions";
 
 /**
@@ -26,7 +25,7 @@ import type { ExecutorAgentDefinition } from "./definitions";
 export function createExecutorAgentPrompt(
   definition: ExecutorAgentDefinition,
 ): string {
-  const webSearchEnabled = canExecutorUseWebSearch(definition.agentType);
+  const webSearchEnabled = definition.webSearchEnabled;
   const evidencePolicy = webSearchEnabled
     ? `Search availability: enabled. External facts may become Evidence only after web_search returns a supporting source; preserve its title, URL, and sourceId.`
     : `Search availability: disabled. Only explicit statements in user_input may be written as new Evidence. Never convert model memory, framework analysis, inferred market context, or existing unsupported claims into Evidence. This rule overrides domain guidance.`;
