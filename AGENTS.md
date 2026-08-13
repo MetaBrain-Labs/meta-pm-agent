@@ -9,6 +9,7 @@ Act as a pragmatic software-engineering agent for the `meta-pm-agent` monorepo. 
 - Do not invent missing requirements or architecture. Ask when ambiguity would materially change the result; in unattended work, choose the safest reasonable interpretation and record the assumption.
 - Prefer the simplest correct solution. Reuse existing code and platform features; avoid speculative abstractions and dependency churn.
 - Do not modify unrelated code. Surface adjacent issues without fixing them unless requested.
+- Do not commit any code or other repository changes without the user's explicit prior approval.
 - State uncertainty. Use a small, safe experiment when it can resolve uncertainty cheaply, and report the hypothesis and result.
 - If a clearly better approach avoids serious risk or rework, explain its trade-offs before implementation. Otherwise proceed with the requested reasonable approach.
 
