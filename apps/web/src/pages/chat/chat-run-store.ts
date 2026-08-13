@@ -193,7 +193,10 @@ export function stopChatRun(threadId: string): void {
 function stopAllActiveRunsOnUnload(): void {
   for (const [threadId, state] of runs) {
     if (!state.isLoading) continue;
-    const payload = JSON.stringify({ chatId: threadId });
+    const payload = JSON.stringify({
+      chatId: threadId,
+      origin: "page_unload",
+    });
     if (navigator.sendBeacon) {
       navigator.sendBeacon(
         "/api/chat/stop",

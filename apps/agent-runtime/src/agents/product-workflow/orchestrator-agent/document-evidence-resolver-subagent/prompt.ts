@@ -62,6 +62,10 @@ export const DOCUMENT_EVIDENCE_RESOLUTION_OUTPUT_SHAPE = `{
 export function createDocumentEvidenceResolutionPayload(
   input: DocumentEvidenceResolutionInput,
 ) {
+  const MAX_NODE_INDEX_ITEMS = 80;
+  const MAX_DETAILED_ENTITIES = 40;
+  const MAX_RELATIONS = 64;
+  const MAX_AUXILIARY_ITEMS = 24;
   const activeEntities = input.knowledgeGraph.entities.filter(
     (entity) => entity.status !== "deprecated",
   );
@@ -75,6 +79,13 @@ export function createDocumentEvidenceResolutionPayload(
   const directlyRelatedEntityIds = new Set(
     [...relatedNodeIds].filter((nodeId) => activeEntityIds.has(nodeId)),
   );
+  const blockerText = input.blockers.map((blocker) => blocker.text).join("\n");
+  for (const entity of activeEntities) {
+    if (blockerText.includes(entity.id)) {
+      directlyRelatedEntityIds.add(entity.id);
+      relatedNodeIds.add(entity.id);
+    }
+  }
   const selectedEntityIds = new Set(directlyRelatedEntityIds);
   if (directlyRelatedEntityIds.size > 0) {
     for (const relation of input.knowledgeGraph.relations) {
@@ -87,10 +98,14 @@ export function createDocumentEvidenceResolutionPayload(
       }
     }
   }
-  const useLegacyFullGraph = relatedNodeIds.size === 0;
-  const detailedEntities = useLegacyFullGraph
-    ? activeEntities
-    : activeEntities.filter((entity) => selectedEntityIds.has(entity.id));
+  const detailedEntities = activeEntities
+    .filter((entity) => selectedEntityIds.has(entity.id))
+    .slice(0, MAX_DETAILED_ENTITIES);
+  const prioritizedNodeIndex = [
+    ...detailedEntities,
+    ...activeEntities.filter((entity) => !selectedEntityIds.has(entity.id)),
+  ].slice(0, MAX_NODE_INDEX_ITEMS);
+  const relevantAuxiliaryIds = new Set([...relatedNodeIds]);
 
   return {
     run_id: input.runId,
@@ -98,7 +113,7 @@ export function createDocumentEvidenceResolutionPayload(
     blockers: input.blockers,
     knowledge_graph: {
       current_state: input.knowledgeGraph.current_state,
-      node_index: activeEntities.map((entity) => ({
+      node_index: prioritizedNodeIndex.map((entity) => ({
         id: entity.id,
         type: entity.type,
         name: entity.name,
@@ -116,10 +131,10 @@ export function createDocumentEvidenceResolutionPayload(
           (relation) =>
             activeEntityIds.has(relation.source) &&
             activeEntityIds.has(relation.target) &&
-            (useLegacyFullGraph ||
-              directlyRelatedEntityIds.has(relation.source) ||
+            (directlyRelatedEntityIds.has(relation.source) ||
               directlyRelatedEntityIds.has(relation.target)),
         )
+        .slice(0, MAX_RELATIONS)
         .map((relation) => ({
           id: relation.id,
           type: relation.type,
@@ -127,8 +142,19 @@ export function createDocumentEvidenceResolutionPayload(
           target: relation.target,
           description: relation.description,
         })),
-      risks: input.knowledgeGraph.risks,
-      open_questions: input.knowledgeGraph.open_questions,
+      risks: input.knowledgeGraph.risks
+        .filter(
+          (risk) =>
+            relevantAuxiliaryIds.has(risk.id) || blockerText.includes(risk.id),
+        )
+        .slice(0, MAX_AUXILIARY_ITEMS),
+      open_questions: input.knowledgeGraph.open_questions
+        .filter(
+          (question) =>
+            relevantAuxiliaryIds.has(question.id) ||
+            blockerText.includes(question.id),
+        )
+        .slice(0, MAX_AUXILIARY_ITEMS),
     },
   };
 }

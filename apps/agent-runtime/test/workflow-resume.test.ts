@@ -23,7 +23,10 @@ import {
   createWorkflowResumeContextFromMessages,
   inferSupplementAffectedTaskIds,
 } from "../src/agents/conversation/workflow-resume";
-import { streamConversation } from "../src/agents/conversation/stream";
+import {
+  createCritiqueCorrectionUserInputBlock,
+  streamConversation,
+} from "../src/agents/conversation/stream";
 import { createProductWorkflowKnowledgeGraph } from "../src/agents/product-workflow/common/knowledge-graph";
 
 test("restores direct executor blocker context from history", () => {
@@ -559,6 +562,37 @@ test("stopping a hard Critique error discards without starting another workflow 
     ),
     false,
   );
+});
+
+test("scopes Critique correction input to retry-task errors", () => {
+  const workflow = createProductWorkflowResult("critique-result");
+  workflow.review.issues.push(
+    {
+      code: "DUPLICATE_METRIC",
+      severity: "warning",
+      task_id: "task-02",
+      message: "Warning must not create supplement work.",
+    },
+    {
+      code: "UNRELATED_ERROR",
+      severity: "error",
+      task_id: "task-01",
+      message: "Another task is outside the persisted retry scope.",
+    },
+  );
+
+  const block = createCritiqueCorrectionUserInputBlock(
+    workflow,
+    "- 请选择如何处理审查错误？: 生成补充修正任务\n- 补充约束: keep exact ids",
+    ["task-02"],
+  );
+
+  assert.match(block, /NO_STRUCTURED_GRAPH_PATCH \(task-02\)/);
+  assert.match(block, /User-supplied correction constraints/);
+  assert.match(block, /补充约束: keep exact ids/);
+  assert.doesNotMatch(block, /DUPLICATE_METRIC/);
+  assert.doesNotMatch(block, /UNRELATED_ERROR/);
+  assert.equal(block.match(/NO_STRUCTURED_GRAPH_PATCH/g)?.length, 1);
 });
 
 test("preserves document evidence purpose when Critique correction replaces source task ids", () => {

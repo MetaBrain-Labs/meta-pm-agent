@@ -396,6 +396,95 @@ test("observes a SubAgent output rejection before delayed task input resolves", 
   ]);
 });
 
+test("drains SubAgent watchers when the projection iterator also fails", async () => {
+  const probe = createSummaryProbe();
+  const plannerFailure = new Error("Subagent planner failed");
+  const projectionFailure = new Error("subagent projection stream failed");
+  const unhandledRejections: unknown[] = [];
+  const onUnhandledRejection = (reason: unknown) => {
+    unhandledRejections.push(reason);
+  };
+  let rejectOutput!: (reason: unknown) => void;
+  const output = new Promise<unknown>((_resolve, reject) => {
+    rejectOutput = reject;
+  });
+  const subagent = {
+    name: "planner",
+    taskInput: Promise.resolve("Plan after projection failure"),
+    messages: streamOf(),
+    output,
+  };
+  async function* failingSubagents() {
+    yield subagent;
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    rejectOutput(plannerFailure);
+    throw projectionFailure;
+  }
+  const run: AgentEventStreamProjection = {
+    messages: streamOf(),
+    toolCalls: streamOf(),
+    subagents: failingSubagents(),
+    output: Promise.resolve({ messages: [] }),
+  };
+
+  process.on("unhandledRejection", onUnhandledRejection);
+  try {
+    await assert.rejects(
+      collectEventStream(run, probe.recorder),
+      (error: unknown) =>
+        error instanceof AgentSubagentExecutionError &&
+        error.subagentType === "planner" &&
+        error.message === plannerFailure.message,
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  } finally {
+    process.off("unhandledRejection", onUnhandledRejection);
+  }
+
+  assert.deepEqual(unhandledRejections, []);
+});
+
+test("observes top-level message output before delayed chunks finish", async () => {
+  const probe = createSummaryProbe();
+  const messageFailure = new Error("top-level message output failed");
+  const unhandledRejections: unknown[] = [];
+  const onUnhandledRejection = (reason: unknown) => {
+    unhandledRejections.push(reason);
+  };
+  let rejectOutput!: (reason: unknown) => void;
+  const output = new Promise<unknown>((_resolve, reject) => {
+    rejectOutput = reject;
+  });
+  async function* delayedText() {
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    yield "late text";
+  }
+  const run: AgentEventStreamProjection = {
+    messages: streamOf({
+      text: delayedText(),
+      reasoning: streamOf(),
+      output,
+    }),
+    toolCalls: streamOf(),
+    subagents: streamOf(),
+    output: Promise.resolve({ messages: [] }),
+  };
+
+  process.on("unhandledRejection", onUnhandledRejection);
+  try {
+    setTimeout(() => rejectOutput(messageFailure), 0);
+    await assert.rejects(
+      collectEventStream(run, probe.recorder),
+      messageFailure,
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  } finally {
+    process.off("unhandledRejection", onUnhandledRejection);
+  }
+
+  assert.deepEqual(unhandledRejections, []);
+});
+
 test("prices SubAgent usage with its own responsibility model", async () => {
   const probe = createSummaryProbe();
   const plannerSelection = resolveAgentModelSelection(

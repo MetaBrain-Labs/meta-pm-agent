@@ -17,11 +17,19 @@ import { z } from "zod";
 import type { ModelUsageProfile, ProductKnowledgeGraph } from "@repo/shared";
 
 export const DOCUMENT_EVIDENCE_FORM_PREFIX = "document-evidence-resolution";
+const MAX_QUESTION_LABEL_CHARS = 240;
+const MAX_QUESTION_HELP_CHARS = 1200;
+const MAX_QUESTION_PLACEHOLDER_CHARS = 800;
+const MAX_QUESTION_OPTION_CHARS = 240;
 
 export const DocumentEvidenceQuestionSchema = z
   .object({
-    id: z.string().min(1).describe("Stable question field ID"),
-    label: z.string().min(1).describe("User-facing question text"),
+    id: z.string().min(1).max(80).describe("Stable question field ID"),
+    label: z
+      .string()
+      .min(1)
+      .max(MAX_QUESTION_LABEL_CHARS)
+      .describe("User-facing question text"),
     type: z
       .enum(["radio", "select", "text", "textarea"])
       .describe("Question Form control type"),
@@ -30,12 +38,18 @@ export const DocumentEvidenceQuestionSchema = z
       .string()
       .trim()
       .min(1)
+      .max(MAX_QUESTION_HELP_CHARS)
       .optional()
       .catch(undefined)
       .describe("User-facing known context and blocker reason"),
-    placeholder: z.string().optional().describe("Optional input guidance"),
+    placeholder: z
+      .string()
+      .max(MAX_QUESTION_PLACEHOLDER_CHARS)
+      .optional()
+      .describe("Optional input guidance"),
     options: z
-      .array(z.string().min(1))
+      .array(z.string().min(1).max(MAX_QUESTION_OPTION_CHARS))
+      .max(8)
       .optional()
       .describe("Options for radio or select questions"),
     blockerIndexes: z
@@ -43,11 +57,13 @@ export const DocumentEvidenceQuestionSchema = z
       .min(1)
       .describe("Zero-based indexes of original blockers covered by this question"),
     suggestedAgentTypes: z
-      .array(z.string().min(1))
+      .array(z.string().min(1).max(64))
+      .max(6)
       .default([])
       .describe("Recommended executor agent types for the supplement DAG"),
     relatedNodeIds: z
-      .array(z.string().min(1))
+      .array(z.string().min(1).max(128))
+      .max(40)
       .default([])
       .describe("Knowledge graph node IDs related to this question"),
   })
@@ -64,7 +80,7 @@ export const DocumentEvidenceQuestionSchema = z
   });
 
 export const DocumentEvidenceResolutionSchema = z.object({
-  summary: z.string().min(1).max(1000),
+  summary: z.string().min(1).max(500),
   questions: z.array(DocumentEvidenceQuestionSchema).min(1).max(10),
 });
 
@@ -153,9 +169,12 @@ export function createFallbackDocumentEvidenceResolution(
           input.blockers.map((blocker) => blocker.index),
           input.blockers,
         ),
-        placeholder: input.blockers
-          .map((blocker) => `${blocker.index + 1}. ${blocker.text}`)
-          .join("\n"),
+        placeholder: limitText(
+          input.blockers
+            .map((blocker) => `${blocker.index + 1}. ${blocker.text}`)
+            .join("\n"),
+          MAX_QUESTION_PLACEHOLDER_CHARS,
+        ),
         blockerIndexes: input.blockers.map((blocker) => blocker.index),
         suggestedAgentTypes: ["executor-product-discovery"],
         relatedNodeIds: [],
@@ -177,10 +196,16 @@ function formatDocumentEvidenceQuestionHelp(
   const reasons = (selected.length > 0 ? selected : blockers)
     .map((blocker) => blocker.text.trim())
     .filter(Boolean);
-  return [
+  return limitText([
     "当前已知资料：暂无更多已确认资料。",
     `阻断原因：${reasons.join("；") || "当前流程仍存在必须由用户确认的信息。"}`,
-  ].join("\n");
+  ].join("\n"), MAX_QUESTION_HELP_CHARS);
+}
+
+/** 在用户可见字段上应用稳定字符上限，避免模型和 SSE 承载无限增长的 blocker 文本。 */
+function limitText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
 }
 
 /**

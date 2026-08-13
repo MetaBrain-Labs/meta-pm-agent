@@ -92,7 +92,9 @@ export function createDocumentEvidenceAnswerResult({
     resolution,
     suggestedAgentTypes: [
       ...new Set(
-        resolution.questions.flatMap((question) => question.suggestedAgentTypes),
+        resolution.questions.flatMap(
+          (question) => question.suggestedAgentTypes,
+        ),
       ),
     ],
     relatedNodeIds: [
@@ -166,7 +168,8 @@ export async function* startDocumentEvidenceResolutionWorkflow(
       yield chunk[1] as DocumentEvidenceResolutionStreamEvent;
       continue;
     }
-    const value = Array.isArray(chunk) && chunk[0] === "values" ? chunk[1] : chunk;
+    const value =
+      Array.isArray(chunk) && chunk[0] === "values" ? chunk[1] : chunk;
     if (isInterrupted<HumanInTheLoopRequest>(value)) {
       const graphInterrupt = value[INTERRUPT][0];
       if (graphInterrupt?.id && graphInterrupt.value) {
@@ -179,7 +182,9 @@ export async function* startDocumentEvidenceResolutionWorkflow(
     }
   }
 
-  throw new Error("Document evidence resolution completed without an interrupt.");
+  throw new Error(
+    "Document evidence resolution completed without an interrupt.",
+  );
 }
 
 /**
@@ -273,9 +278,13 @@ export function isDocumentEvidenceResolutionFormId(formId: string): boolean {
 function createGraph(checkpointer: BaseCheckpointSaver) {
   return new StateGraph(DocumentEvidenceResolutionState)
     .addNode("load_resolution_context", loadResolutionContextNode)
-    .addNode("orchestrator_evidence_resolution", orchestratorEvidenceResolutionNode)
+    .addNode(
+      "orchestrator_evidence_resolution",
+      orchestratorEvidenceResolutionNode,
+    )
     .addNode("request_required_answers", requestRequiredAnswersNode)
     .addNode("normalize_answers", normalizeAnswersNode)
+
     .addEdge(START, "load_resolution_context")
     .addEdge("load_resolution_context", "orchestrator_evidence_resolution")
     .addEdge("orchestrator_evidence_resolution", "request_required_answers")
@@ -295,9 +304,13 @@ function getDurableGraph() {
 /**
  * 校验服务端恢复的可信 run、workspace 与 blocker 上下文。
  */
-function loadResolutionContextNode(state: DocumentEvidenceResolutionStateValue) {
+function loadResolutionContextNode(
+  state: DocumentEvidenceResolutionStateValue,
+) {
   if (!state.runId || !state.workspaceId || state.blockers.length === 0) {
-    throw new Error("Document evidence resolution requires persisted blockers.");
+    throw new Error(
+      "Document evidence resolution requires persisted blockers.",
+    );
   }
   return {};
 }
@@ -334,7 +347,8 @@ function requestRequiredAnswersNode(
   state: DocumentEvidenceResolutionStateValue,
   config?: LangGraphRunnableConfig,
 ) {
-  if (!state.resolution) throw new Error("Evidence questions were not generated.");
+  if (!state.resolution)
+    throw new Error("Evidence questions were not generated.");
   const questionForm = formatDocumentEvidenceQuestionForm({
     runId: state.runId,
     resolution: state.resolution,
@@ -348,7 +362,8 @@ function requestRequiredAnswersNode(
           formId: createDocumentEvidenceResolutionFormId(state.runId),
           agentType: "orchestrator",
         },
-        description: "Required facts or decisions are needed to resolve persisted PRD evidence blockers.",
+        description:
+          "Required facts or decisions are needed to resolve persisted PRD evidence blockers.",
       },
     ],
     reviewConfigs: [{ allowedDecisions: ["respond"] }],
@@ -368,11 +383,13 @@ function normalizeAnswersNode(state: DocumentEvidenceResolutionStateValue) {
   if (!state.resolution || !state.response) {
     throw new Error("Evidence resolution answers are missing.");
   }
-  const answerText = state.response.decisions.flatMap((decision) =>
-    decision.type === "respond" && decision.message.trim()
-      ? [decision.message.trim()]
-      : [],
-  ).join("\n");
+  const answerText = state.response.decisions
+    .flatMap((decision) =>
+      decision.type === "respond" && decision.message.trim()
+        ? [decision.message.trim()]
+        : [],
+    )
+    .join("\n");
   return {
     answerResult: createDocumentEvidenceAnswerResult({
       runId: state.runId,

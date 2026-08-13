@@ -491,17 +491,58 @@ function launchDocumentGenerationRun(
   const controller = new AbortController();
   activeDocumentRuns.set(run.id, controller);
 
-  void executeDocumentGenerationRun(
-    run,
-    graph,
-    modelProfile,
-    controller,
-    resume,
-  ).finally(() => {
-    if (activeDocumentRuns.get(run.id) === controller) {
-      activeDocumentRuns.delete(run.id);
+  observeDetachedDocumentRun(
+    executeDocumentGenerationRun(
+      run,
+      graph,
+      modelProfile,
+      controller,
+      resume,
+    ),
+    () => {
+      if (activeDocumentRuns.get(run.id) === controller) {
+        activeDocumentRuns.delete(run.id);
+      }
+    },
+  );
+}
+
+/**
+ * 接管后台文档 Promise 的最终拒绝，并保证清理阶段异常也不会逃逸为未处理 rejection。
+ */
+export function observeDetachedDocumentRun(
+  task: Promise<void>,
+  cleanup: () => void,
+  reportError: (error: unknown) => void = (error) => {
+    console.error("[document-generation] Detached run failed:", error);
+  },
+): void {
+  const safelyReport = (error: unknown) => {
+    try {
+      reportError(error);
+    } catch (reportingError) {
+      console.error(
+        "[document-generation] Failed to report detached run error:",
+        reportingError,
+      );
     }
-  });
+  };
+  const safelyCleanup = () => {
+    try {
+      cleanup();
+    } catch (cleanupError) {
+      safelyReport(cleanupError);
+    }
+  };
+
+  // 同时安装成功与失败处理器；清理失败单独上报，不能覆盖原始任务错误。
+  void task.then(
+    () => safelyCleanup(),
+    (error: unknown) => {
+      safelyCleanup();
+      safelyReport(error);
+    },
+  );
 }
 
 /**

@@ -1170,6 +1170,9 @@ async function* streamPlanningAfterUserInput(
       }
     }
   } catch (error) {
+    // 调用方中止属于 SSE 生命周期事件，必须回到 API 边界按 stopped 处理，
+    // 不能伪装成 Request Agent 的业务错误并写入错误消息。
+    if (options.signal?.aborted) throw error;
     if (isExecutorRetryRequiredError(error)) {
       const sameTaskRetryable = isSameTaskExecutorRetryable(error.details);
       yield {
@@ -1396,7 +1399,7 @@ export function isAcceptedWorkflowResult(
  * 将 Critique 错误和用户可选补充要求转换为 Planner 可消费的修正输入。
  * 流程控制字段会被过滤，不能写入产品知识图谱。
  */
-function createCritiqueCorrectionUserInputBlock(
+export function createCritiqueCorrectionUserInputBlock(
   workflow: ProductWorkflowResult,
   answerText: string,
   retryTaskIds: string[],
@@ -1409,10 +1412,19 @@ function createCritiqueCorrectionUserInputBlock(
         !line.includes("请选择如何处理审查错误？") &&
         !line.endsWith(": (skipped)"),
     );
+  const retryTaskIdSet = new Set(retryTaskIds);
+  const issueKeys = new Set<string>();
   const issues = [
     ...(workflow.review.issues ?? []),
     ...(workflow.knowledge_graph_review?.issues ?? []),
-  ];
+  ].filter((issue) => {
+    if (issue.severity !== "error") return false;
+    if (issue.task_id && !retryTaskIdSet.has(issue.task_id)) return false;
+    const key = `${issue.code}\u0000${issue.task_id ?? ""}\u0000${issue.message}`;
+    if (issueKeys.has(key)) return false;
+    issueKeys.add(key);
+    return true;
+  });
   return createFormAnswerUserInputBlock(
     [
       "Create a supplement DAG that corrects only the persisted Critique errors below. Preserve accepted graph content and do not treat workflow controls as product facts.",

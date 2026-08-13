@@ -102,6 +102,8 @@ export async function* streamOrchestratorEvidenceResolution(
     subagents: [createDocumentEvidenceResolverSubagent(input)],
     subagentModelGroups: { "document-evidence-resolver": "planner" },
     requiredSubagentType: "document-evidence-resolver",
+    // 提示词中的 exactly-once 必须由运行时硬约束，避免超时或截断后由外层模型重复委派。
+    toolCallRunLimit: 1,
     payload: {
       mode: "evidence-resolution",
       run_id: input.runId,
@@ -131,13 +133,16 @@ export async function* streamOrchestratorEvidenceResolution(
     const candidate = parseResolverCandidate(subagentResult ?? next.value);
     return normalizeDocumentEvidenceResolution(candidate, input);
   } catch (error) {
+    if (input.signal?.aborted) throw error;
     if (
       error instanceof Error &&
-      error.message.includes("required-subagent-not-invoked")
+      (error.message.includes("required-subagent-not-invoked") ||
+        error.message.includes("tool call limit"))
     ) {
       return createFallbackDocumentEvidenceResolution(input);
     }
-    throw error;
+    // Resolver 只负责组织问题；供应商超时或输出失败时使用覆盖全部 blocker 的确定性表单。
+    return createFallbackDocumentEvidenceResolution(input);
   }
 }
 

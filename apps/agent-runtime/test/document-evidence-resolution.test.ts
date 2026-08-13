@@ -240,7 +240,7 @@ test("injects every trusted blocker and the exact label contract into Resolver c
     ...input,
     blockers: input.blockers.map((blocker) => ({
       ...blocker,
-      relatedNodeIds: ["FR-01"],
+      relatedNodeIds: ["FR-01", "RISK-1"],
     })),
     knowledgeGraph: {
       ...input.knowledgeGraph,
@@ -304,6 +304,52 @@ test("injects every trusted blocker and the exact label contract into Resolver c
   assert.match(prompt, /Never ask the user to restate, categorize, prioritize, map/);
   assert.match(prompt, /Do not ask which requirements, metrics, or decisions/);
   assert.match(prompt, /Expand symbolic references such as FR-01~05/);
+});
+
+test("keeps Resolver context bounded when blockers provide no related node IDs", () => {
+  const manyEntities = Array.from({ length: 100 }, (_, index) => ({
+    id: `R-${String(index + 1).padStart(3, "0")}`,
+    type: "Requirement" as const,
+    name: `Requirement ${index + 1}`,
+    description: `Detailed requirement ${index + 1}`,
+    status: "confirmed" as const,
+  }));
+  const payload = createDocumentEvidenceResolutionPayload({
+    ...input,
+    knowledgeGraph: {
+      ...input.knowledgeGraph,
+      entities: manyEntities,
+      relations: [],
+    },
+  });
+
+  assert.equal(payload.knowledge_graph.entities.length, 0);
+  assert.equal(payload.knowledge_graph.node_index.length, 80);
+});
+
+test("rejects oversized Resolver question fields and uses the bounded fallback", () => {
+  const result = normalizeDocumentEvidenceResolution(
+    {
+      summary: "Collect evidence",
+      questions: [
+        {
+          id: "oversized-question",
+          label: "x".repeat(241),
+          type: "textarea",
+          required: true,
+          blockerIndexes: [0, 1],
+          suggestedAgentTypes: [],
+          relatedNodeIds: [],
+        },
+      ],
+    },
+    input,
+  );
+
+  assert.equal(result.questions.length, 1);
+  assert.equal(result.questions[0]?.id, "evidence-resolution-details");
+  assert.ok((result.questions[0]?.help?.length ?? 0) <= 1200);
+  assert.ok((result.questions[0]?.placeholder?.length ?? 0) <= 800);
 });
 
 test("formats evidence blockers with modal help while keeping the question visible", () => {

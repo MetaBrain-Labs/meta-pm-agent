@@ -360,6 +360,9 @@ export async function* adaptAgentEventStream<AgentType extends string>(
 
   const consumeMessages = async () => {
     for await (const message of run.messages) {
+      // Provider 可能在文本/推理流结束前先拒绝 output；必须先安装拒绝处理器，
+      // 避免消费增量内容期间产生未处理 rejection。
+      const messageOutput = observePromise(message.output);
       await Promise.all([
         consumeTextChunks(message.text, (content) => {
           responseText += content;
@@ -375,7 +378,11 @@ export async function* adaptAgentEventStream<AgentType extends string>(
           });
         }),
       ]);
-      tokenUsage = getTokenUsage(await message.output) ?? tokenUsage;
+      const messageOutputResult = await messageOutput;
+      if (messageOutputResult.status === "rejected") {
+        throw messageOutputResult.reason;
+      }
+      tokenUsage = getTokenUsage(messageOutputResult.value) ?? tokenUsage;
     }
   };
 
@@ -462,53 +469,86 @@ export async function* adaptAgentEventStream<AgentType extends string>(
   };
 
   const consumeSubagents = async () => {
-    const watchers: Promise<void>[] = [];
-    for await (const subagent of run.subagents) {
-      const toolCallId = `subagent:${randomUUID()}`;
-      const subagentType = subagent.name;
-      // DeepAgents 可能先拒绝 output、稍后才完成 taskInput。这里必须在任何 await
-      // 之前接管 Promise projection，避免 Node 将短暂无人处理的拒绝视为致命错误。
-      const taskInputPromise = observePromise(subagent.taskInput);
-      const outputPromise = observePromise(subagent.output);
-      const taskInputResult = await taskInputPromise;
-      if (taskInputResult.status === "rejected") {
-        throw new AgentSubagentExecutionError(
+    const watchers: Promise<PromiseSettlement<void>>[] = [];
+    let iterationResult: PromiseSettlement<void> = {
+      status: "fulfilled",
+      value: undefined,
+    };
+
+    try {
+      for await (const subagent of run.subagents) {
+        const toolCallId = `subagent:${randomUUID()}`;
+        const subagentType = subagent.name;
+        // DeepAgents 可能先拒绝 output、稍后才完成 taskInput。这里必须在任何 await
+        // 之前接管 Promise projection，避免 Node 将短暂无人处理的拒绝视为致命错误。
+        const taskInputPromise = observePromise(subagent.taskInput);
+        const outputPromise = observePromise(subagent.output);
+        const taskInputResult = await taskInputPromise;
+        if (taskInputResult.status === "rejected") {
+          throw new AgentSubagentExecutionError(
+            subagentType,
+            taskInputResult.reason,
+          );
+        }
+        const taskInput = taskInputResult.value;
+        invokedSubagentTypes.add(subagentType);
+        options.summaryRecorder.recordSubagentCall({
+          toolCallId,
           subagentType,
-          taskInputResult.reason,
+          input: { description: taskInput },
+        });
+        push({
+          type: "subagent-start",
+          agentType: options.agentType,
+          subagentType,
+          toolCallId,
+        });
+
+        const observed: ObservedSubagentProjection = {
+          output: outputPromise,
+          // AsyncIterable 只有开始消费后才会产生拒绝；启动后立即转为 settlement。
+          messages: observePromise(
+            consumeSubagentMessages(subagent, toolCallId, options, push),
+          ),
+        };
+        // watcher 创建时立即转为 settlement。即使 SubAgent 枚举器随后抛错，
+        // watcher 也不会成为无人接管的 Promise rejection。
+        watchers.push(
+          observePromise(
+            consumeSubagentProjection(
+              subagent,
+              observed,
+              toolCallId,
+              options,
+              push,
+            ),
+          ),
         );
       }
-      const taskInput = taskInputResult.value;
-      invokedSubagentTypes.add(subagentType);
-      options.summaryRecorder.recordSubagentCall({
-        toolCallId,
-        subagentType,
-        input: { description: taskInput },
-      });
-      push({
-        type: "subagent-start",
-        agentType: options.agentType,
-        subagentType,
-        toolCallId,
-      });
-
-      const observed: ObservedSubagentProjection = {
-        output: outputPromise,
-        // AsyncIterable 只有开始消费后才会产生拒绝；启动后立即转为 settlement。
-        messages: observePromise(
-          consumeSubagentMessages(subagent, toolCallId, options, push),
-        ),
-      };
-      watchers.push(
-        consumeSubagentProjection(
-          subagent,
-          observed,
-          toolCallId,
-          options,
-          push,
-        ),
-      );
+    } catch (error) {
+      iterationResult = { status: "rejected", reason: error };
     }
-    await Promise.all(watchers);
+
+    // 枚举失败也必须等待所有已登记 watcher 收敛；优先传播可供调用方定点重试的
+    // SubAgent 错误，再回退到枚举器或其他 projection 错误。
+    const watcherResults = await Promise.all(watchers);
+    const targetedFailure = watcherResults.find(
+      (result) =>
+        result.status === "rejected" &&
+        result.reason instanceof AgentSubagentExecutionError,
+    );
+    if (targetedFailure?.status === "rejected") {
+      throw targetedFailure.reason;
+    }
+    if (iterationResult.status === "rejected") {
+      throw iterationResult.reason;
+    }
+    const watcherFailure = watcherResults.find(
+      (result) => result.status === "rejected",
+    );
+    if (watcherFailure?.status === "rejected") {
+      throw watcherFailure.reason;
+    }
   };
 
   const producer = Promise.all([
@@ -890,6 +930,14 @@ export async function* runAgent<T, AgentType extends string>(
     return fallback;
   } catch (error) {
     const errorMessage = getErrorMessage(error);
+    // 只有调用方 AbortSignal 才表示用户主动停止；供应商自身超时仍按普通失败进入业务 fallback。
+    if (options.signal?.aborted) {
+      await summaryRecorder.finish({
+        error: errorMessage,
+        status: "aborted",
+      });
+      throw error;
+    }
     if (errorMessage.startsWith("required-subagent-not-invoked:")) {
       throw error;
     }
@@ -921,6 +969,14 @@ export async function* runAgent<T, AgentType extends string>(
     return fallback;
   } finally {
     runAbortController.abort();
+    // 外层可在消费到某个事件后提前关闭生成器（例如 Planner 结果校验失败）。
+    // finish 具备幂等性：正常完成时不会重复写；提前关闭时则补齐缺失的运行汇总。
+    await summaryRecorder.finish({
+      error: options.signal?.aborted
+        ? "Agent stream aborted by caller."
+        : "Agent stream closed before completion.",
+      status: options.signal?.aborted ? "aborted" : "cancelled",
+    });
   }
 }
 

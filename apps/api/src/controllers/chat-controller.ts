@@ -75,8 +75,10 @@ import { writeSse, writeSseDone } from "../utils/sse";
 import {
   abortChatRun,
   registerChatRun,
+  resolveChatAbortOrigin,
   unregisterChatRun,
 } from "../services/chat-run-registry";
+import { writeAbnormalWorkflowAbortReport } from "../process-crash-report";
 import { getConversationModelProfile } from "../repositories/model-profile-repository";
 import {
   completeDocumentEvidenceResolutionItem,
@@ -289,7 +291,12 @@ export async function stopChatHandler(c: Context) {
     return c.json({ error: parsed.error.flatten() }, 400);
   }
 
-  return c.json({ stopped: abortChatRun(parsed.data.chatId) });
+  return c.json({
+    stopped: abortChatRun(
+      parsed.data.chatId,
+      parsed.data.origin ?? "manual_stop",
+    ),
+  });
 }
 
 /**
@@ -312,7 +319,11 @@ export async function chatStreamHandler(c: Context) {
 
   return stream(c, async (writer) => {
     const runtimeController = new AbortController();
-    const abortRuntime = () => runtimeController.abort();
+    const abortRuntime = () => {
+      if (!runtimeController.signal.aborted) {
+        runtimeController.abort("client_disconnect");
+      }
+    };
     const chatId = parsed.data.chatId;
     let effectiveRequestFormId = parsed.data.requestFormId;
     let requestFormStatus: string | null = null;
@@ -324,8 +335,8 @@ export async function chatStreamHandler(c: Context) {
 
     const markStatus = async (status: string) => {
       if (requestFormStatus === status) return;
-      requestFormStatus = status;
       await markRequestFormStatus(effectiveRequestFormId, status);
+      requestFormStatus = status;
     };
 
     // 发送 SSE 开始事件
@@ -912,9 +923,15 @@ export async function chatStreamHandler(c: Context) {
         }
       }
 
-      console.log(
-        `[chat] Stream complete, response length: ${responseLength}`,
-      );
+      if (terminalStreamError) {
+        console.warn(
+          `[chat] Stream closed with terminal error, response length: ${responseLength}`,
+        );
+      } else {
+        console.log(
+          `[chat] Stream complete, response length: ${responseLength}`,
+        );
+      }
     } catch (error) {
       if (runtimeWorkspaceId && latestKnowledgeGraph) {
         try {
@@ -931,30 +948,85 @@ export async function chatStreamHandler(c: Context) {
       }
 
       if (isAbortError(error) || runtimeController.signal.aborted) {
-        await persistConversationResult({
-          conversationId: parsed.data.chatId,
-          requestFormId: effectiveRequestFormId,
-          agentOutputs: [...agentOutputs.values()],
-          messages: parsed.data.messages,
-          skipPendingDecisionItems: true,
-        });
-        await markStatus("stopped");
-        await writeSse(writer, { type: "abort" });
+        const abortOrigin = resolveChatAbortOrigin(runtimeController.signal);
+        if (abortOrigin === "client_disconnect" || abortOrigin === "unknown") {
+          writeAbnormalWorkflowAbortReport({
+            activeAgentTypes: [
+              ...new Set(
+                [...agentOutputs.values()].map((output) => output.type),
+              ),
+            ],
+            conversationId: parsed.data.chatId,
+            error,
+            origin: abortOrigin,
+            requestFormId: effectiveRequestFormId,
+          });
+        }
+        try {
+          await persistConversationResult({
+            conversationId: parsed.data.chatId,
+            requestFormId: effectiveRequestFormId,
+            agentOutputs: [...agentOutputs.values()],
+            messages: parsed.data.messages,
+            skipPendingDecisionItems: true,
+          });
+        } catch (persistError) {
+          console.error(
+            "[chat] Failed to persist aborted conversation:",
+            persistError,
+          );
+        }
+        try {
+          await markStatus("stopped");
+        } catch (statusError) {
+          console.error("[chat] Failed to mark request as stopped:", statusError);
+        }
+        try {
+          await writeSse(writer, { type: "abort" });
+        } catch (streamError) {
+          console.error("[chat] Failed to write abort event:", streamError);
+        }
       } else {
-        await markStatus("failed");
         console.error("[chat] Error:", error);
-        await writeSse(writer, {
-          type: "error",
-          error: getErrorMessage(error),
-        });
+        try {
+          await persistConversationResult({
+            conversationId: parsed.data.chatId,
+            requestFormId: effectiveRequestFormId,
+            agentOutputs: [...agentOutputs.values()],
+            messages: parsed.data.messages,
+            skipPendingDecisionItems: true,
+          });
+        } catch (persistError) {
+          console.error(
+            "[chat] Failed to persist failed conversation:",
+            persistError,
+          );
+        }
+        try {
+          await markStatus("failed");
+        } catch (statusError) {
+          console.error("[chat] Failed to mark request as failed:", statusError);
+        }
+        try {
+          await writeSse(writer, {
+            type: "error",
+            error: getErrorMessage(error),
+          });
+        } catch (streamError) {
+          console.error("[chat] Failed to write error event:", streamError);
+        }
       }
     } finally {
       if (chatId) unregisterChatRun(chatId, runtimeController);
       c.req.raw.signal.removeEventListener("abort", abortRuntime);
     }
 
-    // 发送 SSE 结束信号
-    await writeSseDone(writer);
+    // 客户端断连或 writer 已关闭时，结束信号失败不得逃逸请求边界。
+    try {
+      await writeSseDone(writer);
+    } catch (error) {
+      console.error("[chat] Failed to write SSE completion marker:", error);
+    }
   });
 }
 

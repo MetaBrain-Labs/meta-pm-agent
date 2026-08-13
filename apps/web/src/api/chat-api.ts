@@ -218,11 +218,14 @@ export async function fetchChatMessages(threadId: string): Promise<Message[]> {
 /**
  * 请求服务端停止指定会话当前运行中的 Agent。
  */
-export async function stopChatGeneration(threadId: string): Promise<void> {
+export async function stopChatGeneration(
+  threadId: string,
+  origin: "manual_stop" | "page_unload" = "manual_stop",
+): Promise<void> {
   await fetch("/api/chat/stop", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chatId: threadId }),
+    body: JSON.stringify({ chatId: threadId, origin }),
     keepalive: true,
   });
 }

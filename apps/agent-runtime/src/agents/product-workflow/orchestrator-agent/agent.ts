@@ -156,6 +156,17 @@ export async function* streamOrchestratorAgent(
           : createFallbackOrchestratorDecision(input, reason),
       signal: input.signal,
     });
+    let runnerFinished = false;
+    let runnerClosed = false;
+    const closeRunner = async () => {
+      if (runnerFinished || runnerClosed) return;
+      runnerClosed = true;
+      try {
+        await runner.return(undefined as never);
+      } catch {
+        // 关闭旧流的次生异常不得覆盖 Planner 校验错误或调用方中止。
+      }
+    };
 
     try {
       let next = await runner.next();
@@ -214,8 +225,12 @@ export async function* streamOrchestratorAgent(
         next = await runner.next();
       }
       rawOutput = next.value;
+      runnerFinished = true;
       break;
     } catch (error) {
+      // 计划校验会在收到 subagent-result 后同步抛错；此时底层生成器仍停在 yield。
+      // 主动 return 才会触发 runAgent 的 finally，中止旧 provider 流并完成本次诊断汇总。
+      await closeRunner();
       if (!shouldRetryPlannerDelegation(error, attempt)) throw error;
       retryError = error instanceof Error ? error.message : String(error);
       yield {
@@ -224,6 +239,9 @@ export async function* streamOrchestratorAgent(
         content:
           "Planner SubAgent did not produce a usable evidence-resolution plan; retrying delegation once.\n",
       };
+    } finally {
+      // 外层消费者在任意可见事件处停止迭代时，同样释放当前 DeepAgent/provider 流。
+      await closeRunner();
     }
   }
 
