@@ -52,6 +52,7 @@ import {
 import { parseUserInputNode, requestAgentNode } from "./nodes/request-node";
 import { WorkflowGraphState, type WorkflowGraphStateValue } from "./state";
 import { getWorkflowCheckpointer } from "./workflow-checkpointer";
+import { collectDownstreamTaskIds } from "../agents/product-workflow/dag";
 
 export interface WorkflowGraphInput {
   /** 服务端可信工作流用途；checkpoint 恢复时由图状态继续持有。 */
@@ -385,23 +386,3 @@ function filterExecutorResultsForResume(
 /**
  * 计算需要重跑的任务集合，包含直接受影响任务和依赖它们的下游任务。
  */
-function collectDownstreamTaskIds(
-  plan: TaskExecutionPlan,
-  initialTaskIds: Set<string>,
-): Set<string> {
-  const affected = new Set(initialTaskIds);
-  let changed = true;
-
-  while (changed) {
-    changed = false;
-    for (const task of plan.tasks) {
-      if (affected.has(task.task_id)) continue;
-      if (task.depends_on.some((taskId) => affected.has(taskId))) {
-        affected.add(task.task_id);
-        changed = true;
-      }
-    }
-  }
-
-  return affected;
-}

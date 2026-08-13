@@ -59,6 +59,13 @@ import {
 } from "../src/graph/nodes/product-workflow-node";
 import type { WorkflowGraphStateValue } from "../src/graph/state";
 import { selectNextNodeAfterOrchestrator } from "../src/graph/workflow";
+import {
+  collectDownstreamTaskIds,
+  packParallelExecutorTasks,
+  selectReadyTasks,
+  validateTaskDag,
+} from "../src/agents/product-workflow/dag";
+import { classifyProductWorkflowRound } from "../src/agents/product-workflow/round-classification";
 
 test("discards a delegated Planner plan when Orchestrator routes to conversation", () => {
   const plan = createPlan([
@@ -154,6 +161,60 @@ test("recognizes form-answer workflows as supplements without agent hints", () =
   } as unknown as WorkflowGraphStateValue;
 
   assert.equal(isSupplementWorkflow(state), true);
+});
+
+test("classifies every supported form-answer dash as a supplement", () => {
+  for (const dash of ["-", "–", "—"]) {
+    assert.equal(
+      classifyProductWorkflowRound({
+        userInput: [{ content: `[form answers ${dash} decision-form] confirmed` }],
+      }),
+      "supplement",
+    );
+  }
+  assert.equal(
+    classifyProductWorkflowRound({
+      userInput: [{ content: "Create a new product plan." }],
+      supplementAgentTypes: ["executor-product-strategy"],
+    }),
+    "supplement",
+  );
+  assert.equal(
+    classifyProductWorkflowRound({
+      userInput: [{ content: "Create a new product plan." }],
+    }),
+    "initial",
+  );
+});
+
+test("DAG utilities compute ready batches and complete downstream closures", () => {
+  const plan = createPlan([
+    createTask("task-01", 1, "executor-product-strategy", []),
+    createTask("task-02", 2, "executor-product-strategy", []),
+    createTask("task-03", 3, "executor-product-discovery", ["task-01"]),
+    createTask("task-04", 4, "executor-product-execution", ["task-03"]),
+  ]);
+  const ready = selectReadyTasks(plan, new Set());
+  assert.deepEqual(
+    packParallelExecutorTasks(ready).map((task) => task.task_id),
+    ["task-01"],
+  );
+  assert.deepEqual(
+    [...collectDownstreamTaskIds(plan, new Set(["task-01"]))],
+    ["task-01", "task-03", "task-04"],
+  );
+});
+
+test("DAG validation reports unknown, self, and cyclic dependencies", () => {
+  const plan = createPlan([
+    createTask("task-01", 1, "executor-product-strategy", ["task-02"]),
+    createTask("task-02", 2, "executor-product-discovery", ["task-01"]),
+    createTask("task-03", 3, "executor-toolkit", ["task-03", "missing"]),
+  ]);
+  const issues = validateTaskDag(plan);
+  assert.equal(issues.includes("cyclic_dependency"), true);
+  assert.equal(issues.includes("task-03:self_dependency"), true);
+  assert.equal(issues.includes("task-03:unknown_dependency:missing"), true);
 });
 
 test("limits supplement Planner context and preserves tracked questions", () => {

@@ -32,6 +32,7 @@ import type {
   OrchestratorAgentInput,
   ProductWorkflowStreamEvent,
 } from "../types";
+import { classifyProductWorkflowRound } from "../round-classification";
 import { ORCHESTRATOR_AGENT_PROMPT } from "./prompt";
 import {
   createPlannerSubagent,
@@ -690,10 +691,5 @@ function hasMeaningfulProjectContext(input: OrchestratorAgentInput): boolean {
 }
 
 function isWorkflowSupplementInput(input: OrchestratorAgentInput): boolean {
-  return (
-    Boolean(input.supplementAgentTypes?.length) ||
-    input.userInput.some((item) =>
-      /\[form answers - [^\]]+\]/i.test(item.content),
-    )
-  );
+  return classifyProductWorkflowRound(input) === "supplement";
 }

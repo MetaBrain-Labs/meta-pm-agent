@@ -36,6 +36,11 @@ import {
 } from "../../agents/product-workflow/agent";
 import { getModelProfileFromRunnableConfig } from "../../agents/common/model-profile";
 import { updateProductContextMetadata } from "../../agents/product-workflow/common/context-metadata";
+import { classifyProductWorkflowRound } from "../../agents/product-workflow/round-classification";
+import {
+  packParallelExecutorTasks,
+  selectReadyTasks,
+} from "../../agents/product-workflow/dag";
 import type { WorkflowGraphStateValue } from "../state";
 
 /**
@@ -661,12 +666,7 @@ function createOrchestratorDescriptionEntry(
 export function isSupplementWorkflow(
   state: WorkflowGraphStateValue,
 ): boolean {
-  return (
-    (state.supplementAgentTypes?.length ?? 0) > 0 ||
-    state.userInput.some((item) =>
-      /\[form answers - [^\]]+\]/i.test(item.content),
-    )
-  );
+  return classifyProductWorkflowRound(state) === "supplement";
 }
 
 /**
@@ -743,13 +743,9 @@ function findNextExecutableTaskForAgent(
   const completedTaskIds = new Set(
     state.executorResults.map((result) => result.task_id),
   );
-  const executableTasks = state.plan.tasks
-    .filter((task) => task.assigned_agent === agentType)
-    .sort((left, right) => left.sequence - right.sequence)
-    .filter((task) => {
-      if (completedTaskIds.has(task.task_id)) return false;
-      return task.depends_on.every((taskId) => completedTaskIds.has(taskId));
-    });
+  const executableTasks = selectReadyTasks(state.plan, completedTaskIds).filter(
+    (task) => task.assigned_agent === agentType,
+  );
   const retryTaskId = getConfiguredRetryTaskId(config);
   return (
     executableTasks.find((task) => task.task_id === retryTaskId) ??
@@ -799,9 +795,7 @@ export function selectNextExecutorRouterTargets(
 
   if (incompleteTasks.length === 0) return "orchestrator_agent";
 
-  const readyTasks = incompleteTasks.filter((task) =>
-    task.depends_on.every((taskId) => completedTaskIds.has(taskId)),
-  );
+  const readyTasks = selectReadyTasks(state.plan, completedTaskIds);
   const retryTaskId = getConfiguredRetryTaskId(config);
   if (retryTaskId && !completedTaskIds.has(retryTaskId)) {
     const retryTask = readyTasks.find((task) => task.task_id === retryTaskId);
@@ -841,18 +835,3 @@ function arePlanTasksFinished(state: WorkflowGraphStateValue): boolean {
 /**
  * 同一批只保留每个 Executor 的最早任务，避免同一节点被重复调度。
  */
-function packParallelExecutorTasks(
-  tasks: TaskExecutionNode[],
-): TaskExecutionNode[] {
-  const selected = new Map<ExecutorAgentType, TaskExecutionNode>();
-
-  for (const task of tasks.sort(
-    (left, right) => left.sequence - right.sequence,
-  )) {
-    if (!isExecutorAgentType(task.assigned_agent)) continue;
-    if (selected.has(task.assigned_agent)) continue;
-    selected.set(task.assigned_agent, task);
-  }
-
-  return [...selected.values()];
-}

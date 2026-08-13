@@ -22,6 +22,7 @@ import {
   type ExecutorAgentType,
 } from "../../executor-agent/definitions";
 import type { PlannerAgentInput } from "../../types";
+import { classifyProductWorkflowRound } from "../../round-classification";
 
 // ---------------------------------------------------------------------------
 // DAG 归一化
@@ -747,12 +748,7 @@ function createFallbackQualityCriteria(
 }
 
 function isSupplementPlanInput(input: PlannerAgentInput): boolean {
-  return (
-    Boolean(input.supplementAgentTypes?.length) ||
-    input.userInput.some((item) =>
-      /\[form answers - [^\]]+\]/i.test(item.content),
-    )
-  );
+  return classifyProductWorkflowRound(input) === "supplement";
 }
 
 function addExecutorWhenMatches(

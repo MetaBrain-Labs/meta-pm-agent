@@ -58,7 +58,19 @@ export {
 export {
   createScoreRetryFeedback,
   DOCUMENT_SCORE_MAX_ATTEMPTS,
+  finalizeDocumentScoreAttempt,
+  resolveDocumentScoreDisposition,
 } from "./agents/document-agent/scoring";
+export {
+  collectDownstreamTaskIds,
+  packParallelExecutorTasks,
+  selectReadyTasks,
+  validateTaskDag,
+} from "./agents/product-workflow/dag";
+export {
+  classifyProductWorkflowRound,
+  type ProductWorkflowRoundType,
+} from "./agents/product-workflow/round-classification";
 export {
   createDocumentEvidenceAnswerResult,
   createDocumentEvidenceResolutionFormId,

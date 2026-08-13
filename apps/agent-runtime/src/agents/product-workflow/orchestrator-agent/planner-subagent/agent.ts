@@ -34,6 +34,7 @@ import {
   isBroadProductDesignRequest,
   isConceptFoundationRequest,
 } from "./plan";
+import { collectDownstreamTaskIds, validateTaskDag } from "../../dag";
 
 const BROAD_PRODUCT_DESIGN_REQUIRED_AGENTS = [
   "executor-market-research",
@@ -164,14 +165,17 @@ export function validatePlannerTaskExecutability(
   plan: TaskExecutionPlan,
   input: OrchestratorAgentInput,
 ): string[] {
-  if (input.workflowPurpose !== "document_evidence_resolution") return [];
+  const dagIssues = validateTaskDag(plan);
+  if (input.workflowPurpose !== "document_evidence_resolution") {
+    return dagIssues;
+  }
   const graphNodeIds = [
     ...input.knowledgeGraph.entities.map((item) => item.id),
     ...input.knowledgeGraph.decisions.map((item) => item.id),
     ...input.knowledgeGraph.risks.map((item) => item.id),
     ...input.knowledgeGraph.open_questions.map((item) => item.id),
   ];
-  const issues: string[] = [];
+  const issues: string[] = [...dagIssues];
 
   for (const task of plan.tasks) {
     const definition = getExecutorDefinition(task.assigned_agent);
@@ -348,21 +352,9 @@ export function scopeInitialDecisionPlan(
   );
 
   // depends_on 表示真实数据依赖；上游被延后时，下游不能伪装成仍可执行。
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const task of plan.tasks) {
-      if (
-        !removedTaskIds.has(task.task_id) &&
-        task.depends_on.some((taskId) => removedTaskIds.has(taskId))
-      ) {
-        removedTaskIds.add(task.task_id);
-        changed = true;
-      }
-    }
-  }
+  const affectedTaskIds = collectDownstreamTaskIds(plan, removedTaskIds);
 
-  const tasks = plan.tasks.filter((task) => !removedTaskIds.has(task.task_id));
+  const tasks = plan.tasks.filter((task) => !affectedTaskIds.has(task.task_id));
   const scopedPlan = {
     ...plan,
     tasks,
