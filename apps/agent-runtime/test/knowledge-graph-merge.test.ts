@@ -295,7 +295,12 @@ test("critique validation rejects a task that omits its required blocking questi
         ],
       },
     ],
-    knowledgeGraph: graph,
+    knowledgeGraph: {
+      ...graph,
+      open_questions: [
+        { id: "OQ-runtime-allocated", text: "Expected concurrency?", blocking: true },
+      ],
+    },
   });
 
   assert.deepEqual(missing.rejected_task_ids, [task.task_id]);
@@ -598,7 +603,7 @@ test("blocks completion while graph blocking questions remain", () => {
   assert.equal(result.proposal_questions[0]?.required, true);
 });
 
-test("rejects the metric-capable task when explicit success targets are missing", () => {
+test("leaves success-target coverage semantics to Critique Agent", () => {
   const task = createTask("task-01", 1, "executor-product-discovery");
   const requestAnalysis = createRequestAnalysis();
   requestAnalysis.business_model[0]!.goal_constraints = [
@@ -610,7 +615,16 @@ test("rejects the metric-capable task when explicit success targets are missing"
     agent_type: task.assigned_agent,
     focus_layer: "Metric",
     summary: "No success metrics were created.",
-    entities: [],
+    entities: [
+      {
+        id: "F-001",
+        type: "Feature",
+        name: "Collaborative editing",
+        provenance: createUserInputProvenance(),
+        source_task_id: task.task_id,
+        status: "proposed",
+      },
+    ],
     relations: [],
     decisions: [],
     risks: [],
@@ -631,14 +645,14 @@ test("rejects the metric-capable task when explicit success targets are missing"
 
   const missing = createCritiqueValidationReport({
     ...input,
-    knowledgeGraph: createGraph({}),
+    knowledgeGraph: createGraph({ entities: result.entities }),
   });
-  assert.deepEqual(missing.retry_task_ids, [task.task_id]);
+  assert.deepEqual(missing.retry_task_ids, []);
   assert.equal(
     missing.issues.filter(
       (issue) => issue.code === "MISSING_SUCCESS_TARGET_COVERAGE",
     ).length,
-    2,
+    0,
   );
 
   const metric: ProductKnowledgeGraph["entities"][number] = {
@@ -706,7 +720,7 @@ test("critique validation warns when a task patch exceeds the soft ceiling", () 
   assert.deepEqual(report.retry_task_ids, []);
 });
 
-test("critique validation warns about duplicate metrics", () => {
+test("does not infer duplicate metrics from similar wording", () => {
   const task = createTask("task-01", 1, "executor-data-analytics");
   const goal = createGoal("G-001");
   const metrics: ProductKnowledgeGraph["entities"] = [
@@ -769,12 +783,12 @@ test("critique validation warns about duplicate metrics", () => {
 
   assert.equal(
     report.issues.some((issue) => issue.code === "DUPLICATE_METRIC"),
-    true,
+    false,
   );
   assert.deepEqual(report.retry_task_ids, []);
 });
 
-test("critique validation retries a metric task until Measures relations are committed", () => {
+test("does not infer metric completion from missing Measures relations", () => {
   const task = createTask("task-05", 1, "executor-data-analytics");
   const goal = createGoal("G-001");
   const metric: ProductKnowledgeGraph["entities"][number] = {
@@ -815,7 +829,7 @@ test("critique validation retries a metric task until Measures relations are com
     ...input,
     knowledgeGraph: createGraph({ entities: [goal, metric] }),
   });
-  assert.deepEqual(missingRelation.retry_task_ids, [task.task_id]);
+  assert.deepEqual(missingRelation.retry_task_ids, []);
   assert.equal(
     missingRelation.issues.some(
       (issue) =>
@@ -823,7 +837,7 @@ test("critique validation retries a metric task until Measures relations are com
         issue.severity === "error" &&
         issue.task_id === task.task_id,
     ),
-    true,
+    false,
   );
 
   const measureRelation: ProductKnowledgeGraph["relations"][number] = {
@@ -844,7 +858,7 @@ test("critique validation retries a metric task until Measures relations are com
   assert.deepEqual(completed.retry_task_ids, []);
 });
 
-test("critique rejects research gaps when expected_output requires verified Evidence", () => {
+test("leaves free-text expected output equivalence to Critique Agent", () => {
   const task = {
     ...createTask("task-evidence", 1, "executor-market-research"),
     expected_output:
@@ -885,7 +899,7 @@ test("critique rejects research gaps when expected_output requires verified Evid
     focus_layer: "Evidence",
     summary: "Recorded a research gap.",
     entities: [researchGap],
-    relations: [gapRelation],
+    relations: [],
     decisions: [],
     risks: [],
     open_questions: [],
@@ -901,7 +915,7 @@ test("critique rejects research gaps when expected_output requires verified Evid
     ...input,
     knowledgeGraph: createGraph({
       entities: [requirement, researchGap],
-      relations: [gapRelation],
+      relations: [],
     }),
   });
   assert.equal(
@@ -910,9 +924,9 @@ test("critique rejects research gaps when expected_output requires verified Evid
         issue.code === "EXPECTED_OUTPUT_ENTITY_MISSING" &&
         issue.task_id === task.task_id,
     ),
-    true,
+    false,
   );
-  assert.deepEqual(missingEvidence.retry_task_ids, [task.task_id]);
+  assert.deepEqual(missingEvidence.retry_task_ids, []);
 
   const evidence: ProductKnowledgeGraph["entities"][number] = {
     id: "E-evidence",
@@ -944,12 +958,10 @@ test("critique rejects research gaps when expected_output requires verified Evid
     documentEvidenceResolution: true,
   });
   assert.equal(
-    unconsumed.issues.find(
-      (issue) => issue.code === "UNCONSUMED_EVIDENCE",
-    )?.severity,
-    "error",
+    unconsumed.issues.some((issue) => issue.code === "UNCONSUMED_EVIDENCE"),
+    false,
   );
-  assert.deepEqual(unconsumed.retry_task_ids, [task.task_id]);
+  assert.deepEqual(unconsumed.retry_task_ids, []);
   const completed = createCritiqueValidationReport({
     ...input,
     executorResults: [
@@ -1100,7 +1112,7 @@ test("supplement critique leaves natural-language scope conflicts to the model",
   });
   assert.deepEqual(
     partiallyCorrected.semantic_integrity.stale_deprecated_downstream_node_ids,
-    [oldComponent.id, oldMetric.id],
+    [],
   );
 
   const deprecatedComponent = {
@@ -1203,7 +1215,7 @@ test("critique does not infer conflicts or missing coverage from negative wordin
   );
 });
 
-test("supplement critique requires Requirement to Feature to Component and Metric propagation", () => {
+test("leaves delivery-chain and metric propagation semantics to Critique Agent", () => {
   const task = createTask("task-11", 1, "executor-product-execution");
   const requirement = createRequirement(
     "R-011",
@@ -1273,13 +1285,13 @@ test("supplement critique requires Requirement to Feature to Component and Metri
     missing.issues.some(
       (issue) => issue.code === "BROKEN_REQUIREMENT_DELIVERY_CHAIN",
     ),
-    true,
+    false,
   );
   assert.equal(
     missing.issues.some(
       (issue) => issue.code === "MISSING_SUPPLEMENT_METRIC_PROPAGATION",
     ),
-    true,
+    false,
   );
 
   const relations: ProductKnowledgeGraph["relations"] = [
