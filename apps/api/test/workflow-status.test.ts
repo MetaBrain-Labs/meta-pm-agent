@@ -269,6 +269,12 @@ test("does not accept stale graph references as persisted retry targets", () => 
     ),
     true,
   );
+  assert.equal(
+    isPersistedExecutorRetryFailureRetryable(
+      "Node provenance validation failed: unsupported_infrastructure_scope:data-residency",
+    ),
+    true,
+  );
 });
 
 /**

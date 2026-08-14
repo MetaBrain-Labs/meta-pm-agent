@@ -769,7 +769,6 @@ function validateNodeWrites(
     (policy.userInput ?? []).map((item) => [item.index, item.content] as const),
   );
   const entityById = new Map(state.entities.map((entity) => [entity.id, entity]));
-  const allUserInput = [...userInputByIndex.values()].join("\n");
   const errors: string[] = [];
   const numericClaimIssues: UnsupportedNumericClaimsIssue[] = [];
 
@@ -871,16 +870,6 @@ function validateNodeWrites(
         );
       }
     }
-
-    const unsupportedInfrastructureTerms = findUnsupportedInfrastructureTerms(
-      nodeText,
-      allUserInput,
-    );
-    if (unsupportedInfrastructureTerms.length > 0) {
-      errors.push(
-        `${node.type} "${node.name}": unsupported_infrastructure_scope:${unsupportedInfrastructureTerms.join(",")}`,
-      );
-    }
   }
 
   if (errors.length > 0) {
@@ -899,28 +888,6 @@ function extractNumericClaims(value: string): string[] {
       .match(/\b\d+(?:\.\d+)?\s*(?:%|ms|s|mbps|gbps|kb|mb|gb|tb|万|亿)?\b/g) ??
     []
   ).map((item) => item.replace(/\s+/g, ""));
-}
-
-/**
- * 检查用户未声明的高风险基础设施范围，要求 Executor 改写成 Risk。
- */
-function findUnsupportedInfrastructureTerms(
-  nodeText: string,
-  userInput: string,
-): string[] {
-  const terms = [
-    ["bandwidth", /bandwidth|带宽/i],
-    ["data-residency", /data\s+(?:residency|locality)|数据(?:地域|驻留|主权)/i],
-    ["deployment-topology", /deployment\s+topology|部署拓扑/i],
-    ["hosting-model", /hosting\s+model|托管模式/i],
-    ["deployment-region", /deployment\s+region|部署地域|部署区域/i],
-  ] as const;
-
-  return terms
-    .filter(
-      ([, pattern]) => pattern.test(nodeText) && !pattern.test(userInput),
-    )
-    .map(([name]) => name);
 }
 
 /**

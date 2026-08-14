@@ -317,6 +317,19 @@ test("requires auditable Evidence provenance and verified search sources", async
     }),
     "kg_file_add_nodes",
   );
+  const addComponentNodes = getTool(
+    createKnowledgeGraphTools(state, {
+      allowedEntityTypes: ["Component"],
+      sourceTaskId: "task-02",
+      userInput: [
+        {
+          index: 1,
+          content: "The user requires private deployment.",
+        },
+      ],
+    }),
+    "kg_file_add_nodes",
+  );
 
   await assert.rejects(
     addNodes.invoke({
@@ -351,19 +364,17 @@ test("requires auditable Evidence provenance and verified search sources", async
     }),
     /web_source_title_mismatch/i,
   );
-  await assert.rejects(
-    addNodes.invoke({
-      nodes: [
-        {
-          ...createTypedNode("E-005", "Evidence"),
-          name: "Deployment topology",
-          description: "The deployment region is Singapore.",
-          provenance: [{ kind: "user_input", user_input_index: 1 }],
-        },
-      ],
-    }),
-    /unsupported_infrastructure_scope/i,
-  );
+  await addComponentNodes.invoke({
+    nodes: [
+      {
+        ...createTypedNode("COMP-005", "Component"),
+        name: "Deployment topology assumption",
+        description:
+          "Unverified assumption: the deployment region may be Singapore.",
+        provenance: [{ kind: "user_input", user_input_index: 1 }],
+      },
+    ],
+  });
 
   await addNodes.invoke({
     nodes: [
@@ -389,6 +400,7 @@ test("requires auditable Evidence provenance and verified search sources", async
     ],
   });
   assert.equal(state.entities.filter((item) => item.type === "Evidence").length, 2);
+  assert.equal(state.entities.filter((item) => item.type === "Component").length, 1);
 });
 
 test("candidate graph values require an explicit user confirmation before numeric Evidence", async () => {

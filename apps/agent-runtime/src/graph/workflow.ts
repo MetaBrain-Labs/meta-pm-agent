@@ -52,7 +52,10 @@ import {
 import { parseUserInputNode, requestAgentNode } from "./nodes/request-node";
 import { WorkflowGraphState, type WorkflowGraphStateValue } from "./state";
 import { getWorkflowCheckpointer } from "./workflow-checkpointer";
-import { collectDownstreamTaskIds } from "../agents/product-workflow/dag";
+import {
+  collectDownstreamTaskIds,
+  selectReadyTasks,
+} from "../agents/product-workflow/dag";
 
 export interface WorkflowGraphInput {
   /** 服务端可信工作流用途；checkpoint 恢复时由图状态继续持有。 */
@@ -361,12 +364,39 @@ export async function hasRetryableWorkflowTaskCheckpoint({
     configurable: { thread_id: workflowThreadId },
   });
   const state = snapshot.values as WorkflowGraphStateValue;
-  const taskExists = state.plan?.tasks.some((task) => task.task_id === taskId);
-  const taskCompleted = state.executorResults?.some(
-    (result) => result.task_id === taskId,
-  );
+  return isExecutorRetryCheckpointScoped({
+    state,
+    next: snapshot.next,
+    taskId,
+  });
+}
 
-  return Boolean(taskExists && !taskCompleted && snapshot.next.length > 0);
+/**
+ * 校验 checkpoint 的下一步是否仅包含目标 Executor，避免定点重试恢复同批兄弟任务。
+ */
+export function isExecutorRetryCheckpointScoped({
+  state,
+  next,
+  taskId,
+}: {
+  state: Pick<WorkflowGraphStateValue, "plan" | "executorResults">;
+  next: readonly string[];
+  taskId: string;
+}): boolean {
+  const plan = state.plan;
+  if (!plan) return false;
+
+  const completedTaskIds = new Set(
+    state.executorResults.map((result) => result.task_id),
+  );
+  if (completedTaskIds.has(taskId)) return false;
+
+  const task = selectReadyTasks(plan, completedTaskIds).find(
+    (candidate) => candidate.task_id === taskId,
+  );
+  return Boolean(
+    task && next.length === 1 && next[0] === task.assigned_agent,
+  );
 }
 
 /**

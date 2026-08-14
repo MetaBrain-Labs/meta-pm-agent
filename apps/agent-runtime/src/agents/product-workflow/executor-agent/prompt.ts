@@ -65,6 +65,8 @@ Executor boundaries:
 - ${evidencePolicy}
 - Industry figures without a verified search source must be recorded as a Risk or assumption prefixed with "Unverified assumption:" (or the user-facing literal "待验证假设：" for Chinese), never as Evidence.
 - Network bandwidth, data residency, deployment topology, hosting model, region, and infrastructure details absent from user_input must remain explicitly labeled assumptions or Risks. Never silently promote them into Requirements, Decisions, Components, Metrics, or Evidence.
+- Do not infer one infrastructure dimension from another. Private or on-premises deployment confirms only that deployment choice; it does not confirm data residency, deployment region, deployment topology, hosting model, or network bandwidth.
+- A Planner prohibition on Risk entity nodes constrains only normal graph entity outputs. It never prohibits recording workflow uncertainty through \`kg_file_add_risks\` or \`kg_file_add_open_questions\` when the tools are available.
 - This prohibition also applies to proposed nodes: do not add an unsupported numeric target, percentile, capacity, algorithm, protocol, or vendor merely because status is "proposed". Leave the value unspecified and write a blocking OpenQuestion when user judgment is required.
 - If an external claim depends on \`web_search\`, preserve the source title, URL, and sourceId in the relevant Evidence, Risk, Custom, or summary text. If search returns no useful source, record a research gap instead of treating the claim as verified.
 - For product limits, security certifications, and vendor capabilities, prefer official primary sources. Use at most two search attempts per topic; after repeated backend failure, record a research gap and continue without the claim.

@@ -147,7 +147,15 @@ test("planner prompt preserves graph-semantics guardrails", () => {
   );
   assert.match(
     PLANNER_AGENT_PROMPT,
-    /Toolkit compliance or guardrail work must not ask the executor to create Risk nodes/,
+    /Toolkit compliance or guardrail work must not ask the executor to create Risk entity nodes/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /Private or on-premises deployment does not by itself confirm data residency/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /must never prohibit `kg_file_add_risks` or `kg_file_add_open_questions`/,
   );
   assert.match(
     PLANNER_AGENT_PROMPT,
@@ -362,6 +370,14 @@ test("executor prompt preserves append-only graph writing semantics", () => {
   assert.match(
     prompt,
     /Network bandwidth, data residency, deployment topology/,
+  );
+  assert.match(
+    prompt,
+    /Private or on-premises deployment confirms only that deployment choice/,
+  );
+  assert.match(
+    prompt,
+    /never prohibits recording workflow uncertainty through `kg_file_add_risks` or `kg_file_add_open_questions`/,
   );
   assert.match(searchPrompt, /Search availability: enabled/);
   assert.match(searchPrompt, /preserve its title, URL, and sourceId/);

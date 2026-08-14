@@ -58,7 +58,10 @@ import {
   selectNextExecutorRouterTargets,
 } from "../src/graph/nodes/product-workflow-node";
 import type { WorkflowGraphStateValue } from "../src/graph/state";
-import { selectNextNodeAfterOrchestrator } from "../src/graph/workflow";
+import {
+  isExecutorRetryCheckpointScoped,
+  selectNextNodeAfterOrchestrator,
+} from "../src/graph/workflow";
 import {
   collectDownstreamTaskIds,
   packParallelExecutorTasks,
@@ -987,6 +990,58 @@ test("serializes the selected manual retry before other ready tasks", () => {
   ]);
 });
 
+test("resumes a checkpoint only when its pending batch contains the retry target alone", () => {
+  const strategyTask = createTask(
+    "task-strategy",
+    1,
+    "executor-product-strategy",
+    [],
+  );
+  const toolkitTask = createTask(
+    "task-toolkit",
+    2,
+    "executor-toolkit",
+    ["task-strategy"],
+  );
+  const marketTask = createTask(
+    "task-market",
+    3,
+    "executor-market-research",
+    ["task-strategy"],
+  );
+  const state = createState({
+    tasks: [strategyTask, toolkitTask, marketTask],
+    results: [createResult("task-strategy", "executor-product-strategy")],
+  });
+
+  assert.equal(
+    isExecutorRetryCheckpointScoped({
+      state,
+      next: ["executor-toolkit"],
+      taskId: "task-toolkit",
+    }),
+    true,
+  );
+  assert.equal(
+    isExecutorRetryCheckpointScoped({
+      state,
+      next: ["executor-toolkit", "executor-market-research"],
+      taskId: "task-toolkit",
+    }),
+    false,
+  );
+  assert.equal(
+    isExecutorRetryCheckpointScoped({
+      state: createState({
+        tasks: [strategyTask, toolkitTask],
+      }),
+      next: ["executor-toolkit"],
+      taskId: "task-toolkit",
+    }),
+    false,
+  );
+});
+
 test("keeps minimum MVP execution while deferring detailed technical work", () => {
   const scoped = scopeInitialDecisionPlan(
     createPlan([
@@ -1094,6 +1149,11 @@ test("keeps document approval fallback focused and acyclic", () => {
   assert.equal(
     plan.tasks.some((task) => task.assigned_agent === "executor-interface-craft"),
     false,
+  );
+  assert.match(
+    plan.tasks.find((task) => task.assigned_agent === "executor-toolkit")
+      ?.description ?? "",
+    /Private or on-premises deployment does not confirm data residency/,
   );
   assert.equal(
     plan.tasks.filter(
