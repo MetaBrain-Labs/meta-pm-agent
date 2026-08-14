@@ -25,9 +25,38 @@ import {
 } from "../src/agents/conversation/workflow-resume";
 import {
   createCritiqueCorrectionUserInputBlock,
+  formatExecutorRetryRequiredErrorMessage,
   streamConversation,
 } from "../src/agents/conversation/stream";
 import { createProductWorkflowKnowledgeGraph } from "../src/agents/product-workflow/common/knowledge-graph";
+
+test("formats invalid plan recovery guidance for the active workflow purpose", () => {
+  const error = {
+    displayName: "Product Execution Executor",
+    taskId: "supplement-task-03",
+    details:
+      "Structured graph write validation failed: COMP-missing:missing_deprecation_target",
+  };
+
+  const standard = formatExecutorRetryRequiredErrorMessage(error, "standard");
+  const documentEvidence = formatExecutorRetryRequiredErrorMessage(
+    error,
+    "document_evidence_resolution",
+  );
+  const retryableOpenQuestion = formatExecutorRetryRequiredErrorMessage(
+    {
+      ...error,
+      details:
+        "Structured graph write validation failed: OQ-old:missing_deprecation_target",
+    },
+    "standard",
+  );
+
+  assert.match(standard, /当前产品工作流.*已提交的补充信息/);
+  assert.doesNotMatch(standard, /解决证据阻断/);
+  assert.match(documentEvidence, /解决证据阻断/);
+  assert.doesNotMatch(retryableOpenQuestion, /下一步：/);
+});
 
 test("restores direct executor blocker context from history", () => {
   const knowledgeGraph = createProductWorkflowKnowledgeGraph();

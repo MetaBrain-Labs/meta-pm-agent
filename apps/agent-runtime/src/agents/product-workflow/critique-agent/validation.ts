@@ -263,6 +263,13 @@ function validateTaskResult({
     const definition = getExecutorDefinition(assignedAgent);
     for (const entity of result.entities) {
       if (
+        input.plan.status === "supplement" &&
+        entity.type === "OpenQuestion" &&
+        entity.status === "deprecated"
+      ) {
+        continue;
+      }
+      if (
         input.documentEvidenceResolution === true &&
         entity.type === "Risk" &&
         entity.status === "deprecated"

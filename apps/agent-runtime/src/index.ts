@@ -17,6 +17,9 @@ export {
   normalizeDocumentEvidenceWorkflowResult,
   streamConversation,
 } from "./agents/conversation/stream";
+export {
+  isSameTaskExecutorRetryable,
+} from "./agents/product-workflow/executor-agent/agent";
 export type { WorkflowPurpose } from "./agents/product-workflow/types";
 export {
   createRecoveredRequestAnalysis,

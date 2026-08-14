@@ -250,6 +250,7 @@ export interface KnowledgeGraphToolPolicy {
   requiredBlockingOpenQuestionCount?: number;
   allowNodeDeprecation?: boolean;
   allowRiskDeprecation?: boolean;
+  allowOpenQuestionDeprecation?: boolean;
   sourceTaskId?: string;
   userInput?: ReadonlyArray<{ index: number; content: string }>;
   verifiedWebSources?: ReadonlyMap<string, VerifiedWebSource>;
@@ -458,6 +459,27 @@ export function createKnowledgeGraphTools(
             (risk) => risk.id === deprecation.node_id,
           );
           const risk = state.risks[riskIndex];
+          const openQuestionIndex = state.open_questions.findIndex(
+            (question) => question.id === deprecation.node_id,
+          );
+          const openQuestion = state.open_questions[openQuestionIndex];
+          const openQuestionAlreadyResolved = (
+            state.resolved_open_question_ids ?? []
+          ).includes(deprecation.node_id);
+          if (
+            policy.allowOpenQuestionDeprecation &&
+            openQuestionAlreadyResolved &&
+            !openQuestion &&
+            (!existing ||
+              (existing.type === "OpenQuestion" &&
+                existing.status === "deprecated"))
+          ) {
+            skipped.push({
+              id: deprecation.node_id,
+              reason: "already_resolved",
+            });
+            continue;
+          }
           if (!existing && risk && policy.allowRiskDeprecation) {
             existing = {
               id: risk.id,
@@ -469,6 +491,24 @@ export function createKnowledgeGraphTools(
               provenance: [{ kind: "existing_graph", node_id: risk.id }],
             };
           }
+          if (
+            !existing &&
+            openQuestion &&
+            policy.allowOpenQuestionDeprecation
+          ) {
+            existing = {
+              id: openQuestion.id,
+              type: "OpenQuestion",
+              name: openQuestion.text.slice(0, 120),
+              description: openQuestion.text,
+              source_task_id: openQuestion.source_task_id,
+              status: "proposed",
+              blocking: openQuestion.blocking,
+              provenance: [
+                { kind: "existing_graph", node_id: openQuestion.id },
+              ],
+            };
+          }
           if (!existing) {
             skipped.push({
               id: deprecation.node_id,
@@ -478,6 +518,10 @@ export function createKnowledgeGraphTools(
           }
           if (
             !(existing.type === "Risk" && policy.allowRiskDeprecation) &&
+            !(
+              existing.type === "OpenQuestion" &&
+              policy.allowOpenQuestionDeprecation
+            ) &&
             policy.allowedEntityTypes &&
             !policy.allowedEntityTypes.includes(existing.type)
           ) {
@@ -527,6 +571,17 @@ export function createKnowledgeGraphTools(
           if (existing.type === "Risk" && riskIndex >= 0) {
             state.risks.splice(riskIndex, 1);
           }
+          if (existing.type === "OpenQuestion") {
+            if (openQuestionIndex >= 0) {
+              state.open_questions.splice(openQuestionIndex, 1);
+            }
+            state.resolved_open_question_ids = [
+              ...new Set([
+                ...(state.resolved_open_question_ids ?? []),
+                existing.id,
+              ]),
+            ];
+          }
           items.push(deprecated);
         }
 
@@ -544,7 +599,7 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_deprecate_nodes",
         description:
-          `Deprecate active graph nodes during a supplement workflow without deleting history. Use the domain owner for each node type. Provide the concrete correction reason and an active replacement node when one exists.${policy.allowRiskDeprecation ? " In document evidence resolution, directly answered active Risk IDs may also be deprecated without a replacement." : ""}`,
+          `Deprecate active graph nodes during a supplement workflow without deleting history. Use the domain owner for each node type. Provide the concrete correction reason and an active replacement node when one exists.${policy.allowOpenQuestionDeprecation ? " A fully answered active OpenQuestion explicitly assigned to this task may be deprecated without a replacement; an already resolved OpenQuestion is treated as an idempotent success." : ""}${policy.allowRiskDeprecation ? " In document evidence resolution, directly answered active Risk IDs may also be deprecated without a replacement." : ""}`,
         schema: z.object({
           deprecations: z
             .array(nodeDeprecationInputSchema)

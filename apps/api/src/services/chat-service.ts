@@ -21,6 +21,7 @@ import type {
 } from "@repo/shared";
 import {
   createRecoveredRequestAnalysis,
+  isSameTaskExecutorRetryable,
   isProductWorkflowCorrectionRetryAnswer,
   isProductWorkflowOptionalStopAnswer,
   isProductWorkflowStopWithIssuesAnswer,
@@ -347,11 +348,11 @@ export async function loadExecutorRetryFailure(
     : undefined;
 }
 
-/** 失效的废弃目标无法通过重放同一任务修复，不应继续作为可信重试入口。 */
+/** 仅允许仍可由当前工具契约修复的历史 Executor 错误继续定点重试。 */
 export function isPersistedExecutorRetryFailureRetryable(
   error: string,
 ): boolean {
-  return !error.includes("missing_deprecation_target");
+  return isSameTaskExecutorRetryable(error);
 }
 
 /**

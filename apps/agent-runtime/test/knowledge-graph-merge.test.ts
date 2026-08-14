@@ -30,6 +30,7 @@ import {
   getExecutorOutputValidationError,
   hasStructuredGraphItems,
 } from "../src/agents/product-workflow/executor-agent/agent";
+import { appendKnowledgeGraphPatch } from "../src/agents/product-workflow/common/knowledge-graph";
 import { mergeKnowledgeGraphSnapshots } from "../src/graph/state";
 
 test("retries only when an executor wrote no structured graph items", () => {
@@ -216,6 +217,74 @@ test("document evidence review permits only deprecated Risk audit nodes", () => 
     documentEvidenceResolution: true,
   });
 
+  assert.equal(
+    report.issues.some((issue) => issue.code === "UNAUTHORIZED_ENTITY_TYPE"),
+    false,
+  );
+});
+
+test("supplement OpenQuestion deprecation propagates its tombstone through merge and Critique", () => {
+  const task = createTask(
+    "supplement-task-03",
+    1,
+    "executor-product-execution",
+  );
+  const question = {
+    id: "OQ-fatal",
+    text: "Which failures are fatal?",
+    source_task_id: "task-old",
+    blocking: true,
+  };
+  const deprecatedQuestion: ProductKnowledgeGraph["entities"][number] = {
+    id: question.id,
+    type: "OpenQuestion",
+    name: question.text,
+    description: question.text,
+    source_task_id: question.source_task_id,
+    status: "deprecated",
+    deprecated_by_task_id: task.task_id,
+    deprecation_reason: "The submitted answer defines fatal failures.",
+  };
+  const base = createGraph({});
+  base.open_questions = [question];
+  const merged = appendKnowledgeGraphPatch({
+    knowledgeGraph: base,
+    taskId: task.task_id,
+    agentType: task.assigned_agent,
+    entities: [deprecatedQuestion],
+    relations: [],
+    decisions: [],
+    risks: [],
+    openQuestions: [],
+    summary: [],
+  });
+  const result: ExecutorAgentResult = {
+    task_id: task.task_id,
+    agent_type: task.assigned_agent,
+    focus_layer: "Component",
+    summary: "Closed the answered fatal-failure question.",
+    entities: [deprecatedQuestion],
+    relations: [],
+    decisions: [],
+    risks: [],
+    open_questions: [],
+    quality_result: { passed: true, notes: "ok" },
+  };
+  const report = createCritiqueValidationReport({
+    requestAnalysis: createRequestAnalysis(),
+    plan: {
+      status: "supplement",
+      request_summary: "Apply submitted fatal-failure definitions.",
+      dag: { nodes: [task.task_id], edges: [] },
+      tasks: [task],
+      assumptions: [],
+    },
+    executorResults: [result],
+    knowledgeGraph: merged,
+  });
+
+  assert.deepEqual(merged.open_questions, []);
+  assert.deepEqual(merged.resolved_open_question_ids, [question.id]);
   assert.equal(
     report.issues.some((issue) => issue.code === "UNAUTHORIZED_ENTITY_TYPE"),
     false,

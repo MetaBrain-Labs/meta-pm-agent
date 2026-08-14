@@ -159,6 +159,10 @@ test("planner prompt preserves graph-semantics guardrails", () => {
   );
   assert.match(
     PLANNER_AGENT_PROMPT,
+    /fully resolves a different active OpenQuestion.*`kg_file_deprecate_nodes`/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
     /must depend_on every task that produces the evidence, technical comparison, or measurement basis/,
   );
   assert.match(
@@ -378,6 +382,10 @@ test("executor prompt preserves append-only graph writing semantics", () => {
   assert.match(
     prompt,
     /never prohibits recording workflow uncertainty through `kg_file_add_risks` or `kg_file_add_open_questions`/,
+  );
+  assert.match(
+    prompt,
+    /task explicitly identifies an active OpenQuestion.*`kg_file_deprecate_nodes`/,
   );
   assert.match(searchPrompt, /Search availability: enabled/);
   assert.match(searchPrompt, /preserve its title, URL, and sourceId/);

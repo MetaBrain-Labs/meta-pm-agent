@@ -90,6 +90,8 @@ interface CreateToolsForAgentOptions {
   allowNodeDeprecation?: boolean;
   /** 是否允许文档补证任务关闭已被回答的活跃风险。 */
   allowRiskDeprecation?: boolean;
+  /** 是否允许补充任务关闭已被用户回答的活跃问题。 */
+  allowOpenQuestionDeprecation?: boolean;
   /** 当前任务 ID，用于阻止模型伪造来源任务。 */
   sourceTaskId?: string;
   /** 本轮用户输入，供节点来源校验。 */
@@ -128,6 +130,7 @@ export function createToolsForAgent(
           options.requiredBlockingOpenQuestionCount,
         allowNodeDeprecation: options.allowNodeDeprecation,
         allowRiskDeprecation: options.allowRiskDeprecation,
+        allowOpenQuestionDeprecation: options.allowOpenQuestionDeprecation,
         sourceTaskId: options.sourceTaskId,
         userInput: options.userInput,
         verifiedWebSources: options.webSearchEvidenceRegistry?.sources,

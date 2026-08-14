@@ -569,6 +569,77 @@ test("document evidence resolution deprecates an answered active risk", async ()
   );
 });
 
+test("supplement workflows deprecate active OpenQuestions idempotently", async () => {
+  const state = createKnowledgeGraph();
+  state.open_questions.push({
+    id: "OQ-001",
+    text: "Which failures are fatal?",
+    source_task_id: "task-old",
+    blocking: true,
+  });
+  const nonSupplementDeprecate = getTool(
+    createKnowledgeGraphTools(state, {
+      sourceTaskId: "task-03",
+      allowedEntityTypes: ["Component"],
+    }),
+    "kg_file_deprecate_nodes",
+  );
+  const deprecate = getTool(
+    createKnowledgeGraphTools(state, {
+      allowNodeDeprecation: true,
+      allowOpenQuestionDeprecation: true,
+      sourceTaskId: "supplement-task-03",
+      allowedEntityTypes: ["Component"],
+    }),
+    "kg_file_deprecate_nodes",
+  );
+  const input = {
+    deprecations: [
+      {
+        node_id: "OQ-001",
+        source_task_id: "supplement-task-03",
+        reason: "The submitted answer fully defines fatal failures.",
+      },
+    ],
+  };
+
+  await assert.rejects(
+    nonSupplementDeprecate.invoke(input),
+    /allowed only during a supplement workflow/i,
+  );
+
+  const first = JSON.parse(String(await deprecate.invoke(input))) as ToolResult;
+  const second = JSON.parse(String(await deprecate.invoke(input))) as ToolResult;
+  const missingEntity = JSON.parse(
+    String(
+      await deprecate.invoke({
+        deprecations: [
+          {
+            node_id: "F-missing",
+            source_task_id: "supplement-task-03",
+            reason: "The feature is obsolete.",
+          },
+        ],
+      }),
+    ),
+  ) as ToolResult;
+
+  assert.equal(first.count, 1);
+  assert.equal(state.open_questions.length, 0);
+  assert.deepEqual(state.resolved_open_question_ids, ["OQ-001"]);
+  assert.equal(
+    state.entities.find((item) => item.id === "OQ-001")?.status,
+    "deprecated",
+  );
+  assert.equal(second.count, 0);
+  assert.deepEqual(second.skipped, [
+    { id: "OQ-001", reason: "already_resolved" },
+  ]);
+  assert.deepEqual(missingEntity.skipped, [
+    { id: "F-missing", reason: "missing_deprecation_target" },
+  ]);
+});
+
 interface ToolResult {
   count: number;
   items: Array<{ id: string }>;

@@ -1039,6 +1039,11 @@ async function* streamPlanningAfterUserInput(
     resumeFromCheckpoint?: boolean;
   } = {},
 ): AsyncGenerator<ConversationStreamEvent> {
+  let workflowPurpose: WorkflowPurpose = options.documentEvidenceResolution
+    ? "document_evidence_resolution"
+    : (resumeOptions.resumeContext?.workflowPurpose ??
+      options.serverWorkflowRecoveryContext?.workflowPurpose ??
+      "standard");
   try {
     const recoveredResumeContext = resumeOptions.resumeFromCheckpoint
       ? undefined
@@ -1050,7 +1055,7 @@ async function* streamPlanningAfterUserInput(
           serverWorkflowRecoveryContext: options.serverWorkflowRecoveryContext,
         }) ??
         undefined);
-    const workflowPurpose = options.documentEvidenceResolution
+    workflowPurpose = options.documentEvidenceResolution
       ? "document_evidence_resolution"
       : (recoveredResumeContext?.workflowPurpose ?? "standard");
     const resumeContext = recoveredResumeContext
@@ -1177,16 +1182,7 @@ async function* streamPlanningAfterUserInput(
       const sameTaskRetryable = isSameTaskExecutorRetryable(error.details);
       yield {
         type: "error",
-        error: [
-          `来源：${error.displayName} / ${error.taskId}`,
-          sameTaskRetryable
-            ? "原因：requires_executor_retry（Executor 当前运行未能完成）"
-            : "原因：invalid_plan_reference（计划引用的图谱目标已失效，原任务无法重放修复）",
-          `关键详情：${error.details}`,
-          ...(sameTaskRetryable
-            ? []
-            : ["下一步：请重新启动“解决证据阻断”流程生成新的补充计划。"]),
-        ].join("\n"),
+        error: formatExecutorRetryRequiredErrorMessage(error, workflowPurpose),
         agentType: error.agentType,
         ...(sameTaskRetryable
           ? {
@@ -1236,6 +1232,34 @@ async function* streamPlanningAfterUserInput(
       terminal: true,
     };
   }
+}
+
+/**
+ * 按可信工作流用途生成失效计划引用的下一步提示，避免 standard 流程误导到文档补证入口。
+ */
+export function formatExecutorRetryRequiredErrorMessage(
+  error: {
+    displayName: string;
+    taskId: string;
+    details: string;
+  },
+  workflowPurpose: WorkflowPurpose,
+): string {
+  const sameTaskRetryable = isSameTaskExecutorRetryable(error.details);
+  return [
+    `来源：${error.displayName} / ${error.taskId}`,
+    sameTaskRetryable
+      ? "原因：requires_executor_retry（Executor 当前运行未能完成）"
+      : "原因：invalid_plan_reference（计划引用的图谱目标已失效，原任务无法重放修复）",
+    `关键详情：${error.details}`,
+    ...(sameTaskRetryable
+      ? []
+      : [
+          workflowPurpose === "document_evidence_resolution"
+            ? "下一步：请重新启动“解决证据阻断”流程生成新的补充计划。"
+            : "下一步：请在当前产品工作流中基于已提交的补充信息重新生成新的补充计划。",
+        ]),
+  ].join("\n");
 }
 
 /**

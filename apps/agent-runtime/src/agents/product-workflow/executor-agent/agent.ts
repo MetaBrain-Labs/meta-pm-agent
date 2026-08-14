@@ -106,10 +106,20 @@ export function restrictExecutorCorrectionToolNames(
 }
 
 /**
- * 判断失败是否还能通过原任务重放修复；缺失的废弃目标属于失效计划引用。
+ * 判断失败是否还能通过原任务重放修复；历史 OpenQuestion 缺失可由新增幂等关闭能力修复。
  */
 export function isSameTaskExecutorRetryable(details: string): boolean {
-  return !details.includes("missing_deprecation_target");
+  if (!details.includes("missing_deprecation_target")) return true;
+
+  const missingTargetIds = [
+    ...details.matchAll(
+      /(?:^|[\s,])([^,:\s]+):missing_deprecation_target(?=$|[\s,])/g,
+    ),
+  ].map((match) => match[1]);
+  return (
+    missingTargetIds.length > 0 &&
+    missingTargetIds.every((targetId) => targetId?.startsWith("OQ-"))
+  );
 }
 
 /**
@@ -266,6 +276,7 @@ export async function* streamExecutorAgent(
             input.task.required_open_question_count ?? 0,
           allowNodeDeprecation: input.plan.status === "supplement",
           allowRiskDeprecation: input.documentEvidenceResolution === true,
+          allowOpenQuestionDeprecation: input.plan.status === "supplement",
           sourceTaskId: input.task.task_id,
           userInput: input.userInput,
           webSearchEvidenceRegistry,

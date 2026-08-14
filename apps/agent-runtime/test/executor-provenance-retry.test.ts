@@ -209,10 +209,22 @@ test("pure unconsumed Evidence correction keeps relation and deprecation tools o
   ]);
 });
 
-test("does not offer same-task retry for a missing deprecation target", () => {
+test("retries historical missing OpenQuestion targets but rejects stale entity targets", () => {
   assert.equal(
     isSameTaskExecutorRetryable(
       "Structured graph write validation failed: OQ-short:missing_deprecation_target",
+    ),
+    true,
+  );
+  assert.equal(
+    isSameTaskExecutorRetryable(
+      "Structured graph write validation failed: F-short:missing_deprecation_target",
+    ),
+    false,
+  );
+  assert.equal(
+    isSameTaskExecutorRetryable(
+      "Structured graph write validation failed: OQ-short:missing_deprecation_target, F-short:missing_deprecation_target",
     ),
     false,
   );

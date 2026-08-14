@@ -171,6 +171,20 @@ export function appendKnowledgeGraphPatch({
       .filter((entity) => entity.type === "Risk" && entity.status === "deprecated")
       .map((entity) => entity.id),
   );
+  const deprecatedOpenQuestionIds = new Set(
+    entities
+      .filter(
+        (entity) =>
+          entity.type === "OpenQuestion" && entity.status === "deprecated",
+      )
+      .map((entity) => entity.id),
+  );
+  const resolvedOpenQuestionIds = [
+    ...new Set([
+      ...(knowledgeGraph.resolved_open_question_ids ?? []),
+      ...deprecatedOpenQuestionIds,
+    ]),
+  ];
 
   return {
     ...knowledgeGraph,
@@ -192,9 +206,12 @@ export function appendKnowledgeGraphPatch({
       (item) => item.id.trim(),
     ),
     open_questions: mergeByKey(
-      [...knowledgeGraph.open_questions, ...openQuestionsWithSource],
+      [...knowledgeGraph.open_questions, ...openQuestionsWithSource].filter(
+        (question) => !deprecatedOpenQuestionIds.has(question.id),
+      ),
       (item) => item.id.trim(),
     ),
+    resolved_open_question_ids: resolvedOpenQuestionIds,
     summary: mergeTextList([...knowledgeGraph.summary, ...summary]),
     notes: [
       ...knowledgeGraph.notes,

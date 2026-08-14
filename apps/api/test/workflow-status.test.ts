@@ -256,10 +256,16 @@ test("does not treat a historical workflow form answer as a new retry submission
   );
 });
 
-test("does not accept stale graph references as persisted retry targets", () => {
+test("accepts historical OpenQuestion misses but rejects stale entity targets", () => {
   assert.equal(
     isPersistedExecutorRetryFailureRetryable(
       "Structured graph write validation failed: OQ-short:missing_deprecation_target",
+    ),
+    true,
+  );
+  assert.equal(
+    isPersistedExecutorRetryFailureRetryable(
+      "Structured graph write validation failed: COMP-short:missing_deprecation_target",
     ),
     false,
   );
