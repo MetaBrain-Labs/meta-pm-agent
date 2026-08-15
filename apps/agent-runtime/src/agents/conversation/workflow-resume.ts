@@ -35,6 +35,7 @@ import {
   isExecutorAgentType,
   type ExecutorAgentType,
 } from "../product-workflow/executor-agent/definitions";
+import type { ExecutorHumanInputRequired } from "../product-workflow/executor-agent/agent";
 
 const EXECUTOR_BLOCKER_FORM_PREFIX = "executor-blocker-";
 const PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID = "product-workflow-confirmation";
@@ -182,8 +183,19 @@ function createWorkflowResumeContext({
   const originalUserInput = findOriginalUserInput(messages);
 
   if (!requestAnalysis) {
-    return knowledgeGraph
-      ? { workflowPurpose, knowledgeGraph, rerunTaskIds: [] }
+    // 证据补证等会话可能没有 request-analysis 消息块；此处仍保留已恢复的 DAG 与
+    // Executor 结果，并按表单 ID 推导需要重跑的任务，避免退化到无上下文的全新规划。
+    const fallbackRerunTaskIds = formId
+      ? inferRerunTaskIds(formId, executorResults, productWorkflow)
+      : [];
+    return plan || knowledgeGraph
+      ? {
+          workflowPurpose,
+          plan,
+          executorResults,
+          knowledgeGraph: knowledgeGraph ?? null,
+          rerunTaskIds: fallbackRerunTaskIds,
+        }
       : null;
   }
 
@@ -828,4 +840,125 @@ function parseJsonBlock(block: string): unknown {
  */
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * 将 Executor 硬阻塞转换为 Conversation Agent 对用户展示的 HITL 表单。
+ *
+ * 卡片内只保留来源/原因/关键详情的截断核心文字；若阻塞详情里显式引用了图谱节点 ID，
+ * 则把精确匹配到的节点完整内容写入问题的 help 字段（helpMode = modal），
+ * 由前端复用「查看相关资料」按钮 + Modal 展示完整候选信息。
+ */
+export function formatExecutorHumanInputQuestionForm(
+  interrupt: ExecutorHumanInputRequired,
+  knowledgeGraph?: ProductKnowledgeGraph | null,
+): string {
+  const referencedHelp = buildReferencedGraphNodeHelp(
+    interrupt.details,
+    knowledgeGraph,
+  );
+  const form = {
+    description: [
+      `来源：${interrupt.displayName} / ${interrupt.taskId}`,
+      `原因：${interrupt.title}`,
+      `关键详情：${compactUserVisibleText(interrupt.details)}`,
+    ].join("\n"),
+    questions: [
+      {
+        id: "resolution",
+        label: interrupt.neededUserInput,
+        type: "textarea",
+        required: true,
+        placeholder:
+          "请补充事实、取舍或修正信息，提交后系统会基于已有上下文继续运行。",
+        ...(referencedHelp
+          ? { help: referencedHelp, helpMode: "modal" as const }
+          : {}),
+      },
+    ],
+    submitLabel: "提交并继续运行",
+  };
+
+  return `<question-form id="${escapeAttribute(
+    `executor-blocker-${interrupt.taskId}`,
+  )}" title="${escapeAttribute(interrupt.title)}">\n${JSON.stringify(
+    form,
+    null,
+    2,
+  )}\n</question-form>`;
+}
+
+/**
+ * 从阻塞详情中解析显式引用的图谱节点 ID，并把完整节点内容拼成弹窗可读的纯文本。
+ *
+ * 只做精确 ID 包含匹配（机械引用解析），不做任何语义判断；
+ * 无图谱或没有可匹配节点时返回 null，表单结构与旧版一致。
+ */
+function buildReferencedGraphNodeHelp(
+  details: string,
+  knowledgeGraph: ProductKnowledgeGraph | null | undefined,
+): string | null {
+  if (!knowledgeGraph) return null;
+  const nodes: Array<{ id: string; label: string; content: string }> = [];
+  for (const entity of knowledgeGraph.entities) {
+    if (details.includes(entity.id)) {
+      nodes.push({
+        id: entity.id,
+        label: entity.name,
+        content: entity.description ?? entity.name,
+      });
+    }
+  }
+  for (const decision of knowledgeGraph.decisions) {
+    if (details.includes(decision.id)) {
+      nodes.push({ id: decision.id, label: "决策", content: decision.text });
+    }
+  }
+  for (const risk of knowledgeGraph.risks) {
+    if (details.includes(risk.id)) {
+      nodes.push({ id: risk.id, label: "风险", content: risk.text });
+    }
+  }
+  for (const question of knowledgeGraph.open_questions) {
+    if (details.includes(question.id)) {
+      nodes.push({
+        id: question.id,
+        label: "待确认问题",
+        content: question.text,
+      });
+    }
+  }
+  if (nodes.length === 0) return null;
+
+  return nodes
+    .map((node) => {
+      const content =
+        node.content.length > 400
+          ? `${node.content.slice(0, 400).trimEnd()}…`
+          : node.content;
+      return `节点 ${node.id}（${node.label}）\n${content}`;
+    })
+    .join("\n\n");
+}
+
+/**
+ * 压缩展示给用户的阻塞详情，只保留关键一行。
+ */
+function compactUserVisibleText(text: string, maxLength = 180): string {
+  const compacted =
+    text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean)
+      ?.replace(/\s+/g, " ") ?? "";
+  return compacted.length > maxLength
+    ? `${compacted.slice(0, maxLength).trimEnd()}...`
+    : compacted;
+}
+
+/**
+ * 转义 tagged block 属性值，避免标题或 ID 破坏 question-form 标签。
+ */
+function escapeAttribute(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }

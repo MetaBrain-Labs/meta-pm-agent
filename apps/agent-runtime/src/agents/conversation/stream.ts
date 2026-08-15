@@ -63,12 +63,12 @@ import {
   isExecutorHumanInputRequiredError,
   isExecutorRetryRequiredError,
   isSameTaskExecutorRetryable,
-  type ExecutorHumanInputRequired,
 } from "../product-workflow/executor-agent/agent";
 import {
   createWorkflowContinuationResumeContextFromMessages,
   createWorkflowExecutorRetryResumeContextFromMessages,
   createWorkflowResumeContextFromMessages,
+  formatExecutorHumanInputQuestionForm,
   inferSupplementAffectedTaskIds,
   resolveAnsweredGraphOpenQuestions,
 } from "./workflow-resume";
@@ -802,12 +802,24 @@ async function* streamWorkflowResumeAfterFormAnswer(
   options: ConversationStreamOptions,
   formId: string,
 ): AsyncGenerator<ConversationStreamEvent> {
-  const resumeContext = createWorkflowResumeContextFromMessages({
+  let resumeContext = createWorkflowResumeContextFromMessages({
     messages,
     knowledgeGraph: options.knowledgeGraph,
     workflowAnswerResolution: options.workflowAnswerResolution,
     serverWorkflowRecoveryContext: options.serverWorkflowRecoveryContext,
   });
+  // 证据补证会话的消息历史没有 request-analysis 块；此处注入与首轮补证同源的
+  // 权威业务请求，避免表单答案被 Request Agent 当作新业务重新解释。
+  if (
+    resumeContext &&
+    !resumeContext.requestAnalysis &&
+    options.documentEvidenceResolution
+  ) {
+    resumeContext = {
+      ...resumeContext,
+      requestAnalysis: createDocumentEvidenceRequestAnalysis(),
+    };
+  }
   const latestUserMessage = messages.at(-1);
   const acceptsCurrentResult = Boolean(
     latestUserMessage &&
@@ -837,6 +849,31 @@ async function* streamWorkflowResumeAfterFormAnswer(
       agentType: "conversation_confirmation",
       terminal: true,
     };
+    return;
+  }
+
+  // Executor 阻塞表单在 DAG 中途产生，本轮没有已完成的工作流结果；
+  // 其恢复只消费消息历史中的 DAG 与 rerunTaskIds，直接进入定点补充规划，
+  // 不经过依赖 workflowResult 的确认/停止/修正分支。
+  const isExecutorBlockerAnswer = formId.startsWith(EXECUTOR_BLOCKER_FORM_PREFIX);
+  if (isExecutorBlockerAnswer) {
+    if (!resumeContext) {
+      yield {
+        type: "error",
+        error:
+          "无法恢复对应的产品工作流上下文。该表单答案不会作为新业务请求处理，请刷新后重试。",
+        agentType: "conversation_confirmation",
+        terminal: true,
+      };
+      return;
+    }
+    const userInputBlock = createFormAnswerUserInputBlock(
+      latestUserMessage?.content ?? "",
+    );
+    yield* streamPlanningAfterUserInput(userInputBlock, options, messages, {
+      resumeContext,
+      suppressRestoredRequestAnalysis: true,
+    });
     return;
   }
 
@@ -1200,6 +1237,7 @@ async function* streamPlanningAfterUserInput(
     if (isExecutorHumanInputRequiredError(error)) {
       const questionForm = formatExecutorHumanInputQuestionForm(
         error.interrupt,
+        options.knowledgeGraph,
       );
       yield {
         type: "text",
@@ -1598,54 +1636,6 @@ export function normalizeDocumentEvidenceWorkflowResult(
   };
 }
 
-/**
- * 将 Executor 硬阻塞转换为 Conversation Agent 对用户展示的 HITL 表单。
- */
-function formatExecutorHumanInputQuestionForm(
-  interrupt: ExecutorHumanInputRequired,
-): string {
-  const form = {
-    description: [
-      `来源：${interrupt.displayName} / ${interrupt.taskId}`,
-      `原因：${interrupt.title}`,
-      `关键详情：${compactUserVisibleText(interrupt.details)}`,
-    ].join("\n"),
-    questions: [
-      {
-        id: "resolution",
-        label: interrupt.neededUserInput,
-        type: "textarea",
-        required: true,
-        placeholder:
-          "请补充事实、取舍或修正信息，提交后系统会基于已有上下文继续运行。",
-      },
-    ],
-    submitLabel: "提交并继续运行",
-  };
-
-  return `<question-form id="${escapeAttribute(
-    `executor-blocker-${interrupt.taskId}`,
-  )}" title="${escapeAttribute(interrupt.title)}">\n${JSON.stringify(
-    form,
-    null,
-    2,
-  )}\n</question-form>`;
-}
-
-/**
- * 压缩展示给用户的阻塞详情，只保留关键一行。
- */
-function compactUserVisibleText(text: string, maxLength = 180): string {
-  const compacted =
-    text
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find(Boolean)
-      ?.replace(/\s+/g, " ") ?? "";
-  return compacted.length > maxLength
-    ? `${compacted.slice(0, maxLength).trimEnd()}...`
-    : compacted;
-}
 
 /**
  * 格式化为 <user-input> 块，如果已经是该块则直接返回。
@@ -1704,16 +1694,6 @@ function getMessageType(message: BaseMessage): string {
   }
 
   return message.constructor.name;
-}
-
-/**
- * 从模型消息中提取已完成的工具调用。
- */
-/**
- * 转义 tagged block 属性值，避免标题或 ID 破坏 question-form 标签。
- */
-function escapeAttribute(value: string): string {
-  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
 
 /**

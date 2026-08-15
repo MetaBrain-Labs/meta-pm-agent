@@ -21,6 +21,7 @@ import {
   createWorkflowContinuationResumeContextFromMessages,
   createWorkflowExecutorRetryResumeContextFromMessages,
   createWorkflowResumeContextFromMessages,
+  formatExecutorHumanInputQuestionForm,
   inferSupplementAffectedTaskIds,
 } from "../src/agents/conversation/workflow-resume";
 import {
@@ -83,6 +84,109 @@ test("restores direct executor blocker context from history", () => {
     context?.knowledgeGraph?.open_questions.map((question) => question.id),
     ["task-01-oq", "task-02-oq"],
   );
+});
+
+test("restores executor blocker context without request analysis from history", () => {
+  const knowledgeGraph = createProductWorkflowKnowledgeGraph();
+  knowledgeGraph.open_questions = [
+    {
+      id: "task-01-oq",
+      text: "Market scope?",
+      source_task_id: "task-01",
+      blocking: true,
+    },
+  ];
+  const messages = createMessages(
+    "[form answers - executor-blocker-task-01]\n- resolution: use B2B scope",
+  ).filter((item) => !item.content.includes("<request-analysis"));
+
+  const context = createWorkflowResumeContextFromMessages({
+    messages,
+    knowledgeGraph,
+  });
+
+  assert.equal(context?.requestAnalysis, undefined);
+  assert.equal(context?.plan?.tasks.length, 2);
+  assert.equal(context?.executorResults?.length, 2);
+  assert.deepEqual(context?.rerunTaskIds, ["task-01"]);
+});
+
+test("returns null for blocker answers without plan and knowledge graph", () => {
+  const context = createWorkflowResumeContextFromMessages({
+    messages: [
+      message(
+        "u1",
+        "user",
+        "[form answers - executor-blocker-task-01]\n- resolution: keep scope",
+      ),
+    ],
+  });
+
+  assert.equal(context, null);
+});
+
+test("embeds referenced graph node details as modal help in blocker forms", () => {
+  const knowledgeGraph = createProductWorkflowKnowledgeGraph();
+  knowledgeGraph.entities = [
+    {
+      id: "M-7e0bad34-6db6-4d70-93b1-c27e974685d6",
+      type: "Metric",
+      name: "性能实测基线",
+      description:
+        "候选基线：p95=120ms，p99=300ms，冲突率=0.1，锚点漂移率=0.05。",
+      source_task_id: "task-02",
+      provenance: [{ kind: "user_input", user_input_index: 1 }],
+    },
+    {
+      id: "M-other",
+      type: "Metric",
+      name: "无关指标",
+      description: "不应出现在表单中",
+      provenance: [{ kind: "user_input", user_input_index: 1 }],
+    },
+  ];
+
+  const form = formatExecutorHumanInputQuestionForm(
+    {
+      taskId: "task-02",
+      agentType: "executor-data-analytics",
+      displayName: "Data Analytics Executor",
+      category: "hard_conflict",
+      title: "性能实测数值尚未得到用户确认",
+      details:
+        "关联候选节点：M-7e0bad34-6db6-4d70-93b1-c27e974685d6；候选值：0.1",
+      neededUserInput:
+        "请填写 p95、p99、冲突率、锚点漂移率的具体值及监控/日志来源",
+    },
+    knowledgeGraph,
+  );
+
+  assert.match(form, /"helpMode": "modal"/);
+  assert.match(form, /性能实测基线/);
+  assert.match(form, /p95=120ms/);
+  assert.doesNotMatch(form, /无关指标/);
+});
+
+test("omits modal help when no graph or no referenced nodes", () => {
+  const interrupt = {
+    taskId: "task-02",
+    agentType: "executor-data-analytics" as const,
+    displayName: "Data Analytics Executor",
+    category: "hard_conflict" as const,
+    title: "性能实测数值尚未得到用户确认",
+    details: "关联候选节点：M-missing；候选值：0.1",
+    neededUserInput: "请填写具体值",
+  };
+
+  const withoutGraph = formatExecutorHumanInputQuestionForm(interrupt, null);
+  assert.doesNotMatch(withoutGraph, /"help"/);
+
+  const emptyGraph = createProductWorkflowKnowledgeGraph();
+  const unreferenced = formatExecutorHumanInputQuestionForm(
+    interrupt,
+    emptyGraph,
+  );
+  assert.doesNotMatch(unreferenced, /"help"/);
 });
 
 test("restores the original structured user input for resumed corrections", () => {
