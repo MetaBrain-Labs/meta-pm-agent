@@ -169,7 +169,10 @@ export function getExecutorDefaultToolNames(
 }
 
 /**
- * 返回 Executor 结构化重试阶段的写入工具，避免重复读取和外部研究。
+ * 返回 Executor 结构化重试阶段的工具：全部写工具 + 只读图谱查询工具。
+ *
+ * 只读工具用于核实任务引用的节点 ID（例如 Planner 转录笔误导致端点缺失时），
+ * 避免「信息集不变 + 盲重试」造成同一校验错误反复失败；外部研究（web_search）仍被排除。
  */
 export function getExecutorRetryToolNames(supplement = false): AgentRuntimeTool[] {
   return [
@@ -181,6 +184,9 @@ export function getExecutorRetryToolNames(supplement = false): AgentRuntimeTool[
     "kg_file_add_decisions",
     "kg_file_add_risks",
     "kg_file_add_open_questions",
+    "kg_file_read",
+    "kg_file_query_nodes",
+    "kg_file_query_relations",
     ...EXECUTOR_BLOCKER_TOOLS,
   ];
 }

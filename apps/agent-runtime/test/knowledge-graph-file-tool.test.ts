@@ -57,7 +57,7 @@ test("atomically allocates graph IDs and skips missing relation endpoints", asyn
   assert.equal(new Set(state.relations.map((item) => item.id)).size, 2);
   assert.deepEqual(
     new Set(relationResult.skipped?.map((item) => item.reason)),
-    new Set(["missing_relation_endpoint"]),
+    new Set(["missing_relation_endpoint:target=MISSING"]),
   );
   assert.equal(
     relationResult.items.every((item) => /^REL-[0-9a-f-]{36}$/.test(item.id)),

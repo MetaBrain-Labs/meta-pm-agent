@@ -1066,7 +1066,10 @@ function filterAppendOnlyRelations<
     if (!source || !target) {
       skipped.push({
         id: relation.id,
-        reason: "missing_relation_endpoint",
+        // 携带缺失侧与端点 ID，让模型在当回合即可定位并核实具体引用。
+        reason: !source
+          ? `missing_relation_endpoint:source=${relation.source}`
+          : `missing_relation_endpoint:target=${relation.target}`,
       });
       continue;
     }

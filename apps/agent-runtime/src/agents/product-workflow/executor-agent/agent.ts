@@ -431,17 +431,11 @@ export async function* streamExecutorAgent(
         );
       }
 
-      retryInstruction = [
-        "The previous attempt failed executor output validation. This is the only retry and exposes write tools only; do not repeat research or analysis.",
-        !hasStructuredItems
-          ? "Write the minimum required graph items immediately."
-          : "",
-        blockingQuestionCount < requiredBlockingCount
-          ? `Persist at least ${requiredBlockingCount} new open questions with blocking=true in one kg_file_add_open_questions call; currently ${blockingQuestionCount} are committed.`
-          : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
+      retryInstruction = createOutputValidationRetryInstruction({
+        hasStructuredItems,
+        blockingQuestionCount,
+        requiredBlockingCount,
+      });
       attemptErrors.push(retryInstruction);
 
       yield {
@@ -457,11 +451,15 @@ export async function* streamExecutorAgent(
     if (isAbortError(error) || isExecutorRetryRequiredError(error)) {
       throw error;
     }
+    const attemptSummary = formatExecutorAttemptErrors(attemptErrors, error);
     throw new ExecutorRetryRequiredError({
       taskId: input.task.task_id,
       agentType: definition.agentType,
       displayName: definition.displayName,
-      details: formatExecutorAttemptErrors(attemptErrors, error),
+      details: appendMissingEndpointRecoveryGuidance(
+        attemptSummary,
+        toolKnowledgeGraph,
+      ),
     });
   }
   const graphDelta = getKnowledgeGraphDelta(
@@ -508,6 +506,27 @@ function createCorrectionTargetContext(
     nodes: knowledgeGraph.entities.filter((entity) => relatedIds.has(entity.id)),
     relations,
   };
+}
+
+/**
+ * 当失败包含缺失关系端点时，在详情中追加确定性的自愈指引与当前图谱实体 ID 样本。
+ *
+ * 该文本会随持久化错误进入手动重试卡片与 correction 指令，
+ * 使重试具备「核实并用正确 ID 改写」的完整信息，不再盲写同一错误端点。
+ */
+export function appendMissingEndpointRecoveryGuidance(
+  details: string,
+  knowledgeGraph: ProductKnowledgeGraph,
+): string {
+  if (!details.includes("missing_relation_endpoint")) return details;
+  const knownIds = knowledgeGraph.entities
+    .map((entity) => entity.id)
+    .slice(0, 20);
+  return [
+    details,
+    `Known entity ID sample from the current graph (first ${knownIds.length}): ${knownIds.join(", ") || "(empty)"}`,
+    "On retry, verify referenced IDs with kg_file_query_nodes and use the exact persisted IDs from the graph; if a node must be created first, create it and use its returned ID.",
+  ].join("\n");
 }
 
 /**
@@ -780,12 +799,40 @@ export function isStructuredWriteValidationFailure(error: unknown): boolean {
   );
 }
 
-/** 为唯一一次原地修正提供精确的失败原因。 */
-function createStructuredWriteRetryInstruction(error: unknown): string {
+/**
+ * 构造输出校验失败后的唯一一次原地重试指令。
+ *
+ * 重试仍提供只读图谱查询工具，要求先核实引用的节点 ID 再写最小结构化条目，
+ * 避免在「任务引用 ID 已失效/笔误」时把同一错误写入重复执行。
+ */
+export function createOutputValidationRetryInstruction({
+  hasStructuredItems,
+  blockingQuestionCount,
+  requiredBlockingCount,
+}: {
+  hasStructuredItems: boolean;
+  blockingQuestionCount: number;
+  requiredBlockingCount: number;
+}): string {
   return [
-    "The previous graph write was partially rejected. This is the only local correction attempt; keep all successful writes and do not repeat research or analysis.",
+    "The previous attempt failed executor output validation. This is the only retry and exposes write tools plus read-only graph queries; verify every referenced node ID with kg_file_query_nodes before writing the minimum items.",
+    !hasStructuredItems
+      ? "Write the minimum required graph items immediately."
+      : "",
+    blockingQuestionCount < requiredBlockingCount
+      ? `Persist at least ${requiredBlockingCount} new open questions with blocking=true in one kg_file_add_open_questions call; currently ${blockingQuestionCount} are committed.`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/** 为唯一一次原地修正提供精确的失败原因与核实指引。 */
+export function createStructuredWriteRetryInstruction(error: unknown): string {
+  return [
+    "The previous graph write was partially rejected. This is the only local correction attempt; keep all successful writes and verify each rejected endpoint with kg_file_query_nodes before rewriting.",
     `Validation error: ${getErrorMessage(error)}`,
-    "Immediately rewrite only the rejected items using authorized entity and relation types, valid typed directions, and existing endpoint IDs. Do not merely describe the correction.",
+    "Immediately rewrite only the rejected items using authorized entity and relation types, valid typed directions, and the exact persisted endpoint IDs found via kg_file_query_nodes. Do not merely describe the correction.",
   ].join(" ");
 }
 

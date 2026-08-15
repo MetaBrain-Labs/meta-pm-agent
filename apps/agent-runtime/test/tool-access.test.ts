@@ -75,7 +75,7 @@ test("all executor web-search capabilities come from definitions", () => {
   }
 });
 
-test("executor structured retry exposes write tools only", () => {
+test("executor structured retry exposes write and read-only query tools", () => {
   const toolNames = createToolsForAgent(
     "executor-ai-shipping",
     getExecutorRetryToolNames(),
@@ -84,8 +84,10 @@ test("executor structured retry exposes write tools only", () => {
 
   assert.equal(toolNames.includes("kg_file_add_nodes"), true);
   assert.equal(toolNames.includes("kg_file_add_relations"), true);
+  assert.equal(toolNames.includes("kg_file_read"), true);
+  assert.equal(toolNames.includes("kg_file_query_nodes"), true);
+  assert.equal(toolNames.includes("kg_file_query_relations"), true);
   assert.equal(toolNames.includes("web_search"), false);
-  assert.equal(toolNames.includes("kg_file_read"), false);
   assert.equal(toolNames.includes("kg_file_add_summary"), false);
 });
 
