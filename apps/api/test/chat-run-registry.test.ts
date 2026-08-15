@@ -12,10 +12,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  STOP_REQUEST_GRACE_MS,
   abortChatRun,
   isChatRunActive,
   registerChatRun,
   resolveChatAbortOrigin,
+  resolveEffectiveAbortOrigin,
   unregisterChatRun,
 } from "../src/services/chat-run-registry";
 
@@ -51,5 +53,80 @@ test("defaults stop requests to manual stop and preserves page unload", () => {
   } finally {
     unregisterChatRun(manualChatId, manualController);
     unregisterChatRun(unloadChatId, unloadController);
+  }
+});
+
+test("reclassifies an already-disconnected run when a stop request arrives within the grace window", () => {
+  const chatId = crypto.randomUUID();
+  const controller = new AbortController();
+  registerChatRun(chatId, controller);
+
+  try {
+    // 模拟传输层断连先于页面卸载的 stop 请求到达。
+    controller.abort("client_disconnect");
+    assert.equal(abortChatRun(chatId, "page_unload"), true);
+    assert.equal(
+      resolveEffectiveAbortOrigin(chatId, controller.signal),
+      "page_unload",
+    );
+  } finally {
+    unregisterChatRun(chatId, controller);
+  }
+});
+
+test("falls back to the transport origin after the grace window expires", () => {
+  const chatId = crypto.randomUUID();
+  const controller = new AbortController();
+  registerChatRun(chatId, controller);
+
+  try {
+    controller.abort("client_disconnect");
+    abortChatRun(chatId, "page_unload");
+    const pastNow = Date.now() + STOP_REQUEST_GRACE_MS + 1_000;
+    assert.equal(
+      resolveEffectiveAbortOrigin(chatId, controller.signal, pastNow),
+      "client_disconnect",
+    );
+  } finally {
+    unregisterChatRun(chatId, controller);
+  }
+});
+
+test("falls back to the signal origin when no stop request was recorded", () => {
+  const chatId = crypto.randomUUID();
+  const controller = new AbortController();
+  registerChatRun(chatId, controller);
+
+  try {
+    controller.abort("client_disconnect");
+    assert.equal(
+      resolveEffectiveAbortOrigin(chatId, controller.signal),
+      "client_disconnect",
+    );
+  } finally {
+    unregisterChatRun(chatId, controller);
+  }
+});
+
+test("clears stale stop records when a new run registers", () => {
+  const chatId = crypto.randomUUID();
+  const first = new AbortController();
+  registerChatRun(chatId, first);
+
+  try {
+    first.abort("client_disconnect");
+    abortChatRun(chatId, "page_unload");
+
+    // 新一轮运行注册后，上一轮的 stop 补记不再参与判定。
+    const second = new AbortController();
+    registerChatRun(chatId, second);
+    second.abort("client_disconnect");
+    assert.equal(
+      resolveEffectiveAbortOrigin(chatId, second.signal),
+      "client_disconnect",
+    );
+    unregisterChatRun(chatId, second);
+  } finally {
+    unregisterChatRun(chatId, first);
   }
 });

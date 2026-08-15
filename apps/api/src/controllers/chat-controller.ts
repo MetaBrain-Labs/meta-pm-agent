@@ -71,11 +71,13 @@ import {
   getAccount,
   listWorkspaces,
 } from "../services/workspace-service";
-import { writeSse, writeSseDone } from "../utils/sse";
+import { writeSse, writeSseDone, writeSseKeepalive } from "../utils/sse";
 import {
+  STOP_REQUEST_GRACE_MS,
   abortChatRun,
   registerChatRun,
   resolveChatAbortOrigin,
+  resolveEffectiveAbortOrigin,
   unregisterChatRun,
 } from "../services/chat-run-registry";
 import { writeAbnormalWorkflowAbortReport } from "../process-crash-report";
@@ -99,6 +101,9 @@ type AgentOutputAccumulator = AgentConversationOutput & {
   durationMs: number;
   tokenUsageRecordIds: string[];
 };
+
+/** SSE 心跳注释帧的发送间隔，用于防止空闲连接被代理或 NAT 回收。 */
+const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
 
 /**
  * 使用服务端会话关联选择专用补证上下文，并拒绝客户端表单串线。
@@ -332,6 +337,15 @@ export async function chatStreamHandler(c: Context) {
       registerChatRun(chatId, runtimeController);
     }
     c.req.raw.signal.addEventListener("abort", abortRuntime, { once: true });
+
+    // SSE 心跳保活：工作流内部阶段（如 Planner 子代理重试）可能数分钟无可见事件，
+    // 定期写入注释帧防止代理/NAT 回收空闲连接；写入失败说明连接已断开，停止心跳。
+    const heartbeat = setInterval(() => {
+      writeSseKeepalive(writer).catch(() => {
+        clearInterval(heartbeat);
+      });
+    }, SSE_KEEPALIVE_INTERVAL_MS);
+    heartbeat.unref?.();
 
     const markStatus = async (status: string) => {
       if (requestFormStatus === status) return;
@@ -960,17 +974,33 @@ export async function chatStreamHandler(c: Context) {
       if (isAbortError(error) || runtimeController.signal.aborted) {
         const abortOrigin = resolveChatAbortOrigin(runtimeController.signal);
         if (abortOrigin === "client_disconnect" || abortOrigin === "unknown") {
-          writeAbnormalWorkflowAbortReport({
-            activeAgentTypes: [
-              ...new Set(
-                [...agentOutputs.values()].map((output) => output.type),
-              ),
-            ],
-            conversationId: parsed.data.chatId,
-            error,
-            origin: abortOrigin,
-            requestFormId: effectiveRequestFormId,
-          });
+          // 页面卸载的 stop 请求可能晚于传输层断开到达；延迟到宽限窗口结束后
+          // 再判定有效来源，避免把用户主动离开误报为异常断连。
+          const reportChatId = parsed.data.chatId;
+          const reportError = error;
+          const reportTimer = setTimeout(() => {
+            const effectiveOrigin = resolveEffectiveAbortOrigin(
+              reportChatId,
+              runtimeController.signal,
+            );
+            if (
+              effectiveOrigin === "client_disconnect" ||
+              effectiveOrigin === "unknown"
+            ) {
+              writeAbnormalWorkflowAbortReport({
+                activeAgentTypes: [
+                  ...new Set(
+                    [...agentOutputs.values()].map((output) => output.type),
+                  ),
+                ],
+                conversationId: reportChatId,
+                error: reportError,
+                origin: effectiveOrigin,
+                requestFormId: effectiveRequestFormId,
+              });
+            }
+          }, STOP_REQUEST_GRACE_MS + 500);
+          reportTimer.unref?.();
         }
         try {
           await persistConversationResult({
@@ -1027,6 +1057,7 @@ export async function chatStreamHandler(c: Context) {
         }
       }
     } finally {
+      clearInterval(heartbeat);
       if (chatId) unregisterChatRun(chatId, runtimeController);
       c.req.raw.signal.removeEventListener("abort", abortRuntime);
     }

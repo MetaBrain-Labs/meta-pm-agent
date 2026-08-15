@@ -169,7 +169,8 @@ export function MessageBubble({
     !message.plannerReview &&
     !message.workflowCompletion &&
     !message.documentEvidenceResolutionComplete &&
-    !message.agentError;
+    !message.agentError &&
+    !message.interrupted;
   const handleFormSubmit = useCallback(
     (formId: string, text: string, hitlResume?: HumanInTheLoopResume) => {
       if (!onFormSubmit) return;
@@ -445,6 +446,10 @@ export function MessageBubble({
           message={otherError.message}
           onRetry={onRetry}
         />
+      )}
+
+      {showMainContent && message.interrupted && !message.agentError && (
+        <AgentInterruptedCard onContinue={onRetry} />
       )}
 
       {showMainContent &&
@@ -768,6 +773,41 @@ function getQuestionFormFromInterrupt(
   return typeof action?.args.questionForm === "string"
     ? action.args.questionForm
     : null;
+}
+
+/**
+ * 展示连接中断后留下的中断态，并提供恢复入口。
+ */
+function AgentInterruptedCard({
+  onContinue,
+}: {
+  onContinue?: () => void;
+}) {
+  return (
+    <div className="mb-2 rounded-lg border border-[#fbbf24] bg-[#fffbeb] px-4 py-3 text-[#92400e]">
+      <div className="mb-1 flex items-center justify-between gap-3">
+        <span className="text-[13px] font-extrabold">
+          连接中断，工作流已停止
+        </span>
+        {onContinue && (
+          <button
+            type="button"
+            className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-[#fbbf24] bg-white px-2 py-1 text-[12px] font-bold text-[#92400e]"
+            onClick={(event) => {
+              event.stopPropagation();
+              onContinue();
+            }}
+          >
+            <ReloadOutlined />
+            继续运行
+          </button>
+        )}
+      </div>
+      <span className="text-[12px] leading-relaxed">
+        可点击继续运行，服务端将从上次检查点恢复。
+      </span>
+    </div>
+  );
 }
 
 /**

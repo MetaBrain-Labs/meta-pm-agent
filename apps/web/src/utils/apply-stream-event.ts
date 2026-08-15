@@ -178,6 +178,14 @@ export function applyStreamEvent(
       return applySubagentResult(message, event);
     case "token-usage":
       return appendTokenUsage(message, event);
+    case "abort":
+      // 服务端在手动停止或其他线程停止后发送 abort，流被主动中止而非正常完成。
+      return {
+        ...message,
+        activeAgent: undefined,
+        activeAgents: [],
+        interrupted: true,
+      };
     case "error":
       {
         const failedAgentType = event.agentType ?? message.activeAgent;

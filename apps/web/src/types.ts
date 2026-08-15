@@ -358,6 +358,8 @@ export interface Message {
     message: string;
     retryAction?: WorkflowRetryAction;
   };
+  /** 连接中断或服务端中止后留下的运行时标记，仅前端展示态，不入库。 */
+  interrupted?: boolean;
   todos?: TodoItem[];
   toolCalls?: Array<{
     id?: string;

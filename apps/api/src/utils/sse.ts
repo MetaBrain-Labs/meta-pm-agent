@@ -33,3 +33,15 @@ export async function writeSseDone(
 ): Promise<void> {
   await writer.write("data: [DONE]\n\n");
 }
+
+/**
+ * 向 SSE 流写入注释心跳帧，保持长空闲连接存活。
+ *
+ * SSE 注释帧以冒号开头，浏览器端解析器会跳过，不影响 data 事件流语义；
+ * 用于防止代理或 NAT 因工作流长时间无可见输出而回收空闲连接。
+ */
+export async function writeSseKeepalive(
+  writer: StreamWriter,
+): Promise<void> {
+  await writer.write(": ping\n\n");
+}
