@@ -6,6 +6,7 @@
  *
  * Responsibilities:
  * - 渲染 GFM Markdown，包括表格、列表、链接、代码块和行内格式
+ * - 在文档预览场景启用后，将 echarts/prototype/html 代码块渲染为图表或原型
  * - 将 [[source:id]] 标记转换成可点击引用图标
  * - 为可匹配搜索来源的段落和标题追加引用入口
  *
@@ -18,6 +19,10 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button, Tooltip } from "antd";
 import { CopyOutlined, LinkOutlined } from "@ant-design/icons";
+import {
+  DocumentVisualBlock,
+  isDocumentVisualLanguage,
+} from "../components/DocumentVisualBlocks";
 
 /**
  * 联网搜索结果在正文中可引用的来源信息。
@@ -34,6 +39,8 @@ export interface MarkdownCitationSource {
  */
 interface RenderMarkdownOptions {
   citationSources?: MarkdownCitationSource[];
+  /** 是否渲染文档可视化块（echarts/prototype/html），默认关闭以保持聊天轻量。 */
+  enableVisualizations?: boolean;
 }
 
 /**
@@ -142,6 +149,19 @@ function createMarkdownComponents(
         const language =
           /language-([\w+-]+)/.exec(props.className ?? "")?.[1] ?? null;
         const body = flattenReactText(props.children).replace(/\n$/, "");
+
+          if (
+            options.enableVisualizations &&
+            isDocumentVisualLanguage(language)
+          ) {
+            return (
+              <DocumentVisualBlock
+                language={language}
+                body={body}
+                fallback={<CodeBlock lang={language} body={body} />}
+              />
+            );
+          }
 
         return <CodeBlock lang={language} body={body} />;
       }

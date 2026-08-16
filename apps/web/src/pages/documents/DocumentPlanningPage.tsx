@@ -583,7 +583,7 @@ export function DocumentPlanningPage({
                       </Space>
                     </div>
                     <Text type="secondary" className="text-xs">
-                      正文内容仅在完整 Markdown 弹窗中展示。
+                      正文、图表和原型图仅在完整 Markdown 弹窗中展示。
                     </Text>
                   </section>
                 )}
@@ -727,7 +727,10 @@ export function DocumentPlanningPage({
         >
           {previewDocument ? (
             <div className="text-sm leading-7">
-              {renderMarkdown(previewDocument.markdown)}
+              {renderMarkdown(previewDocument.markdown, {
+                  enableVisualizations: true,
+                    // 文档预览启用图表与原型渲染
+})}
             </div>
           ) : (
             <Empty description="暂无可查看的 PRD 内容" />

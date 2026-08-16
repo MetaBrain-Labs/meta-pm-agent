@@ -1,7 +1,7 @@
 /**
  * Document Agent Skill 与 PRD 规则测试
  *
- * 使用真实 DeepAgents StateBackend 验证六个文档 Skill 的发现和读取，并检查
+ * 使用真实 DeepAgents StateBackend 验证七个文档 Skill 的发现和读取，并检查
  * 主 Agent、紧凑 payload、评分提示词和内置工具可见性遵循既定边界。
  *
  * Responsibilities:
@@ -41,7 +41,7 @@ test("discovers all PRD Document Agent skills from isolated StateBackend files",
     expectedNames,
   );
   assert.deepEqual(bundle.sources, ["/skills/"]);
-  assert.equal(Object.keys(bundle.files).length, 6);
+  assert.equal(Object.keys(bundle.files).length, 7);
 
   for (const skill of metadata) {
     assert.equal(skill.path, `/skills/${skill.name}/SKILL.md`);
@@ -55,6 +55,7 @@ test("discovers all PRD Document Agent skills from isolated StateBackend files",
   for (const skillName of [
     "deliver-prd",
     "deliver-acceptance-criteria",
+      "deliver-visuals",
     "deliver-edge-cases",
   ]) {
     assert.match(
@@ -144,6 +145,9 @@ test("keeps skill reads internal while enforcing PRD detail and gap rules", () =
   assert.match(PRD_DOCUMENT_AGENT_PROMPT, /Keep P1 and P2 requirements concise/);
   assert.match(PRD_DOCUMENT_AGENT_PROMPT, /mark missing facts with specific TBD/);
   assert.match(PRD_DOCUMENT_AGENT_PROMPT, /Never invent priority/);
+    assert.match(PRD_DOCUMENT_AGENT_PROMPT, /Optional visual blocks/);
+    assert.match(PRD_DOCUMENT_AGENT_PROMPT, /deliver-visuals\/SKILL\.md/);
+    assert.match(PRD_SCORING_REVIEWER_PROMPT, /Their absence is never a deduction/);
   assert.match(
     PRD_SCORING_REVIEWER_PROMPT,
     /cannot score 85 or higher/,

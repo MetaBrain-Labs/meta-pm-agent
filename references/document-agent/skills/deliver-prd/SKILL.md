@@ -49,6 +49,10 @@ Build one coherent PRD from the supplied product knowledge graph.
   risk.
 - If priority is not supported by evidence, write `TBD` instead of assigning
   one.
+- When graph evidence contains quantitative facts or interface details that
+  are easier to read visually, follow the `deliver-visuals` skill and place a
+  small number of grounded `echarts`, `prototype`, or static `html` blocks
+  directly after the section they support.
 
 ## Final Check
 

@@ -5,7 +5,7 @@
  * 虚拟文件，使主 Agent 与自定义 SubAgent 能按需渐进加载，同时不接触宿主机文件系统。
  *
  * Responsibilities:
- * - 选择 PRD 工作流可用的六个 Skill
+ * - 选择 PRD 工作流可用的七个 Skill
  * - 将仓库文件映射为稳定的 /skills/<name>/SKILL.md
  * - 在模型调用前报告缺失或无法读取的 Skill
  *
@@ -43,6 +43,11 @@ export const PRD_DOCUMENT_SKILLS: readonly DocumentSkillDefinition[] = [
     name: "deliver-prd",
     repositoryPath: "references/document-agent/skills/deliver-prd/SKILL.md",
   },
+    {
+            name: "deliver-visuals",
+      repositoryPath:
+                "references/document-agent/skills/deliver-visuals/SKILL.md",
+    },
   {
     name: "user-stories",
     repositoryPath:
