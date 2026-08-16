@@ -246,13 +246,6 @@ body {
   margin-bottom: 48px;
 }
 
-.workspace-logo {
-  width: 128px;
-  height: 128px;
-  border-radius: 8px;
-  background: #bcbcbc;
-}
-
 .workspace-brand h1 {
   margin: 18px 0 0;
   color: #11161d;
@@ -923,11 +916,6 @@ body {
 
   .workspace-main {
     padding: 76px 24px 32px;
-  }
-
-  .workspace-logo {
-    width: 104px;
-    height: 104px;
   }
 
   .workspace-actions {
