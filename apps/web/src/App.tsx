@@ -55,6 +55,7 @@ export default function App() {
                   workspaceId={app.activeWorkspaceId}
                   workspaceName={app.activeWorkspaceName}
                   onBack={app.handleBackToWorkspaceList}
+                  onOpenEvidenceThread={app.handleOpenDocumentEvidenceThread}
                 />
               ) : (
                 <ThreadChatPage

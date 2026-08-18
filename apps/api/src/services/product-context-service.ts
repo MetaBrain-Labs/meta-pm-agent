@@ -167,11 +167,18 @@ function removeLegacyDecisionAliases(
 /**
  * 将不含 nodes/relations 的产品上下文快照与长期知识图谱合并成运行时图谱。
  */
-function mergeProductContextSnapshotWithPersistedGraph(
+export function mergeProductContextSnapshotWithPersistedGraph(
   snapshot: ProductKnowledgeGraph,
   persistedGraph: ProductKnowledgeGraph | null,
 ): ProductKnowledgeGraph {
   if (!persistedGraph) return snapshot;
+  const resolvedOpenQuestionIds = [
+    ...new Set([
+      ...(persistedGraph.resolved_open_question_ids ?? []),
+      ...(snapshot.resolved_open_question_ids ?? []),
+    ]),
+  ];
+  const resolvedOpenQuestionIdSet = new Set(resolvedOpenQuestionIds);
 
   return {
     ...snapshot,
@@ -182,7 +189,10 @@ function mergeProductContextSnapshotWithPersistedGraph(
     open_questions: mergeAuxiliaryItems(
       snapshot.open_questions,
       persistedGraph.open_questions,
-    ),
+    ).filter((question) => !resolvedOpenQuestionIdSet.has(question.id)),
+    ...(resolvedOpenQuestionIds.length > 0
+      ? { resolved_open_question_ids: resolvedOpenQuestionIds }
+      : {}),
   };
 }
 
@@ -251,7 +261,7 @@ function restoreDecisionInputs(
  */
 function restoreRiskInputs(nodes: KnowledgeGraphEntity[]): KnowledgeGraphRiskInput[] {
   return nodes
-    .filter((node) => node.type === "Risk")
+    .filter((node) => node.type === "Risk" && node.status !== "deprecated")
     .map((node) => ({
       id: node.id,
       text: node.description || node.name,
@@ -266,7 +276,9 @@ function restoreOpenQuestionInputs(
   nodes: KnowledgeGraphEntity[],
 ): KnowledgeGraphOpenQuestionInput[] {
   return nodes
-    .filter((node) => node.type === "OpenQuestion")
+    .filter(
+      (node) => node.type === "OpenQuestion" && node.status !== "deprecated",
+    )
     .map((node) => ({
       id: node.id,
       text: node.description || node.name,

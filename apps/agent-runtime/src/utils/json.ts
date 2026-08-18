@@ -33,7 +33,7 @@ function extractJsonObjectCandidates(text: string): string[] {
     return [withoutFence.slice(0, rootEnd + 1)];
   }
 
-  const starts: number[] = [];
+  const candidates: string[] = [];
   let inString = false;
   let escaping = false;
 
@@ -54,18 +54,15 @@ function extractJsonObjectCandidates(text: string): string[] {
     }
     if (inString) continue;
 
-    if (char === "{") {
-      starts.push(index);
-    }
+    if (char !== "{") continue;
+
+    const end = findBalancedObjectEnd(withoutFence, index);
+    if (end === -1) break;
+    candidates.push(withoutFence.slice(index, end + 1));
+    index = end;
   }
 
-  return starts
-    .map((start) => {
-      const end = findBalancedObjectEnd(withoutFence, start);
-      return end === -1 ? null : withoutFence.slice(start, end + 1);
-    })
-    .filter((candidate): candidate is string => Boolean(candidate))
-    .reverse();
+  return candidates.reverse();
 }
 
 /**

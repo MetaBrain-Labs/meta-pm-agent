@@ -11,11 +11,13 @@
  */
 
 import type { TodoItem } from "../types";
+import type { ThreadInfo } from "../types";
 
 export type DocumentKind = "prd" | "mrd" | "brd";
 export type DocumentGenerationStatus =
   | "queued"
   | "running"
+  | "awaiting_input"
   | "completed"
   | "stopped"
   | "failed";
@@ -26,6 +28,7 @@ export type DocumentWorkflowStage =
   | "draftSection"
   | "crossCheck"
   | "scoreDraft"
+  | "groupEvidenceBlockers"
   | "aggregateScore"
   | "humanReview"
   | "exportPrd";
@@ -48,6 +51,12 @@ export interface DocumentScoreAttempt {
     strengths: string[];
     weaknesses: string[];
     revisionAdvice: string[];
+    evidenceBlocked?: boolean;
+    evidenceBlockers?: string[];
+    evidenceBlockerDetails?: Array<{
+      text: string;
+      relatedNodeIds: string[];
+    }>;
   }>;
   scoreSpread: number;
   varianceAccepted: boolean;
@@ -65,7 +74,25 @@ export interface DocumentScoreAttempt {
     };
   };
   passed: boolean;
+  evidenceBlocked?: boolean;
+  evidenceBlockers?: string[];
+  evidenceBlockerGroups?: DocumentEvidenceBlockerGroup[];
+  evidenceBlockerGroupingStatus?: "grouped" | "fallback";
   selected: boolean;
+}
+
+export interface DocumentEvidenceBlockerGroup {
+  id: string;
+  title: string;
+  description: string;
+  sourceIndexes: number[];
+  relatedNodeIds: string[];
+  sources: Array<{
+    reviewerId: string;
+    reviewerName: string;
+    text: string;
+    relatedNodeIds: string[];
+  }>;
 }
 
 export interface DocumentQualityScore {
@@ -106,6 +133,11 @@ export interface DocumentArtifact {
   markdown: string;
   content: {
     qualityScore?: DocumentQualityScore;
+    sourceGraphStats?: {
+      nodeCount: number;
+      relationCount: number;
+      version?: number;
+    };
   } | null;
   version: number;
   createdAt: string;
@@ -115,6 +147,16 @@ export interface DocumentArtifact {
 export interface DocumentGenerationStatusResponse {
   run: DocumentGenerationRun | null;
   artifact: DocumentArtifact | null;
+  evidenceResolution?: {
+    status: string;
+    sourceGraphVersion: number;
+    resolvedGraphVersion?: number;
+  } | null;
+}
+
+export interface DocumentEvidenceResolutionResponse {
+  thread: ThreadInfo;
+  autoStart: boolean;
 }
 
 /**
@@ -123,13 +165,14 @@ export interface DocumentGenerationStatusResponse {
 export async function startDocumentGeneration(
   workspaceId: string,
   kind: DocumentKind,
+  profileId: string,
 ): Promise<DocumentGenerationStatusResponse> {
   const response = await fetch(
     `/api/workspaces/${encodeURIComponent(workspaceId)}/document-generation`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind }),
+      body: JSON.stringify({ kind, profileId }),
     },
   );
 
@@ -173,6 +216,42 @@ export async function stopDocumentGeneration(runId: string): Promise<void> {
     { method: "POST" },
   );
   await readJsonResponse<{ stopped: boolean }>(response);
+}
+
+/**
+ * 创建或恢复证据阻断专用会话。
+ */
+export async function createDocumentEvidenceResolution(
+  runId: string,
+  profileId: string,
+): Promise<DocumentEvidenceResolutionResponse> {
+  const response = await fetch(
+    `/api/document-generation/${encodeURIComponent(runId)}/evidence-resolution`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profileId }),
+    },
+  );
+  return readJsonResponse<DocumentEvidenceResolutionResponse>(response);
+}
+
+/**
+ * 在权威知识图谱版本更新后恢复原 PRD run。
+ */
+export async function resumeDocumentGeneration(
+  runId: string,
+  profileId: string,
+): Promise<DocumentGenerationStatusResponse> {
+  const response = await fetch(
+    `/api/document-generation/${encodeURIComponent(runId)}/resume`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profileId }),
+    },
+  );
+  return readJsonResponse<DocumentGenerationStatusResponse>(response);
 }
 
 /**

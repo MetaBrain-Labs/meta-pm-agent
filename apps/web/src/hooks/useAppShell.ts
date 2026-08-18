@@ -64,7 +64,9 @@ export function useAppShell() {
   const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [configModalOpen, setConfigModalOpen] = useState(false);
-  const [configTab, setConfigTab] = useState<"account" | "workspace">(
+  const [configTab, setConfigTab] = useState<
+    "account" | "workspace" | "models"
+  >(
     "account",
   );
   const [configWorkspaceVisible, setConfigWorkspaceVisible] = useState(false);
@@ -184,6 +186,24 @@ export function useAppShell() {
     pushPath(buildChatPath(newThread.workspaceId, newThread.id));
   }, []);
 
+  /**
+   * 打开文档证据阻断专用会话；仅首次创建时附带自动启动标记。
+   */
+  const handleOpenDocumentEvidenceThread = useCallback(
+    (thread: ThreadInfo, autoStart: boolean) => {
+      setCreationError(null);
+      setWorkspaceDetailOpen(true);
+      setThreads((prev) => [
+        thread,
+        ...prev.filter((item) => item.id !== thread.id),
+      ]);
+      setActiveThreadId(thread.id);
+      const path = buildChatPath(thread.workspaceId, thread.id);
+      pushPath(autoStart ? `${path}?documentEvidence=1` : path);
+    },
+    [],
+  );
+
   const handleThreadTitleChange = useCallback(
     (threadId: string, title: string) => {
       // SSE 标题更新只改对应会话，避免刷新整个列表打断当前聊天流。
@@ -241,11 +261,14 @@ export function useAppShell() {
     setActiveThreadId(null);
   }, []);
 
-  const openConfigModal = useCallback((tab: "account" | "workspace") => {
-    setConfigWorkspaceVisible(tab === "workspace");
-    setConfigTab(tab);
-    setConfigModalOpen(true);
-  }, []);
+  const openConfigModal = useCallback(
+    (tab: "account" | "workspace" | "models") => {
+      setConfigWorkspaceVisible(tab === "workspace");
+      setConfigTab(tab);
+      setConfigModalOpen(true);
+    },
+    [],
+  );
 
   const openProjectModal = useCallback(() => {
     setProjectLocationHint(false);
@@ -398,6 +421,7 @@ export function useAppShell() {
     handleThreadTitleChange,
     handleNewWorkspace,
     handleOpenDocuments,
+    handleOpenDocumentEvidenceThread,
     handleOpenWorkspace,
     handleSelectThread,
     isCreatingChat,

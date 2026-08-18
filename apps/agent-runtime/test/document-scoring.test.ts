@@ -15,19 +15,57 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { resolveJsonOutput } from "../src/agents/common/run-agent";
 import {
+  applyPrdCompletionGate,
+  createDeterministicConsensusScore,
+  createReviewerSourceLedger,
+  DOCUMENT_SCORE_REVIEWERS,
   DOCUMENT_SCORE_MAX_SPREAD,
+  DOCUMENT_REVIEWER_MODEL_OPTIONS,
+  normalizeEvidenceBlockerGrouping,
   createSkippedConsensusScore,
+  finalizeDocumentScoreAttempt,
+  resolveDocumentScoreDisposition,
   selectFinalScoreAttempt,
+  shouldRetryDocumentScoreAttempt,
+  validatePrdSourceGrounding,
   type DocumentScoreAttempt,
   type DocumentScoreReview,
 } from "../src/agents/document-agent/scoring";
 
+test("uses responsibility-based English reviewer names", () => {
+  assert.deepEqual(
+    DOCUMENT_SCORE_REVIEWERS.map((reviewer) => reviewer.name),
+    [
+      "Product Rationale & Evidence Reviewer",
+      "Requirements & Acceptance Reviewer",
+      "Scope & Delivery Readiness Reviewer",
+    ],
+  );
+  assert.equal(DOCUMENT_REVIEWER_MODEL_OPTIONS.enableThinking, true);
+  assert.equal(DOCUMENT_REVIEWER_MODEL_OPTIONS.maxTokens, 3072);
+});
+
+test("blocks PRDs with unresolved TBD evidence gaps from passing", () => {
+  const blocked = applyPrdCompletionGate({
+    markdown: "# PRD\n\nMetric target: [TBD — needs evidence]",
+    score: 93,
+  });
+  const complete = applyPrdCompletionGate({
+    markdown: "# PRD\n\nMetric target: 20%, source M-001",
+    score: 93,
+  });
+
+  assert.deepEqual(blocked, { score: 84, blocked: true });
+  assert.deepEqual(complete, { score: 93, blocked: false });
+});
+
 test("records high-spread attempts as failed without consensus pass", () => {
   const reviewerScores = [
-    createReview("gaokao-reviewer-a", 92),
-    createReview("gaokao-reviewer-b", 71),
-    createReview("gaokao-reviewer-c", 88),
+    createReview("product-rationale-evidence-reviewer", 92),
+    createReview("requirements-acceptance-reviewer", 71),
+    createReview("scope-delivery-readiness-reviewer", 88),
   ];
 
   const aggregate = createSkippedConsensusScore({
@@ -38,6 +76,237 @@ test("records high-spread attempts as failed without consensus pass", () => {
   assert.equal(aggregate.passed, false);
   assert.match(aggregate.rationale, /consensus scoring was skipped/i);
   assert.equal(21 > DOCUMENT_SCORE_MAX_SPREAD, true);
+});
+
+test("stops for evidence gaps before retrying a failed draft", () => {
+  assert.equal(
+    shouldRetryDocumentScoreAttempt({
+      attemptCount: 1,
+      passed: false,
+      evidenceBlocked: true,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRetryDocumentScoreAttempt({
+      attemptCount: 1,
+      passed: false,
+      evidenceBlocked: false,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldRetryDocumentScoreAttempt({
+      attemptCount: 3,
+      passed: false,
+      evidenceBlocked: false,
+    }),
+    false,
+  );
+});
+
+test("produces one authoritative final disposition for every score outcome", () => {
+  const retry = createAttempt(1, 80, 4, false);
+  const blocked = { ...retry, evidenceBlocked: true };
+  const passed = { ...retry, passed: true, aggregate: { ...retry.aggregate, passed: true } };
+  assert.equal(
+    resolveDocumentScoreDisposition({ attempt: passed, attemptCount: 1 }),
+    "passed",
+  );
+  assert.equal(
+    resolveDocumentScoreDisposition({ attempt: retry, attemptCount: 1 }),
+    "retry",
+  );
+  assert.equal(
+    resolveDocumentScoreDisposition({ attempt: blocked, attemptCount: 1 }),
+    "awaiting_input",
+  );
+  assert.equal(
+    resolveDocumentScoreDisposition({ attempt: retry, attemptCount: 3 }),
+    "export_best_attempt",
+  );
+  const finalized = finalizeDocumentScoreAttempt({
+    priorAttempts: [],
+    attempt: retry,
+  });
+  assert.equal(finalized.disposition, "retry");
+  assert.equal(finalized.persistedAttempt.selected, false);
+  assert.match(finalized.scoreFeedback, /did not pass/);
+});
+
+test("rejects unknown citations without line-level source status false positives", () => {
+  const issues = validatePrdSourceGrounding({
+    markdown: [
+      "# PRD",
+      "| Decision D-12345678 | Confirmed |",
+      "Evidence: E-deadbeef",
+    ].join("\n"),
+    nodes: [
+      {
+        id: "D-12345678-0000-4000-8000-000000000000",
+        type: "Decision",
+        name: "Candidate scope",
+        status: "proposed",
+      },
+    ],
+    relations: [],
+  });
+
+  assert.equal(issues.length, 1);
+  assert.match(issues.join("\n"), /unknown graph source ID E-deadbeef/);
+  assert.doesNotMatch(issues.join("\n"), /D-12345678 is proposed/);
+});
+
+test("builds reviewer-specific source details plus a complete lightweight index", () => {
+  const reviewer = DOCUMENT_SCORE_REVIEWERS.find(
+    (item) => item.id === "requirements-acceptance-reviewer",
+  );
+  assert.ok(reviewer);
+
+  const ledger = createReviewerSourceLedger({
+    markdown: "# PRD\nEvidence E-12345678\nRequirement R-12345678",
+    reviewer,
+    sourceGraph: {
+      nodes: [
+        {
+          id: "E-12345678-0000-4000-8000-000000000000",
+          type: "Evidence",
+          name: "Cited evidence",
+          description: "Detailed cited evidence",
+          status: "confirmed",
+        },
+        {
+          id: "R-12345678-0000-4000-8000-000000000000",
+          type: "Requirement",
+          name: "Relevant requirement",
+          description: "Detailed requirement",
+          status: "confirmed",
+        },
+        {
+          id: "M-12345678-0000-4000-8000-000000000000",
+          type: "Metric",
+          name: "Unrelated metric",
+          description: "Large unrelated metric detail",
+          status: "proposed",
+        },
+      ],
+      relations: [],
+    },
+  });
+
+  assert.equal(ledger.nodeIndex.length, 3);
+  assert.equal("description" in ledger.nodeIndex[0]!, false);
+  assert.deepEqual(
+    ledger.nodes.map((node) => node.id),
+    ["R-12345678"],
+  );
+});
+
+test("keeps the 70/30 consensus score deterministic", () => {
+  const reviewerScores = [
+    createReview("product-rationale-evidence-reviewer", 90),
+    createReview("requirements-acceptance-reviewer", 88),
+    createReview("scope-delivery-readiness-reviewer", 87),
+  ];
+  const result = createDeterministicConsensusScore({
+    markdown: "# PRD\nComplete and evidenced.",
+    reviewerScores,
+    scoreSpread: 3,
+    blockingEvidenceIssues: [],
+  });
+
+  assert.equal(result.score, 88);
+  assert.equal(result.passed, true);
+  assert.equal(result.weights.minimumScore, 87);
+});
+
+test("consolidates 14 multilingual reviewer findings into traceable semantic groups", () => {
+  const reviewerIds: DocumentScoreReview["reviewerId"][] = [
+    "product-rationale-evidence-reviewer",
+    "requirements-acceptance-reviewer",
+    "scope-delivery-readiness-reviewer",
+  ];
+  const findings = Array.from({ length: 14 }, (_, index) => ({
+    index,
+    reviewerId: reviewerIds[index % reviewerIds.length]!,
+    reviewerName: `Reviewer ${index % reviewerIds.length}`,
+    text: `Raw blocker ${index}`,
+    relatedNodeIds: [`R-${String(index).padStart(8, "0")}`],
+  }));
+  const modelOutput = {
+    groups: [
+      { title: "优先级", description: "需要确认优先级。", sourceIndexes: [0, 5, 9] },
+      { title: "范围决策", description: "需要确认范围决策。", sourceIndexes: [1, 6, 10] },
+      { title: "安全合规", description: "需要确认安全合规。", sourceIndexes: [2, 7, 11] },
+      { title: "性能基线", description: "需要补充性能基线。", sourceIndexes: [3, 8, 12] },
+      { title: "交付可行性", description: "需要确认交付可行性。", sourceIndexes: [4, 13] },
+    ],
+  };
+  const resolution = resolveJsonOutput(
+    {
+      text: "",
+      reasoningText: JSON.stringify(modelOutput),
+      tokenUsage: null,
+      maxTokens: 3_072,
+    },
+    {
+      safeParse: (value) =>
+        typeof value === "object" &&
+        value !== null &&
+        Array.isArray((value as { groups?: unknown }).groups)
+          ? { success: true as const, data: value }
+          : { success: false as const, error: new Error("invalid grouping") },
+    },
+  );
+  assert.equal(resolution.success, true);
+  if (!resolution.success) return;
+
+  const grouping = normalizeEvidenceBlockerGrouping(resolution.data, findings);
+
+  assert.equal(grouping.status, "grouped");
+  assert.equal(grouping.groups.length, 5);
+  assert.equal(grouping.groups.flatMap((group) => group.sources).length, 14);
+  assert.deepEqual(
+    grouping.groups.flatMap((group) => group.sourceIndexes).sort((a, b) => a - b),
+    findings.map((finding) => finding.index),
+  );
+  assert.deepEqual(grouping.groups[0]?.relatedNodeIds, [
+    "R-00000000",
+    "R-00000005",
+    "R-00000009",
+  ]);
+});
+
+test("falls back to one group per finding when semantic coverage is invalid", () => {
+  const findings = [
+    {
+      index: 0,
+      reviewerId: "product-rationale-evidence-reviewer" as const,
+      reviewerName: "Reviewer A",
+      text: "Missing priority",
+    },
+    {
+      index: 1,
+      reviewerId: "requirements-acceptance-reviewer" as const,
+      reviewerName: "Reviewer B",
+      text: "Missing baseline",
+    },
+  ];
+  const grouping = normalizeEvidenceBlockerGrouping(
+    {
+      groups: [
+        { title: "重复", description: "覆盖重复。", sourceIndexes: [0, 0] },
+      ],
+    },
+    findings,
+  );
+
+  assert.equal(grouping.status, "fallback");
+  assert.equal(grouping.groups.length, 2);
+  assert.deepEqual(
+    grouping.groups.map((group) => group.sourceIndexes),
+    [[0], [1]],
+  );
 });
 
 test("selects the first attempt that passed threshold", () => {
@@ -75,9 +344,12 @@ function createAttempt(
     attempt,
     markdown: `# Draft ${attempt}`,
     reviewerScores: [
-      createReview("gaokao-reviewer-a", aggregateScore),
-      createReview("gaokao-reviewer-b", aggregateScore - scoreSpread),
-      createReview("gaokao-reviewer-c", aggregateScore),
+      createReview("product-rationale-evidence-reviewer", aggregateScore),
+      createReview(
+        "requirements-acceptance-reviewer",
+        aggregateScore - scoreSpread,
+      ),
+      createReview("scope-delivery-readiness-reviewer", aggregateScore),
     ],
     scoreSpread,
     varianceAccepted: scoreSpread <= DOCUMENT_SCORE_MAX_SPREAD,
@@ -95,6 +367,10 @@ function createAttempt(
       },
     },
     passed,
+    evidenceBlocked: false,
+    evidenceBlockers: [],
+    evidenceBlockerGroups: [],
+    evidenceBlockerGroupingStatus: "grouped",
     selected: false,
   };
 }
@@ -120,5 +396,8 @@ function createReview(
     strengths: [],
     weaknesses: [],
     revisionAdvice: ["Improve PRD evidence."],
+    evidenceBlocked: false,
+    evidenceBlockers: [],
+    evidenceBlockerDetails: [],
   };
 }

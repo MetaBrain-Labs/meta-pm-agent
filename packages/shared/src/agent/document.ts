@@ -26,9 +26,18 @@ export const DocumentKindSchema = z.enum(["prd", "mrd", "brd"]);
 export const DocumentGenerationStatusSchema = z.enum([
   "queued",
   "running",
+  "awaiting_input",
   "completed",
   "stopped",
   "failed",
+]);
+
+/** 文档评分完成后的权威处置。 */
+export const DocumentScoreDispositionSchema = z.enum([
+  "passed",
+  "retry",
+  "awaiting_input",
+  "export_best_attempt",
 ]);
 
 /**
@@ -60,6 +69,7 @@ export const DocumentWorkflowStageSchema = z.enum([
   "draftSection",
   "crossCheck",
   "scoreDraft",
+  "groupEvidenceBlockers",
   "aggregateScore",
   "humanReview",
   "exportPrd",
@@ -79,12 +89,51 @@ export const DocumentSectionDraftSchema = z.object({
 /**
  * 单个 PRD 评分尝试的持久化摘要。
  */
+export const DocumentScoringReviewerIdSchema = z.enum([
+  "product-rationale-evidence-reviewer",
+  "requirements-acceptance-reviewer",
+  "scope-delivery-readiness-reviewer",
+]);
+
+/**
+ * 语义阻断组中的单条 Reviewer 原始意见。
+ */
+export const DocumentEvidenceBlockerSourceSchema = z.object({
+  reviewerId: DocumentScoringReviewerIdSchema,
+  reviewerName: z.string().min(1),
+  text: z.string().min(1),
+  relatedNodeIds: z.array(z.string().min(1)).default([]),
+});
+
+/**
+ * Reviewer 在产生证据阻断时同步记录的知识图谱节点来源。
+ */
+export const DocumentEvidenceBlockerDetailSchema = z.object({
+  text: z.string().min(1),
+  relatedNodeIds: z.array(z.string().min(1)).default([]),
+});
+
+/**
+ * 三方 Reviewer 意见经语义合并后的独立证据阻断。
+ */
+export const DocumentEvidenceBlockerGroupSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  description: z.string().min(1),
+  sourceIndexes: z.array(z.number().int().nonnegative()).min(1),
+  sources: z.array(DocumentEvidenceBlockerSourceSchema).min(1),
+  relatedNodeIds: z.array(z.string().min(1)).default([]),
+});
+
+/**
+ * 单个 PRD 评分尝试的持久化摘要。
+ */
 export const DocumentScoreAttemptSchema = z.object({
   attempt: z.number().int().positive(),
   markdown: z.string().min(1),
   reviewerScores: z.array(
     z.object({
-      reviewerId: z.string().min(1),
+      reviewerId: DocumentScoringReviewerIdSchema,
       reviewerName: z.string().min(1),
       score: z.number().min(0).max(100),
       dimensions: z.object({
@@ -97,6 +146,11 @@ export const DocumentScoreAttemptSchema = z.object({
       strengths: z.array(z.string()),
       weaknesses: z.array(z.string()),
       revisionAdvice: z.array(z.string()),
+      evidenceBlocked: z.boolean().default(false),
+      evidenceBlockers: z.array(z.string()).default([]),
+      evidenceBlockerDetails: z
+        .array(DocumentEvidenceBlockerDetailSchema)
+        .default([]),
     }),
   ),
   scoreSpread: z.number().min(0).max(100),
@@ -115,6 +169,12 @@ export const DocumentScoreAttemptSchema = z.object({
     }),
   }),
   passed: z.boolean(),
+  evidenceBlocked: z.boolean().default(false),
+  evidenceBlockers: z.array(z.string()).default([]),
+  evidenceBlockerGroups: z.array(DocumentEvidenceBlockerGroupSchema).default([]),
+  evidenceBlockerGroupingStatus: z
+    .enum(["grouped", "fallback"])
+    .default("fallback"),
   selected: z.boolean().default(false),
 });
 
@@ -129,6 +189,7 @@ export const DocumentGenerationResultSchema = z.object({
   sourceGraphStats: z.object({
     nodeCount: z.number().int().nonnegative(),
     relationCount: z.number().int().nonnegative(),
+    version: z.number().int().nonnegative().optional(),
   }),
   crossCheck: z.object({
     passed: z.boolean(),
@@ -141,6 +202,7 @@ export const DocumentGenerationResultSchema = z.object({
     selectedAttempt: z.number().int().positive(),
     finalScore: z.number().min(0).max(100),
     passed: z.boolean(),
+    disposition: DocumentScoreDispositionSchema,
     selectionReason: z.string(),
     attempts: z.array(DocumentScoreAttemptSchema),
   }),
@@ -150,6 +212,9 @@ export type DocumentKind = z.infer<typeof DocumentKindSchema>;
 export type DocumentGenerationStatus = z.infer<
   typeof DocumentGenerationStatusSchema
 >;
+export type DocumentScoreDisposition = z.infer<
+  typeof DocumentScoreDispositionSchema
+>;
 export type DocumentTodo = z.infer<typeof DocumentTodoSchema>;
 export type DocumentReasoningLogEntry = z.infer<
   typeof DocumentReasoningLogEntrySchema
@@ -157,6 +222,15 @@ export type DocumentReasoningLogEntry = z.infer<
 export type DocumentWorkflowStage = z.infer<typeof DocumentWorkflowStageSchema>;
 export type DocumentSectionDraft = z.infer<typeof DocumentSectionDraftSchema>;
 export type DocumentScoreAttempt = z.infer<typeof DocumentScoreAttemptSchema>;
+export type DocumentEvidenceBlockerDetail = z.infer<
+  typeof DocumentEvidenceBlockerDetailSchema
+>;
+export type DocumentEvidenceBlockerGroup = z.infer<
+  typeof DocumentEvidenceBlockerGroupSchema
+>;
+export type DocumentScoringReviewerId = z.infer<
+  typeof DocumentScoringReviewerIdSchema
+>;
 export type DocumentGenerationResult = z.infer<
   typeof DocumentGenerationResultSchema
 >;

@@ -24,10 +24,14 @@ import type {
   ProductWorkflowResult,
   RequestAnalysis,
   TaskExecutionPlan,
+  ModelUsageProfile,
 } from "@repo/shared";
 import type { UserInputRecord } from "../agents/request/user-input";
 import type { ProductWorkflowStreamEvent } from "../agents/product-workflow/agent";
-import type { WorkflowResumeContext } from "../agents/product-workflow/types";
+import type {
+  WorkflowPurpose,
+  WorkflowResumeContext,
+} from "../agents/product-workflow/types";
 import {
   aiShippingExecutorNode,
   dataAnalyticsExecutorNode,
@@ -48,8 +52,16 @@ import {
 import { parseUserInputNode, requestAgentNode } from "./nodes/request-node";
 import { WorkflowGraphState, type WorkflowGraphStateValue } from "./state";
 import { getWorkflowCheckpointer } from "./workflow-checkpointer";
+import {
+  collectDownstreamTaskIds,
+  selectReadyTasks,
+} from "../agents/product-workflow/dag";
 
 export interface WorkflowGraphInput {
+  /** 服务端可信工作流用途；checkpoint 恢复时由图状态继续持有。 */
+  workflowPurpose?: WorkflowPurpose;
+  /** API 在本次请求或恢复前重新解析的会话当前模型快照。 */
+  modelProfile?: ModelUsageProfile;
   workspaceId?: string;
   productContext?: string;
   contextSource?: OrchestratorContextSource;
@@ -223,13 +235,17 @@ export async function* streamWorkflowGraph(
 /**
  * 根据 Orchestrator Agent 的路由决策，决定是否进入 Planner SubAgent 计划回放节点。
  */
-function selectNextNodeAfterOrchestrator(state: WorkflowGraphStateValue) {
+export function selectNextNodeAfterOrchestrator(
+  state: WorkflowGraphStateValue,
+) {
   if (state.productWorkflow) return "end";
-  if (state.plan) return "planner_agent";
-
-  return state.orchestratorDecision?.route === "product_workflow"
-    ? "planner_agent"
-    : "end";
+  if (state.orchestratorDecision?.route !== "product_workflow") return "end";
+  if (!state.plan) {
+    throw new Error(
+      "Orchestrator routed to product_workflow without a valid delegated Planner plan.",
+    );
+  }
+  return "planner_agent";
 }
 
 /**
@@ -248,6 +264,8 @@ function createWorkflowInitialState(input: WorkflowGraphInput) {
       );
 
   return {
+    workflowPurpose:
+      resume?.workflowPurpose ?? input.workflowPurpose ?? "standard",
     productContext: input.productContext ?? "",
     contextSource: input.contextSource ?? "none",
     workspaceId: input.workspaceId,
@@ -257,6 +275,9 @@ function createWorkflowInitialState(input: WorkflowGraphInput) {
     orchestratorDecision: resume?.orchestratorDecision ?? null,
     plan,
     supplementAgentTypes: resume?.supplementAgentTypes ?? [],
+    supplementSourceTaskIds: resume?.supplementSourceTaskIds ?? [],
+    supplementAffectedTaskIds: resume?.supplementAffectedTaskIds ?? [],
+    supplementRelatedNodeIds: resume?.supplementRelatedNodeIds ?? [],
     answeredOpenQuestionIds: resume?.answeredOpenQuestionIds ?? [],
     executorResults,
     knowledgeGraph: resume?.knowledgeGraph ?? input.knowledgeGraph ?? null,
@@ -304,6 +325,7 @@ function createWorkflowRunConfig(
       thread_id:
         input.workflowThreadId ??
         `workflow:local:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      ...(input.modelProfile ? { model_profile: input.modelProfile } : {}),
       ...(input.retryFailure
         ? {
             retry_task_id: input.retryFailure.taskId,
@@ -342,12 +364,39 @@ export async function hasRetryableWorkflowTaskCheckpoint({
     configurable: { thread_id: workflowThreadId },
   });
   const state = snapshot.values as WorkflowGraphStateValue;
-  const taskExists = state.plan?.tasks.some((task) => task.task_id === taskId);
-  const taskCompleted = state.executorResults?.some(
-    (result) => result.task_id === taskId,
-  );
+  return isExecutorRetryCheckpointScoped({
+    state,
+    next: snapshot.next,
+    taskId,
+  });
+}
 
-  return Boolean(taskExists && !taskCompleted && snapshot.next.length > 0);
+/**
+ * 校验 checkpoint 的下一步是否仅包含目标 Executor，避免定点重试恢复同批兄弟任务。
+ */
+export function isExecutorRetryCheckpointScoped({
+  state,
+  next,
+  taskId,
+}: {
+  state: Pick<WorkflowGraphStateValue, "plan" | "executorResults">;
+  next: readonly string[];
+  taskId: string;
+}): boolean {
+  const plan = state.plan;
+  if (!plan) return false;
+
+  const completedTaskIds = new Set(
+    state.executorResults.map((result) => result.task_id),
+  );
+  if (completedTaskIds.has(taskId)) return false;
+
+  const task = selectReadyTasks(plan, completedTaskIds).find(
+    (candidate) => candidate.task_id === taskId,
+  );
+  return Boolean(
+    task && next.length === 1 && next[0] === task.assigned_agent,
+  );
 }
 
 /**
@@ -367,23 +416,3 @@ function filterExecutorResultsForResume(
 /**
  * 计算需要重跑的任务集合，包含直接受影响任务和依赖它们的下游任务。
  */
-function collectDownstreamTaskIds(
-  plan: TaskExecutionPlan,
-  initialTaskIds: Set<string>,
-): Set<string> {
-  const affected = new Set(initialTaskIds);
-  let changed = true;
-
-  while (changed) {
-    changed = false;
-    for (const task of plan.tasks) {
-      if (affected.has(task.task_id)) continue;
-      if (task.depends_on.some((taskId) => affected.has(taskId))) {
-        affected.add(task.task_id);
-        changed = true;
-      }
-    }
-  }
-
-  return affected;
-}

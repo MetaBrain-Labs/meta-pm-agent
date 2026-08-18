@@ -20,14 +20,36 @@ import type {
   RequestAnalysis,
   TaskExecutionNode,
   TaskExecutionPlan,
+  ModelUsageProfile,
 } from "@repo/shared";
 import type { UserInputRecord } from "../request/user-input";
 import type { ExecutorAgentType } from "./executor-agent/definitions";
+
+const DOCUMENT_EVIDENCE_SOURCE_PREFIX = "document-evidence:";
+
+/** 产品工作流用途；用于跨补充轮次保留专项验收策略。 */
+export type WorkflowPurpose = "standard" | "document_evidence_resolution";
+
+/**
+ * 判断当前补充 DAG 是否来自 PRD 证据阻断专用流程。
+ */
+export function isDocumentEvidenceSupplement(
+  sourceTaskIds: string[] | undefined,
+): boolean {
+  return Boolean(
+    sourceTaskIds?.some((taskId) =>
+      taskId.startsWith(DOCUMENT_EVIDENCE_SOURCE_PREFIX),
+    ),
+  );
+}
 
 /**
  * 产品工作流的公共输入，贯穿 Planner 与 Executor。
  */
 export interface ProductWorkflowInput {
+  /** 服务端确定的工作流用途，不能通过补充任务 ID 反向推断。 */
+  workflowPurpose?: WorkflowPurpose;
+  modelProfile?: ModelUsageProfile;
   workspaceId?: string;
   productContext?: string;
   contextSource?: OrchestratorContextSource;
@@ -37,6 +59,8 @@ export interface ProductWorkflowInput {
 }
 
 export interface WorkflowResumeContext {
+  /** 跨修正和 checkpoint 恢复保留的可信工作流用途。 */
+  workflowPurpose?: WorkflowPurpose;
   userInputBlock?: string;
   originalUserInput?: UserInputRecord[];
   requestAnalysis?: RequestAnalysis | null;
@@ -47,6 +71,9 @@ export interface WorkflowResumeContext {
   rerunTaskIds?: string[];
   forceSupplementPlan?: boolean;
   supplementAgentTypes?: ExecutorAgentType[];
+  supplementSourceTaskIds?: string[];
+  supplementAffectedTaskIds?: string[];
+  supplementRelatedNodeIds?: string[];
   answeredOpenQuestionIds?: string[];
   productWorkflow?: ProductWorkflowResult | null;
 }
@@ -57,6 +84,9 @@ export interface WorkflowResumeContext {
 export interface PlannerAgentInput extends ProductWorkflowInput {
   knowledgeGraph: ProductKnowledgeGraph;
   supplementAgentTypes?: ExecutorAgentType[];
+  supplementSourceTaskIds?: string[];
+  supplementAffectedTaskIds?: string[];
+  supplementRelatedNodeIds?: string[];
 }
 
 /**
@@ -65,6 +95,9 @@ export interface PlannerAgentInput extends ProductWorkflowInput {
 export interface OrchestratorAgentInput extends ProductWorkflowInput {
   knowledgeGraph: ProductKnowledgeGraph;
   supplementAgentTypes?: ExecutorAgentType[];
+  supplementSourceTaskIds?: string[];
+  supplementAffectedTaskIds?: string[];
+  supplementRelatedNodeIds?: string[];
   answeredOpenQuestionIds?: string[];
 }
 
@@ -78,12 +111,25 @@ export interface ExecutorAgentInput extends ProductWorkflowInput {
   previousResults: ExecutorAgentResult[];
   /** 手动定点重试时，由服务端从可信错误记录恢复的修正指令。 */
   retryInstruction?: string;
+  /** Critique 确认后的定点修正指令；首次调用即进入受限 correction mode。 */
+  correctionInstruction?: string;
+  /** 定点修正涉及的确定性问题代码。 */
+  correctionIssueCodes?: string[];
+  /** 已由运行时解析出的精确图谱目标。 */
+  correctionTargetNodeIds?: string[];
+  /** 纯孤立证据修正不得通过创建新 Evidence 规避原问题。 */
+  forbidNewEvidence?: boolean;
+  /** 仅为 PRD 证据阻断补充流程开放额外的风险关闭能力。 */
+  documentEvidenceResolution?: boolean;
 }
 
 /**
  * Critique Agent 收尾节点输入，用于审查 Planner 与 Executor 的产出。
  */
 export interface CritiqueAgentInput {
+  /** 当前 Critique 的可信工作流用途。 */
+  workflowPurpose?: WorkflowPurpose;
+  modelProfile?: ModelUsageProfile;
   workspaceId?: string;
   productContext?: string;
   requestAnalysis: RequestAnalysis;
@@ -92,6 +138,7 @@ export interface CritiqueAgentInput {
   knowledgeGraph: ProductKnowledgeGraph;
   priorIssues?: CritiqueReviewIssue[];
   userInput?: UserInputRecord[];
+  documentEvidenceResolution?: boolean;
   signal?: AbortSignal;
 }
 

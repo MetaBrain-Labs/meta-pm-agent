@@ -11,10 +11,12 @@
  */
 
 import type { SubAgent } from "deepagents";
+import type { ModelUsageProfile } from "@repo/shared";
 import { createDeepAgentToolAllowlistMiddleware } from "../../../common/deep-agent-tool-policy";
 import { createChatModel } from "../../../common/model";
+import { resolveAgentModelSelection } from "../../../common/model-profile";
 import { parseJsonObject } from "../../../../utils/json";
-import { PRE_ORCHESTRATOR_SUBAGENT_PROMPT } from "./prompt";
+import { createPreOrchestratorSubagentPrompt } from "./prompt";
 import {
   PreOrchResultSchema,
   type PreOrchResult,
@@ -26,7 +28,10 @@ import {
  * 创建 Pre-Orchestrator 子代理；该子代理接收用户消息和产品上下文并通过 task 描述
  * 返回意图分类和路由决策 JSON。子代理无工具权限，仅从 task 描述中读取上下文。
  */
-export function createPreOrchestratorSubagent(): SubAgent {
+export function createPreOrchestratorSubagent(
+  modelProfile?: ModelUsageProfile,
+  preCheckContext = "{}",
+): SubAgent {
   const subagentToolAllowlistMiddleware =
     createDeepAgentToolAllowlistMiddleware({
       agentName: "orchestrator-pre-orchestrator-subagent",
@@ -37,13 +42,16 @@ export function createPreOrchestratorSubagent(): SubAgent {
     name: "pre-orchestrator",
     description:
       "Classifies user intent (casual_chat/new_project/project_evolution) based on product context and generates clarification questions when needed. Returns a JSON with intent, decision, reason, and optional questions.",
-    systemPrompt: PRE_ORCHESTRATOR_SUBAGENT_PROMPT,
-    model: createChatModel({
-      enableThinking: true,
-      responseFormat: "json_object",
-      temperature: 0,
-      maxTokens: 4096,
-    }),
+    systemPrompt: createPreOrchestratorSubagentPrompt(preCheckContext),
+    model: createChatModel(
+      {
+        enableThinking: true,
+        responseFormat: "json_object",
+        temperature: 0,
+        maxTokens: 4096,
+      },
+      resolveAgentModelSelection(modelProfile, "pre-orchestrator"),
+    ),
     tools: [],
     middleware: [subagentToolAllowlistMiddleware],
   };

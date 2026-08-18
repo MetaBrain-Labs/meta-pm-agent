@@ -1,13 +1,13 @@
 /**
  * 产品工作流上下文压缩工具
  *
- * 为 Planner、Executor 和知识图谱工具生成可控大小的图谱摘要、任务相关子图、
+ * 为 Executor 和知识图谱工具生成可控大小的图谱摘要、任务相关子图、
  * 精简计划和精简历史结果。这里不改变持久化的完整结构，只控制传给模型的上下文形态。
  *
  * Responsibilities:
  * - 生成知识图谱的全局轻量摘要
  * - 按当前任务依赖和来源任务筛选相关子图
- * - 压缩 Planner 计划、Request 分析、用户输入和历史 Executor 结果
+ * - 压缩 Executor 消费的计划、Request 分析、用户输入和历史执行结果
  *
  * Notes:
  * - 该模块只做确定性裁剪，不负责语义检索或向量召回。
@@ -35,7 +35,6 @@ export function createGraphContextSummary(
 ) {
   return {
     current_state: knowledgeGraph.current_state,
-    description: truncateText(knowledgeGraph.description ?? "", 800),
     counts: {
       entities: knowledgeGraph.entities.length,
       relations: knowledgeGraph.relations.length,
@@ -73,13 +72,22 @@ export function createTaskRelevantGraphContext({
 }) {
   const sourceTaskIds = new Set([task.task_id, ...task.depends_on]);
   const dependencyResultTaskIds = new Set(task.depends_on);
-  const keywords = extractKeywords(
-    [task.title, task.description, task.expected_output].join(" "),
+  const taskContract = [
+    task.title,
+    task.description,
+    task.expected_output,
+    ...task.quality_check.criteria,
+  ].join(" ");
+  const keywords = extractKeywords(taskContract);
+  const nodeReferences = resolveTaskNodeReferences(
+    taskContract,
+    knowledgeGraph,
   );
   const relevantNodes = selectRelevantNodes(
     knowledgeGraph,
     sourceTaskIds,
     keywords,
+    nodeReferences.map((reference) => reference.exact_id),
   );
   const relevantNodeIds = new Set(relevantNodes.map((node) => node.id));
 
@@ -97,6 +105,7 @@ export function createTaskRelevantGraphContext({
 
   return {
     dependency_task_ids: task.depends_on,
+    task_node_references: nodeReferences,
     dependency_results: previousResults
       .filter((result) => dependencyResultTaskIds.has(result.task_id))
       .map(compactExecutorResult),
@@ -227,8 +236,14 @@ function selectRelevantNodes(
   knowledgeGraph: ProductKnowledgeGraph,
   sourceTaskIds: Set<string>,
   keywords: string[],
+  referencedNodeIds: string[] = [],
 ) {
+  const referencedNodeIdSet = new Set(referencedNodeIds);
+  const referenced = knowledgeGraph.entities.filter((entity) =>
+    referencedNodeIdSet.has(entity.id),
+  );
   const matched = knowledgeGraph.entities.filter((entity) => {
+    if (referencedNodeIdSet.has(entity.id)) return false;
     if (entity.source_task_id && sourceTaskIds.has(entity.source_task_id)) {
       return true;
     }
@@ -238,8 +253,42 @@ function selectRelevantNodes(
     );
   });
 
-  return (matched.length > 0 ? matched : takeTail(knowledgeGraph.entities, 6))
-    .slice(0, MAX_RELEVANT_NODES);
+  const fallback =
+    matched.length > 0 ? matched : takeTail(knowledgeGraph.entities, 6);
+  return [...referenced, ...fallback].slice(0, MAX_RELEVANT_NODES);
+}
+
+/**
+ * 将任务文本中的完整或唯一短前缀节点引用解析为权威完整 ID。
+ *
+ * 这里只解析 ID 结构，不根据业务词汇推断语义；歧义前缀不会自动选择。
+ */
+export function resolveTaskNodeReferences(
+  taskContract: string,
+  knowledgeGraph: ProductKnowledgeGraph,
+): Array<{ reference: string; exact_id: string }> {
+  const graphRecordIds = [
+    ...knowledgeGraph.entities.map((item) => item.id),
+    ...knowledgeGraph.decisions.map((item) => item.id),
+    ...knowledgeGraph.risks.map((item) => item.id),
+    ...knowledgeGraph.open_questions.map((item) => item.id),
+  ];
+  const references = [
+    ...new Set(
+      taskContract.match(
+        /\b(?:COMP|RISK|CUS|OQ|G|D|R|E|F|M)-[A-Za-z0-9][A-Za-z0-9-]*/g,
+      ) ?? [],
+    ),
+  ];
+
+  return references.flatMap((reference) => {
+    const matches = graphRecordIds.filter(
+      (id) => id === reference || id.startsWith(`${reference}-`),
+    );
+    return matches.length === 1
+      ? [{ reference, exact_id: matches[0]! }]
+      : [];
+  });
 }
 
 /**

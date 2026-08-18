@@ -27,6 +27,16 @@ export function applyStreamEvent(
   event: StreamEvent,
 ): Message {
   switch (event.type) {
+    case "document-evidence-resolution-complete":
+      return event.runId && event.workspaceId
+        ? {
+            ...message,
+            documentEvidenceResolutionComplete: {
+              runId: event.runId,
+              workspaceId: event.workspaceId,
+            },
+          }
+        : message;
     case "agent-status":
       return applyAgentStatus(message, event);
     case "thinking":
@@ -147,18 +157,6 @@ export function applyStreamEvent(
           analysis: event.analysis,
         },
       };
-    case "todo-update":
-      return {
-        ...message,
-        todos: (event.todos ?? []).map((todo) => ({
-          index: todo.index,
-          content: todo.content,
-          status: todo.status as
-            | "pending"
-            | "in_progress"
-            | "completed",
-        })),
-      };
     case "tool-call":
       return appendToolCall(message, event);
     case "tool-result":
@@ -180,12 +178,13 @@ export function applyStreamEvent(
       return applySubagentResult(message, event);
     case "token-usage":
       return appendTokenUsage(message, event);
-    case "finish":
+    case "abort":
+      // 服务端在手动停止或其他线程停止后发送 abort，流被主动中止而非正常完成。
       return {
         ...message,
-        usage: event.usage,
         activeAgent: undefined,
         activeAgents: [],
+        interrupted: true,
       };
     case "error":
       {

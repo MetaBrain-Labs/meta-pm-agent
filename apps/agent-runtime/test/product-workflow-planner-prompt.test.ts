@@ -44,8 +44,29 @@ test("planner prompt preserves graph-semantics guardrails", () => {
   assert.match(PLANNER_AGENT_PROMPT, /runtime allocates actual OQ-\* IDs atomically/);
   assert.match(
     PLANNER_AGENT_PROMPT,
+    /OpenQuestions listed in answered_open_question_ids are already closed before Planner runs/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /never ask an Executor to deprecate or otherwise operate on those OpenQuestion IDs/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
     /normally no more than 8 new entities total/,
   );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /reuse compatible active Feature, Component, Metric, Evidence, and constraint nodes/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /active graph records as context or candidates, never as proof/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /answer says a measurement exists but omits its exact numeric values/,
+  );
+  assert.match(PLANNER_AGENT_PROMPT, /A relation-only correction task is valid/);
   assert.match(
     PLANNER_AGENT_PROMPT,
     /first plan Goal\/Requirement work plus evidence-producing tasks, then add a downstream Product Strategy refinement task/,
@@ -126,7 +147,19 @@ test("planner prompt preserves graph-semantics guardrails", () => {
   );
   assert.match(
     PLANNER_AGENT_PROMPT,
-    /Toolkit compliance or guardrail work must not ask the executor to create Risk nodes/,
+    /Toolkit compliance or guardrail work must not ask the executor to create Risk entity nodes/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /Private or on-premises deployment does not by itself confirm data residency/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /must never prohibit `kg_file_add_risks` or `kg_file_add_open_questions`/,
+  );
+  assert.match(
+    PLANNER_AGENT_PROMPT,
+    /fully resolves a different active OpenQuestion.*`kg_file_deprecate_nodes`/,
   );
   assert.match(
     PLANNER_AGENT_PROMPT,
@@ -192,6 +225,14 @@ test("orchestrator planner subagent prompt satisfies json response format", () =
     ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
     /do not create placeholder capacity metrics, numeric targets/,
   );
+  assert.match(
+    ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
+    /Allowed relations:/,
+  );
+  assert.match(
+    ORCHESTRATOR_PLANNER_SUBAGENT_PROMPT,
+    /supplement_agents contains recommendations rather than an exhaustive allowlist/,
+  );
 });
 
 test("orchestrator retry requires an immediate Planner task call", () => {
@@ -201,7 +242,7 @@ test("orchestrator retry requires an immediate Planner task call", () => {
   );
   assert.match(
     ORCHESTRATOR_AGENT_PROMPT,
-    /If retry_context is present, the previous attempt did not invoke Planner/,
+    /If retry_context is present, the previous attempt either did not invoke Planner or returned an invalid plan/,
   );
   assert.match(
     ORCHESTRATOR_AGENT_PROMPT,
@@ -235,8 +276,14 @@ test("critique agent prompt stays compact and does not request full graph copies
   );
   assert.match(
     CRITIQUE_AGENT_PROMPT,
-    /graph_ref must be an object/,
+    /Never output knowledge_graph_review\.graph_ref/,
   );
+  assert.match(
+    CRITIQUE_AGENT_PROMPT,
+    /source_context and target_context/,
+  );
+  assert.match(CRITIQUE_AGENT_PROMPT, /CONFLICTING_PRECISE_CONSTRAINT/);
+  assert.match(CRITIQUE_AGENT_PROMPT, /UNSUPPORTED_EVIDENCE_CLAIM/);
   assert.match(
     CRITIQUE_AGENT_PROMPT,
     /Review content only/,
@@ -292,6 +339,8 @@ test("executor prompt preserves append-only graph writing semantics", () => {
 
   assert.match(prompt, /ONLY create new traceable records/);
   assert.match(prompt, /The graph tools are append-only/);
+  assert.match(prompt, /Reusing active node IDs in a relation-only correction is valid/);
+  assert.match(prompt, /otherwise omit the field and never pass null/);
   assert.match(prompt, /Never reuse an existing node, relation, decision, risk, or open-question ID/);
   assert.match(prompt, /runtime allocates/);
   assert.match(prompt, /runtime generates the execution summary/);
@@ -313,10 +362,30 @@ test("executor prompt preserves append-only graph writing semantics", () => {
     prompt,
     /Only explicit statements in user_input may be written as new Evidence/,
   );
+  assert.match(
+    prompt,
+    /existing_graph provenance item is traceability context, not independent proof/,
+  );
+  assert.match(
+    prompt,
+    /when exact values are absent.*call `kg_file_raise_blocker`/,
+  );
   assert.match(prompt, /Unverified assumption/);
   assert.match(
     prompt,
     /Network bandwidth, data residency, deployment topology/,
+  );
+  assert.match(
+    prompt,
+    /Private or on-premises deployment confirms only that deployment choice/,
+  );
+  assert.match(
+    prompt,
+    /never prohibits recording workflow uncertainty through `kg_file_add_risks` or `kg_file_add_open_questions`/,
+  );
+  assert.match(
+    prompt,
+    /task explicitly identifies an active OpenQuestion.*`kg_file_deprecate_nodes`/,
   );
   assert.match(searchPrompt, /Search availability: enabled/);
   assert.match(searchPrompt, /preserve its title, URL, and sourceId/);

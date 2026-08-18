@@ -15,6 +15,10 @@
 
 import { randomUUID } from "node:crypto";
 import type { WorkflowAnswerResolution } from "@repo/agent-runtime";
+import type {
+  DocumentEvidenceBlocker,
+  DocumentEvidenceResolution,
+} from "@repo/agent-runtime";
 import { prisma } from "@repo/database";
 import type {
   ChatMessage,
@@ -23,6 +27,7 @@ import type {
   ProductWorkflowResult,
   RequestAnalysis,
 } from "@repo/shared";
+import { ProductWorkflowResultSchema } from "@repo/shared";
 
 /**
  * 更新请求表单的阶段状态，用于前端和后续调度判断当前表单被哪个阶段消费。
@@ -181,7 +186,28 @@ export async function persistProposalDecisionItem(
   if (!requestFormId || !result) return;
 
   const slots = collectProposalSlots(result);
-  if (slots.length === 0) return;
+  const correctionRequired = result.status === "requires_executor_retry";
+  const correctionTaskIds = collectCorrectionTaskIds(result);
+  if (slots.length === 0 && !correctionRequired) return;
+  const questionId = getProposalDecisionId(result);
+  const payload = JSON.stringify({
+    question_id: questionId,
+    questions: slots,
+    decision_kind: correctionRequired ? "critique_correction" : "proposal",
+    retry_task_ids: correctionTaskIds,
+  });
+  const updated = await prisma.$executeRaw`
+    UPDATE "request_form_item"
+    SET
+      "priority" = ${correctionRequired ? 100 : (slots[0]?.priority ?? 0)},
+      "payload" = ${payload}::jsonb,
+      "updated_at" = CURRENT_TIMESTAMP
+    WHERE "form_id" = ${requestFormId}
+      AND "type" = 'decision'
+      AND "status" = 'pending'
+      AND "payload"->>'question_id' = ${questionId}
+  `;
+  if (updated > 0) return;
 
   await prisma.$executeRaw`
     INSERT INTO "request_form_item" (
@@ -199,13 +225,32 @@ export async function persistProposalDecisionItem(
       'decision',
       'pending',
       'planner',
-      ${slots[0]?.priority ?? 0},
-      ${JSON.stringify({
-        question_id: getProposalDecisionId(result),
-        questions: slots,
-      })}::jsonb
+      ${correctionRequired ? 100 : (slots[0]?.priority ?? 0)},
+      ${payload}::jsonb
     )
   `;
+}
+
+/**
+ * 收集 Critique 修正的稳定任务引用；全局硬错误回退到原 DAG。
+ */
+function collectCorrectionTaskIds(result: ProductWorkflowResult): string[] {
+  const plannedTaskIds = new Set(
+    result.planner.tasks.map((task) => task.task_id),
+  );
+  const referencedTaskIds = [
+    ...(result.review.retry_task_ids ?? []),
+    ...(result.review.issues ?? []).flatMap((issue) =>
+      issue.severity === "error" && issue.task_id ? [issue.task_id] : [],
+    ),
+    ...(result.knowledge_graph_review?.issues ?? []).flatMap((issue) =>
+      issue.severity === "error" && issue.task_id ? [issue.task_id] : [],
+    ),
+  ].filter((taskId) => plannedTaskIds.has(taskId));
+  if (referencedTaskIds.length > 0) return [...new Set(referencedTaskIds)];
+  return result.status === "requires_executor_retry"
+    ? result.planner.tasks.map((task) => task.task_id)
+    : [];
 }
 
 /**
@@ -284,6 +329,11 @@ export async function finishAnsweredDecisionItems(
     `;
     const row = rows[0];
     if (!row) return null;
+    const payload = parsePayload(row.payload);
+    const confirmationResolution =
+      row.type === "decision"
+        ? null
+        : collectConfirmationWorkflowResolution(payload, answer.formId);
 
     const answeredAt = new Date().toISOString();
     const answerPatch = {
@@ -301,11 +351,8 @@ export async function finishAnsweredDecisionItems(
     `;
 
     // 补充信息确认表单提交后，同步关闭它汇总的 Executor proposal 条目。
-    if (row.type !== "decision") {
-      return { formId: answer.formId, questions: [] };
-    }
+    if (confirmationResolution) return confirmationResolution;
 
-    const payload = parsePayload(row.payload);
     const resolution = collectWorkflowAnswerResolution(payload, answer);
     const taskIds = extractProposalTaskIds(payload);
     for (const taskId of taskIds) {
@@ -327,6 +374,260 @@ export async function finishAnsweredDecisionItems(
 
     return resolution;
   });
+}
+
+/** 从服务端确认记录恢复权威工作流结果，供“确认接受”直接完成当前轮次。 */
+export function collectConfirmationWorkflowResolution(
+  payload: Record<string, unknown> | null,
+  formId: string,
+): WorkflowAnswerResolution {
+  const workflow = ProductWorkflowResultSchema.safeParse(payload?.workflow);
+  if (!workflow.success) {
+    throw new Error(
+      "The persisted product workflow result for final confirmation is unavailable.",
+    );
+  }
+  return {
+    formId,
+    action: "submit_answers",
+    questions: [],
+    workflow: workflow.data,
+  };
+}
+
+/** request_form_item JSONB 中的证据解决流程上下文。 */
+export interface DocumentEvidenceResolutionRecord {
+  itemId: string;
+  requestFormId: string;
+  conversationId: string;
+  workspaceId: string;
+  runId: string;
+  sourceGraphVersion: number;
+  blockers: DocumentEvidenceBlocker[];
+  resolution?: DocumentEvidenceResolution;
+  answer?: string;
+  status: string;
+  resolvedGraphVersion?: number;
+}
+
+interface DocumentEvidenceResolutionRow {
+  item_id: string;
+  form_id: string;
+  conversation_id: string;
+  workspace_id: string;
+  status: string;
+  payload: unknown;
+}
+
+/**
+ * 为专用会话创建一条证据解决上下文，阻断内容只来自服务端持久化评分结果。
+ */
+export async function createDocumentEvidenceResolutionItem({
+  requestFormId,
+  runId,
+  sourceGraphVersion,
+  blockers,
+}: {
+  requestFormId: string;
+  runId: string;
+  sourceGraphVersion: number;
+  blockers: DocumentEvidenceBlocker[];
+}): Promise<void> {
+  await prisma.$executeRaw`
+    INSERT INTO "request_form_item" (
+      "id", "form_id", "type", "status", "agent", "priority", "payload"
+    )
+    VALUES (
+      ${randomUUID()},
+      ${requestFormId},
+      'document_evidence_resolution',
+      'ready',
+      'orchestrator',
+      100,
+      ${JSON.stringify({
+        run_id: runId,
+        source_graph_version: sourceGraphVersion,
+        blockers,
+      })}::jsonb
+    )
+  `;
+}
+
+/**
+ * 按 PRD run 与源图谱版本查找同一轮证据解决会话。
+ */
+export async function findDocumentEvidenceResolutionCycle(
+  runId: string,
+  sourceGraphVersion: number,
+): Promise<DocumentEvidenceResolutionRecord | null> {
+  const rows = await prisma.$queryRaw<DocumentEvidenceResolutionRow[]>`
+    SELECT
+      i."id" AS "item_id",
+      i."form_id",
+      f."chat_id" AS "conversation_id",
+      c."workspace_id",
+      i."status",
+      i."payload"
+    FROM "request_form_item" i
+    JOIN "request_form" f ON f."id" = i."form_id"
+    JOIN "conversation" c ON c."id" = f."chat_id"
+    WHERE i."type" = 'document_evidence_resolution'
+      AND i."payload"->>'run_id' = ${runId}
+      AND i."payload"->>'source_graph_version' = ${String(sourceGraphVersion)}
+      AND i."status" IN ('ready', 'collecting', 'supplement_running', 'completed')
+    ORDER BY i."created_at" DESC
+    LIMIT 1
+  `;
+  return rows[0] ? mapDocumentEvidenceResolutionRow(rows[0]) : null;
+}
+
+/**
+ * 按 request form 恢复专用流程上下文；普通聊天不会命中该记录。
+ */
+export async function getDocumentEvidenceResolutionByRequestFormId(
+  requestFormId: string | undefined,
+): Promise<DocumentEvidenceResolutionRecord | null> {
+  if (!requestFormId) return null;
+  const rows = await prisma.$queryRaw<DocumentEvidenceResolutionRow[]>`
+    SELECT
+      i."id" AS "item_id",
+      i."form_id",
+      f."chat_id" AS "conversation_id",
+      c."workspace_id",
+      i."status",
+      i."payload"
+    FROM "request_form_item" i
+    JOIN "request_form" f ON f."id" = i."form_id"
+    JOIN "conversation" c ON c."id" = f."chat_id"
+    WHERE i."form_id" = ${requestFormId}
+      AND i."type" = 'document_evidence_resolution'
+    ORDER BY i."created_at" DESC
+    LIMIT 1
+  `;
+  return rows[0] ? mapDocumentEvidenceResolutionRow(rows[0]) : null;
+}
+
+/**
+ * 按专用会话恢复证据解决上下文，避免客户端表单 ID 丢失后误入普通编排。
+ */
+export async function getDocumentEvidenceResolutionByConversationId(
+  conversationId: string | undefined,
+): Promise<DocumentEvidenceResolutionRecord | null> {
+  if (!conversationId) return null;
+  const rows = await prisma.$queryRaw<DocumentEvidenceResolutionRow[]>`
+    SELECT
+      i."id" AS "item_id",
+      i."form_id",
+      f."chat_id" AS "conversation_id",
+      c."workspace_id",
+      i."status",
+      i."payload"
+    FROM "request_form_item" i
+    JOIN "request_form" f ON f."id" = i."form_id"
+    JOIN "conversation" c ON c."id" = f."chat_id"
+    WHERE f."chat_id" = ${conversationId}
+      AND i."type" = 'document_evidence_resolution'
+    ORDER BY i."created_at" DESC
+    LIMIT 1
+  `;
+  return rows[0] ? mapDocumentEvidenceResolutionRow(rows[0]) : null;
+}
+
+/**
+ * 保存 Resolver 生成的问题与 blocker 映射，便于刷新恢复和审计。
+ */
+export async function persistDocumentEvidenceResolutionPlan(
+  requestFormId: string | undefined,
+  resolution: DocumentEvidenceResolution,
+): Promise<void> {
+  if (!requestFormId) return;
+  await prisma.$executeRaw`
+    UPDATE "request_form_item"
+    SET
+      "status" = 'collecting',
+      "payload" = "payload" || ${JSON.stringify({ resolution })}::jsonb,
+      "updated_at" = CURRENT_TIMESTAMP
+    WHERE "form_id" = ${requestFormId}
+      AND "type" = 'document_evidence_resolution'
+      AND "status" IN ('ready', 'collecting')
+  `;
+}
+
+/**
+ * 在答案提交后记录 supplement 执行中状态。
+ */
+export async function markDocumentEvidenceSupplementRunning(
+  requestFormId: string | undefined,
+  answer: string,
+): Promise<void> {
+  if (!requestFormId) return;
+  await prisma.$executeRaw`
+    UPDATE "request_form_item"
+    SET
+      "status" = 'supplement_running',
+      "payload" = "payload" || ${JSON.stringify({
+        answer,
+        answered_at: new Date().toISOString(),
+      })}::jsonb,
+      "updated_at" = CURRENT_TIMESTAMP
+    WHERE "form_id" = ${requestFormId}
+      AND "type" = 'document_evidence_resolution'
+      AND "status" IN ('collecting', 'supplement_running')
+  `;
+}
+
+/**
+ * Critique 接受且图谱版本递增后完成证据解决项。
+ */
+export async function completeDocumentEvidenceResolutionItem({
+  requestFormId,
+  resolvedGraphVersion,
+}: {
+  requestFormId: string | undefined;
+  resolvedGraphVersion: number;
+}): Promise<void> {
+  if (!requestFormId) return;
+  await prisma.$executeRaw`
+    UPDATE "request_form_item"
+    SET
+      "status" = 'completed',
+      "payload" = "payload" || ${JSON.stringify({
+        resolved_graph_version: resolvedGraphVersion,
+        completed_at: new Date().toISOString(),
+      })}::jsonb,
+      "updated_at" = CURRENT_TIMESTAMP
+    WHERE "form_id" = ${requestFormId}
+      AND "type" = 'document_evidence_resolution'
+      AND "status" = 'supplement_running'
+  `;
+}
+
+/**
+ * 将 JSONB 行安全映射为内部证据解决上下文。
+ */
+function mapDocumentEvidenceResolutionRow(
+  row: DocumentEvidenceResolutionRow,
+): DocumentEvidenceResolutionRecord {
+  const payload = parsePayload(row.payload) ?? {};
+  return {
+    itemId: row.item_id,
+    requestFormId: row.form_id,
+    conversationId: row.conversation_id,
+    workspaceId: row.workspace_id,
+    runId: String(payload.run_id ?? ""),
+    sourceGraphVersion: Number(payload.source_graph_version ?? 0),
+    blockers: Array.isArray(payload.blockers)
+      ? (payload.blockers as DocumentEvidenceBlocker[])
+      : [],
+    ...(payload.resolution && typeof payload.resolution === "object"
+      ? { resolution: payload.resolution as DocumentEvidenceResolution }
+      : {}),
+    ...(typeof payload.answer === "string" ? { answer: payload.answer } : {}),
+    status: row.status,
+    ...(typeof payload.resolved_graph_version === "number"
+      ? { resolvedGraphVersion: payload.resolved_graph_version }
+      : {}),
+  };
 }
 
 interface RequestFormDecisionRow {
@@ -689,7 +990,32 @@ export function collectWorkflowAnswerResolution(
     sources: question.sources,
   }));
 
-  return { formId: answer.formId, questions };
+  const decisionKind = payload?.decision_kind;
+  const action =
+    decisionKind === "critique_correction" &&
+    /^-\s*请选择如何处理审查错误？:\s*生成补充修正任务\s*$/m.test(
+      answer.content,
+    )
+      ? "retry_correction"
+      : decisionKind === "critique_correction" &&
+          /^-\s*请选择如何处理审查错误？:\s*停止并保留问题结果\s*$/m.test(
+            answer.content,
+          )
+        ? "stop_with_issues"
+        : /^-\s*workflow_action:\s*stop_optional_questions\s*$/m.test(
+              answer.content,
+            )
+          ? "stop_optional_questions"
+          : "submit_answers";
+
+  return {
+    formId: answer.formId,
+    action,
+    questions,
+    ...(decisionKind === "critique_correction"
+      ? { correctionTaskIds: parseStringArray(payload?.retry_task_ids) ?? [] }
+      : {}),
+  };
 }
 
 /**
@@ -947,13 +1273,22 @@ function buildDecisionQuestionForm(payload: Record<string, unknown>): string | n
           parseQuestionType(record.type),
           options,
         );
+        const required =
+          typeof record.required === "boolean" ? record.required : true;
+        const help = typeof record.help === "string" && record.help.trim()
+          ? record.help.trim()
+          : required
+            ? [
+                "当前已知资料：暂无更多已确认资料。",
+                `阻断原因：${record.question}`,
+              ].join("\n")
+            : `来源：${formatQuestionSources(record)}`;
         return [
           {
             id: record.id,
             label: record.question,
             type,
-            required:
-              typeof record.required === "boolean" ? record.required : true,
+            required,
             ...(options && type !== "text" && type !== "textarea"
               ? { options }
               : {}),
@@ -965,25 +1300,37 @@ function buildDecisionQuestionForm(payload: Record<string, unknown>): string | n
             record.maxSelections > 0
               ? { maxSelections: record.maxSelections }
               : {}),
-            help: `来源：${formatQuestionSources(record)}`,
+            help,
           },
         ];
       })
     : [];
 
-  if (!questionId || questions.length === 0) return null;
+  if (!questionId) return null;
+  if (payload.decision_kind === "critique_correction") {
+    return buildCorrectionQuestionForm(questionId, questions, payload);
+  }
+  if (questions.length === 0) return null;
   const hasBlockingQuestions = questions.some((question) => question.required);
-  const displayQuestions = questions.map((question) => ({
-    ...question,
-    collapsible: true,
-    defaultCollapsed: hasBlockingQuestions && !question.required,
-  }));
+  const displayQuestions = questions.map((question) =>
+    question.required
+      ? {
+          ...question,
+          collapsible: false,
+          helpMode: "modal",
+        }
+      : {
+          ...question,
+          collapsible: true,
+          defaultCollapsed: hasBlockingQuestions,
+        },
+  );
 
   return `<question-form id="${escapeAttribute(questionId)}" title="${hasBlockingQuestions ? "补充信息确认" : "可选优化问题"}">
 ${JSON.stringify(
   {
     description: hasBlockingQuestions
-      ? "Planner SubAgent 汇总了 Executor Agent 需要你补充确认的信息。必填问题默认展开，选填问题默认折叠。"
+      ? "Planner SubAgent 汇总了需要你补充确认的信息。必填问题始终显示，可通过“查看相关资料”了解上下文；选填问题默认折叠。"
       : "以下问题均为可选优化项。你可以填写任意一项后继续下一轮 DAG，也可以选择“不再继续”并直接确认当前已有设计成果。",
     questions: displayQuestions,
     submitLabel: "提交补充信息",
@@ -995,6 +1342,53 @@ ${JSON.stringify(
           secondaryActionValue: "stop_optional_questions",
         }
       : {}),
+  },
+  null,
+  2,
+)}
+</question-form>`;
+}
+
+/**
+ * 从持久化 decision 恢复 Critique 硬错误处理表单。
+ */
+function buildCorrectionQuestionForm(
+  questionId: string,
+  questions: Array<Record<string, unknown>>,
+  payload: Record<string, unknown>,
+): string {
+  const retryTaskIds = parseStringArray(payload.retry_task_ids) ?? [];
+  return `<question-form id="${escapeAttribute(questionId)}" title="审查错误处理">
+${JSON.stringify(
+  {
+    description:
+      "Critique Agent 发现当前结果存在必须修正的错误。请选择生成补充修正任务，或停止流程并保留当前问题报告；未经确认不会继续生成 DAG。",
+    questions: [
+      {
+        id: "workflow_action",
+        label: "请选择如何处理审查错误？",
+        type: "radio",
+        required: true,
+        options: ["生成补充修正任务", "停止并保留问题结果"],
+        help: `待修正任务：${retryTaskIds.join("、") || "未指定"}`,
+        collapsible: false,
+      },
+      ...questions.map((question) => ({
+        ...question,
+        collapsible: true,
+        defaultCollapsed: true,
+      })),
+      {
+        id: "correction_notes",
+        label: "补充修正要求",
+        type: "textarea",
+        required: false,
+        placeholder: "可选：补充本轮修正需要遵守的事实或约束。",
+        collapsible: true,
+        defaultCollapsed: true,
+      },
+    ],
+    submitLabel: "提交处理决定",
   },
   null,
   2,

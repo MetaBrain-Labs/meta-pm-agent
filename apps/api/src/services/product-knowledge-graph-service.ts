@@ -72,7 +72,12 @@ export async function finalizeWorkspaceKnowledgeGraph({
     knowledgeGraph,
     advanceVersion,
   });
-  if (!hasGraphData) return;
+  if (
+    !hasGraphData &&
+    (knowledgeGraph.resolved_open_question_ids?.length ?? 0) === 0
+  ) {
+    return;
+  }
 
   await upsertProductKnowledgeGraph({
     workspaceId,
@@ -251,6 +256,7 @@ function hasRuntimeContextData(knowledgeGraph: ProductKnowledgeGraph): boolean {
     knowledgeGraph.decisions.length > 0 ||
     knowledgeGraph.risks.length > 0 ||
     knowledgeGraph.open_questions.length > 0 ||
+    (knowledgeGraph.resolved_open_question_ids?.length ?? 0) > 0 ||
     knowledgeGraph.summary.length > 0 ||
     knowledgeGraph.notes.length > 0 ||
     Boolean(knowledgeGraph.markdown.trim())
@@ -353,6 +359,9 @@ export function buildPersistentNodes(
   knowledgeGraph: ProductKnowledgeGraph,
 ): KnowledgeGraphEntity[] {
   const nodes = new Map<string, KnowledgeGraphEntity>();
+  const resolvedOpenQuestionIds = new Set(
+    knowledgeGraph.resolved_open_question_ids ?? [],
+  );
   const entityIds = new Set(
     knowledgeGraph.entities.map((entity) => entity.id.trim()),
   );
@@ -387,6 +396,7 @@ export function buildPersistentNodes(
   }
 
   for (const question of knowledgeGraph.open_questions) {
+    if (resolvedOpenQuestionIds.has(question.id)) continue;
     addAuxiliaryNode(nodes, {
       id: question.id,
       type: "OpenQuestion",

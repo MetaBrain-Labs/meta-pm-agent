@@ -1,12 +1,14 @@
 /**
  * Document Agent 评分执行器
  *
- * 为 PRD 草稿提供独立质量门禁：三位评分 Agent 按中国高考语文作文阅卷模式独立打分。
- * 只有三方分差不超过阈值时，才进入共识评分；分差过大时直接记录失败并触发重写重试。
+ * 为 PRD 草稿提供独立质量门禁：三位职责明确的评分 Agent 按统一量表独立打分，
+ * 随后由语义聚合 Agent 合并重叠证据阻断。只有三方分差不超过阈值时，才进入
+ * 确定性共识评分；分差过大时直接记录失败并触发重写重试。
  *
  * Responsibilities:
  * - runPrdScoringReviewers()：运行三位独立评分 Agent
- * - runPrdWeightedScoringAgent()：运行分差合格后的共识评分 Agent
+ * - groupPrdEvidenceBlockers()：语义合并 Reviewer 阻断并保留来源
+ * - createDeterministicConsensusScore()：汇总分差合格后的三方评分
  * - 提供评分阈值、最大偏差、最大重试次数与确定性回退
  *
  * Notes:
@@ -14,7 +16,15 @@
  */
 
 import { z } from "zod";
-import type { DocumentSectionDraft } from "@repo/shared";
+import type {
+  DocumentEvidenceBlockerDetail,
+  DocumentEvidenceBlockerGroup,
+  DocumentSectionDraft,
+  DocumentScoreDisposition,
+  KnowledgeGraphEntity,
+  KnowledgeGraphRelation,
+  ModelUsageProfile,
+} from "@repo/shared";
 import {
   type AgentRunEvent,
   JSON_AGENT_MODEL_OPTIONS,
@@ -22,22 +32,27 @@ import {
   runAgent,
 } from "../common/run-agent";
 import {
-  PRD_GAOKAO_SCORING_AGENT_PROMPT,
-  PRD_WEIGHTED_SCORING_AGENT_PROMPT,
+  PRD_EVIDENCE_BLOCKER_GROUPING_PROMPT,
+  PRD_SCORING_REVIEWER_PROMPT,
 } from "./prompt";
 
 export const DOCUMENT_SCORE_THRESHOLD = 85;
 export const DOCUMENT_SCORE_MAX_SPREAD = 8;
 export const DOCUMENT_SCORE_MAX_ATTEMPTS = 3;
+export const DOCUMENT_REVIEWER_MODEL_OPTIONS = {
+  ...JSON_AGENT_MODEL_OPTIONS,
+  enableThinking: true,
+  maxTokens: 3072,
+} as const;
 
 export type DocumentScoreAgentType = "document-score";
 
 export type DocumentScoringStreamEvent = AgentRunEvent<DocumentScoreAgentType>;
 
 export type DocumentScoringReviewerId =
-  | "gaokao-reviewer-a"
-  | "gaokao-reviewer-b"
-  | "gaokao-reviewer-c";
+  | "product-rationale-evidence-reviewer"
+  | "requirements-acceptance-reviewer"
+  | "scope-delivery-readiness-reviewer";
 
 /**
  * 单个评分 Agent 的结构化评分结果。
@@ -56,6 +71,9 @@ export interface DocumentScoreReview {
   strengths: string[];
   weaknesses: string[];
   revisionAdvice: string[];
+  evidenceBlocked: boolean;
+  evidenceBlockers: string[];
+  evidenceBlockerDetails: DocumentEvidenceBlockerDetail[];
 }
 
 /**
@@ -86,7 +104,30 @@ export interface DocumentScoreAttempt {
   varianceAccepted: boolean;
   aggregate: DocumentWeightedScore;
   passed: boolean;
+  evidenceBlocked: boolean;
+  evidenceBlockers: string[];
+  evidenceBlockerGroups: DocumentEvidenceBlockerGroup[];
+  evidenceBlockerGroupingStatus: "grouped" | "fallback";
   selected: boolean;
+}
+
+/**
+ * 语义分组前带稳定索引的 Reviewer 阻断意见。
+ */
+export interface DocumentEvidenceBlockerFinding {
+  index: number;
+  reviewerId: DocumentScoringReviewerId;
+  reviewerName: string;
+  text: string;
+  relatedNodeIds?: string[];
+}
+
+/**
+ * 语义分组结果及其确定性降级状态。
+ */
+export interface DocumentEvidenceBlockerGrouping {
+  groups: DocumentEvidenceBlockerGroup[];
+  status: "grouped" | "fallback";
 }
 
 /**
@@ -101,6 +142,23 @@ export interface DocumentScoreSelection {
     | "highest_score_then_lowest_spread";
 }
 
+/** 单次评分写入状态前的统一处置结果。 */
+export interface FinalizedDocumentScoreAttempt {
+  attempts: DocumentScoreAttempt[];
+  persistedAttempt: DocumentScoreAttempt;
+  disposition: DocumentScoreDisposition;
+  scoreFeedback: string;
+  draftMarkdown: string;
+}
+
+const ReviewerEvidenceBlockerSchema = z.union([
+  z.string().min(1),
+  z.object({
+    text: z.string().min(1),
+    relatedNodeIds: z.array(z.string().min(1)).default([]),
+  }),
+]);
+
 const ReviewerScoreSchema = z.object({
   score: z.number().min(0).max(100),
   dimensions: z.object({
@@ -113,43 +171,53 @@ const ReviewerScoreSchema = z.object({
   strengths: z.array(z.string()).default([]),
   weaknesses: z.array(z.string()).default([]),
   revisionAdvice: z.array(z.string()).default([]),
+  evidenceBlocked: z.boolean().default(false),
+  evidenceBlockers: z.array(ReviewerEvidenceBlockerSchema).default([]),
 });
 
-const WeightedScoreSchema = z.object({
-  score: z.number().min(0).max(100),
-  confidence: z.number().min(0).max(1),
-  rationale: z.string().min(1),
-  requiredRevisions: z.array(z.string()).default([]),
-  weights: z.object({
-    averageScore: z.number().min(0).max(100),
-    minimumScore: z.number().min(0).max(100),
-    spreadPenalty: z.number().min(0),
-    consistencyBonus: z.number().min(0),
-  }),
+const EvidenceBlockerGroupingSchema = z.object({
+  groups: z.array(
+    z.object({
+      title: z.string().min(1),
+      description: z.string().min(1),
+      sourceIndexes: z.array(z.number().int().nonnegative()).min(1),
+    }),
+  ),
 });
 
-const REVIEWERS: Array<{
+export const DOCUMENT_SCORE_REVIEWERS: Array<{
   id: DocumentScoringReviewerId;
   name: string;
   profile: string;
+  relevantTypes: KnowledgeGraphEntity["type"][];
 }> = [
   {
-    id: "gaokao-reviewer-a",
-    name: "Gaokao Reviewer A",
+    id: "product-rationale-evidence-reviewer",
+    name: "Product Rationale & Evidence Reviewer",
     profile:
-      "Strict first reviewer. Prioritize requirement completeness, evidence grounding, and whether the PRD answers the core product problem.",
+      "Why-and-evidence reviewer. Prioritize why the work matters, the problem and target users, business value, source-node traceability, and whether facts or priorities were invented.",
+    relevantTypes: ["Goal", "Evidence", "Decision", "Metric"],
   },
   {
-    id: "gaokao-reviewer-b",
-    name: "Gaokao Reviewer B",
+    id: "requirements-acceptance-reviewer",
+    name: "Requirements & Acceptance Reviewer",
     profile:
-      "Structure-focused second reviewer. Prioritize clear hierarchy, acceptance criteria, dependencies, and logical consistency across sections.",
+      "Cross-functional specification reviewer. Prioritize functional coverage, user experience, stable requirement IDs, P0 or high-risk Given/When/Then acceptance criteria, edge cases, and clarity for product, design, engineering, and QA.",
+    relevantTypes: ["Requirement", "Feature", "Component"],
   },
   {
-    id: "gaokao-reviewer-c",
-    name: "Gaokao Reviewer C",
+    id: "scope-delivery-readiness-reviewer",
+    name: "Scope & Delivery Readiness Reviewer",
     profile:
-      "Practicality-focused third reviewer. Prioritize feasibility, implementation readiness, measurable metrics, and risk disclosure.",
+      "Scope-and-readiness reviewer. Prioritize scope and priority, measurable outcomes, dependencies, constraints, risks, validation, business usability, and whether the document defines the required degree of completion.",
+    relevantTypes: [
+      "Goal",
+      "Decision",
+      "Metric",
+      "Requirement",
+      "Component",
+      "Custom",
+    ],
   },
 ];
 
@@ -159,136 +227,435 @@ const REVIEWERS: Array<{
 export async function runPrdScoringReviewers({
   markdown,
   sections,
+  sourceGraph,
+  sourceGroundingIssues,
   attempt,
+  modelProfile,
   signal,
   onEvent,
 }: {
   markdown: string;
   sections: DocumentSectionDraft[];
+  sourceGraph: {
+    nodes: KnowledgeGraphEntity[];
+    relations: KnowledgeGraphRelation[];
+  };
+  sourceGroundingIssues: string[];
   attempt: number;
+  modelProfile?: ModelUsageProfile;
   signal?: AbortSignal;
   onEvent?: (event: DocumentScoringStreamEvent) => void;
 }): Promise<DocumentScoreReview[]> {
-  const reviews: DocumentScoreReview[] = [];
-
-  for (const reviewer of REVIEWERS) {
-    const stream = runAgent({
-      agentType: "document-score",
-      agentLabel: reviewer.name,
-      name: `document-${reviewer.id}`,
-      systemPrompt: PRD_GAOKAO_SCORING_AGENT_PROMPT,
-      modelOptions: {
-        ...JSON_AGENT_MODEL_OPTIONS,
-        maxTokens: 4096,
-      },
-      payload: {
-        reviewer,
-        attempt,
-        scoringScale: "0-100",
-        markdown,
-        sections,
-      },
-      resolveOutput: (context) =>
-        resolveJsonOutput(context, ReviewerScoreSchema),
-      fallback: (reason) =>
-        createReviewerFallback({
-          reviewer,
+  return Promise.all(
+    DOCUMENT_SCORE_REVIEWERS.map(async (reviewer) => {
+      const stream = runAgent({
+        agentType: "document-score",
+        agentLabel: reviewer.name,
+        name: `document-${reviewer.id}`,
+        systemPrompt: PRD_SCORING_REVIEWER_PROMPT,
+        modelOptions: DOCUMENT_REVIEWER_MODEL_OPTIONS,
+        modelProfile,
+        modelGroup: "document",
+        payload: {
+          attempt,
+          scoringScale: "0-100",
           markdown,
           sections,
-          reason,
-        }),
-      signal,
-      suppressFallbackReasoning: true,
-    });
+          sourceGroundingIssues,
+          sourceLedger: createReviewerSourceLedger({
+            markdown,
+            sourceGraph,
+            reviewer,
+          }),
+          reviewer,
+        },
+        resolveOutput: (context) =>
+          resolveJsonOutput(context, ReviewerScoreSchema),
+        fallback: (reason) =>
+          createReviewerFallback({
+            reviewer,
+            markdown,
+            sections,
+            reason,
+          }),
+        signal,
+        suppressFallbackReasoning: true,
+      });
 
-    const parsed = await consumeJsonAgentStream(stream, onEvent);
-    reviews.push({
-      reviewerId: reviewer.id,
-      reviewerName: reviewer.name,
-      score: clampScore(parsed.score),
-      dimensions: {
-        relevance: clampScore(parsed.dimensions.relevance),
-        completeness: clampScore(parsed.dimensions.completeness),
-        structure: clampScore(parsed.dimensions.structure),
-        feasibility: clampScore(parsed.dimensions.feasibility),
-        language: clampScore(parsed.dimensions.language),
-      },
-      strengths: parsed.strengths.slice(0, 6),
-      weaknesses: parsed.weaknesses.slice(0, 6),
-      revisionAdvice: parsed.revisionAdvice.slice(0, 8),
-    });
-  }
-
-  return reviews;
+      const parsed = await consumeJsonAgentStream(stream, onEvent);
+      const evidenceBlockerDetails = normalizeReviewerEvidenceBlockers(
+        parsed.evidenceBlockers,
+        sourceGraph,
+      );
+      return {
+        reviewerId: reviewer.id,
+        reviewerName: reviewer.name,
+        score: clampScore(parsed.score),
+        dimensions: {
+          relevance: clampScore(parsed.dimensions.relevance),
+          completeness: clampScore(parsed.dimensions.completeness),
+          structure: clampScore(parsed.dimensions.structure),
+          feasibility: clampScore(parsed.dimensions.feasibility),
+          language: clampScore(parsed.dimensions.language),
+        },
+        strengths: parsed.strengths,
+        weaknesses: parsed.weaknesses,
+        revisionAdvice: parsed.revisionAdvice,
+        evidenceBlocked: parsed.evidenceBlocked,
+        evidenceBlockers: evidenceBlockerDetails.map((item) => item.text),
+        evidenceBlockerDetails,
+      };
+    }),
+  );
 }
 
 /**
- * 运行分差合格后的共识评分 Agent，并由代码层强制执行阈值与偏差规则。
+ * 将三方 Reviewer 的重叠证据阻断合并为可展示、可追溯的语义组。
  */
-export async function runPrdWeightedScoringAgent({
+export async function groupPrdEvidenceBlockers({
+  reviewerScores,
+  modelProfile,
+  signal,
+  onEvent,
+}: {
+  reviewerScores: DocumentScoreReview[];
+  modelProfile?: ModelUsageProfile;
+  signal?: AbortSignal;
+  onEvent?: (event: DocumentScoringStreamEvent) => void;
+}): Promise<DocumentEvidenceBlockerGrouping> {
+  const findings = flattenEvidenceBlockerFindings(reviewerScores);
+  if (findings.length === 0) return { groups: [], status: "grouped" };
+
+  const stream = runAgent({
+    agentType: "document-score",
+    agentLabel: "PRD Evidence Blocker Consolidator",
+    name: "document-evidence-blocker-consolidator",
+    systemPrompt: PRD_EVIDENCE_BLOCKER_GROUPING_PROMPT,
+    modelOptions: DOCUMENT_REVIEWER_MODEL_OPTIONS,
+    modelProfile,
+    modelGroup: "document",
+    payload: { findings },
+    resolveOutput: (context) =>
+      resolveJsonOutput(context, EvidenceBlockerGroupingSchema),
+    fallback: () => ({ groups: [] }),
+    signal,
+    suppressFallbackReasoning: true,
+  });
+  const result = await consumeJsonAgentStream(stream, onEvent);
+  return normalizeEvidenceBlockerGrouping(result, findings);
+}
+
+/**
+ * 为 Reviewer 阻断意见分配跨分组稳定的零基索引。
+ */
+export function flattenEvidenceBlockerFindings(
+  reviewerScores: DocumentScoreReview[],
+): DocumentEvidenceBlockerFinding[] {
+  return reviewerScores
+    .flatMap((reviewer) => {
+      const blockers =
+        reviewer.evidenceBlockers.length > 0
+          ? reviewer.evidenceBlockers
+          : reviewer.evidenceBlocked
+            ? [`${reviewer.reviewerName} identified a blocking evidence gap.`]
+            : [];
+      return blockers.map((text, index) => ({
+        index: 0,
+        reviewerId: reviewer.reviewerId,
+        reviewerName: reviewer.reviewerName,
+        text,
+        relatedNodeIds:
+          reviewer.evidenceBlockerDetails?.[index]?.relatedNodeIds ?? [],
+      }));
+    })
+    .map((finding, index) => ({ ...finding, index }));
+}
+
+/**
+ * 校验模型分组覆盖率；无效结果逐条降级，确保每条原始意见恰好保留一次。
+ */
+export function normalizeEvidenceBlockerGrouping(
+  value: unknown,
+  findings: DocumentEvidenceBlockerFinding[],
+): DocumentEvidenceBlockerGrouping {
+  const parsed = EvidenceBlockerGroupingSchema.safeParse(value);
+  const expectedIndexes = new Set(findings.map((finding) => finding.index));
+  const actualIndexes = parsed.success
+    ? parsed.data.groups.flatMap((group) => group.sourceIndexes)
+    : [];
+  const valid =
+    parsed.success &&
+    actualIndexes.length === findings.length &&
+    new Set(actualIndexes).size === findings.length &&
+    actualIndexes.every((index) => expectedIndexes.has(index));
+
+  if (!valid) {
+    return {
+      status: "fallback",
+      groups: findings.map((finding, index) => ({
+        id: `evidence-blocker-group-${index + 1}`,
+        title: `证据阻断 ${index + 1}`,
+        description: finding.text,
+        sourceIndexes: [finding.index],
+        sources: [toEvidenceBlockerSource(finding)],
+        relatedNodeIds: finding.relatedNodeIds ?? [],
+      })),
+    };
+  }
+
+  const findingByIndex = new Map(
+    findings.map((finding) => [finding.index, finding] as const),
+  );
+  return {
+    status: "grouped",
+    groups: parsed.data.groups.map((group, index) => {
+      const sources = group.sourceIndexes.map((sourceIndex) =>
+        toEvidenceBlockerSource(findingByIndex.get(sourceIndex)!),
+      );
+      return {
+        id: `evidence-blocker-group-${index + 1}`,
+        title: group.title.trim(),
+        description: group.description.trim(),
+        sourceIndexes: group.sourceIndexes,
+        sources,
+        relatedNodeIds: [
+          ...new Set(sources.flatMap((source) => source.relatedNodeIds)),
+        ],
+      };
+    }),
+  };
+}
+
+/**
+ * 将内部索引意见压缩为共享持久化来源结构。
+ */
+function toEvidenceBlockerSource(finding: DocumentEvidenceBlockerFinding) {
+  return {
+    reviewerId: finding.reviewerId,
+    reviewerName: finding.reviewerName,
+    text: finding.text,
+    relatedNodeIds: finding.relatedNodeIds ?? [],
+  };
+}
+
+/**
+ * 将 Reviewer 声明或阻断文本中引用的短 ID 恢复为权威图谱节点 ID。
+ */
+function normalizeReviewerEvidenceBlockers(
+  blockers: Array<z.infer<typeof ReviewerEvidenceBlockerSchema>>,
+  sourceGraph: { nodes: KnowledgeGraphEntity[] },
+) {
+  const nodeIdByReference = new Map<string, string>();
+  for (const node of sourceGraph.nodes) {
+    nodeIdByReference.set(node.id.toUpperCase(), node.id);
+    nodeIdByReference.set(shortenGraphId(node.id).toUpperCase(), node.id);
+  }
+
+  return blockers.map((blocker) => {
+    const text = typeof blocker === "string" ? blocker : blocker.text;
+    const declaredIds = typeof blocker === "string" ? [] : blocker.relatedNodeIds;
+    const citedIds = text.match(/\b[A-Z][A-Z0-9]*-[0-9a-f]{8}\b/gi) ?? [];
+    return {
+      text,
+      relatedNodeIds: [
+        ...new Set(
+          [...declaredIds, ...citedIds].flatMap((nodeId) => {
+            const resolved = nodeIdByReference.get(nodeId.toUpperCase());
+            return resolved ? [resolved] : [];
+          }),
+        ),
+      ],
+    };
+  });
+}
+
+/**
+ * 通过固定权重汇总三方评分，避免重复调用模型解释 Reviewer 已给出的结论。
+ */
+export function createDeterministicConsensusScore({
   markdown,
   reviewerScores,
   scoreSpread,
-  varianceAccepted,
-  attempt,
-  signal,
-  onEvent,
+  blockingEvidenceIssues,
 }: {
   markdown: string;
   reviewerScores: DocumentScoreReview[];
   scoreSpread: number;
-  varianceAccepted: boolean;
-  attempt: number;
-  signal?: AbortSignal;
-  onEvent?: (event: DocumentScoringStreamEvent) => void;
-}): Promise<DocumentWeightedScore> {
-  const stream = runAgent({
-    agentType: "document-score",
-    agentLabel: "Document Weighted Scoring Agent",
-    name: "document-weighted-scoring-agent",
-    systemPrompt: PRD_WEIGHTED_SCORING_AGENT_PROMPT,
-    modelOptions: {
-      ...JSON_AGENT_MODEL_OPTIONS,
-      // 共识评分需要综合三方分歧和修订项，使用与单评审一致的 4k 结构化输出预算。
-      maxTokens: 4096,
-    },
-    payload: {
-      attempt,
-      threshold: DOCUMENT_SCORE_THRESHOLD,
-      maxAllowedScoreSpread: DOCUMENT_SCORE_MAX_SPREAD,
-      scoreSpread,
-      varianceAccepted,
-      reviewerScores,
-      markdown,
-    },
-    resolveOutput: (context) =>
-      resolveJsonOutput(context, WeightedScoreSchema),
-    fallback: (reason) =>
-      createWeightedFallback({
-        reviewerScores,
-        scoreSpread,
-        varianceAccepted,
-        reason,
-      }),
-    signal,
-    suppressFallbackReasoning: true,
+  blockingEvidenceIssues: string[];
+}): DocumentWeightedScore {
+  const scores = reviewerScores.map((review) => review.score);
+  const averageScore =
+    scores.length > 0
+      ? scores.reduce((sum, score) => sum + score, 0) / scores.length
+      : 0;
+  const minimumScore = scores.length > 0 ? Math.min(...scores) : 0;
+  const baseScore = clampScore(averageScore * 0.7 + minimumScore * 0.3);
+  const completionGate = applyPrdCompletionGate({
+    markdown,
+    score: baseScore,
+    blockingEvidenceIssues,
   });
-
-  const parsed = await consumeJsonAgentStream(stream, onEvent);
-  const score = clampScore(parsed.score);
+  const requiredRevisions = Array.from(
+    new Set(
+      [
+        ...blockingEvidenceIssues,
+        ...reviewerScores.flatMap((review) => review.revisionAdvice),
+      ]
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ).slice(0, 10);
+  if (completionGate.blocked) {
+    requiredRevisions.unshift(
+      "Keep unsupported facts as TBD and obtain new graph evidence before quality approval.",
+    );
+  }
 
   return {
-    score,
-    passed: varianceAccepted && score >= DOCUMENT_SCORE_THRESHOLD,
-    confidence: Math.max(0, Math.min(1, parsed.confidence)),
-    rationale: parsed.rationale,
-    requiredRevisions: parsed.requiredRevisions.slice(0, 10),
+    score: completionGate.score,
+    passed:
+      !completionGate.blocked &&
+      completionGate.score >= DOCUMENT_SCORE_THRESHOLD,
+    confidence: 0.72,
+    rationale: completionGate.blocked
+      ? "The deterministic consensus score is below approval because unresolved evidence or source-grounding gaps remain."
+      : "The deterministic consensus score weights the reviewer average at 70% and the strictest reviewer at 30%.",
+    requiredRevisions: Array.from(new Set(requiredRevisions)).slice(0, 10),
     weights: {
-      averageScore: clampScore(parsed.weights.averageScore),
-      minimumScore: clampScore(parsed.weights.minimumScore),
-      spreadPenalty: Math.max(0, parsed.weights.spreadPenalty),
-      consistencyBonus: Math.max(0, parsed.weights.consistencyBonus),
+      averageScore,
+      minimumScore,
+      spreadPenalty: 0,
+      consistencyBonus: 0,
     },
+  };
+}
+
+/**
+ * 对明确标记为 TBD 的未决事实执行确定性完成门禁。
+ */
+export function applyPrdCompletionGate({
+  markdown,
+  score,
+  blockingEvidenceIssues = [],
+}: {
+  markdown: string;
+  score: number;
+  blockingEvidenceIssues?: string[];
+}): {
+  score: number;
+  blocked: boolean;
+} {
+  const blocked =
+    /\bTBD\b/i.test(markdown) || blockingEvidenceIssues.length > 0;
+  return {
+    score: blocked
+      ? Math.min(clampScore(score), DOCUMENT_SCORE_THRESHOLD - 1)
+      : clampScore(score),
+    blocked,
+  };
+}
+
+/**
+ * 检查 PRD 中可确定验证的图谱引用，不执行自然语言状态判断。
+ */
+export function validatePrdSourceGrounding({
+  markdown,
+  nodes,
+  relations,
+}: {
+  markdown: string;
+  nodes: KnowledgeGraphEntity[];
+  relations: KnowledgeGraphRelation[];
+}): string[] {
+  const graphItems = [...nodes, ...relations];
+  const knownIds = new Set(
+    graphItems.map((item) => shortenGraphId(item.id).toUpperCase()),
+  );
+  const issues: string[] = [];
+  const citedIds = markdown.match(
+    /\b(?:G|E|R|F|D|M|CUS|COMP|REL|RISK)-[0-9a-f]{8}\b/gi,
+  );
+
+  for (const citedId of new Set(citedIds ?? [])) {
+    if (!knownIds.has(citedId.toUpperCase())) {
+      issues.push(`PRD cites unknown graph source ID ${citedId}.`);
+    }
+  }
+
+  return Array.from(new Set(issues));
+}
+
+/**
+ * 判断失败草稿能否仅靠现有图谱重写；证据阻塞时直接导出草案等待补充。
+ */
+export function shouldRetryDocumentScoreAttempt({
+  attemptCount,
+  passed,
+  evidenceBlocked,
+}: {
+  attemptCount: number;
+  passed: boolean;
+  evidenceBlocked: boolean;
+}): boolean {
+  return (
+    !passed &&
+    !evidenceBlocked &&
+    attemptCount < DOCUMENT_SCORE_MAX_ATTEMPTS
+  );
+}
+
+/**
+ * 根据最新一次评分与累计次数决定后续动作。
+ */
+export function resolveDocumentScoreDisposition({
+  attempt,
+  attemptCount,
+}: {
+  attempt: DocumentScoreAttempt;
+  attemptCount: number;
+}): DocumentScoreDisposition {
+  if (attempt.passed) return "passed";
+  if (attempt.evidenceBlocked) return "awaiting_input";
+  if (attemptCount >= DOCUMENT_SCORE_MAX_ATTEMPTS) {
+    return "export_best_attempt";
+  }
+  return "retry";
+}
+
+/**
+ * 统一追加、选择并标记评分 attempt，避免不同评分分支各自推导状态。
+ */
+export function finalizeDocumentScoreAttempt({
+  priorAttempts,
+  attempt,
+}: {
+  priorAttempts: DocumentScoreAttempt[];
+  attempt: DocumentScoreAttempt;
+}): FinalizedDocumentScoreAttempt {
+  const accumulatedAttempts = [...priorAttempts, attempt];
+  const disposition = resolveDocumentScoreDisposition({
+    attempt,
+    attemptCount: accumulatedAttempts.length,
+  });
+  const selected = selectFinalScoreAttempt(accumulatedAttempts);
+  const selectedAttemptNumber =
+    disposition === "retry" ? null : (selected?.attempt.attempt ?? null);
+  const attempts = accumulatedAttempts.map((item) => ({
+    ...item,
+    selected: item.attempt === selectedAttemptNumber,
+  }));
+  const persistedAttempt = attempts.at(-1)!;
+
+  return {
+    attempts: [...priorAttempts, persistedAttempt],
+    persistedAttempt,
+    disposition,
+    scoreFeedback:
+      disposition === "retry" ? createScoreRetryFeedback(attempt) : "",
+    draftMarkdown:
+      disposition === "retry"
+        ? attempt.markdown
+        : (selected?.attempt.markdown ?? attempt.markdown),
   };
 }
 
@@ -298,9 +665,11 @@ export async function runPrdWeightedScoringAgent({
 export function createSkippedConsensusScore({
   reviewerScores,
   scoreSpread,
+  sourceGroundingIssues = [],
 }: {
   reviewerScores: DocumentScoreReview[];
   scoreSpread: number;
+  sourceGroundingIssues?: string[];
 }): DocumentWeightedScore {
   const scores = reviewerScores.map((review) => review.score);
   const averageScore =
@@ -314,8 +683,10 @@ export function createSkippedConsensusScore({
   );
   const requiredRevisions = Array.from(
     new Set(
-      reviewerScores
-        .flatMap((review) => review.revisionAdvice)
+      [
+        ...sourceGroundingIssues,
+        ...reviewerScores.flatMap((review) => review.revisionAdvice),
+      ]
         .map((item) => item.trim())
         .filter(Boolean),
     ),
@@ -427,7 +798,7 @@ function createReviewerFallback({
   sections,
   reason,
 }: {
-  reviewer: (typeof REVIEWERS)[number];
+  reviewer: (typeof DOCUMENT_SCORE_REVIEWERS)[number];
   markdown: string;
   sections: DocumentSectionDraft[];
   reason: string;
@@ -436,7 +807,7 @@ function createReviewerFallback({
   const hasMetric = /指标|metric|success/i.test(markdown);
   const hasAcceptance = /验收|acceptance/i.test(markdown);
   const baseScore = Math.min(
-    88,
+    74,
     62 +
       Math.min(12, sections.length * 2) +
       (hasRisk ? 5 : 0) +
@@ -462,54 +833,47 @@ function createReviewerFallback({
       "Make acceptance criteria and measurable success metrics explicit.",
       "Clarify risks, dependencies, and implementation constraints.",
     ],
+    evidenceBlocked: false,
+    evidenceBlockers: [],
   };
 }
 
 /**
- * 创建共识评分 Agent 的确定性回退结果。
+ * 为单个 Reviewer 构造轻量全图索引和职责相关的详细事实。
  */
-function createWeightedFallback({
-  reviewerScores,
-  scoreSpread,
-  varianceAccepted,
-  reason,
+export function createReviewerSourceLedger({
+  markdown,
+  sourceGraph,
+  reviewer,
 }: {
-  reviewerScores: DocumentScoreReview[];
-  scoreSpread: number;
-  varianceAccepted: boolean;
-  reason: string;
-}): z.infer<typeof WeightedScoreSchema> {
-  const scores = reviewerScores.map((review) => review.score);
-  const averageScore =
-    scores.length > 0
-      ? scores.reduce((sum, score) => sum + score, 0) / scores.length
-      : 0;
-  const minimumScore = scores.length > 0 ? Math.min(...scores) : 0;
-  const spreadPenalty = Math.max(0, scoreSpread - 4) * 1.5;
-  const consistencyBonus = varianceAccepted ? 2 : 0;
-  const score = clampScore(
-    averageScore * 0.72 +
-      minimumScore * 0.18 +
-      consistencyBonus -
-      spreadPenalty,
+  markdown: string;
+  sourceGraph: {
+    nodes: KnowledgeGraphEntity[];
+    relations: KnowledgeGraphRelation[];
+  };
+  reviewer: (typeof DOCUMENT_SCORE_REVIEWERS)[number];
+}) {
+  const citedIds = new Set(
+    (markdown.match(
+      /\b(?:G|E|R|F|D|M|CUS|COMP|REL|RISK)-[0-9a-f]{8}\b/gi,
+    ) ?? []).map((id) => id.toUpperCase()),
+  );
+  const detailedNodes = sourceGraph.nodes.filter(
+    (node) =>
+      citedIds.has(shortenGraphId(node.id).toUpperCase()) &&
+      reviewer.relevantTypes.includes(node.type),
+  );
+  const detailedNodeIds = new Set(detailedNodes.map((node) => node.id));
+  const detailedRelations = sourceGraph.relations.filter(
+    (relation) =>
+      detailedNodeIds.has(relation.source) &&
+      detailedNodeIds.has(relation.target),
   );
 
   return {
-    score,
-    confidence: varianceAccepted ? 0.72 : 0.48,
-    rationale:
-      "Weighted scoring was completed by the deterministic backup scorer because the weighted scoring agent did not return a valid structured result.",
-    requiredRevisions: [
-      "Address the lowest scoring reviewer comments first.",
-      "Reduce reviewer disagreement by making requirements more concrete and evidence-backed.",
-      "Improve PRD completeness before final export.",
-    ],
-    weights: {
-      averageScore,
-      minimumScore,
-      spreadPenalty,
-      consistencyBonus,
-    },
+    nodeIndex: sourceGraph.nodes.map(compactSourceNodeIndex),
+    nodes: detailedNodes.map(compactSourceNode),
+    relations: detailedRelations.map(compactSourceRelation),
   };
 }
 
@@ -518,4 +882,48 @@ function createWeightedFallback({
  */
 function clampScore(score: number): number {
   return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+/**
+ * 压缩评分 Agent 所需的节点事实，保留状态和描述用于语义证据判断。
+ */
+function compactSourceNode(node: KnowledgeGraphEntity) {
+  return {
+    id: shortenGraphId(node.id),
+    type: node.type,
+    name: node.name,
+    description: node.description,
+    status: node.status,
+  };
+}
+
+/** 压缩全图节点索引，不复制长描述。 */
+function compactSourceNodeIndex(node: KnowledgeGraphEntity) {
+  return {
+    id: shortenGraphId(node.id),
+    type: node.type,
+    name: node.name,
+    status: node.status,
+  };
+}
+
+/**
+ * 压缩评分 Agent 所需的关系事实。
+ */
+function compactSourceRelation(relation: KnowledgeGraphRelation) {
+  return {
+    id: shortenGraphId(relation.id),
+    type: relation.type,
+    source: shortenGraphId(relation.source),
+    target: shortenGraphId(relation.target),
+    description: relation.description,
+  };
+}
+
+/**
+ * 将图谱 UUID 形式 ID 缩短为 PRD 使用的稳定前缀。
+ */
+function shortenGraphId(id: string): string {
+  const match = /^([A-Z]+-[0-9a-f]{8})(?:-|$)/i.exec(id);
+  return match?.[1] ?? id;
 }

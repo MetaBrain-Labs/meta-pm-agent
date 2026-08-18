@@ -74,6 +74,7 @@ export const ChatRequestSchema = z
  */
 export const StopChatRequestSchema = z.object({
   chatId: z.string().uuid(),
+  origin: z.enum(["manual_stop", "page_unload"]).optional(),
 });
 
 /**

@@ -26,13 +26,22 @@ import type {
 import { mergeProductKnowledgeGraphSnapshots } from "../agents/product-workflow/common/knowledge-graph-merge";
 import type { UserInputRecord } from "../agents/request/user-input";
 import type { ExecutorAgentType } from "../agents/product-workflow/executor-agent/definitions";
-import type { CritiqueReviewIssue } from "../agents/product-workflow/types";
+import type {
+  CritiqueReviewIssue,
+  WorkflowPurpose,
+} from "../agents/product-workflow/types";
 
 /**
  * 公共 LangGraph 状态。后续新增 Planner、QA 或模块 Agent 时，
  * 都应继续在这里扩展跨节点共享的状态字段。
  */
 export const WorkflowGraphState = Annotation.Root({
+  // 工作流用途由服务端入口设置，并在所有补充、修正和 checkpoint 轮次中保持不变。
+  workflowPurpose: Annotation<WorkflowPurpose>({
+    reducer: (_current, update) => update,
+    default: () => "standard",
+  }),
+
   // API 读取工作区概述性文档后注入，可为空。
   productContext: Annotation<string>({
     reducer: (_current, update) => update,
@@ -98,6 +107,23 @@ export const WorkflowGraphState = Annotation.Root({
 
   // Question Form 恢复时仅允许 Planner 为受影响的 Executor 生成补充任务。
   supplementAgentTypes: Annotation<ExecutorAgentType[]>({
+    reducer: (_current, update) => update,
+    default: () => [],
+  }),
+
+  // 补充流程保留问题来源任务与一跳影响任务，供 Planner 精确选择上下文。
+  supplementSourceTaskIds: Annotation<string[]>({
+    reducer: (_current, update) => update,
+    default: () => [],
+  }),
+
+  supplementAffectedTaskIds: Annotation<string[]>({
+    reducer: (_current, update) => update,
+    default: () => [],
+  }),
+
+  // 专用补证 Resolver 已确认的节点关联，供 Planner 精确选择子图。
+  supplementRelatedNodeIds: Annotation<string[]>({
     reducer: (_current, update) => update,
     default: () => [],
   }),

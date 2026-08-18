@@ -13,11 +13,21 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { ProductKnowledgeGraph } from "@repo/shared";
 import {
   buildPersistentNodes,
   createProductContextSnapshotKnowledgeGraph,
 } from "../src/services/product-knowledge-graph-service";
+import {
+  mergeProductContextSnapshotWithPersistedGraph,
+} from "../src/services/product-context-service";
+import {
+  readProductContextResourceSnapshot,
+  writeProductContextResourceSnapshot,
+} from "../src/services/product-context-resource-service";
 
 test("normalizes runtime graph facts into persisted nodes", () => {
   const nodes = buildPersistentNodes(createKnowledgeGraph());
@@ -59,6 +69,63 @@ test("strips nodes and relations from product context snapshots", () => {
   assert.equal(snapshot.decisions.length, 1);
   assert.equal(snapshot.risks.length, 1);
   assert.equal(snapshot.open_questions.length, 1);
+});
+
+test("does not persist or restore resolved open questions", () => {
+  const persistedGraph = createKnowledgeGraph();
+  const snapshot = {
+    ...createProductContextSnapshotKnowledgeGraph(persistedGraph),
+    resolved_open_question_ids: ["OQ-001"],
+  };
+
+  assert.equal(
+    buildPersistentNodes({
+      ...persistedGraph,
+      resolved_open_question_ids: ["OQ-001"],
+    }).some((node) => node.id === "OQ-001"),
+    false,
+  );
+  assert.deepEqual(
+    mergeProductContextSnapshotWithPersistedGraph(
+      snapshot,
+      persistedGraph,
+    ).open_questions,
+    [],
+  );
+});
+
+test("preserves stable lifecycle state after resource snapshot reload", async (t) => {
+  const resourceDir = await mkdtemp(
+    path.join(tmpdir(), "meta-pm-product-context-"),
+  );
+  const previousResourceDir = process.env.PRODUCT_CONTEXT_RESOURCE_DIR;
+  process.env.PRODUCT_CONTEXT_RESOURCE_DIR = resourceDir;
+  t.after(async () => {
+    if (previousResourceDir === undefined) {
+      delete process.env.PRODUCT_CONTEXT_RESOURCE_DIR;
+    } else {
+      process.env.PRODUCT_CONTEXT_RESOURCE_DIR = previousResourceDir;
+    }
+    await rm(resourceDir, { recursive: true, force: true });
+  });
+
+  await writeProductContextResourceSnapshot({
+    workspaceId: "workspace-stable",
+    knowledgeGraph: {
+      ...createKnowledgeGraph(),
+      current_state: "stable",
+      description: "Critique accepted the completed workflow.",
+    },
+  });
+  const restored = await readProductContextResourceSnapshot(
+    "workspace-stable",
+  );
+
+  assert.equal(restored?.knowledgeGraph.current_state, "stable");
+  assert.equal(
+    restored?.knowledgeGraph.description,
+    "Critique accepted the completed workflow.",
+  );
 });
 
 /**

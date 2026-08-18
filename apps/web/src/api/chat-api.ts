@@ -19,8 +19,75 @@ import type {
   PersistedMessageInfo,
   ThreadInfo,
   WorkspaceInfo,
+  ModelUsageProfile,
 } from "../types";
 import { mapPersistedMessageToMessage } from "../mappers/persisted-message";
+
+/** 获取账号可用模型列表，首项始终为内置默认列表。 */
+export async function fetchModelProfiles(): Promise<ModelUsageProfile[]> {
+  const response = await fetch("/api/model-profiles");
+  if (!response.ok) throw new Error(`Server error: ${response.status}`);
+  return ((await response.json()) as { profiles: ModelUsageProfile[] }).profiles;
+}
+
+/** 新建账号模型使用列表。 */
+export async function createModelProfile(
+  input: Pick<ModelUsageProfile, "name" | "config">,
+): Promise<ModelUsageProfile> {
+  return saveModelProfile("/api/model-profiles", "POST", input);
+}
+
+/** 更新账号模型使用列表。 */
+export async function updateModelProfile(
+  id: string,
+  input: Pick<ModelUsageProfile, "name" | "config">,
+): Promise<ModelUsageProfile> {
+  return saveModelProfile(`/api/model-profiles/${id}`, "PUT", input);
+}
+
+/** 删除账号模型使用列表，关联会话由数据库级联自动回退默认。 */
+export async function deleteModelProfile(id: string): Promise<void> {
+  const response = await fetch(`/api/model-profiles/${id}`, { method: "DELETE" });
+  if (!response.ok) throw new Error(`Server error: ${response.status}`);
+}
+
+/** 获取会话当前模型使用列表。 */
+export async function fetchChatModelProfile(
+  chatId: string,
+): Promise<ModelUsageProfile> {
+  const response = await fetch(`/api/chats/${chatId}/model-profile`);
+  if (!response.ok) throw new Error(`Server error: ${response.status}`);
+  return ((await response.json()) as { profile: ModelUsageProfile }).profile;
+}
+
+/** 空闲或 HITL 状态下更新会话模型列表。 */
+export async function selectChatModelProfile(
+  chatId: string,
+  profileId: string,
+): Promise<ModelUsageProfile> {
+  const response = await fetch(`/api/chats/${chatId}/model-profile`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ profileId }),
+  });
+  if (!response.ok) throw new Error(`Server error: ${response.status}`);
+  return ((await response.json()) as { profile: ModelUsageProfile }).profile;
+}
+
+/** 统一提交模型列表并保留服务端冲突状态。 */
+async function saveModelProfile(
+  url: string,
+  method: "POST" | "PUT",
+  input: Pick<ModelUsageProfile, "name" | "config">,
+): Promise<ModelUsageProfile> {
+  const response = await fetch(url, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(`Server error: ${response.status}`);
+  return ((await response.json()) as { profile: ModelUsageProfile }).profile;
+}
 
 /**
  * 获取当前默认账号信息。
@@ -151,11 +218,14 @@ export async function fetchChatMessages(threadId: string): Promise<Message[]> {
 /**
  * 请求服务端停止指定会话当前运行中的 Agent。
  */
-export async function stopChatGeneration(threadId: string): Promise<void> {
+export async function stopChatGeneration(
+  threadId: string,
+  origin: "manual_stop" | "page_unload" = "manual_stop",
+): Promise<void> {
   await fetch("/api/chat/stop", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chatId: threadId }),
+    body: JSON.stringify({ chatId: threadId, origin }),
     keepalive: true,
   });
 }

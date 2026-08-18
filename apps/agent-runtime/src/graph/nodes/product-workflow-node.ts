@@ -34,11 +34,14 @@ import {
   streamCritiqueAgent,
   type OrchestratorAgentOutput,
 } from "../../agents/product-workflow/agent";
+import { getModelProfileFromRunnableConfig } from "../../agents/common/model-profile";
 import { updateProductContextMetadata } from "../../agents/product-workflow/common/context-metadata";
+import { classifyProductWorkflowRound } from "../../agents/product-workflow/round-classification";
+import {
+  packParallelExecutorTasks,
+  selectReadyTasks,
+} from "../../agents/product-workflow/dag";
 import type { WorkflowGraphStateValue } from "../state";
-
-const AUTOMATIC_CRITIQUE_CORRECTION_MARKER =
-  "[automatic critique correction]";
 
 /**
  * Planner 节点：显示 Orchestrator 的 Planner SubAgent 生成的 DAG，
@@ -144,6 +147,8 @@ export async function orchestratorAgentNode(
   });
   const { decision, plan } = (await consumeProductWorkflowStream(
     streamOrchestratorAgent({
+      workflowPurpose: state.workflowPurpose,
+      modelProfile: getModelProfileFromRunnableConfig(config),
       workspaceId: state.workspaceId,
       productContext: state.productContext,
       contextSource: state.contextSource,
@@ -151,6 +156,9 @@ export async function orchestratorAgentNode(
       userInput: state.userInput,
       knowledgeGraph,
       supplementAgentTypes: state.supplementAgentTypes,
+      supplementSourceTaskIds: state.supplementSourceTaskIds,
+      supplementAffectedTaskIds: state.supplementAffectedTaskIds,
+      supplementRelatedNodeIds: state.supplementRelatedNodeIds,
       answeredOpenQuestionIds: state.answeredOpenQuestionIds,
       signal: config?.signal,
     }),
@@ -330,11 +338,11 @@ async function executeExecutorAgentTask(
   if (!state.requestAnalysis || !state.plan) return {};
 
   const writer = getWriter(config);
-  const task = findNextExecutableTaskForAgent(state, agentType);
+  const task = findNextExecutableTaskForAgent(state, agentType, config);
   if (!task) return {};
   const knowledgeGraph =
     state.knowledgeGraph ?? createProductWorkflowKnowledgeGraph();
-  const parallelAgents = getCurrentParallelExecutorAgents(state);
+  const parallelAgents = getCurrentParallelExecutorAgents(state, config);
 
   writer?.({
     type: "agent-status",
@@ -354,9 +362,12 @@ async function executeExecutorAgentTask(
           `Previous failure details:\n${retryError}`,
         ].join("\n")
       : undefined;
+  const critiqueCorrection = createCritiqueCorrectionContext(state, task);
 
   const result = await consumeProductWorkflowStream(
     streamExecutorAgent({
+      workflowPurpose: state.workflowPurpose,
+      modelProfile: getModelProfileFromRunnableConfig(config),
       task,
       plan: state.plan,
       knowledgeGraph,
@@ -366,6 +377,12 @@ async function executeExecutorAgentTask(
       userInput: state.userInput,
       previousResults: state.executorResults,
       retryInstruction,
+      correctionInstruction: critiqueCorrection?.instruction,
+      correctionIssueCodes: critiqueCorrection?.issueCodes,
+      correctionTargetNodeIds: critiqueCorrection?.targetNodeIds,
+      forbidNewEvidence: critiqueCorrection?.forbidNewEvidence,
+      documentEvidenceResolution:
+        state.workflowPurpose === "document_evidence_resolution",
       signal: config?.signal,
     }),
     writer,
@@ -407,6 +424,85 @@ async function executeExecutorAgentTask(
 }
 
 /**
+ * 为 Critique 补充 DAG 提取确定性问题和精确节点目标。
+ *
+ * 这里只依据问题代码、任务 ID、节点类型及关系是否存在进行选择，不判断自然语言语义等价性。
+ */
+function createCritiqueCorrectionContext(
+  state: WorkflowGraphStateValue,
+  task: TaskExecutionNode,
+): {
+  instruction: string;
+  issueCodes: string[];
+  targetNodeIds: string[];
+  forbidNewEvidence: boolean;
+} | null {
+  if (state.plan?.status !== "supplement") return null;
+  const sourceTaskIds = new Set(state.supplementSourceTaskIds);
+  const hardIssues = state.priorCritiqueIssues.filter(
+    (issue) =>
+      issue.severity === "error" &&
+      (!issue.task_id || sourceTaskIds.has(issue.task_id)),
+  );
+  if (hardIssues.length === 0) return null;
+
+  const taskContract = [task.title, task.description, task.expected_output].join(
+    "\n",
+  );
+  const exactIssues = hardIssues.filter(
+    (issue) =>
+      taskContract.includes(issue.code) ||
+      Boolean(issue.task_id && taskContract.includes(issue.task_id)),
+  );
+  const selectedIssues = exactIssues.length > 0 ? exactIssues : hardIssues;
+  const unconsumedSourceTaskIds = new Set(
+    selectedIssues.flatMap((issue) =>
+      issue.code === "UNCONSUMED_EVIDENCE" && issue.task_id
+        ? [issue.task_id]
+        : [],
+    ),
+  );
+  const graph = state.knowledgeGraph;
+  const targetNodeIds = graph
+    ? graph.entities
+        .filter(
+          (entity) =>
+            entity.type === "Evidence" &&
+            entity.status !== "deprecated" &&
+            unconsumedSourceTaskIds.has(entity.source_task_id ?? "") &&
+            !graph.relations.some(
+              (relation) =>
+                relation.source === entity.id &&
+                ["Validates", "References"].includes(relation.type),
+            ),
+        )
+        .map((entity) => entity.id)
+    : [];
+  const issueCodes = [...new Set(selectedIssues.map((issue) => issue.code))];
+  const forbidNewEvidence =
+    issueCodes.length > 0 &&
+    issueCodes.every((code) => code === "UNCONSUMED_EVIDENCE");
+  const issueLines = selectedIssues.map(
+    (issue) =>
+      `- ${issue.code}${issue.task_id ? ` (${issue.task_id})` : ""}: ${issue.message}`,
+  );
+
+  return {
+    instruction: [
+      "This is a user-confirmed Critique correction task. Correct only the persisted issues and exact graph targets below.",
+      ...issueLines,
+      `Exact target node IDs: ${targetNodeIds.join(", ") || "none"}.`,
+      forbidNewEvidence
+        ? "Do not create Evidence nodes. Consume each exact target with a valid relation, or deprecate it with an existing active replacement."
+        : "Reuse active Evidence whenever it already represents the supplied answer; only the designated evidence owner may create a missing Evidence node.",
+    ].join("\n"),
+    issueCodes,
+    targetNodeIds,
+    forbidNewEvidence,
+  };
+}
+
+/**
  * 执行 Critique Agent 收尾阶段，审查 Executor 结果并生成待用户确认的更新。
  */
 async function executeCritiqueAgentReview(
@@ -426,6 +522,8 @@ async function executeCritiqueAgentReview(
   });
   const workflowResult = await consumeProductWorkflowStream(
     streamCritiqueAgent({
+      workflowPurpose: state.workflowPurpose,
+      modelProfile: getModelProfileFromRunnableConfig(config),
       workspaceId: state.workspaceId,
       productContext: state.productContext,
       requestAnalysis: state.requestAnalysis,
@@ -434,6 +532,8 @@ async function executeCritiqueAgentReview(
       knowledgeGraph,
       priorIssues: state.priorCritiqueIssues,
       userInput: state.userInput,
+      documentEvidenceResolution:
+        state.workflowPurpose === "document_evidence_resolution",
       signal: config?.signal,
     }),
     writer,
@@ -470,118 +570,12 @@ async function executeCritiqueAgentReview(
     knowledgeGraph: reviewedKnowledgeGraph,
   });
 
-  if (shouldAutomaticallyPlanCorrection(nextWorkflowResult, state)) {
-    const correctionInput = createAutomaticCorrectionUserInput(
-      nextWorkflowResult,
-      state.originalUserInput,
-      state.userInput,
-    );
-    const priorCritiqueIssues = [
-      ...(nextWorkflowResult.review.issues ?? []),
-      ...(nextWorkflowResult.knowledge_graph_review?.issues ?? []),
-    ];
-    const planningResult = await orchestratorAgentNode(
-      {
-        ...state,
-        userInput: correctionInput,
-        plan: null,
-        orchestratorDecision: null,
-        executorResults: [],
-        knowledgeGraph: reviewedKnowledgeGraph,
-        priorCritiqueIssues,
-        productWorkflow: null,
-        supplementAgentTypes: EXECUTOR_DEFINITIONS.map(
-          (definition) => definition.agentType,
-        ),
-      },
-      config,
-    );
-
-    return {
-      ...planningResult,
-      userInput: correctionInput,
-      executorResults: [],
-      priorCritiqueIssues,
-      productWorkflow: null,
-      supplementAgentTypes: EXECUTOR_DEFINITIONS.map(
-        (definition) => definition.agentType,
-      ),
-    };
-  }
-
   writer?.({ type: "complete", result: nextWorkflowResult });
 
   return {
     productWorkflow: nextWorkflowResult,
     knowledgeGraph: reviewedKnowledgeGraph,
   };
-}
-
-/**
- * 判断 Critique 缺口是否可在无需用户输入时自动进入一次补充规划。
- */
-export function shouldAutomaticallyPlanCorrection(
-  workflowResult: ProductWorkflowResult,
-  state: Pick<WorkflowGraphStateValue, "userInput">,
-): boolean {
-  return (
-    (workflowResult.review.retry_task_ids?.length ?? 0) > 0 &&
-    workflowResult.proposal_questions.length === 0 &&
-    !workflowResult.knowledge_graph_update.open_questions.some(
-      (question) => question.blocking,
-    ) &&
-    !state.userInput.some((item) =>
-      item.content.includes(AUTOMATIC_CRITIQUE_CORRECTION_MARKER),
-    )
-  );
-}
-
-/**
- * 将 Critique 的确定性缺口转换为 Planner 可消费的自动修正输入。
- */
-function createAutomaticCorrectionInput(
-  workflowResult: ProductWorkflowResult,
-): string {
-  const issues = [
-    ...(workflowResult.review.issues ?? []),
-    ...(workflowResult.knowledge_graph_review?.issues ?? []),
-  ];
-  return [
-    AUTOMATIC_CRITIQUE_CORRECTION_MARKER,
-    "Create a supplement DAG that corrects the deterministic Critique issues below. Do not ask the user unless a genuinely blocking product decision is missing.",
-    `Retry tasks: ${workflowResult.review.retry_task_ids?.join(", ") || "none"}`,
-    ...issues.map(
-      (issue) =>
-        `- ${issue.code}${issue.task_id ? ` (${issue.task_id})` : ""}: ${issue.message}`,
-    ),
-  ].join("\n");
-}
-
-/**
- * 合并原始输入、当前表单答案和自动修正指令，原始输入索引始终保持稳定。
- */
-export function createAutomaticCorrectionUserInput(
-  workflowResult: ProductWorkflowResult,
-  originalUserInput: UserInputRecord[],
-  currentUserInput: UserInputRecord[],
-): UserInputRecord[] {
-  const records = originalUserInput.map((item) => ({ ...item }));
-  const seenContent = new Set(records.map((item) => item.content.trim()));
-  let nextIndex = Math.max(0, ...records.map((item) => item.index)) + 1;
-
-  for (const item of currentUserInput) {
-    const content = item.content.trim();
-    if (!content || seenContent.has(content)) continue;
-    records.push({ ...item, index: nextIndex++ });
-    seenContent.add(content);
-  }
-
-  records.push({
-    index: nextIndex,
-    type: "自动审查修正",
-    content: createAutomaticCorrectionInput(workflowResult),
-  });
-  return records;
 }
 
 /**
@@ -613,7 +607,10 @@ export function requireMissingInputConfirmation(
 
   return {
     ...workflowResult,
-    status: "pending_user_confirmation",
+    status:
+      (workflowResult.review.retry_task_ids?.length ?? 0) > 0
+        ? "requires_executor_retry"
+        : "pending_user_confirmation",
     proposal_questions: [
       ...workflowResult.proposal_questions,
       ...missingIndexes.map((index) => {
@@ -669,12 +666,7 @@ function createOrchestratorDescriptionEntry(
 export function isSupplementWorkflow(
   state: WorkflowGraphStateValue,
 ): boolean {
-  return (
-    (state.supplementAgentTypes?.length ?? 0) > 0 ||
-    state.userInput.some((item) =>
-      /\[form answers - [^\]]+\]/i.test(item.content),
-    )
-  );
+  return classifyProductWorkflowRound(state) === "supplement";
 }
 
 /**
@@ -744,20 +736,21 @@ function withParallelAgents(
 function findNextExecutableTaskForAgent(
   state: WorkflowGraphStateValue,
   agentType: ExecutorAgentType,
+  config?: LangGraphRunnableConfig,
 ) {
   if (!state.plan) return null;
 
   const completedTaskIds = new Set(
     state.executorResults.map((result) => result.task_id),
   );
+  const executableTasks = selectReadyTasks(state.plan, completedTaskIds).filter(
+    (task) => task.assigned_agent === agentType,
+  );
+  const retryTaskId = getConfiguredRetryTaskId(config);
   return (
-    state.plan.tasks
-    .filter((task) => task.assigned_agent === agentType)
-    .sort((left, right) => left.sequence - right.sequence)
-    .find((task) => {
-      if (completedTaskIds.has(task.task_id)) return false;
-      return task.depends_on.every((taskId) => completedTaskIds.has(taskId));
-    }) ?? null
+    executableTasks.find((task) => task.task_id === retryTaskId) ??
+    executableTasks[0] ??
+    null
   );
 }
 
@@ -766,8 +759,9 @@ function findNextExecutableTaskForAgent(
  */
 function getCurrentParallelExecutorAgents(
   state: WorkflowGraphStateValue,
+  config?: LangGraphRunnableConfig,
 ): ExecutorAgentType[] {
-  const targets = selectNextExecutorRouterTargets(state);
+  const targets = selectNextExecutorRouterTargets(state, config);
   if (!Array.isArray(targets)) return [];
 
   return targets.filter(isExecutorAgentType);
@@ -788,6 +782,7 @@ export function selectNextProductWorkflowNode(
  */
 export function selectNextExecutorRouterTargets(
   state: WorkflowGraphStateValue,
+  config?: LangGraphRunnableConfig,
 ): string | string[] {
   if (state.productWorkflow || !state.plan) return "end";
 
@@ -800,13 +795,24 @@ export function selectNextExecutorRouterTargets(
 
   if (incompleteTasks.length === 0) return "orchestrator_agent";
 
-  const readyTasks = incompleteTasks.filter((task) =>
-    task.depends_on.every((taskId) => completedTaskIds.has(taskId)),
-  );
+  const readyTasks = selectReadyTasks(state.plan, completedTaskIds);
+  const retryTaskId = getConfiguredRetryTaskId(config);
+  if (retryTaskId && !completedTaskIds.has(retryTaskId)) {
+    const retryTask = readyTasks.find((task) => task.task_id === retryTaskId);
+    if (retryTask) return [retryTask.assigned_agent];
+  }
   const parallelTasks = packParallelExecutorTasks(readyTasks);
   if (parallelTasks.length === 0) return "orchestrator_agent";
 
   return parallelTasks.map((task) => task.assigned_agent);
+}
+
+/** 手动重试恢复时先串行完成目标任务，避免同批兄弟任务被失败信号连带取消。 */
+function getConfiguredRetryTaskId(
+  config?: LangGraphRunnableConfig,
+): string | undefined {
+  const value = config?.configurable?.retry_task_id;
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 /**
@@ -829,18 +835,3 @@ function arePlanTasksFinished(state: WorkflowGraphStateValue): boolean {
 /**
  * 同一批只保留每个 Executor 的最早任务，避免同一节点被重复调度。
  */
-function packParallelExecutorTasks(
-  tasks: TaskExecutionNode[],
-): TaskExecutionNode[] {
-  const selected = new Map<ExecutorAgentType, TaskExecutionNode>();
-
-  for (const task of tasks.sort(
-    (left, right) => left.sequence - right.sequence,
-  )) {
-    if (!isExecutorAgentType(task.assigned_agent)) continue;
-    if (selected.has(task.assigned_agent)) continue;
-    selected.set(task.assigned_agent, task);
-  }
-
-  return [...selected.values()];
-}

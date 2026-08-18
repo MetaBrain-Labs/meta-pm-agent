@@ -12,14 +12,58 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ProductWorkflowResult } from "@repo/shared";
-import { collectWorkflowAnswerResolution } from "../src/repositories/request-form-repository";
+import {
+  collectConfirmationWorkflowResolution,
+  collectWorkflowAnswerResolution,
+} from "../src/repositories/request-form-repository";
 import { ChatRequestSchema } from "../src/schemas/request.schema";
-import { shouldPersistProductWorkflowConfirmation } from "../src/services/chat-service";
+import {
+  createServerWorkflowRecoveryContext,
+  isPersistedExecutorRetryFailureRetryable,
+  shouldPersistProductWorkflowConfirmation,
+  shouldRejectStaleWorkflowFormSubmission,
+} from "../src/services/chat-service";
 
-test("persists final handling confirmation only for pending results without proposals", () => {
+test("builds an authoritative correction context from persisted snapshots", () => {
+  const workflow = createWorkflowResult();
+  const recovery = createServerWorkflowRecoveryContext({
+    messages: [],
+    workflow,
+    workflowPurpose: "document_evidence_resolution",
+    resolution: {
+      action: "retry_correction",
+      formId: "review-1-proposal-decision",
+      questions: [],
+    },
+  });
+
+  assert.equal(recovery.workflowPurpose, "document_evidence_resolution");
+  assert.equal(recovery.requestAnalysis.business_model[0]?.user_goal, workflow.request_summary);
+  assert.deepEqual(recovery.planner, workflow.planner);
+  assert.deepEqual(recovery.executorResults, []);
+  assert.deepEqual(recovery.correctionSource, {
+    formId: "review-1-proposal-decision",
+    action: "retry_correction",
+    retryTaskIds: ["task-01"],
+  });
+});
+
+test("uses correction decisions instead of final handling for hard Critique errors", () => {
   const result = createWorkflowResult();
 
-  assert.equal(shouldPersistProductWorkflowConfirmation(result), true);
+  assert.equal(shouldPersistProductWorkflowConfirmation(result), false);
+  assert.equal(
+    shouldPersistProductWorkflowConfirmation({
+      ...result,
+      status: "pending_user_confirmation",
+      review: {
+        ...result.review,
+        rejected_task_ids: [],
+        retry_task_ids: [],
+      },
+    }),
+    true,
+  );
   assert.equal(
     shouldPersistProductWorkflowConfirmation({ ...result, status: "completed" }),
     false,
@@ -101,6 +145,52 @@ test("keeps exact question sources and only marks submitted fields answered", ()
       { answered: false, openQuestionId: "OQ-deployment" },
     ],
   );
+  assert.equal(resolution.action, "submit_answers");
+});
+
+test("parses Critique correction decisions as control actions", () => {
+  const retry = collectWorkflowAnswerResolution(
+    {
+      decision_kind: "critique_correction",
+      questions: [],
+      retry_task_ids: ["task-01"],
+    },
+    {
+      formId: "review-proposal-decision",
+      content:
+        "[form answers - review-proposal-decision]\n- 请选择如何处理审查错误？: 生成补充修正任务",
+    },
+  );
+  const stop = collectWorkflowAnswerResolution(
+    { decision_kind: "critique_correction", questions: [] },
+    {
+      formId: "review-proposal-decision",
+      content:
+        "[form answers - review-proposal-decision]\n- 请选择如何处理审查错误？: 停止并保留问题结果",
+    },
+  );
+
+  assert.equal(retry.action, "retry_correction");
+  assert.deepEqual(retry.correctionTaskIds, ["task-01"]);
+  assert.equal(stop.action, "stop_with_issues");
+});
+
+test("restores the persisted workflow from a final confirmation decision", () => {
+  const workflow = createWorkflowResult();
+  const resolution = collectConfirmationWorkflowResolution(
+    { workflow },
+    "product-workflow-confirmation",
+  );
+
+  assert.deepEqual(resolution.workflow, workflow);
+  assert.throws(
+    () =>
+      collectConfirmationWorkflowResolution(
+        { workflow: { status: "invalid" } },
+        "product-workflow-confirmation",
+      ),
+    /persisted product workflow result/i,
+  );
 });
 
 test("accepts executor retry separately from HITL resume", () => {
@@ -139,12 +229,66 @@ test("accepts executor retry separately from HITL resume", () => {
   );
 });
 
+test("does not treat a historical workflow form answer as a new retry submission", () => {
+  assert.equal(
+    shouldRejectStaleWorkflowFormSubmission({
+      isWorkflowRetry: true,
+      submittedFormId: "review-proposal-decision",
+      answerResolved: false,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldRejectStaleWorkflowFormSubmission({
+      isWorkflowRetry: false,
+      submittedFormId: "review-proposal-decision",
+      answerResolved: false,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldRejectStaleWorkflowFormSubmission({
+      isWorkflowRetry: false,
+      submittedFormId: "review-proposal-decision",
+      answerResolved: true,
+    }),
+    false,
+  );
+});
+
+test("accepts historical OpenQuestion misses but rejects stale entity targets", () => {
+  assert.equal(
+    isPersistedExecutorRetryFailureRetryable(
+      "Structured graph write validation failed: OQ-short:missing_deprecation_target",
+    ),
+    true,
+  );
+  assert.equal(
+    isPersistedExecutorRetryFailureRetryable(
+      "Structured graph write validation failed: COMP-short:missing_deprecation_target",
+    ),
+    false,
+  );
+  assert.equal(
+    isPersistedExecutorRetryFailureRetryable(
+      "Node provenance validation failed: unsupported_numeric_claims:2026",
+    ),
+    true,
+  );
+  assert.equal(
+    isPersistedExecutorRetryFailureRetryable(
+      "Node provenance validation failed: unsupported_infrastructure_scope:data-residency",
+    ),
+    true,
+  );
+});
+
 /**
  * 构造无需新增用户信息、但仍需确认处理方式的最小工作流结果。
  */
 function createWorkflowResult(): ProductWorkflowResult {
   return {
-    status: "pending_user_confirmation",
+    status: "requires_executor_retry",
     confirmation_id: "review-1",
     request_summary: "Review correction.",
     planner: {

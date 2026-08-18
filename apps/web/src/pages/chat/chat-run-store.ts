@@ -14,6 +14,7 @@
  * - 本模块只保存运行期内存快照，历史权威数据仍来自 API 持久化消息。
  */
 
+import { ChatSseEventSchema } from "@repo/shared";
 import { stopChatGeneration as requestStopChatGeneration } from "../../api/chat-api";
 import type {
   HumanInTheLoopResume,
@@ -162,11 +163,26 @@ export async function startChatRun(input: StartChatRunInput): Promise<void> {
   } catch (error: unknown) {
     if (!(error instanceof Error && error.name === "AbortError")) {
       state.error = mapErrorToChinese(error);
+      markLatestAgentMessageInterrupted(state);
     }
   } finally {
     state.isLoading = false;
     state.controller = null;
     emit(input.threadId);
+  }
+}
+
+/**
+ * 网络失败（非主动中止）时，把本次运行最后一条助手消息标记为中断态，
+ * 供 UI 渲染「已中断 → 继续运行」恢复入口。
+ */
+function markLatestAgentMessageInterrupted(state: ChatRunState): void {
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    if (state.messages[index]?.role !== "agent") continue;
+    state.messages = state.messages.map((message, messageIndex) =>
+      messageIndex === index ? { ...message, interrupted: true } : message,
+    );
+    return;
   }
 }
 
@@ -193,7 +209,10 @@ export function stopChatRun(threadId: string): void {
 function stopAllActiveRunsOnUnload(): void {
   for (const [threadId, state] of runs) {
     if (!state.isLoading) continue;
-    const payload = JSON.stringify({ chatId: threadId });
+    const payload = JSON.stringify({
+      chatId: threadId,
+      origin: "page_unload",
+    });
     if (navigator.sendBeacon) {
       navigator.sendBeacon(
         "/api/chat/stop",
@@ -248,7 +267,9 @@ async function readChatStream(
       if (payload === "[DONE]") continue;
 
       try {
-        const event = JSON.parse(payload) as StreamEvent;
+        const parsedEvent = ChatSseEventSchema.safeParse(JSON.parse(payload));
+        if (!parsedEvent.success) continue;
+        const event: StreamEvent = parsedEvent.data;
         if (
           event.type === "conversation-title" &&
           event.chatId &&

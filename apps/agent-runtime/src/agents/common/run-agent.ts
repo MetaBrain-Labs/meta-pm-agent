@@ -14,6 +14,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import type { AgentModelGroup, ModelUsageProfile } from "@repo/shared";
 import { HumanMessage, type BaseMessage, type StructuredTool } from "langchain";
 import { createDeepAgent, type FileData, type SubAgent } from "deepagents";
 import { calculateCost } from "../../config";
@@ -31,6 +32,12 @@ import {
 import { createDeepAgentToolAllowlistMiddleware } from "./deep-agent-tool-policy";
 import { createDefaultAgentMiddleware } from "./middleware";
 import { createChatModel, type ChatModelOptions } from "./model";
+import {
+  createModelSummarySnapshot,
+  resolveAgentModelSelection,
+  toLlmPricing,
+  type ResolvedAgentModelSelection,
+} from "./model-profile";
 
 const SKILL_READ_TOOL_NAME = "read_file";
 
@@ -95,9 +102,10 @@ export type AgentRunEvent<AgentType extends string> =
 
 /** Agent 最终输出解析上下文。 */
 export interface AgentOutputContext {
-  text: string;
-  tokenUsage: ReturnType<typeof getTokenUsage>;
-  maxTokens?: number;
+  readonly text: string;
+  readonly reasoningText: string;
+  readonly tokenUsage: ReturnType<typeof getTokenUsage>;
+  readonly maxTokens?: number;
 }
 
 /** Agent 最终输出解析结果。 */
@@ -116,6 +124,12 @@ export interface RunAgentOptions<T, AgentType extends string> {
   agentLabel: string;
   name: string;
   modelOptions?: ChatModelOptions;
+  modelProfile?: ModelUsageProfile;
+  modelGroup?: AgentModelGroup;
+  /** 主 Agent 报告需要同时展示 SubAgent 模型时可覆盖默认模型区块。 */
+  modelSummary?: unknown;
+  /** SubAgent 名称到职责组的映射，用于按其实际模型单独计费。 */
+  subagentModelGroups?: Partial<Record<string, AgentModelGroup>>;
   systemPrompt: string;
   tools?: StructuredTool[];
   skills?: string[];
@@ -128,11 +142,17 @@ export interface RunAgentOptions<T, AgentType extends string> {
   requiredSubagentType?: string;
   suppressFallbackReasoning?: boolean;
   throwOnError?: boolean;
+  /** SubAgent 运行失败时跳过业务 fallback，由调用方执行定点重试或错误恢复。 */
+  throwOnSubagentError?: boolean;
+  /** 至少一个指定工具必须成功完成；用于禁止 correction mode 仅返回说明文本。 */
+  requiredSuccessfulToolNames?: ReadonlySet<string>;
   /** 将调用方指定的工具失败结果提升为运行异常。 */
   getToolResultError?: (
     toolName: string,
     toolResult: unknown,
   ) => Error | null;
+  /** 覆盖单次运行的工具调用硬上限；未设置时沿用通用默认值。 */
+  toolCallRunLimit?: number;
   signal?: AbortSignal;
 }
 
@@ -161,24 +181,35 @@ export function resolveJsonOutput<T>(
   },
 ): AgentOutputResolution<T> {
   const parsed = parseJsonObject(context.text);
-  if (parsed === null) {
-    return {
-      success: false,
-      reason: formatInvalidJsonReason(
-        context.text,
-        context.tokenUsage,
-        context.maxTokens,
-      ),
-    };
+  if (parsed !== null) {
+    const result = schema.safeParse(parsed);
+    return result.success
+      ? result
+      : {
+          success: false,
+          reason: `schema-validation: ${formatSchemaError(result.error)}`,
+        };
   }
 
-  const result = schema.safeParse(parsed);
-  return result.success
-    ? result
-    : {
-        success: false,
-        reason: `schema-validation: ${formatSchemaError(result.error)}`,
-      };
+  const reasoningParsed = parseJsonObject(context.reasoningText);
+  if (reasoningParsed !== null) {
+    const result = schema.safeParse(reasoningParsed);
+    return result.success
+      ? result
+      : {
+          success: false,
+          reason: `schema-validation: ${formatSchemaError(result.error)}`,
+        };
+  }
+
+  return {
+    success: false,
+    reason: formatInvalidJsonReason(
+      context.text,
+      context.tokenUsage,
+      context.maxTokens,
+    ),
+  };
 }
 
 /**
@@ -235,6 +266,43 @@ export interface AgentSubagentProjection {
   messages: AsyncIterable<AgentMessageProjection>;
 }
 
+/**
+ * 标识 DeepAgents SubAgent projection 的运行失败。
+ *
+ * 调用方可据此区分协调 Agent 自身失败与被委派 Agent 失败，并执行定点重试。
+ */
+export class AgentSubagentExecutionError extends Error {
+  readonly subagentType: string;
+
+  constructor(subagentType: string, cause: unknown) {
+    super(getErrorMessage(cause), { cause });
+    this.name = "AgentSubagentExecutionError";
+    this.subagentType = subagentType;
+  }
+}
+
+type PromiseSettlement<T> =
+  | { status: "fulfilled"; value: T }
+  | { status: "rejected"; reason: unknown };
+
+/** 立即为外部 Promise 安装拒绝处理器，避免稍后消费时出现未处理 rejection。 */
+function observePromise<T>(value: PromiseLike<T>): Promise<PromiseSettlement<T>> {
+  return Promise.resolve(value).then(
+    (resolved) => ({ status: "fulfilled", value: resolved }),
+    (reason: unknown) => ({ status: "rejected", reason }),
+  );
+}
+
+interface ObservedSubagentProjection {
+  output: Promise<PromiseSettlement<unknown>>;
+  messages: Promise<
+    PromiseSettlement<{
+      streamedText: string;
+      tokenUsage: ReturnType<typeof getTokenUsage>;
+    }>
+  >;
+}
+
 /** 公共运行器消费的 Event Streaming v3 投影集合。 */
 export interface AgentEventStreamProjection {
   messages: AsyncIterable<AgentMessageProjection>;
@@ -245,15 +313,18 @@ export interface AgentEventStreamProjection {
 
 /** Event Streaming 汇流完成后交给结果解析器的状态。 */
 export interface AgentEventStreamResult {
-  responseText: string;
-  tokenUsage: ReturnType<typeof getTokenUsage>;
-  invokedSubagentTypes: Set<string>;
+  readonly responseText: string;
+  readonly reasoningText: string;
+  readonly tokenUsage: ReturnType<typeof getTokenUsage>;
+  readonly invokedSubagentTypes: Set<string>;
+  readonly successfulToolNames: Set<string>;
 }
 
 interface AgentEventStreamAdapterOptions<AgentType extends string> {
   agentType: AgentType;
   visibleToolNames: ReadonlySet<string>;
   summaryRecorder: AgentRunSummaryRecorder;
+  subagentSelections?: ReadonlyMap<string, ResolvedAgentModelSelection>;
   getToolResultError?: (
     toolName: string,
     toolResult: unknown,
@@ -276,8 +347,10 @@ export async function* adaptAgentEventStream<AgentType extends string>(
   let completed = false;
   let failure: unknown;
   let responseText = "";
+  let reasoningText = "";
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
   const invokedSubagentTypes = new Set<string>();
+  const successfulToolNames = new Set<string>();
 
   const push = (event: AgentRunEvent<AgentType>) => {
     events.push(event);
@@ -287,12 +360,16 @@ export async function* adaptAgentEventStream<AgentType extends string>(
 
   const consumeMessages = async () => {
     for await (const message of run.messages) {
+      // Provider 可能在文本/推理流结束前先拒绝 output；必须先安装拒绝处理器，
+      // 避免消费增量内容期间产生未处理 rejection。
+      const messageOutput = observePromise(message.output);
       await Promise.all([
         consumeTextChunks(message.text, (content) => {
           responseText += content;
           options.summaryRecorder.recordOutput(content);
         }),
         consumeTextChunks(message.reasoning, (content) => {
+          reasoningText += content;
           options.summaryRecorder.recordThinking(content);
           push({
             type: "reasoning",
@@ -301,7 +378,11 @@ export async function* adaptAgentEventStream<AgentType extends string>(
           });
         }),
       ]);
-      tokenUsage = getTokenUsage(await message.output) ?? tokenUsage;
+      const messageOutputResult = await messageOutput;
+      if (messageOutputResult.status === "rejected") {
+        throw messageOutputResult.reason;
+      }
+      tokenUsage = getTokenUsage(messageOutputResult.value) ?? tokenUsage;
     }
   };
 
@@ -383,44 +464,98 @@ export async function* adaptAgentEventStream<AgentType extends string>(
       });
       const toolError = options.getToolResultError?.(call.name, toolResult);
       if (toolError) throw toolError;
+      if (status === "finished") successfulToolNames.add(call.name);
     }
   };
 
   const consumeSubagents = async () => {
-    const watchers: Promise<void>[] = [];
-    for await (const subagent of run.subagents) {
-      const toolCallId = `subagent:${randomUUID()}`;
-      const subagentType = subagent.name;
-      const taskInput = await subagent.taskInput;
-      invokedSubagentTypes.add(subagentType);
-      options.summaryRecorder.recordSubagentCall({
-        toolCallId,
-        subagentType,
-        input: { description: taskInput },
-      });
-      push({
-        type: "subagent-start",
-        agentType: options.agentType,
-        subagentType,
-        toolCallId,
-      });
+    const watchers: Promise<PromiseSettlement<void>>[] = [];
+    let iterationResult: PromiseSettlement<void> = {
+      status: "fulfilled",
+      value: undefined,
+    };
 
-      watchers.push(
-        consumeSubagentProjection(
-          subagent,
+    try {
+      for await (const subagent of run.subagents) {
+        const toolCallId = `subagent:${randomUUID()}`;
+        const subagentType = subagent.name;
+        // DeepAgents 可能先拒绝 output、稍后才完成 taskInput。这里必须在任何 await
+        // 之前接管 Promise projection，避免 Node 将短暂无人处理的拒绝视为致命错误。
+        const taskInputPromise = observePromise(subagent.taskInput);
+        const outputPromise = observePromise(subagent.output);
+        const taskInputResult = await taskInputPromise;
+        if (taskInputResult.status === "rejected") {
+          throw new AgentSubagentExecutionError(
+            subagentType,
+            taskInputResult.reason,
+          );
+        }
+        const taskInput = taskInputResult.value;
+        invokedSubagentTypes.add(subagentType);
+        options.summaryRecorder.recordSubagentCall({
           toolCallId,
-          options,
-          push,
-        ),
-      );
+          subagentType,
+          input: { description: taskInput },
+        });
+        push({
+          type: "subagent-start",
+          agentType: options.agentType,
+          subagentType,
+          toolCallId,
+        });
+
+        const observed: ObservedSubagentProjection = {
+          output: outputPromise,
+          // AsyncIterable 只有开始消费后才会产生拒绝；启动后立即转为 settlement。
+          messages: observePromise(
+            consumeSubagentMessages(subagent, toolCallId, options, push),
+          ),
+        };
+        // watcher 创建时立即转为 settlement。即使 SubAgent 枚举器随后抛错，
+        // watcher 也不会成为无人接管的 Promise rejection。
+        watchers.push(
+          observePromise(
+            consumeSubagentProjection(
+              subagent,
+              observed,
+              toolCallId,
+              options,
+              push,
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      iterationResult = { status: "rejected", reason: error };
     }
-    await Promise.all(watchers);
+
+    // 枚举失败也必须等待所有已登记 watcher 收敛；优先传播可供调用方定点重试的
+    // SubAgent 错误，再回退到枚举器或其他 projection 错误。
+    const watcherResults = await Promise.all(watchers);
+    const targetedFailure = watcherResults.find(
+      (result) =>
+        result.status === "rejected" &&
+        result.reason instanceof AgentSubagentExecutionError,
+    );
+    if (targetedFailure?.status === "rejected") {
+      throw targetedFailure.reason;
+    }
+    if (iterationResult.status === "rejected") {
+      throw iterationResult.reason;
+    }
+    const watcherFailure = watcherResults.find(
+      (result) => result.status === "rejected",
+    );
+    if (watcherFailure?.status === "rejected") {
+      throw watcherFailure.reason;
+    }
   };
 
   const producer = Promise.all([
+    // 优先订阅 SubAgent 生命周期，尽早接管 DeepAgents 暴露的 output Promise。
+    consumeSubagents(),
     consumeMessages(),
     consumeToolCalls(),
-    consumeSubagents(),
     Promise.resolve(run.output).then(() => undefined),
   ])
     .then(() => {
@@ -448,51 +583,56 @@ export async function* adaptAgentEventStream<AgentType extends string>(
 
   return {
     responseText,
+    reasoningText,
     tokenUsage,
     invokedSubagentTypes,
+    successfulToolNames,
   };
 }
 
 /** 消费单个 SubAgent handle，并保持其 reasoning、文本和结果归属稳定。 */
 async function consumeSubagentProjection<AgentType extends string>(
   subagent: AgentSubagentProjection,
+  observed: ObservedSubagentProjection,
   toolCallId: string,
   options: AgentEventStreamAdapterOptions<AgentType>,
   push: (event: AgentRunEvent<AgentType>) => void,
 ): Promise<void> {
-  let streamedText = "";
-  const messages = (async () => {
-    for await (const message of subagent.messages) {
-      await Promise.all([
-        consumeTextChunks(message.text, (content) => {
-          streamedText += content;
-          options.summaryRecorder.recordSubagentRawOutput({
-            toolCallId,
-            subagentType: subagent.name,
-            content,
-          });
-        }),
-        consumeTextChunks(message.reasoning, (content) => {
-          options.summaryRecorder.recordSubagentThinking({
-            toolCallId,
-            subagentType: subagent.name,
-            content,
-          });
-          push({
-            type: "subagent-thinking",
-            agentType: options.agentType,
-            subagentType: subagent.name,
-            toolCallId,
-            content,
-          });
-        }),
-      ]);
-      await message.output;
-    }
-  })();
+  const startedAt = Date.now();
+  const [outputResult, messagesResult] = await Promise.all([
+    observed.output,
+    observed.messages,
+  ]);
+  if (outputResult.status === "rejected") {
+    const error = new AgentSubagentExecutionError(
+      subagent.name,
+      outputResult.reason,
+    );
+    options.summaryRecorder.recordSubagentResult({
+      toolCallId,
+      subagentType: subagent.name,
+      output: { error: error.message },
+    });
+    throw error;
+  }
+  if (messagesResult.status === "rejected") {
+    const error = new AgentSubagentExecutionError(
+      subagent.name,
+      messagesResult.reason,
+    );
+    options.summaryRecorder.recordSubagentResult({
+      toolCallId,
+      subagentType: subagent.name,
+      output: { error: error.message },
+    });
+    throw error;
+  }
 
-  const [output] = await Promise.all([subagent.output, messages]);
-  const result = extractSubagentOutput(output, streamedText);
+  const output = outputResult.value;
+  const result = extractSubagentOutput(
+    output,
+    messagesResult.value.streamedText,
+  );
   options.summaryRecorder.recordSubagentResult({
     toolCallId,
     subagentType: subagent.name,
@@ -505,6 +645,70 @@ async function consumeSubagentProjection<AgentType extends string>(
     toolCallId,
     result,
   });
+  const selection = options.subagentSelections?.get(subagent.name);
+  const tokenUsage = messagesResult.value.tokenUsage;
+  if (tokenUsage && selection) {
+    const cost = calculateCost(
+      tokenUsage.cacheMissInputTokens,
+      tokenUsage.cacheHitInputTokens,
+      tokenUsage.outputTokens,
+      toLlmPricing(selection),
+    );
+    push({
+      type: "token-usage",
+      agentType: subagent.name as AgentType,
+      ...tokenUsage,
+      ...cost,
+      durationMs: Date.now() - startedAt,
+    });
+  }
+}
+
+/** 在 SubAgent 被发现时立即消费消息流，并将内容归属到对应 Agent。 */
+async function consumeSubagentMessages<AgentType extends string>(
+  subagent: AgentSubagentProjection,
+  toolCallId: string,
+  options: AgentEventStreamAdapterOptions<AgentType>,
+  push: (event: AgentRunEvent<AgentType>) => void,
+): Promise<{
+  streamedText: string;
+  tokenUsage: ReturnType<typeof getTokenUsage>;
+}> {
+  let streamedText = "";
+  let tokenUsage: ReturnType<typeof getTokenUsage> = null;
+  for await (const message of subagent.messages) {
+    const messageOutput = observePromise(message.output);
+    await Promise.all([
+      consumeTextChunks(message.text, (content) => {
+        streamedText += content;
+        options.summaryRecorder.recordSubagentRawOutput({
+          toolCallId,
+          subagentType: subagent.name,
+          content,
+        });
+      }),
+      consumeTextChunks(message.reasoning, (content) => {
+        options.summaryRecorder.recordSubagentThinking({
+          toolCallId,
+          subagentType: subagent.name,
+          content,
+        });
+        push({
+          type: "subagent-thinking",
+          agentType: options.agentType,
+          subagentType: subagent.name,
+          toolCallId,
+          content,
+        });
+      }),
+    ]);
+    const messageOutputResult = await messageOutput;
+    if (messageOutputResult.status === "rejected") {
+      throw messageOutputResult.reason;
+    }
+    tokenUsage = getTokenUsage(messageOutputResult.value) ?? tokenUsage;
+  }
+  return { streamedText, tokenUsage };
 }
 
 /** 消费可回放的文本 projection。 */
@@ -549,6 +753,18 @@ export async function* runAgent<T, AgentType extends string>(
   options: RunAgentOptions<T, AgentType>,
 ): AsyncGenerator<AgentRunEvent<AgentType>, T, void> {
   const startTime = Date.now();
+  const modelSelection = options.modelGroup
+    ? resolveAgentModelSelection(options.modelProfile, options.modelGroup)
+    : undefined;
+  const subagentSelections = new Map<string, ResolvedAgentModelSelection>();
+  for (const [name, group] of Object.entries(
+    options.subagentModelGroups ?? {},
+  )) {
+    const selection = group
+      ? resolveAgentModelSelection(options.modelProfile, group)
+      : undefined;
+    if (selection) subagentSelections.set(name, selection);
+  }
   const tools = options.tools ?? [];
   const subagents = options.subagents ?? [];
   const skillFiles = options.skillFiles ?? {};
@@ -562,6 +778,8 @@ export async function* runAgent<T, AgentType extends string>(
     agentLabel: options.agentLabel,
     agentName: options.name,
     agentType: options.agentType,
+    model:
+      options.modelSummary ?? createModelSummarySnapshot(modelSelection),
     context: {
       modelOptions: options.modelOptions,
       payload: options.payload,
@@ -580,7 +798,7 @@ export async function* runAgent<T, AgentType extends string>(
 
   try {
     const agent = createDeepAgent({
-      model: createChatModel(options.modelOptions) as any,
+      model: createChatModel(options.modelOptions, modelSelection) as any,
       systemPrompt: options.systemPrompt,
       tools,
       name: options.name,
@@ -594,7 +812,9 @@ export async function* runAgent<T, AgentType extends string>(
             ...allowedBuiltinToolNames,
           ],
         }),
-        ...createDefaultAgentMiddleware(),
+        ...createDefaultAgentMiddleware({
+          toolCallRunLimit: options.toolCallRunLimit,
+        }),
         ...createAgentRunSummaryMiddleware(summaryRecorder),
       ] as any,
     });
@@ -616,10 +836,16 @@ export async function* runAgent<T, AgentType extends string>(
         agentType: options.agentType,
         visibleToolNames,
         summaryRecorder,
+        subagentSelections,
         getToolResultError: options.getToolResultError,
       },
     );
-    const { responseText, invokedSubagentTypes } = streamResult;
+    const {
+      responseText,
+      reasoningText,
+      invokedSubagentTypes,
+      successfulToolNames,
+    } = streamResult;
     tokenUsage = streamResult.tokenUsage;
 
     const tokenUsageSummary = tokenUsage
@@ -630,6 +856,7 @@ export async function* runAgent<T, AgentType extends string>(
         tokenUsage.cacheMissInputTokens,
         tokenUsage.cacheHitInputTokens,
         tokenUsage.outputTokens,
+        toLlmPricing(modelSelection),
       );
       yield {
         type: "token-usage",
@@ -653,10 +880,25 @@ export async function* runAgent<T, AgentType extends string>(
       throw new Error(missingSubagent);
     }
 
+    const missingSuccessfulTool = getMissingRequiredSuccessfulToolError(
+      options.requiredSuccessfulToolNames,
+      successfulToolNames,
+    );
+    if (missingSuccessfulTool) {
+      await summaryRecorder.finish({
+        error: missingSuccessfulTool,
+        status: "failed",
+        tokenUsage: tokenUsageSummary,
+      });
+      throw new Error(missingSuccessfulTool);
+    }
+
     const resolution = options.resolveOutput({
       text: responseText,
+      reasoningText,
       tokenUsage,
-      maxTokens: options.modelOptions?.maxTokens,
+      maxTokens:
+        modelSelection?.model.maxTokens ?? options.modelOptions?.maxTokens,
     });
     if (resolution.success) {
       await summaryRecorder.finish({
@@ -688,10 +930,22 @@ export async function* runAgent<T, AgentType extends string>(
     return fallback;
   } catch (error) {
     const errorMessage = getErrorMessage(error);
+    // 只有调用方 AbortSignal 才表示用户主动停止；供应商自身超时仍按普通失败进入业务 fallback。
+    if (options.signal?.aborted) {
+      await summaryRecorder.finish({
+        error: errorMessage,
+        status: "aborted",
+      });
+      throw error;
+    }
     if (errorMessage.startsWith("required-subagent-not-invoked:")) {
       throw error;
     }
-    if (options.throwOnError) {
+    if (
+      options.throwOnError ||
+      (options.throwOnSubagentError &&
+        error instanceof AgentSubagentExecutionError)
+    ) {
       await summaryRecorder.finish({
         error: errorMessage,
         status: "failed",
@@ -715,7 +969,27 @@ export async function* runAgent<T, AgentType extends string>(
     return fallback;
   } finally {
     runAbortController.abort();
+    // 外层可在消费到某个事件后提前关闭生成器（例如 Planner 结果校验失败）。
+    // finish 具备幂等性：正常完成时不会重复写；提前关闭时则补齐缺失的运行汇总。
+    await summaryRecorder.finish({
+      error: options.signal?.aborted
+        ? "Agent stream aborted by caller."
+        : "Agent stream closed before completion.",
+      status: options.signal?.aborted ? "aborted" : "cancelled",
+    });
   }
+}
+
+/** correction mode 至少成功执行一个受控写入工具，否则不能把纯文本承诺视为完成。 */
+export function getMissingRequiredSuccessfulToolError(
+  requiredToolNames: ReadonlySet<string> | undefined,
+  successfulToolNames: ReadonlySet<string>,
+): string | null {
+  if (!requiredToolNames?.size) return null;
+  for (const toolName of requiredToolNames) {
+    if (successfulToolNames.has(toolName)) return null;
+  }
+  return "required-structured-write-not-invoked";
 }
 
 /**

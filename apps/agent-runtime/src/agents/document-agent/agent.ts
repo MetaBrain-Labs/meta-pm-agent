@@ -1,29 +1,28 @@
 /**
  * Document Agent 执行器
  *
- * 负责组装 PRD Document Agent 的输入 payload、运行时 SubAgent 上下文和
- * 对外流式入口。具体 DeepAgents 驱动逻辑由 Document 专属 runDocumentAgent 承载。
+ * 负责组装紧凑的 PRD Document Agent 输入 payload 和对外流式入口。
+ * 具体 DeepAgents 驱动逻辑由 Document 专属 runDocumentAgent 承载。
  *
  * Responsibilities:
  * - streamPrdDocumentAgent()：基于知识图谱启动 PRD 生成
- * - createRuntimePrdSubagents()：为 PRD 子代理注入运行时图谱上下文
+ * - createPrdDocumentAgentPayload()：去除重复章节证据与非必要图谱字段
  * - 维持 document-workflow 对 Document Agent 的稳定入口
  *
  * Notes:
  * - Document Agent 不写知识图谱；知识图谱是输入事实源。
  */
 
-import type { SubAgent } from "deepagents";
 import type {
   KnowledgeGraphEntity,
   KnowledgeGraphRelation,
+  ModelUsageProfile,
 } from "@repo/shared";
-import { createDeepAgentToolAllowlistMiddleware } from "../common/deep-agent-tool-policy";
 import {
   runDocumentAgent,
   type DocumentAgentStreamEvent,
 } from "./run-document-agent";
-import { PRD_DOCUMENT_SUBAGENTS } from "./prompt";
+import { createPrdDocumentSkillBundle } from "./skills";
 
 export { sanitizePrdMarkdown } from "./run-document-agent";
 export type { DocumentAgentStreamEvent } from "./run-document-agent";
@@ -48,10 +47,9 @@ export interface PrdDocumentAgentInput {
   }>;
   attemptNumber?: number;
   revisionFeedback?: string;
+  modelProfile?: ModelUsageProfile;
   signal?: AbortSignal;
 }
-
-const SUBAGENT_RUNTIME_CONTEXT_MAX_CHARS = 120_000;
 
 /**
  * 运行 PRD Document Agent，返回最终 Markdown 文档。
@@ -59,28 +57,14 @@ const SUBAGENT_RUNTIME_CONTEXT_MAX_CHARS = 120_000;
 export async function* streamPrdDocumentAgent(
   input: PrdDocumentAgentInput,
 ): AsyncGenerator<DocumentAgentStreamEvent, string, void> {
-  const documentSubagentToolAllowlistMiddleware =
-    createDeepAgentToolAllowlistMiddleware({
-      agentName: "document-agent-prd-subagent",
-      allowedToolNames: [],
-    });
-  const agentPayload = {
-    task: "Generate a complete PRD from the supplied product knowledge graph.",
-    workspaceId: input.workspaceId,
-    runId: input.runId,
-    attemptNumber: input.attemptNumber ?? 1,
-    revisionFeedback: input.revisionFeedback ?? "",
-    taskDelegationPolicy:
-      "When using task subagents, include all relevant graph nodes, relations, section dossier evidence, and draft excerpts directly in the task description. Subagents must not look for files or external graph context.",
-    graph: input.graph,
-    sectionDossiers: input.dossiers,
-  };
+  const skillBundle = await createPrdDocumentSkillBundle();
+  const agentPayload = createPrdDocumentAgentPayload(input);
   const markdown = yield* runDocumentAgent({
     payload: agentPayload,
-    subagents: createRuntimePrdSubagents(
-      input,
-      documentSubagentToolAllowlistMiddleware,
-    ),
+    skills: skillBundle.sources,
+    skillFiles: skillBundle.files,
+    subagents: [],
+    modelProfile: input.modelProfile,
     signal: input.signal,
   });
 
@@ -88,31 +72,11 @@ export async function* streamPrdDocumentAgent(
 }
 
 /**
- * 为 PRD 子代理注入当前运行的知识图谱上下文。
+ * 构造不重复章节 evidence 的紧凑主 Agent payload。
  */
-function createRuntimePrdSubagents(
-  input: PrdDocumentAgentInput,
-  documentSubagentToolAllowlistMiddleware: ReturnType<
-    typeof createDeepAgentToolAllowlistMiddleware
-  >,
-): SubAgent[] {
-  const runtimeContext = createSubagentRuntimeContext(input);
-
-  return PRD_DOCUMENT_SUBAGENTS.map((subagent) => ({
-    ...subagent,
-    systemPrompt: `${subagent.systemPrompt}\n\n${runtimeContext}`,
-    middleware: [
-      ...((subagent as { middleware?: unknown[] }).middleware ?? []),
-      documentSubagentToolAllowlistMiddleware,
-    ],
-  })) as SubAgent[];
-}
-
-/**
- * 构造子代理可直接读取的紧凑知识图谱上下文。
- */
-function createSubagentRuntimeContext(input: PrdDocumentAgentInput): string {
-  const context = JSON.stringify({
+export function createPrdDocumentAgentPayload(input: PrdDocumentAgentInput) {
+  return {
+    task: "Generate a complete PRD from the supplied product knowledge graph.",
     workspaceId: input.workspaceId,
     runId: input.runId,
     attemptNumber: input.attemptNumber ?? 1,
@@ -121,23 +85,16 @@ function createSubagentRuntimeContext(input: PrdDocumentAgentInput): string {
       nodes: input.graph.nodes.map(compactKnowledgeGraphNode),
       relations: input.graph.relations.map(compactKnowledgeGraphRelation),
     },
-    sectionDossiers: input.dossiers,
-  });
-  const compactContext =
-    context.length > SUBAGENT_RUNTIME_CONTEXT_MAX_CHARS
-      ? `${context.slice(0, SUBAGENT_RUNTIME_CONTEXT_MAX_CHARS)}`
-      : context;
-  const truncationNote =
-    context.length > SUBAGENT_RUNTIME_CONTEXT_MAX_CHARS
-      ? "\nThe runtime context was truncated for token budget. Use the available evidence and explicitly mark gaps."
-      : "";
-
-  return [
-    "Runtime knowledge graph context:",
-    "Use this context as the authoritative product graph even if the delegated task description is short.",
-    "Do not claim that no knowledge graph evidence was provided unless this runtime context is empty.",
-    `<knowledge_graph_context>${compactContext}</knowledge_graph_context>${truncationNote}`,
-  ].join("\n");
+    sectionDossiers: input.dossiers.map(
+      ({ id, title, purpose, nodeIds, relationIds }) => ({
+        id,
+        title,
+        purpose,
+        nodeIds: nodeIds.map(compactGraphId),
+        relationIds: relationIds.map(compactGraphId),
+      }),
+    ),
+  };
 }
 
 /**
@@ -145,11 +102,10 @@ function createSubagentRuntimeContext(input: PrdDocumentAgentInput): string {
  */
 function compactKnowledgeGraphNode(node: KnowledgeGraphEntity) {
   return {
-    id: node.id,
+    id: compactGraphId(node.id),
     type: node.type,
     name: node.name,
     description: node.description,
-    source_task_id: node.source_task_id,
     status: node.status,
   };
 }
@@ -159,11 +115,17 @@ function compactKnowledgeGraphNode(node: KnowledgeGraphEntity) {
  */
 function compactKnowledgeGraphRelation(relation: KnowledgeGraphRelation) {
   return {
-    id: relation.id,
+    id: compactGraphId(relation.id),
     type: relation.type,
-    source: relation.source,
-    target: relation.target,
+    source: compactGraphId(relation.source),
+    target: compactGraphId(relation.target),
     description: relation.description,
-    source_task_id: relation.source_task_id,
   };
+}
+
+/**
+ * 将模型可见图谱 ID 缩短为 PRD 使用的稳定前缀。
+ */
+function compactGraphId(id: string): string {
+  return /^([A-Z]+-[0-9a-f]{8})(?:-|$)/i.exec(id)?.[1] ?? id;
 }

@@ -18,13 +18,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   CritiqueAgentOutputSchema,
+  OrchestratorAgentResultSchema,
   TaskExecutionPlanSchema,
   type ProductKnowledgeGraph,
   type RequestAnalysis,
-  ExecutorAgentResult,
-  ProductWorkflowResult,
-  TaskExecutionNode,
-  TaskExecutionPlan,
+  type ExecutorAgentResult,
+  type ProductWorkflowResult,
+  type TaskExecutionNode,
+  type TaskExecutionPlan,
 } from "@repo/shared";
 import {
   createFallbackPlan,
@@ -35,46 +36,62 @@ import {
   removeAnsweredOpenQuestions,
   scopeInitialDecisionPlan,
   scopeSupplementPlan,
+  validatePlannerTaskExecutability,
 } from "../src/agents/product-workflow/orchestrator-agent/planner-subagent/agent";
 import {
   compactGraphForPlanner,
+  createOrchestratorPayload,
+  createPlannerContext,
   createPlannerDelegationSummary,
   requireDelegatedPlannerPlan,
+  sanitizeOrchestratorModelOutput,
   shouldRetryPlannerDelegation,
 } from "../src/agents/product-workflow/orchestrator-agent/agent";
-import { getMissingRequiredSubagentError } from "../src/agents/common/run-agent";
 import {
-  createAutomaticCorrectionUserInput,
+  AgentSubagentExecutionError,
+  getMissingRequiredSubagentError,
+} from "../src/agents/common/run-agent";
+import {
   createWorkflowRoundStartEvent,
   isSupplementWorkflow,
   requireMissingInputConfirmation,
   selectNextExecutorRouterTargets,
-  shouldAutomaticallyPlanCorrection,
 } from "../src/graph/nodes/product-workflow-node";
 import type { WorkflowGraphStateValue } from "../src/graph/state";
+import {
+  isExecutorRetryCheckpointScoped,
+  selectNextNodeAfterOrchestrator,
+} from "../src/graph/workflow";
+import {
+  collectDownstreamTaskIds,
+  packParallelExecutorTasks,
+  selectReadyTasks,
+  validateTaskDag,
+} from "../src/agents/product-workflow/dag";
+import { classifyProductWorkflowRound } from "../src/agents/product-workflow/round-classification";
 
-test("automatically replans one retry-only Critique result", () => {
-  const result = {
-    review: { retry_task_ids: ["supplement-task-01"] },
-    proposal_questions: [],
-    knowledge_graph_update: { open_questions: [] },
-  } as unknown as ProductWorkflowResult;
+test("discards a delegated Planner plan when Orchestrator routes to conversation", () => {
+  const plan = createPlan([
+    createTask("task-01", 1, "executor-product-strategy", []),
+  ]);
 
+  assert.equal(requireDelegatedPlannerPlan("conversation", plan, true), undefined);
   assert.equal(
-    shouldAutomaticallyPlanCorrection(result, { userInput: [] }),
-    true,
+    selectNextNodeAfterOrchestrator({
+      productWorkflow: null,
+      plan,
+      orchestratorDecision: { route: "conversation" },
+    } as unknown as WorkflowGraphStateValue),
+    "end",
   );
-  assert.equal(
-    shouldAutomaticallyPlanCorrection(result, {
-      userInput: [
-        {
-          index: 1,
-          type: "自动审查修正",
-          content: "[automatic critique correction]",
-        },
-      ],
-    }),
-    false,
+  assert.throws(
+    () =>
+      selectNextNodeAfterOrchestrator({
+        productWorkflow: null,
+        plan: null,
+        orchestratorDecision: { route: "product_workflow" },
+      } as unknown as WorkflowGraphStateValue),
+    /without a valid delegated Planner plan/,
   );
 });
 
@@ -84,34 +101,6 @@ test("assigns a distinct round ID to each new Planner DAG", () => {
 
   assert.equal(first.type, "workflow-round-start");
   assert.notEqual(first.roundId, second.roundId);
-});
-
-test("automatic Critique correction preserves original input indexes and meaning", () => {
-  const workflow = createRetryWorkflowResult();
-  const correctedInput = createAutomaticCorrectionUserInput(
-    workflow,
-    [
-      { index: 1, type: "request", content: "设计文档协同工具" },
-      {
-        index: 5,
-        type: "constraint",
-        content: "无特殊技术或平台约束",
-      },
-    ],
-    [
-      {
-        index: 1,
-        type: "form",
-        content: "[form answers - proposal] 保持当前范围",
-      },
-    ],
-  );
-
-  assert.equal(correctedInput[1]?.index, 5);
-  assert.equal(correctedInput[1]?.content, "无特殊技术或平台约束");
-  assert.equal(correctedInput[2]?.index, 6);
-  assert.equal(correctedInput[3]?.index, 7);
-  assert.match(correctedInput[3]?.content ?? "", /automatic critique correction/);
 });
 
 test("missing referenced input asks for confirmation instead of automatic planning", () => {
@@ -128,13 +117,9 @@ test("missing referenced input asks for confirmation instead of automatic planni
 
   const guarded = requireMissingInputConfirmation(workflow, []);
 
-  assert.equal(guarded.status, "pending_user_confirmation");
+  assert.equal(guarded.status, "requires_executor_retry");
   assert.equal(guarded.proposal_questions[0]?.source_task_id, "task-01");
   assert.match(guarded.proposal_questions[0]?.label ?? "", /5/);
-  assert.equal(
-    shouldAutomaticallyPlanCorrection(guarded, { userInput: [] }),
-    false,
-  );
 });
 
 test("removes answered open questions from supplement tasks only", () => {
@@ -181,6 +166,60 @@ test("recognizes form-answer workflows as supplements without agent hints", () =
   assert.equal(isSupplementWorkflow(state), true);
 });
 
+test("classifies every supported form-answer dash as a supplement", () => {
+  for (const dash of ["-", "–", "—"]) {
+    assert.equal(
+      classifyProductWorkflowRound({
+        userInput: [{ content: `[form answers ${dash} decision-form] confirmed` }],
+      }),
+      "supplement",
+    );
+  }
+  assert.equal(
+    classifyProductWorkflowRound({
+      userInput: [{ content: "Create a new product plan." }],
+      supplementAgentTypes: ["executor-product-strategy"],
+    }),
+    "supplement",
+  );
+  assert.equal(
+    classifyProductWorkflowRound({
+      userInput: [{ content: "Create a new product plan." }],
+    }),
+    "initial",
+  );
+});
+
+test("DAG utilities compute ready batches and complete downstream closures", () => {
+  const plan = createPlan([
+    createTask("task-01", 1, "executor-product-strategy", []),
+    createTask("task-02", 2, "executor-product-strategy", []),
+    createTask("task-03", 3, "executor-product-discovery", ["task-01"]),
+    createTask("task-04", 4, "executor-product-execution", ["task-03"]),
+  ]);
+  const ready = selectReadyTasks(plan, new Set());
+  assert.deepEqual(
+    packParallelExecutorTasks(ready).map((task) => task.task_id),
+    ["task-01"],
+  );
+  assert.deepEqual(
+    [...collectDownstreamTaskIds(plan, new Set(["task-01"]))],
+    ["task-01", "task-03", "task-04"],
+  );
+});
+
+test("DAG validation reports unknown, self, and cyclic dependencies", () => {
+  const plan = createPlan([
+    createTask("task-01", 1, "executor-product-strategy", ["task-02"]),
+    createTask("task-02", 2, "executor-product-discovery", ["task-01"]),
+    createTask("task-03", 3, "executor-toolkit", ["task-03", "missing"]),
+  ]);
+  const issues = validateTaskDag(plan);
+  assert.equal(issues.includes("cyclic_dependency"), true);
+  assert.equal(issues.includes("task-03:self_dependency"), true);
+  assert.equal(issues.includes("task-03:unknown_dependency:missing"), true);
+});
+
 test("limits supplement Planner context and preserves tracked questions", () => {
   const graph = createEmptyKnowledgeGraph();
   graph.entities = Array.from({ length: 30 }, (_, index) => ({
@@ -201,7 +240,7 @@ test("limits supplement Planner context and preserves tracked questions", () => 
 
   const compact = compactGraphForPlanner(graph, true);
 
-  assert.ok(compact.entities.length <= 20);
+  assert.ok(compact.entities.length <= 40);
   assert.deepEqual(compact.open_questions, [
     {
       id: "OQ-001",
@@ -210,6 +249,108 @@ test("limits supplement Planner context and preserves tracked questions", () => 
       source_task_id: "task-01",
     },
   ]);
+});
+
+test("supplement Planner context includes affected neighbor descriptions", () => {
+  const graph = createEmptyKnowledgeGraph();
+  graph.entities = [
+    {
+      id: "R-001",
+      type: "Requirement",
+      name: "SM4 encryption",
+      description: "The confirmed encryption requirement uses SM4.",
+      source_task_id: "task-strategy",
+      status: "confirmed",
+    },
+    {
+      id: "C-001",
+      type: "Custom",
+      name: "Legacy encryption guardrail",
+      description: "Use AES-256 for data encryption.",
+      source_task_id: "task-toolkit",
+      status: "confirmed",
+    },
+  ];
+  graph.relations = [
+    {
+      id: "REL-001",
+      type: "Constrains",
+      source: "C-001",
+      target: "R-001",
+      source_task_id: "task-toolkit",
+    },
+  ];
+
+  const compact = compactGraphForPlanner(
+    graph,
+    true,
+    ["task-strategy"],
+    ["task-strategy", "task-toolkit"],
+  );
+
+  assert.equal(
+    compact.entities.find((entity) => entity.id === "C-001")?.description,
+    "Use AES-256 for data encryption.",
+  );
+  assert.equal(compact.relations[0]?.description, undefined);
+});
+
+test("uses Resolver related node IDs even when synthetic source tasks match no graph nodes", () => {
+  const graph = createEmptyKnowledgeGraph();
+  graph.entities = Array.from({ length: 20 }, (_, index) => ({
+    id: index === 0 ? "R-related" : `R-${index}`,
+    type: "Requirement" as const,
+    name: `Requirement ${index}`,
+    description: `Description ${index}`,
+    status: "confirmed" as const,
+  }));
+
+  const compact = compactGraphForPlanner(
+    graph,
+    true,
+    ["document-evidence:run-1"],
+    [],
+    ["R-related"],
+  );
+
+  assert.equal(
+    compact.entities.find((entity) => entity.id === "R-related")?.description,
+    "Description 0",
+  );
+  assert.equal("description" in compact, false);
+});
+
+test("keeps authoritative Planner context out of the outer Orchestrator payload", () => {
+  const graph = createEmptyKnowledgeGraph();
+  graph.description = "historical agent audit entry".repeat(100);
+  const input = {
+    requestAnalysis: {
+      business_model: [
+        {
+          index: 1,
+          user_goal: "Resolve evidence blockers",
+          goal_constraints: [],
+          missing_information: [],
+          covered_user_input_indexes: [1],
+        },
+      ],
+      questions: [],
+      chitchat: [],
+    },
+    userInput: [{ index: 1, content: "Confirmed", type: "form-answer" }],
+    knowledgeGraph: graph,
+    supplementSourceTaskIds: ["document-evidence:run-1"],
+  };
+
+  const outerPayload = createOrchestratorPayload(input);
+  assert.equal("planner_context" in outerPayload, false);
+  assert.equal("request_analysis" in outerPayload, false);
+  assert.equal("user_input" in outerPayload, false);
+  assert.equal("description" in outerPayload.graph_stats, false);
+
+  const plannerContext = JSON.parse(createPlannerContext(input));
+  assert.equal(plannerContext.request_analysis.business_model.length, 1);
+  assert.equal("description" in plannerContext.product_knowledge_graph, false);
 });
 
 test("fails when Orchestrator does not actually delegate to Planner", () => {
@@ -251,6 +392,41 @@ test("fails when Orchestrator does not actually delegate to Planner", () => {
     shouldRetryPlannerDelegation(new Error("provider unavailable"), 1),
     false,
   );
+  assert.equal(
+    shouldRetryPlannerDelegation(
+      new AgentSubagentExecutionError(
+        "planner",
+        new Error("Subagent planner failed"),
+      ),
+      1,
+    ),
+    true,
+  );
+  assert.equal(
+    shouldRetryPlannerDelegation(
+      new AgentSubagentExecutionError(
+        "pre-orchestrator",
+        new Error("Subagent pre-orchestrator failed"),
+      ),
+      1,
+    ),
+    false,
+  );
+});
+
+test("truncates Orchestrator display prose before schema validation", () => {
+  const sanitized = sanitizeOrchestratorModelOutput({
+    intent: "project_evolution",
+    route: "product_workflow",
+    reason_summary: "x".repeat(900),
+    planner_delegation_summary: "model-owned summary",
+    warnings: ["keep warning"],
+  }) as Record<string, unknown>;
+
+  assert.equal((sanitized.reason_summary as string).length, 800);
+  assert.equal("planner_delegation_summary" in sanitized, false);
+  assert.deepEqual(sanitized.warnings, ["keep warning"]);
+  assert.equal(sanitized.route, "product_workflow");
 });
 
 test("waits for dependencies before selecting downstream executor", () => {
@@ -661,6 +837,211 @@ test("scopes a model-generated supplement plan to authorized agents", () => {
   ]);
 });
 
+test("treats document evidence executor suggestions as advisory", () => {
+  const modelPlan = {
+    ...createPlan([
+      createTask("task-01", 1, "executor-market-research", []),
+      createTask("task-02", 2, "executor-data-analytics", ["task-01"]),
+    ]),
+    status: "supplement" as const,
+  };
+  const input = {
+    workflowPurpose: "document_evidence_resolution" as const,
+    productContext: "Workspace: local test",
+    knowledgeGraph: createEmptyKnowledgeGraph(),
+    requestAnalysis: createCollaborativeDocumentRequestAnalysis(),
+    userInput: [{ index: 1, content: "Resolve evidence blockers", type: "request" }],
+    supplementAgentTypes: ["executor-data-analytics" as const],
+    supplementSourceTaskIds: ["document-evidence:run-1"],
+  };
+  const result = extractPlanFromSubagentResult(JSON.stringify(modelPlan), input);
+
+  assert.deepEqual(
+    result.tasks.map((task) => task.assigned_agent),
+    ["executor-market-research", "executor-data-analytics"],
+  );
+  assert.throws(
+    () => extractPlanFromSubagentResult("not-json", input),
+    /document-evidence-planner-invalid/,
+  );
+  assert.equal(
+    shouldRetryPlannerDelegation(
+      new Error("document-evidence-planner-invalid:invalid-json"),
+      1,
+    ),
+    true,
+  );
+});
+
+test("rejects document evidence plans with unauthorized relations and abbreviated node IDs", () => {
+  const graph = createEmptyKnowledgeGraph();
+  graph.entities.push({
+    id: "R-9da6bd4d-45b6-4cfb-be2a-c20456e02ec0",
+    type: "Requirement",
+    name: "Security compliance",
+    description: "Private deployment compliance requirement",
+    source_task_id: "strategy-01",
+    status: "confirmed",
+  });
+  const task = createTask(
+    "task-s04",
+    1,
+    "executor-market-research",
+    [],
+  );
+  task.description = "Create Custom --Constrains--> R-9da6bd4d.";
+  task.quality_check.criteria = ["Evidence --Validates--> Custom"];
+  const plan = { ...createPlan([task]), status: "supplement" as const };
+  const input = {
+    workflowPurpose: "document_evidence_resolution" as const,
+    productContext: "Workspace: local test",
+    knowledgeGraph: graph,
+    requestAnalysis: createCollaborativeDocumentRequestAnalysis(),
+    userInput: [{ index: 1, content: "Resolve evidence blockers", type: "request" }],
+    supplementSourceTaskIds: ["document-evidence:run-1"],
+  };
+
+  const issues = validatePlannerTaskExecutability(plan, input);
+  assert.ok(issues.some((issue) => issue.includes("relation Constrains")));
+  assert.ok(
+    issues.some((issue) =>
+      issue.includes("Evidence --Validates--> Custom"),
+    ),
+  );
+  assert.ok(issues.some((issue) => issue.includes("use exact ID R-9da6bd4d-45b6")));
+  assert.throws(
+    () => extractPlanFromSubagentResult(JSON.stringify(plan), input),
+    /document-evidence-planner-invalid:Planner produced non-executable/,
+  );
+  assert.deepEqual(
+    validatePlannerTaskExecutability(plan, {
+      ...input,
+      workflowPurpose: "standard",
+    }),
+    [],
+  );
+});
+
+test("accepts authorized relation names written as natural-language task requirements", () => {
+  const strategyTask = createTask(
+    "supp-task-01",
+    1,
+    "executor-product-strategy",
+    [],
+  );
+  strategyTask.description = "Persist Produces and References relations.";
+  const discoveryTask = createTask(
+    "supp-task-02",
+    2,
+    "executor-product-discovery",
+    [],
+  );
+  discoveryTask.description = "Persist Satisfies and Measures relations.";
+  const analyticsTask = createTask(
+    "supp-task-03",
+    3,
+    "executor-data-analytics",
+    [],
+  );
+  analyticsTask.description = "Persist Measures and Validates relations.";
+  const plan = {
+    ...createPlan([strategyTask, discoveryTask, analyticsTask]),
+    status: "supplement" as const,
+  };
+  const input = {
+    workflowPurpose: "document_evidence_resolution" as const,
+    productContext: "Workspace: local test",
+    knowledgeGraph: createEmptyKnowledgeGraph(),
+    requestAnalysis: createCollaborativeDocumentRequestAnalysis(),
+    userInput: [{ index: 1, content: "Resolve evidence blockers", type: "request" }],
+    supplementSourceTaskIds: ["document-evidence:run-1"],
+  };
+
+  assert.deepEqual(validatePlannerTaskExecutability(plan, input), []);
+});
+
+test("serializes the selected manual retry before other ready tasks", () => {
+  const marketTask = createTask(
+    "task-market",
+    1,
+    "executor-market-research",
+    [],
+  );
+  const analyticsTask = createTask(
+    "task-analytics",
+    2,
+    "executor-data-analytics",
+    [],
+  );
+  const state = createState({ tasks: [marketTask, analyticsTask] });
+  const retryConfig = {
+    configurable: { retry_task_id: "task-market" },
+  } as any;
+
+  assert.deepEqual(selectNextExecutorRouterTargets(state, retryConfig), [
+    "executor-market-research",
+  ]);
+  const afterRetry = createState({
+    tasks: [marketTask, analyticsTask],
+    results: [createResult("task-market", "executor-market-research")],
+  });
+  assert.deepEqual(selectNextExecutorRouterTargets(afterRetry, retryConfig), [
+    "executor-data-analytics",
+  ]);
+});
+
+test("resumes a checkpoint only when its pending batch contains the retry target alone", () => {
+  const strategyTask = createTask(
+    "task-strategy",
+    1,
+    "executor-product-strategy",
+    [],
+  );
+  const toolkitTask = createTask(
+    "task-toolkit",
+    2,
+    "executor-toolkit",
+    ["task-strategy"],
+  );
+  const marketTask = createTask(
+    "task-market",
+    3,
+    "executor-market-research",
+    ["task-strategy"],
+  );
+  const state = createState({
+    tasks: [strategyTask, toolkitTask, marketTask],
+    results: [createResult("task-strategy", "executor-product-strategy")],
+  });
+
+  assert.equal(
+    isExecutorRetryCheckpointScoped({
+      state,
+      next: ["executor-toolkit"],
+      taskId: "task-toolkit",
+    }),
+    true,
+  );
+  assert.equal(
+    isExecutorRetryCheckpointScoped({
+      state,
+      next: ["executor-toolkit", "executor-market-research"],
+      taskId: "task-toolkit",
+    }),
+    false,
+  );
+  assert.equal(
+    isExecutorRetryCheckpointScoped({
+      state: createState({
+        tasks: [strategyTask, toolkitTask],
+      }),
+      next: ["executor-toolkit"],
+      taskId: "task-toolkit",
+    }),
+    false,
+  );
+});
+
 test("keeps minimum MVP execution while deferring detailed technical work", () => {
   const scoped = scopeInitialDecisionPlan(
     createPlan([
@@ -689,6 +1070,20 @@ test("keeps minimum MVP execution while deferring detailed technical work", () =
   assert.match(summary, /with 3 tasks/);
   assert.match(summary, /task-03/);
   assert.doesNotMatch(summary, /task-04/);
+});
+
+test("truncates model planner delegation summaries before schema validation", () => {
+  const parsed = OrchestratorAgentResultSchema.parse({
+    intent: "project_evolution",
+    route: "product_workflow",
+    context_source: "product_knowledge_graph",
+    has_project_context: true,
+    reason_summary: "Continue the persisted product workflow.",
+    planner_delegation_summary: "x".repeat(1600),
+    warnings: [],
+  });
+
+  assert.equal(parsed.planner_delegation_summary?.length, 1200);
 });
 
 test("replaces an under-scoped broad model plan with evidence and MVP coverage", () => {
@@ -754,6 +1149,11 @@ test("keeps document approval fallback focused and acyclic", () => {
   assert.equal(
     plan.tasks.some((task) => task.assigned_agent === "executor-interface-craft"),
     false,
+  );
+  assert.match(
+    plan.tasks.find((task) => task.assigned_agent === "executor-toolkit")
+      ?.description ?? "",
+    /Private or on-premises deployment does not confirm data residency/,
   );
   assert.equal(
     plan.tasks.filter(
@@ -965,14 +1365,14 @@ function assertNoDagCycle(plan: TaskExecutionPlan): void {
 }
 
 /**
- * 构造会触发自动补充规划的最小 Critique 结果。
+ * 构造等待用户选择修正动作的最小 Critique 结果。
  */
 function createRetryWorkflowResult(): ProductWorkflowResult {
   const planner = createPlan([
     createTask("task-01", 1, "executor-product-strategy", []),
   ]);
   return {
-    status: "pending_user_confirmation",
+    status: "requires_executor_retry",
     confirmation_id: "critique-retry",
     request_summary: "Correct uncovered input.",
     planner,

@@ -5,7 +5,7 @@
  * token 用量以 Agent 单次执行为粒度记录，实时流和历史恢复共用同一结构。
  *
  * Responsibilities:
- * - 描述 API/SSE 与前端状态之间的类型契约
+ * - 复用 shared 的 API/SSE 事件契约
  * - 定义产品工作流结构化卡片的数据模型
  * - 定义 token 用量实时展示和历史恢复字段
  *
@@ -13,69 +13,53 @@
  * - 本文件仅包含类型定义，不包含运行时逻辑。
  */
 
-export type StreamEventType =
-  | "start"
-  | "agent-status"
-  | "thinking"
-  | "thinking-done"
-  | "text"
-  | "human-interrupt"
-  | "question-form-start"
-  | "question-form-complete"
-  | "user-input-start"
-  | "user-input-complete"
-  | "request-analysis-start"
-  | "request-analysis-complete"
-  | "workflow-round-start"
-  | "todo-update"
-  | "tool-call"
-  | "tool-result"
-  | "subagent-start"
-  | "subagent-thinking"
-  | "subagent-result"
-  | "token-usage"
-  | "conversation-title"
-  | "step-finish"
-  | "finish"
-  | "error"
-  | "abort";
+import type { ChatSseEvent } from "@repo/shared";
 
-export interface StreamEvent {
-  type: StreamEventType;
-  roundId?: string;
-  id?: string;
-  content?: string;
-  agentType?: string;
-  status?: "started" | "completed";
-  phase?: "planning" | "execution" | "review";
-  parallelAgents?: string[];
-  taskId?: string;
-  toolCallId?: string;
-  toolName?: string;
-  toolArgs?: Record<string, unknown>;
-  toolResult?: unknown;
-  subagentType?: string;
-  description?: string;
-  result?: unknown;
-  usage?: Record<string, unknown>;
-  inputTokens?: number;
-  cacheHitInputTokens?: number;
-  cacheMissInputTokens?: number;
-  outputTokens?: number;
-  totalTokens?: number;
-  costInput?: number;
-  costOutput?: number;
-  costTotal?: number;
-  durationMs?: number;
+export type StreamEvent = ChatSseEvent;
+
+/** DeepSeek 模型使用列表中的单模型配置。 */
+export interface DeepSeekModelConfig {
+  provider: "deepseek";
+  modelId: "deepseek-v4-flash" | "deepseek-v4-pro";
+  customName: string;
+  baseUrl: string;
+  thinking: true;
+  temperature: number;
+  topP: number;
+  maxTokens: number;
+  reasoningEffort: "low" | "high" | "max";
+  pricing: {
+    cacheHitInputPricePerMillion: number;
+    cacheMissInputPricePerMillion: number;
+    outputPricePerMillion: number;
+  };
+}
+
+export type ModelTier = "reasoning" | "standard" | "fast";
+export type AgentModelGroup =
+  | "conversation"
+  | "pre-orchestrator"
+  | "request"
+  | "orchestrator"
+  | "planner"
+  | "executors"
+  | "critique"
+  | "document";
+
+/** 设置页和 Chat 选择器共享的模型使用列表 DTO。 */
+export interface ModelUsageProfile {
+  id: string;
+  name: string;
+  isSystem: boolean;
+  config:
+    | {
+        mode: "tiered";
+        models: Record<ModelTier, DeepSeekModelConfig>;
+        assignments: Record<AgentModelGroup, ModelTier>;
+      }
+    | { mode: "universal"; model: DeepSeekModelConfig };
   createdAt?: string;
-  error?: unknown;
-  chatId?: string;
-  title?: string;
-  todos?: Array<{ index: number; content: string; status: string }>;
-  analysis?: RequestAnalysis;
-  interrupt?: HumanInTheLoopInterrupt;
-  retryAction?: WorkflowRetryAction;
-  terminal?: boolean;
+  updatedAt?: string;
 }
 
 /**
@@ -258,7 +242,11 @@ export interface ExecutorAgentResult {
 }
 
 export interface ProductWorkflowResult {
-  status: "pending_user_confirmation" | "completed" | "discarded";
+  status:
+    | "pending_user_confirmation"
+    | "requires_executor_retry"
+    | "completed"
+    | "discarded";
   confirmation_id: string;
   request_summary: string;
   planner: TaskExecutionPlan;
@@ -357,6 +345,10 @@ export interface Message {
     state: "complete";
     content: string;
   };
+  documentEvidenceResolutionComplete?: {
+    runId: string;
+    workspaceId: string;
+  };
   executorResults?: ExecutorAgentResult[];
   activeAgent?: string;
   activeAgents?: string[];
@@ -366,6 +358,8 @@ export interface Message {
     message: string;
     retryAction?: WorkflowRetryAction;
   };
+  /** 连接中断或服务端中止后留下的运行时标记，仅前端展示态，不入库。 */
+  interrupted?: boolean;
   todos?: TodoItem[];
   toolCalls?: Array<{
     id?: string;

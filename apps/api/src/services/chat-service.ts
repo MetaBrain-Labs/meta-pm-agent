@@ -15,10 +15,21 @@
 
 import type {
   ChatMessage,
+  ExecutorAgentResult,
   ProductWorkflowResult,
   WorkflowRetryAction,
 } from "@repo/shared";
-import { isProductWorkflowOptionalStopAnswer } from "@repo/agent-runtime";
+import {
+  createRecoveredRequestAnalysis,
+  isSameTaskExecutorRetryable,
+  isProductWorkflowCorrectionRetryAnswer,
+  isProductWorkflowOptionalStopAnswer,
+  isProductWorkflowStopWithIssuesAnswer,
+  normalizeDocumentEvidenceWorkflowResult,
+  type WorkflowAnswerResolution,
+  type WorkflowPurpose,
+  type WorkflowRecoveryContext,
+} from "@repo/agent-runtime";
 import {
   createConversationWithInitialRequestForm,
   listActiveConversations,
@@ -26,9 +37,11 @@ import {
 } from "../repositories/chat-repository";
 import {
   findLatestExecutorRetryError,
+  findLatestProductWorkflowForForm,
   listConversationMessages,
   persistAssistantMessage,
   persistConversationMessages,
+  type MessageDto,
   type SubagentTraceDto,
 } from "../repositories/message-repository";
 import {
@@ -176,13 +189,45 @@ export async function persistConversationStart(
   conversationId: string | undefined,
   requestFormId: string | undefined,
   messages: ChatMessage[],
-): Promise<Awaited<ReturnType<typeof finishAnsweredDecisionItems>>> {
+  workflowPurpose: WorkflowPurpose = "standard",
+): Promise<WorkflowAnswerResolution | null> {
   if (!conversationId) return null;
 
   const workflowAnswerResolution = await finishAnsweredDecisionItems(
     requestFormId,
     messages,
   );
+  const persistedWorkflow =
+    workflowAnswerResolution && !workflowAnswerResolution.workflow
+      ? await findLatestProductWorkflowForForm(
+          conversationId,
+          workflowAnswerResolution.formId,
+        )
+      : null;
+  const recoveredWorkflow =
+    workflowAnswerResolution?.workflow ?? persistedWorkflow;
+  const authoritativeWorkflow =
+    recoveredWorkflow && workflowPurpose === "document_evidence_resolution"
+      ? normalizeDocumentEvidenceWorkflowResult(recoveredWorkflow)
+      : recoveredWorkflow;
+  const serverRecoveryContext =
+    workflowAnswerResolution && authoritativeWorkflow
+      ? createServerWorkflowRecoveryContext({
+          messages: await listConversationMessages(conversationId),
+          workflow: authoritativeWorkflow,
+          resolution: workflowAnswerResolution,
+          workflowPurpose,
+        })
+      : null;
+  const resolvedWorkflowAnswer = workflowAnswerResolution
+    ? {
+        ...workflowAnswerResolution,
+        ...(authoritativeWorkflow ? { workflow: authoritativeWorkflow } : {}),
+        ...(serverRecoveryContext
+          ? { serverRecoveryContext }
+          : {}),
+      }
+    : null;
 
   // 只持久化用户消息，助手回复由 persistConversationResult 统一写入。
   await persistConversationMessages(
@@ -190,15 +235,107 @@ export async function persistConversationStart(
     messages.filter(
       (message) =>
         message.role === "user" &&
-        !isProductWorkflowOptionalStopAnswer(message.content),
+        !isProductWorkflowCorrectionRetryAnswer(message.content) &&
+        !isProductWorkflowOptionalStopAnswer(message.content) &&
+        !isProductWorkflowStopWithIssuesAnswer(message.content),
     ),
   );
 
-  return workflowAnswerResolution;
+  return resolvedWorkflowAnswer;
 }
 
 /**
- * 为定点重试加载服务端可信的上一轮错误，避免接受客户端可篡改文本。
+ * 将历史上误标 completed 的 Document 补证结果恢复为 Critique 修正决策。
+ *
+ * 只复用已持久化的 Critique 快照，不重新运行 Request Agent、Resolver 或 Executor。
+ */
+export async function recoverDocumentEvidenceCorrectionDecision({
+  conversationId,
+  requestFormId,
+}: {
+  conversationId: string | undefined;
+  requestFormId: string | undefined;
+}): Promise<ProductWorkflowResult | null> {
+  if (!conversationId || !requestFormId) return null;
+  const messages = await listConversationMessages(conversationId);
+  const latestWorkflow = messages
+    .map((message) => message.productWorkflow)
+    .filter((workflow) => workflow !== null && workflow !== undefined)
+    .at(-1);
+  if (!latestWorkflow) {
+    const claimedTerminalCompletion = messages.some(
+      (message) =>
+        message.type === "conversation_confirmation" &&
+        message.content.includes("本轮产品工作流已正式结束"),
+    );
+    if (claimedTerminalCompletion) {
+      throw new Error(
+        "Document evidence resolution cannot recover its persisted Critique result. The historical answer will not be replayed as a new product request.",
+      );
+    }
+    return null;
+  }
+
+  const normalized = normalizeDocumentEvidenceWorkflowResult(latestWorkflow);
+  if (normalized.status !== "requires_executor_retry") return null;
+  await persistProposalDecisionItem(requestFormId, normalized);
+  await updateRequestFormStatus(requestFormId, "pending_user_confirmation");
+  return normalized;
+}
+
+/**
+ * 从服务端消息快照组装表单恢复所需的最小权威上下文。
+ *
+ * 图谱正文不进入该对象；运行时仍从工作区图谱存储读取最新版本。
+ */
+export function createServerWorkflowRecoveryContext({
+  messages,
+  workflow,
+  resolution,
+  workflowPurpose = "standard",
+}: {
+  messages: MessageDto[];
+  workflow: ProductWorkflowResult;
+  resolution: WorkflowAnswerResolution;
+  workflowPurpose?: WorkflowPurpose;
+}): WorkflowRecoveryContext {
+  const requestAnalysis =
+    messages
+      .map((message) => message.requestAnalysis)
+      .filter((analysis) => analysis !== null && analysis !== undefined)
+      .at(-1) ?? createRecoveredRequestAnalysis(workflow);
+  const planner =
+    messages
+      .map((message) => message.taskExecutionPlan)
+      .filter((plan) => plan !== null && plan !== undefined)
+      .at(-1) ?? workflow.planner;
+  const executorByTaskId = new Map<string, ExecutorAgentResult>();
+  for (const message of messages) {
+    if (message.executorResult) {
+      executorByTaskId.set(message.executorResult.task_id, message.executorResult);
+    }
+    for (const result of message.executorResults ?? []) {
+      executorByTaskId.set(result.task_id, result);
+    }
+  }
+
+  return {
+    workflowPurpose,
+    requestAnalysis,
+    planner,
+    executorResults: [...executorByTaskId.values()],
+    critique: workflow,
+    correctionSource: {
+      formId: resolution.formId,
+      action: resolution.action,
+      retryTaskIds:
+        resolution.correctionTaskIds ?? workflow.review.retry_task_ids ?? [],
+    },
+  };
+}
+
+/**
+ * 为定点重试加载服务端可信的历史错误，避免接受客户端可篡改文本并丢失早期约束。
  */
 export async function loadExecutorRetryFailure(
   conversationId: string | undefined,
@@ -206,7 +343,36 @@ export async function loadExecutorRetryFailure(
 ): Promise<{ taskId: string; error: string } | undefined> {
   if (!conversationId || !taskId) return undefined;
   const error = await findLatestExecutorRetryError(conversationId, taskId);
-  return error ? { taskId, error } : undefined;
+  return error && isPersistedExecutorRetryFailureRetryable(error)
+    ? { taskId, error }
+    : undefined;
+}
+
+/** 仅允许仍可由当前工具契约修复的历史 Executor 错误继续定点重试。 */
+export function isPersistedExecutorRetryFailureRetryable(
+  error: string,
+): boolean {
+  return isSameTaskExecutorRetryable(error);
+}
+
+/**
+ * 仅把当前请求真正提交但未命中待处理记录的产品工作流表单判定为过期。
+ * Executor 重试携带的是只读历史消息，不得把其中的旧表单答案再次消费。
+ */
+export function shouldRejectStaleWorkflowFormSubmission({
+  isWorkflowRetry,
+  submittedFormId,
+  answerResolved,
+}: {
+  isWorkflowRetry: boolean;
+  submittedFormId: string | null;
+  answerResolved: boolean;
+}): boolean {
+  return (
+    !isWorkflowRetry &&
+    Boolean(submittedFormId?.endsWith("-proposal-decision")) &&
+    !answerResolved
+  );
 }
 
 /**

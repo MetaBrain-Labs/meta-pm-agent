@@ -192,6 +192,14 @@ export function CritiqueAgentReviewCard({
   result?: ProductWorkflowResult;
 }) {
   const complete = state === "complete";
+  const requiresCorrection =
+    result?.status === "requires_executor_retry" ||
+    (result?.review.retry_task_ids?.length ?? 0) > 0;
+  const statusColor = requiresCorrection
+    ? "#d97706"
+    : complete
+      ? "var(--success)"
+      : "var(--primary)";
 
   return (
     <div
@@ -202,18 +210,21 @@ export function CritiqueAgentReviewCard({
         <div
           className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2"
           style={{
-            borderColor: complete ? "var(--success)" : "var(--primary)",
+            borderColor: statusColor,
             animation: complete ? undefined : "qf-pulse 1.4s ease-out infinite",
           }}
         >
           {complete && (
-            <CheckCircleOutlined className="text-[11px] text-[var(--success)]" />
+            <CheckCircleOutlined
+              className="text-[11px]"
+              style={{ color: statusColor }}
+            />
           )}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2 text-[13px] font-extrabold text-[var(--ink)]">
             <PartitionOutlined
-              style={{ color: complete ? "var(--success)" : "var(--primary)" }}
+              style={{ color: statusColor }}
             />
             <span>Critique Agent</span>
             {result && (
@@ -228,7 +239,9 @@ export function CritiqueAgentReviewCard({
           </div>
           <div className="mt-1 text-[12px] font-bold text-[var(--ink-faint)]">
             {complete
-              ? "已完成 Executor 结果与知识图谱审查"
+              ? requiresCorrection
+                ? "审查已完成，工作流正在等待修正决定"
+                : "已完成 Executor 结果与知识图谱审查"
               : "正在审查 Executor 结果与知识图谱一致性"}
           </div>
         </div>

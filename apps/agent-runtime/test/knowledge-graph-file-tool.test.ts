@@ -12,7 +12,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ProductKnowledgeGraph } from "@repo/shared";
-import { createKnowledgeGraphTools } from "../src/agents/common/knowledge-graph-file-tool";
+import {
+  NodeProvenanceValidationError,
+  createKnowledgeGraphTools,
+} from "../src/agents/common/knowledge-graph-file-tool";
 
 test("atomically allocates graph IDs and skips missing relation endpoints", async () => {
   const state = createKnowledgeGraph();
@@ -54,7 +57,7 @@ test("atomically allocates graph IDs and skips missing relation endpoints", asyn
   assert.equal(new Set(state.relations.map((item) => item.id)).size, 2);
   assert.deepEqual(
     new Set(relationResult.skipped?.map((item) => item.reason)),
-    new Set(["missing_relation_endpoint"]),
+    new Set(["missing_relation_endpoint:target=MISSING"]),
   );
   assert.equal(
     relationResult.items.every((item) => /^REL-[0-9a-f-]{36}$/.test(item.id)),
@@ -314,6 +317,19 @@ test("requires auditable Evidence provenance and verified search sources", async
     }),
     "kg_file_add_nodes",
   );
+  const addComponentNodes = getTool(
+    createKnowledgeGraphTools(state, {
+      allowedEntityTypes: ["Component"],
+      sourceTaskId: "task-02",
+      userInput: [
+        {
+          index: 1,
+          content: "The user requires private deployment.",
+        },
+      ],
+    }),
+    "kg_file_add_nodes",
+  );
 
   await assert.rejects(
     addNodes.invoke({
@@ -348,19 +364,17 @@ test("requires auditable Evidence provenance and verified search sources", async
     }),
     /web_source_title_mismatch/i,
   );
-  await assert.rejects(
-    addNodes.invoke({
-      nodes: [
-        {
-          ...createTypedNode("E-005", "Evidence"),
-          name: "Deployment topology",
-          description: "The deployment region is Singapore.",
-          provenance: [{ kind: "user_input", user_input_index: 1 }],
-        },
-      ],
-    }),
-    /unsupported_infrastructure_scope/i,
-  );
+  await addComponentNodes.invoke({
+    nodes: [
+      {
+        ...createTypedNode("COMP-005", "Component"),
+        name: "Deployment topology assumption",
+        description:
+          "Unverified assumption: the deployment region may be Singapore.",
+        provenance: [{ kind: "user_input", user_input_index: 1 }],
+      },
+    ],
+  });
 
   await addNodes.invoke({
     nodes: [
@@ -386,6 +400,63 @@ test("requires auditable Evidence provenance and verified search sources", async
     ],
   });
   assert.equal(state.entities.filter((item) => item.type === "Evidence").length, 2);
+  assert.equal(state.entities.filter((item) => item.type === "Component").length, 1);
+});
+
+test("candidate graph values require an explicit user confirmation before numeric Evidence", async () => {
+  const candidateId = "D-cfafdde1-ed04-4a40-bfaa-fdef8487d71f";
+  const state = createKnowledgeGraph();
+  state.entities.push({
+    id: candidateId,
+    type: "Decision",
+    name: "Candidate latency baseline",
+    description:
+      "Candidate p95=600ms, p99=1200ms, conflict rate=0.8%, and anchor drift=0.3%.",
+    source_task_id: "task-old",
+    status: "proposed",
+  });
+  const createTool = (content: string) =>
+    getTool(
+      createKnowledgeGraphTools(state, {
+        allowedEntityTypes: ["Evidence"],
+        sourceTaskId: "task-02",
+        userInput: [{ index: 1, content }],
+      }),
+      "kg_file_add_nodes",
+    );
+  const node = {
+    ...createTypedNode("E-candidate", "Evidence"),
+    name: "Measured latency",
+    description:
+      "Measured p95=600ms, p99=1200ms, conflict rate=0.8%, and anchor drift=0.3%.",
+    provenance: [
+      { kind: "user_input" as const, user_input_index: 1 },
+      { kind: "existing_graph" as const, node_id: candidateId },
+    ],
+  };
+
+  await assert.rejects(
+    createTool("A measurement exists in pre-production.").invoke({
+      nodes: [node],
+    }),
+    (error: unknown) =>
+      error instanceof NodeProvenanceValidationError &&
+      ["600ms", "1200ms", "0.8", "0.3"].every((claim) =>
+        error.numericClaimIssues[0]?.claims.includes(claim),
+      ) &&
+      error.numericClaimIssues[0]?.existingGraphNodeIds.includes(candidateId) ===
+        true,
+  );
+
+  await createTool(
+    "The user explicitly confirms adopting p95=600ms, p99=1200ms, conflict rate=0.8%, and anchor drift=0.3% as the measured baseline.",
+  ).invoke({ nodes: [node] });
+  assert.equal(
+    state.entities.some(
+      (entity) => entity.type === "Evidence" && entity.name === "Measured latency",
+    ),
+    true,
+  );
 });
 
 test("deprecates owned nodes only during supplement workflows", async () => {
@@ -426,6 +497,19 @@ test("deprecates owned nodes only during supplement workflows", async () => {
     }),
     /new_nodes_cannot_start_deprecated/i,
   );
+  await assert.rejects(
+    deprecateNodes.invoke({
+      deprecations: [
+        {
+          node_id: "F-001",
+          reason: "The user confirmed Markdown-only editing.",
+          replacement_node_id: null,
+          source_task_id: "task-02",
+        },
+      ],
+    }),
+    /replacement_node_id|string/i,
+  );
 
   const result = JSON.parse(
     String(
@@ -447,6 +531,113 @@ test("deprecates owned nodes only during supplement workflows", async () => {
     state.entities.find((item) => item.id === "F-001")?.deprecated_by_task_id,
     "task-02",
   );
+});
+
+test("document evidence resolution deprecates an answered active risk", async () => {
+  const state = createKnowledgeGraph();
+  state.risks.push({
+    id: "RISK-001",
+    text: "Security certification is not confirmed.",
+    source_task_id: "task-01",
+  });
+  const tools = createKnowledgeGraphTools(state, {
+    allowNodeDeprecation: true,
+    allowRiskDeprecation: true,
+    sourceTaskId: "supplement-task-01",
+    allowedEntityTypes: ["Decision"],
+  });
+  const deprecate = getTool(tools, "kg_file_deprecate_nodes");
+  const result = JSON.parse(
+    String(
+      await deprecate.invoke({
+        deprecations: [
+          {
+            node_id: "RISK-001",
+            source_task_id: "supplement-task-01",
+            reason: "The required certification was confirmed by the user.",
+          },
+        ],
+      }),
+    ),
+  ) as ToolResult;
+
+  assert.equal(result.count, 1);
+  assert.equal(state.risks.length, 0);
+  assert.equal(
+    state.entities.find((item) => item.id === "RISK-001")?.status,
+    "deprecated",
+  );
+});
+
+test("supplement workflows deprecate active OpenQuestions idempotently", async () => {
+  const state = createKnowledgeGraph();
+  state.open_questions.push({
+    id: "OQ-001",
+    text: "Which failures are fatal?",
+    source_task_id: "task-old",
+    blocking: true,
+  });
+  const nonSupplementDeprecate = getTool(
+    createKnowledgeGraphTools(state, {
+      sourceTaskId: "task-03",
+      allowedEntityTypes: ["Component"],
+    }),
+    "kg_file_deprecate_nodes",
+  );
+  const deprecate = getTool(
+    createKnowledgeGraphTools(state, {
+      allowNodeDeprecation: true,
+      allowOpenQuestionDeprecation: true,
+      sourceTaskId: "supplement-task-03",
+      allowedEntityTypes: ["Component"],
+    }),
+    "kg_file_deprecate_nodes",
+  );
+  const input = {
+    deprecations: [
+      {
+        node_id: "OQ-001",
+        source_task_id: "supplement-task-03",
+        reason: "The submitted answer fully defines fatal failures.",
+      },
+    ],
+  };
+
+  await assert.rejects(
+    nonSupplementDeprecate.invoke(input),
+    /allowed only during a supplement workflow/i,
+  );
+
+  const first = JSON.parse(String(await deprecate.invoke(input))) as ToolResult;
+  const second = JSON.parse(String(await deprecate.invoke(input))) as ToolResult;
+  const missingEntity = JSON.parse(
+    String(
+      await deprecate.invoke({
+        deprecations: [
+          {
+            node_id: "F-missing",
+            source_task_id: "supplement-task-03",
+            reason: "The feature is obsolete.",
+          },
+        ],
+      }),
+    ),
+  ) as ToolResult;
+
+  assert.equal(first.count, 1);
+  assert.equal(state.open_questions.length, 0);
+  assert.deepEqual(state.resolved_open_question_ids, ["OQ-001"]);
+  assert.equal(
+    state.entities.find((item) => item.id === "OQ-001")?.status,
+    "deprecated",
+  );
+  assert.equal(second.count, 0);
+  assert.deepEqual(second.skipped, [
+    { id: "OQ-001", reason: "already_resolved" },
+  ]);
+  assert.deepEqual(missingEntity.skipped, [
+    { id: "F-missing", reason: "missing_deprecation_target" },
+  ]);
 });
 
 interface ToolResult {

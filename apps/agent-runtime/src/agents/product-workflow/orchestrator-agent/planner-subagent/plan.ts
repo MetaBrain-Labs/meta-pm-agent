@@ -22,6 +22,7 @@ import {
   type ExecutorAgentType,
 } from "../../executor-agent/definitions";
 import type { PlannerAgentInput } from "../../types";
+import { classifyProductWorkflowRound } from "../../round-classification";
 
 // ---------------------------------------------------------------------------
 // DAG 归一化
@@ -647,7 +648,7 @@ function createFallbackTaskDescription(
     case "executor-ai-shipping":
       return `${requestContext}. Compare technical option families, synchronization models, integration approaches, and delivery constraints. Do not lock libraries, protocols, vendors, or storage choices unless already chosen. Record source-backed trade-offs as Evidence and unsupported claims as research gaps.`;
     case "executor-toolkit":
-      return `${requestContext}. After Strategy requirements exist, create compact Custom or Component guardrails for security, permissions, compliance, and workflow. Do not create Risk nodes; record unconfirmed compliance risk in Custom/Component descriptions, uncertainty, risks, or open questions.`;
+      return `${requestContext}. Create compact Custom or Component guardrails only when grounded in user input or verified Evidence. Private or on-premises deployment does not confirm data residency, region, topology, hosting, or bandwidth. Put unsupported dimensions in workflow risks or open questions instead of forced graph entities; do not create Risk entity nodes.`;
     case "executor-interface-craft":
       return `${requestContext}. Add UI-facing Component constraints and UX Evidence only when interface craft is in scope. Use Component constraint --Constrains--> UI Component and Evidence --Validates--> Component constraint; Evidence must not be the source of Constrains.`;
     default:
@@ -747,12 +748,7 @@ function createFallbackQualityCriteria(
 }
 
 function isSupplementPlanInput(input: PlannerAgentInput): boolean {
-  return (
-    Boolean(input.supplementAgentTypes?.length) ||
-    input.userInput.some((item) =>
-      /\[form answers - [^\]]+\]/i.test(item.content),
-    )
-  );
+  return classifyProductWorkflowRound(input) === "supplement";
 }
 
 function addExecutorWhenMatches(

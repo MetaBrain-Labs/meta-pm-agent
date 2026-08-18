@@ -23,11 +23,21 @@ import {
   getWorkspaceKnowledgeGraphHandler,
 } from "./chat-controller";
 import {
+  createDocumentEvidenceResolutionHandler,
   getDocumentGenerationRunHandler,
   getLatestDocumentGenerationHandler,
   startDocumentGenerationHandler,
+  resumeDocumentGenerationHandler,
   stopDocumentGenerationHandler,
 } from "./document-controller";
+import {
+  createModelProfileHandler,
+  deleteModelProfileHandler,
+  getConversationModelProfileHandler,
+  listModelProfilesHandler,
+  selectConversationModelProfileHandler,
+  updateModelProfileHandler,
+} from "./model-profile-controller";
 
 /**
  * 创建聊天相关的路由组，将路径映射到对应的控制器处理器。
@@ -43,6 +53,12 @@ export function createChatRoutes() {
   routes.post("/chats", createChatHandler);
   routes.post("/chat", chatStreamHandler);
   routes.post("/chat/stop", stopChatHandler);
+  routes.get("/model-profiles", listModelProfilesHandler);
+  routes.post("/model-profiles", createModelProfileHandler);
+  routes.put("/model-profiles/:id", updateModelProfileHandler);
+  routes.delete("/model-profiles/:id", deleteModelProfileHandler);
+  routes.get("/chats/:id/model-profile", getConversationModelProfileHandler);
+  routes.put("/chats/:id/model-profile", selectConversationModelProfileHandler);
   routes.get("/workspaces/:workspaceId/knowledge-graph", getWorkspaceKnowledgeGraphHandler);
   routes.get(
     "/workspaces/:workspaceId/document-generation/latest",
@@ -56,6 +72,14 @@ export function createChatRoutes() {
   routes.post(
     "/document-generation/:runId/stop",
     stopDocumentGenerationHandler,
+  );
+  routes.post(
+    "/document-generation/:runId/resume",
+    resumeDocumentGenerationHandler,
+  );
+  routes.post(
+    "/document-generation/:runId/evidence-resolution",
+    createDocumentEvidenceResolutionHandler,
   );
 
   return routes;

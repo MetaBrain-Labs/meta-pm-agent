@@ -12,14 +12,52 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { ChatMessage, ProductWorkflowResult } from "@repo/shared";
+import type {
+  ChatMessage,
+  ProductWorkflowResult,
+  TaskExecutionPlan,
+} from "@repo/shared";
 import {
   createWorkflowContinuationResumeContextFromMessages,
   createWorkflowExecutorRetryResumeContextFromMessages,
   createWorkflowResumeContextFromMessages,
+  formatExecutorHumanInputQuestionForm,
+  inferSupplementAffectedTaskIds,
 } from "../src/agents/conversation/workflow-resume";
-import { streamConversation } from "../src/agents/conversation/stream";
+import {
+  createCritiqueCorrectionUserInputBlock,
+  formatExecutorRetryRequiredErrorMessage,
+  streamConversation,
+} from "../src/agents/conversation/stream";
 import { createProductWorkflowKnowledgeGraph } from "../src/agents/product-workflow/common/knowledge-graph";
+
+test("formats invalid plan recovery guidance for the active workflow purpose", () => {
+  const error = {
+    displayName: "Product Execution Executor",
+    taskId: "supplement-task-03",
+    details:
+      "Structured graph write validation failed: COMP-missing:missing_deprecation_target",
+  };
+
+  const standard = formatExecutorRetryRequiredErrorMessage(error, "standard");
+  const documentEvidence = formatExecutorRetryRequiredErrorMessage(
+    error,
+    "document_evidence_resolution",
+  );
+  const retryableOpenQuestion = formatExecutorRetryRequiredErrorMessage(
+    {
+      ...error,
+      details:
+        "Structured graph write validation failed: OQ-old:missing_deprecation_target",
+    },
+    "standard",
+  );
+
+  assert.match(standard, /当前产品工作流.*已提交的补充信息/);
+  assert.doesNotMatch(standard, /解决证据阻断/);
+  assert.match(documentEvidence, /解决证据阻断/);
+  assert.doesNotMatch(retryableOpenQuestion, /下一步：/);
+});
 
 test("restores direct executor blocker context from history", () => {
   const knowledgeGraph = createProductWorkflowKnowledgeGraph();
@@ -46,6 +84,109 @@ test("restores direct executor blocker context from history", () => {
     context?.knowledgeGraph?.open_questions.map((question) => question.id),
     ["task-01-oq", "task-02-oq"],
   );
+});
+
+test("restores executor blocker context without request analysis from history", () => {
+  const knowledgeGraph = createProductWorkflowKnowledgeGraph();
+  knowledgeGraph.open_questions = [
+    {
+      id: "task-01-oq",
+      text: "Market scope?",
+      source_task_id: "task-01",
+      blocking: true,
+    },
+  ];
+  const messages = createMessages(
+    "[form answers - executor-blocker-task-01]\n- resolution: use B2B scope",
+  ).filter((item) => !item.content.includes("<request-analysis"));
+
+  const context = createWorkflowResumeContextFromMessages({
+    messages,
+    knowledgeGraph,
+  });
+
+  assert.equal(context?.requestAnalysis, undefined);
+  assert.equal(context?.plan?.tasks.length, 2);
+  assert.equal(context?.executorResults?.length, 2);
+  assert.deepEqual(context?.rerunTaskIds, ["task-01"]);
+});
+
+test("returns null for blocker answers without plan and knowledge graph", () => {
+  const context = createWorkflowResumeContextFromMessages({
+    messages: [
+      message(
+        "u1",
+        "user",
+        "[form answers - executor-blocker-task-01]\n- resolution: keep scope",
+      ),
+    ],
+  });
+
+  assert.equal(context, null);
+});
+
+test("embeds referenced graph node details as modal help in blocker forms", () => {
+  const knowledgeGraph = createProductWorkflowKnowledgeGraph();
+  knowledgeGraph.entities = [
+    {
+      id: "M-7e0bad34-6db6-4d70-93b1-c27e974685d6",
+      type: "Metric",
+      name: "性能实测基线",
+      description:
+        "候选基线：p95=120ms，p99=300ms，冲突率=0.1，锚点漂移率=0.05。",
+      source_task_id: "task-02",
+      provenance: [{ kind: "user_input", user_input_index: 1 }],
+    },
+    {
+      id: "M-other",
+      type: "Metric",
+      name: "无关指标",
+      description: "不应出现在表单中",
+      provenance: [{ kind: "user_input", user_input_index: 1 }],
+    },
+  ];
+
+  const form = formatExecutorHumanInputQuestionForm(
+    {
+      taskId: "task-02",
+      agentType: "executor-data-analytics",
+      displayName: "Data Analytics Executor",
+      category: "hard_conflict",
+      title: "性能实测数值尚未得到用户确认",
+      details:
+        "关联候选节点：M-7e0bad34-6db6-4d70-93b1-c27e974685d6；候选值：0.1",
+      neededUserInput:
+        "请填写 p95、p99、冲突率、锚点漂移率的具体值及监控/日志来源",
+    },
+    knowledgeGraph,
+  );
+
+  assert.match(form, /"helpMode": "modal"/);
+  assert.match(form, /性能实测基线/);
+  assert.match(form, /p95=120ms/);
+  assert.doesNotMatch(form, /无关指标/);
+});
+
+test("omits modal help when no graph or no referenced nodes", () => {
+  const interrupt = {
+    taskId: "task-02",
+    agentType: "executor-data-analytics" as const,
+    displayName: "Data Analytics Executor",
+    category: "hard_conflict" as const,
+    title: "性能实测数值尚未得到用户确认",
+    details: "关联候选节点：M-missing；候选值：0.1",
+    neededUserInput: "请填写具体值",
+  };
+
+  const withoutGraph = formatExecutorHumanInputQuestionForm(interrupt, null);
+  assert.doesNotMatch(withoutGraph, /"help"/);
+
+  const emptyGraph = createProductWorkflowKnowledgeGraph();
+  const unreferenced = formatExecutorHumanInputQuestionForm(
+    interrupt,
+    emptyGraph,
+  );
+  assert.doesNotMatch(unreferenced, /"help"/);
 });
 
 test("restores the original structured user input for resumed corrections", () => {
@@ -157,6 +298,8 @@ test("restores dynamic Critique confirmation as a scoped supplement", () => {
     "executor-product-strategy",
     "executor-product-execution",
   ]);
+  assert.deepEqual(context?.supplementSourceTaskIds, ["task-02", "task-01"]);
+  assert.deepEqual(context?.supplementAffectedTaskIds, ["task-01", "task-02"]);
   assert.deepEqual(context?.answeredOpenQuestionIds, [
     "task-01-oq",
     "task-01-oq-2",
@@ -175,6 +318,78 @@ test("restores dynamic Critique confirmation as a scoped supplement", () => {
   );
 });
 
+test("expands supplement scope to one-hop graph owners", () => {
+  const graph = createProductWorkflowKnowledgeGraph();
+  graph.entities = [
+    {
+      id: "R-001",
+      type: "Requirement",
+      name: "SM4 encryption",
+      source_task_id: "task-strategy",
+      status: "confirmed",
+    },
+    {
+      id: "C-001",
+      type: "Custom",
+      name: "AES-256 guardrail",
+      description: "Use AES-256 for data encryption.",
+      source_task_id: "task-toolkit",
+      status: "confirmed",
+    },
+  ];
+  graph.relations = [
+    {
+      id: "REL-001",
+      type: "Constrains",
+      source: "C-001",
+      target: "R-001",
+      source_task_id: "task-toolkit",
+    },
+  ];
+  const plan = {
+    status: "initial",
+    request_summary: "Encryption policy",
+    dag: {
+      nodes: ["task-strategy", "task-toolkit"],
+      edges: [],
+    },
+    tasks: [
+      {
+        task_id: "task-strategy",
+        sequence: 1,
+        title: "Strategy",
+        description: "Confirm encryption requirement.",
+        assigned_agent: "executor-product-strategy",
+        depends_on: [],
+        covered_business_model_indexes: [1],
+        expected_output: "Requirement",
+        quality_check: { status: "pending", criteria: ["Traceable"] },
+      },
+      {
+        task_id: "task-toolkit",
+        sequence: 2,
+        title: "Toolkit",
+        description: "Maintain encryption guardrails.",
+        assigned_agent: "executor-toolkit",
+        depends_on: [],
+        covered_business_model_indexes: [1],
+        expected_output: "Constraint",
+        quality_check: { status: "pending", criteria: ["Traceable"] },
+      },
+    ],
+    assumptions: [],
+  } satisfies TaskExecutionPlan;
+
+  assert.deepEqual(
+    inferSupplementAffectedTaskIds(
+      ["task-strategy"],
+      plan,
+      graph,
+    ),
+    ["task-strategy", "task-toolkit"],
+  );
+});
+
 test("closes all answered form questions without restored product workflow payload", () => {
   const knowledgeGraph = createProductWorkflowKnowledgeGraph();
   knowledgeGraph.open_questions = [
@@ -188,6 +403,7 @@ test("closes all answered form questions without restored product workflow paylo
     ),
     knowledgeGraph,
     workflowAnswerResolution: {
+      action: "submit_answers",
       formId: "review-proposal-decision",
       questions: knowledgeGraph.open_questions.map((question) => ({
         label: question.text,
@@ -228,6 +444,7 @@ test("keeps skipped questions open and preserves their source agent", () => {
     ),
     knowledgeGraph,
     workflowAnswerResolution: {
+      action: "submit_answers",
       formId: "review-proposal-decision",
       questions: [
         {
@@ -279,6 +496,7 @@ test("uses unique task and text matching for legacy form sources", () => {
     ),
     knowledgeGraph,
     workflowAnswerResolution: {
+      action: "submit_answers",
       formId: "review-proposal-decision",
       questions: [
         {
@@ -311,6 +529,7 @@ test("does not close ambiguous legacy text matches", () => {
     ),
     knowledgeGraph,
     workflowAnswerResolution: {
+      action: "submit_answers",
       formId: "review-proposal-decision",
       questions: [
         {
@@ -391,10 +610,18 @@ test("stopping optional questions completes without another form or orchestrator
   const messages = createMessages(
     "[form answers - critique-result-proposal-decision]\n- workflow_action: stop_optional_questions",
   );
+  const workflow = createProductWorkflowResult("critique-result");
+  workflow.review.rejected_task_ids = [];
+  workflow.review.retry_task_ids = [];
+  workflow.review.issues = [];
   messages.splice(
     messages.length - 1,
     0,
-    message("a5", "assistant", createProductWorkflowBlock("critique-result")),
+    message(
+      "a5",
+      "assistant",
+      `<product-workflow>\n${JSON.stringify(workflow)}\n</product-workflow>`,
+    ),
   );
   const events = [];
 
@@ -431,6 +658,169 @@ test("stopping optional questions completes without another form or orchestrator
         event.content.includes("本轮产品工作流已正式结束"),
     ),
     true,
+  );
+});
+
+test("stopping a hard Critique error discards without starting another workflow round", async () => {
+  const workflow = createProductWorkflowResult("critique-result");
+  workflow.status = "requires_executor_retry";
+  const messages = createMessages(
+    "[form answers - critique-result-proposal-decision]\n- 请选择如何处理审查错误？: 停止并保留问题结果",
+  );
+  const events = [];
+
+  for await (const event of streamConversation(messages, {
+    mode: "project",
+    workflowAnswerResolution: {
+      action: "stop_with_issues",
+      formId: "critique-result-proposal-decision",
+      questions: [],
+      workflow,
+    },
+  })) {
+    events.push(event);
+  }
+
+  const completed = events.find((event) => event.type === "complete");
+  assert.equal(completed?.type === "complete" && completed.result.status, "discarded");
+  assert.equal(
+    events.some((event) => event.type === "workflow-round-start"),
+    false,
+  );
+  assert.equal(
+    events.some(
+      (event) =>
+        event.type === "agent-status" &&
+        ["request", "planner", "orchestrator"].includes(event.agentType ?? ""),
+    ),
+    false,
+  );
+});
+
+test("scopes Critique correction input to retry-task errors", () => {
+  const workflow = createProductWorkflowResult("critique-result");
+  workflow.review.issues.push(
+    {
+      code: "DUPLICATE_METRIC",
+      severity: "warning",
+      task_id: "task-02",
+      message: "Warning must not create supplement work.",
+    },
+    {
+      code: "UNRELATED_ERROR",
+      severity: "error",
+      task_id: "task-01",
+      message: "Another task is outside the persisted retry scope.",
+    },
+  );
+
+  const block = createCritiqueCorrectionUserInputBlock(
+    workflow,
+    "- 请选择如何处理审查错误？: 生成补充修正任务\n- 补充约束: keep exact ids",
+    ["task-02"],
+  );
+
+  assert.match(block, /NO_STRUCTURED_GRAPH_PATCH \(task-02\)/);
+  assert.match(block, /User-supplied correction constraints/);
+  assert.match(block, /补充约束: keep exact ids/);
+  assert.doesNotMatch(block, /DUPLICATE_METRIC/);
+  assert.doesNotMatch(block, /UNRELATED_ERROR/);
+  assert.equal(block.match(/NO_STRUCTURED_GRAPH_PATCH/g)?.length, 1);
+});
+
+test("preserves document evidence purpose when Critique correction replaces source task ids", () => {
+  const messages = createMessages(
+    "[form answers - critique-result-proposal-decision]\n- workflow_action: retry_correction",
+  );
+  const workflow = createProductWorkflowResult("critique-result");
+  const baseline = createWorkflowResumeContextFromMessages({ messages });
+  assert.ok(baseline?.requestAnalysis);
+
+  const context = createWorkflowResumeContextFromMessages({
+    messages,
+    serverWorkflowRecoveryContext: {
+      workflowPurpose: "document_evidence_resolution",
+      requestAnalysis: baseline.requestAnalysis,
+      planner: workflow.planner,
+      executorResults: [],
+      critique: workflow,
+      correctionSource: {
+        formId: "critique-result-proposal-decision",
+        action: "retry_correction",
+        retryTaskIds: ["task-02"],
+      },
+    },
+    workflowAnswerResolution: {
+      action: "retry_correction",
+      formId: "critique-result-proposal-decision",
+      workflow,
+      questions: [],
+    },
+  });
+
+  assert.equal(context?.workflowPurpose, "document_evidence_resolution");
+  assert.ok(context?.supplementSourceTaskIds?.includes("task-02"));
+  assert.equal(
+    context?.supplementSourceTaskIds?.some((taskId) =>
+      taskId.startsWith("document-evidence:"),
+    ),
+    false,
+  );
+  assert.equal(context?.forceSupplementPlan, true);
+});
+
+test("accepts a persisted final workflow without client workflow history", async () => {
+  const messages = createMessages(
+    "[form answers - product-workflow-confirmation]\n- 你希望如何处理当前结果？: 确认接受\n- 补充说明: (skipped)",
+  );
+  const events = [];
+
+  for await (const event of streamConversation(messages, {
+    mode: "project",
+    workflowAnswerResolution: {
+      action: "submit_answers",
+      formId: "product-workflow-confirmation",
+      questions: [],
+      workflow: createProductWorkflowResult(),
+    },
+  })) {
+    events.push(event);
+  }
+
+  const completed = events.find((event) => event.type === "complete");
+  assert.equal(completed?.type === "complete" && completed.result.status, "completed");
+  assert.equal(
+    events.some(
+      (event) => event.type === "agent-status" && event.agentType === "request",
+    ),
+    false,
+  );
+});
+
+test("does not send final acceptance to Request Agent when persisted workflow is missing", async () => {
+  const messages = createMessages(
+    "[form answers - product-workflow-confirmation]\n- 你希望如何处理当前结果？: 确认接受",
+  );
+  const events = [];
+
+  for await (const event of streamConversation(messages, { mode: "project" })) {
+    events.push(event);
+  }
+
+  assert.equal(
+    events.some(
+      (event) =>
+        event.type === "error" &&
+        event.agentType === "conversation_confirmation" &&
+        event.terminal,
+    ),
+    true,
+  );
+  assert.equal(
+    events.some(
+      (event) => event.type === "agent-status" && event.agentType === "request",
+    ),
+    false,
   );
 });
 
@@ -508,6 +898,14 @@ function createSupplementTaskExecutionBlock(): string {
 function createProductWorkflowBlock(
   confirmationId = "product-workflow-confirmation",
 ): string {
+  return `<product-workflow>\n${JSON.stringify(
+    createProductWorkflowResult(confirmationId),
+  )}\n</product-workflow>`;
+}
+
+function createProductWorkflowResult(
+  confirmationId = "product-workflow-confirmation",
+): ProductWorkflowResult {
   const result: ProductWorkflowResult = {
     status: "pending_user_confirmation",
     confirmation_id: confirmationId,
@@ -616,7 +1014,7 @@ function createProductWorkflowBlock(
     confirmation_message: "Please confirm correction.",
   };
 
-  return `<product-workflow>\n${JSON.stringify(result)}\n</product-workflow>`;
+  return result;
 }
 
 function createMessagesWithRequestAnalysisOnly(

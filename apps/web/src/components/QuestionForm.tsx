@@ -26,6 +26,7 @@ import {
   Tag,
   Typography,
   Divider,
+  Modal,
 } from "antd";
 import { QuestionCircleOutlined } from "@ant-design/icons";
 import {
@@ -56,6 +57,10 @@ export function QuestionFormView({
   );
   const [answers, setAnswers] =
     useState<Record<string, string | string[]>>(initial);
+  const [activeHelp, setActiveHelp] = useState<{
+    label: string;
+    help: string;
+  } | null>(null);
   const locked = !interactive || !onSubmit || submittedAnswers !== undefined;
 
   function update(id: string, value: string | string[]) {
@@ -171,6 +176,7 @@ export function QuestionFormView({
               layout="vertical"
               label={
                 <span
+                  className="inline-flex items-baseline gap-2"
                   style={{
                     fontFamily: "var(--sans)",
                     color: "var(--ink)",
@@ -178,13 +184,32 @@ export function QuestionFormView({
                     fontSize: 13,
                   }}
                 >
-                  {q.label}
-                  {q.required && (
-                    <span style={{ color: "var(--danger)" }}> *</span>
+                  <span>
+                    {q.label}
+                    {q.required && (
+                      <span style={{ color: "var(--danger)" }}> *</span>
+                    )}
+                  </span>
+                  {q.help && q.helpMode === "modal" && (
+                    <Button
+                      type="link"
+                      size="small"
+                      className="h-auto p-0 text-xs"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        setActiveHelp({ label: q.label, help: q.help! });
+                      }}
+                    >
+                      查看相关资料
+                    </Button>
                   )}
                 </span>
               }
-              help={q.help && <div className="mb-4">{q.help}</div>}
+              help={
+                q.help && q.helpMode !== "modal"
+                  ? <div className="mb-4">{q.help}</div>
+                  : undefined
+              }
             >
               {q.type === "radio" && q.options && (
                 <Radio.Group
@@ -261,6 +286,17 @@ export function QuestionFormView({
           />
         );
       })}
+
+      <Modal
+        open={Boolean(activeHelp)}
+        title={activeHelp ? `相关资料：${activeHelp.label}` : "相关资料"}
+        footer={null}
+        onCancel={() => setActiveHelp(null)}
+      >
+        <div className="whitespace-pre-wrap text-sm leading-6 text-[var(--ink)]">
+          {activeHelp?.help}
+        </div>
+      </Modal>
 
       {!locked && (
         <div className="flex justify-end gap-2">

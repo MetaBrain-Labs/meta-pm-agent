@@ -29,6 +29,7 @@ import type {
   SubagentTrace,
   TokenUsageInfo,
 } from "../types";
+import { buildDocumentsPath } from "../router/app-route";
 import { ProseBlock } from "./ProseBlock";
 import {
   CritiqueAgentReviewCard,
@@ -167,7 +168,9 @@ export function MessageBubble({
     !message.plannerExecution &&
     !message.plannerReview &&
     !message.workflowCompletion &&
-    !message.agentError;
+    !message.documentEvidenceResolutionComplete &&
+    !message.agentError &&
+    !message.interrupted;
   const handleFormSubmit = useCallback(
     (formId: string, text: string, hitlResume?: HumanInTheLoopResume) => {
       if (!onFormSubmit) return;
@@ -223,6 +226,22 @@ export function MessageBubble({
 
       {showMainContent && message.todos && message.todos.length > 0 && (
         <TodoCard todos={message.todos} />
+      )}
+
+      {showMainContent && message.documentEvidenceResolutionComplete && (
+        <div className="mb-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3">
+          <div className="text-sm font-semibold text-green-800">
+            证据阻断补充已完成，产品知识图谱已更新。
+          </div>
+          <a
+            className="mt-2 inline-flex rounded-md bg-green-600 px-3 py-1.5 text-sm font-medium text-white"
+            href={buildDocumentsPath(
+              message.documentEvidenceResolutionComplete.workspaceId,
+            )}
+          >
+            返回文档产出页面
+          </a>
+        </div>
       )}
 
       {showProcessContent &&
@@ -427,6 +446,10 @@ export function MessageBubble({
           message={otherError.message}
           onRetry={onRetry}
         />
+      )}
+
+      {showMainContent && message.interrupted && !message.agentError && (
+        <AgentInterruptedCard onContinue={onRetry} />
       )}
 
       {showMainContent &&
@@ -750,6 +773,41 @@ function getQuestionFormFromInterrupt(
   return typeof action?.args.questionForm === "string"
     ? action.args.questionForm
     : null;
+}
+
+/**
+ * 展示连接中断后留下的中断态，并提供恢复入口。
+ */
+function AgentInterruptedCard({
+  onContinue,
+}: {
+  onContinue?: () => void;
+}) {
+  return (
+    <div className="mb-2 rounded-lg border border-[#fbbf24] bg-[#fffbeb] px-4 py-3 text-[#92400e]">
+      <div className="mb-1 flex items-center justify-between gap-3">
+        <span className="text-[13px] font-extrabold">
+          连接中断，工作流已停止
+        </span>
+        {onContinue && (
+          <button
+            type="button"
+            className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-[#fbbf24] bg-white px-2 py-1 text-[12px] font-bold text-[#92400e]"
+            onClick={(event) => {
+              event.stopPropagation();
+              onContinue();
+            }}
+          >
+            <ReloadOutlined />
+            继续运行
+          </button>
+        )}
+      </div>
+      <span className="text-[12px] leading-relaxed">
+        可点击继续运行，服务端将从上次检查点恢复。
+      </span>
+    </div>
+  );
 }
 
 /**

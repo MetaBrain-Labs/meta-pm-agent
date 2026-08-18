@@ -9,7 +9,6 @@
  * - createToolsForAgent()：根据 agentType 和启用的用户工具构建工具数组
  * - getExecutorDefaultToolNames()：返回 Executor 内部默认启用的工具名称列表
  * - getExecutorRetryToolNames()：返回结构化重试阶段的最小写入工具列表
- * - getKnowledgeGraphFileToolNames()：返回知识图谱文件工具名称列表
  *
  * Notes:
  * - conversation 的 web_search 由前端 enabledTools 控制
@@ -21,6 +20,7 @@
 import type { StructuredTool } from "langchain";
 import type { AgentRuntimeTool, ProductKnowledgeGraph } from "@repo/shared";
 import type { AgentMessageType } from "../../types";
+import { EXECUTOR_DEFINITIONS } from "../product-workflow/executor-agent/definitions";
 import {
   createKnowledgeGraphTools,
   type StructuredToolCallResult,
@@ -50,28 +50,15 @@ const EXECUTOR_BLOCKER_TOOLS: AgentRuntimeTool[] = [
   "kg_file_raise_blocker",
 ];
 
-const EXECUTOR_AGENT_TYPES = [
-  "executor-product-strategy",
-  "executor-market-research",
-  "executor-gtm",
-  "executor-product-discovery",
-  "executor-product-execution",
-  "executor-marketing-growth",
-  "executor-data-analytics",
-  "executor-ai-shipping",
-  "executor-toolkit",
-  "executor-interface-craft",
-];
+const EXECUTOR_AGENT_TYPES = EXECUTOR_DEFINITIONS.map(
+  (definition) => definition.agentType,
+);
 
-const EXECUTOR_WEB_SEARCH_AGENT_TYPES = new Set([
-  "executor-market-research",
-  "executor-gtm",
-  "executor-marketing-growth",
-  "executor-data-analytics",
-  "executor-ai-shipping",
-  "executor-toolkit",
-  "executor-interface-craft",
-]);
+const EXECUTOR_WEB_SEARCH_AGENT_TYPES: ReadonlySet<string> = new Set(
+  EXECUTOR_DEFINITIONS.filter((definition) => definition.webSearchEnabled).map(
+    (definition) => definition.agentType,
+  ),
+);
 
 const AGENT_TOOL_ACCESS: Record<string, ReadonlySet<AgentRuntimeTool>> = {
   conversation: new Set(["web_search"]),
@@ -101,6 +88,10 @@ interface CreateToolsForAgentOptions {
   requiredBlockingOpenQuestionCount?: number;
   /** 是否允许补充任务通过受控工具退役旧节点。 */
   allowNodeDeprecation?: boolean;
+  /** 是否允许文档补证任务关闭已被回答的活跃风险。 */
+  allowRiskDeprecation?: boolean;
+  /** 是否允许补充任务关闭已被用户回答的活跃问题。 */
+  allowOpenQuestionDeprecation?: boolean;
   /** 当前任务 ID，用于阻止模型伪造来源任务。 */
   sourceTaskId?: string;
   /** 本轮用户输入，供节点来源校验。 */
@@ -138,6 +129,8 @@ export function createToolsForAgent(
         requiredBlockingOpenQuestionCount:
           options.requiredBlockingOpenQuestionCount,
         allowNodeDeprecation: options.allowNodeDeprecation,
+        allowRiskDeprecation: options.allowRiskDeprecation,
+        allowOpenQuestionDeprecation: options.allowOpenQuestionDeprecation,
         sourceTaskId: options.sourceTaskId,
         userInput: options.userInput,
         verifiedWebSources: options.webSearchEvidenceRegistry?.sources,
@@ -176,7 +169,10 @@ export function getExecutorDefaultToolNames(
 }
 
 /**
- * 返回 Executor 结构化重试阶段的写入工具，避免重复读取和外部研究。
+ * 返回 Executor 结构化重试阶段的工具：全部写工具 + 只读图谱查询工具。
+ *
+ * 只读工具用于核实任务引用的节点 ID（例如 Planner 转录笔误导致端点缺失时），
+ * 避免「信息集不变 + 盲重试」造成同一校验错误反复失败；外部研究（web_search）仍被排除。
  */
 export function getExecutorRetryToolNames(supplement = false): AgentRuntimeTool[] {
   return [
@@ -188,6 +184,9 @@ export function getExecutorRetryToolNames(supplement = false): AgentRuntimeTool[
     "kg_file_add_decisions",
     "kg_file_add_risks",
     "kg_file_add_open_questions",
+    "kg_file_read",
+    "kg_file_query_nodes",
+    "kg_file_query_relations",
     ...EXECUTOR_BLOCKER_TOOLS,
   ];
 }
@@ -213,14 +212,10 @@ export function canAgentUseTool(
  * Toolkit、Interface Craft 需要外部事实验证，runtime 自动注入 web_search。
  */
 export function canExecutorUseWebSearch(agentType: ToolOwningAgent): boolean {
-  return EXECUTOR_WEB_SEARCH_AGENT_TYPES.has(agentType);
-}
-
-/**
- * Planner/Executor 内部默认启用的知识图谱文件工具名称列表。
- */
-export function getKnowledgeGraphFileToolNames(): AgentRuntimeTool[] {
-  return [...KNOWLEDGE_GRAPH_FILE_TOOLS, ...EXECUTOR_BLOCKER_TOOLS];
+  return EXECUTOR_DEFINITIONS.some(
+    (definition) =>
+      definition.agentType === agentType && definition.webSearchEnabled,
+  );
 }
 
 export type { StructuredToolCallResult };

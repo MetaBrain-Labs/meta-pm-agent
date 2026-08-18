@@ -1,12 +1,12 @@
 /**
  * Document Agent 专用运行器
  *
- * 独立承载 Document Agent 的 DeepAgents 创建、SubAgent task 记录、write_todos
- * 任务规划事件转换、token 用量统计和最终 PRD Markdown 清理逻辑。
+ * 独立承载 Document Agent 的 DeepAgents 创建、Skill 读取审计、
+ * token 用量统计和最终 PRD Markdown 清理逻辑。
  *
  * Responsibilities:
- * - runDocumentAgent()：运行带 PRD 子代理的 Document Agent
- * - 将 write_todos/task 内置工具转换为文档工作流事件
+ * - runDocumentAgent()：运行直接使用 PRD Skills 的 Document Agent
+ * - 保留兼容的工具事件转换边界
  * - 清理最终 Markdown，避免持久化 DeepAgents 编排说明
  *
  * Notes:
@@ -14,24 +14,35 @@
  * - Document Agent 不写知识图谱；知识图谱只作为输入事实源。
  */
 
+import { createHash } from "node:crypto";
 import {
   AIMessage,
   HumanMessage,
   ToolMessage,
   type BaseMessage,
 } from "langchain";
-import { createDeepAgent, type SubAgent } from "deepagents";
-import type { DocumentTodo } from "@repo/shared";
+import {
+  createDeepAgent,
+  type FileData,
+  type SubAgent,
+} from "deepagents";
+import type { DocumentTodo, ModelUsageProfile } from "@repo/shared";
 import { calculateCost } from "../../config";
 import {
   createAgentRunSummaryMiddleware,
   createAgentRunSummaryRecorder,
+  createNamedToolCallExtractor,
   createSubagentTaskCallExtractor,
   extractSubagentTaskResult,
 } from "../common/agent-run-summary";
 import { createDeepAgentToolAllowlistMiddleware } from "../common/deep-agent-tool-policy";
 import { createDefaultAgentMiddleware } from "../common/middleware";
 import { createChatModel } from "../common/model";
+import {
+  createModelSummarySnapshot,
+  resolveAgentModelSelection,
+  toLlmPricing,
+} from "../common/model-profile";
 import {
   getReasoningContent,
   getTextContent,
@@ -87,10 +98,29 @@ export type DocumentAgentStreamEvent =
 export interface RunDocumentAgentOptions {
   payload: unknown;
   subagents: SubAgent[];
+  skills?: string[];
+  skillFiles?: Record<string, FileData>;
+  modelProfile?: ModelUsageProfile;
   signal?: AbortSignal;
 }
 
-const VISIBLE_BUILTIN_TOOL_NAMES = new Set(["write_todos", "task"]);
+export const DOCUMENT_VISIBLE_BUILTIN_TOOL_NAMES = [] as const;
+const VISIBLE_BUILTIN_TOOL_NAMES = new Set<string>(
+  DOCUMENT_VISIBLE_BUILTIN_TOOL_NAMES,
+);
+const SKILL_READER_TOOL_NAME = "read_file";
+
+/**
+ * 计算 Document Agent 内置工具白名单；Skill 读取保持内部可用但不进入可见工具集合。
+ */
+export function createDocumentAllowedBuiltinToolNames(
+  hasSkillFiles: boolean,
+): Set<string> {
+  return new Set([
+    ...DOCUMENT_VISIBLE_BUILTIN_TOOL_NAMES,
+    ...(hasSkillFiles ? [SKILL_READER_TOOL_NAME] : []),
+  ]);
+}
 const PRD_MARKDOWN_START_PATTERNS = [
   /^#{1,2}\s+.*Product Requirements Document\s*\(PRD\).*$/im,
   /^#{1,2}\s+.*产品需求文档.*PRD.*$/im,
@@ -104,23 +134,35 @@ export async function* runDocumentAgent(
   options: RunDocumentAgentOptions,
 ): AsyncGenerator<DocumentAgentStreamEvent, string, void> {
   const startTime = Date.now();
+  const modelSelection = resolveAgentModelSelection(
+    options.modelProfile,
+    "document",
+  );
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
   let responseText = "";
+  const skillFiles = options.skillFiles ?? {};
+  const hasSkillFiles = Object.keys(skillFiles).length > 0;
+  const allowedBuiltinToolNames =
+    createDocumentAllowedBuiltinToolNames(hasSkillFiles);
   const documentToolAllowlistMiddleware =
     createDeepAgentToolAllowlistMiddleware({
       agentName: "document-agent-prd",
-      allowedToolNames: VISIBLE_BUILTIN_TOOL_NAMES,
+      allowedToolNames: allowedBuiltinToolNames,
     });
   const summaryRecorder = createAgentRunSummaryRecorder({
     agentLabel: "PRD Document Agent",
     agentName: "document-agent-prd",
     agentType: "document",
+    model: createModelSummarySnapshot(modelSelection),
     context: {
       payload: options.payload,
       subagents: options.subagents.map((subagent) => ({
         name: subagent.name,
         description: subagent.description,
+        skills: subagent.skills ?? [],
       })),
+      skills: options.skills ?? [],
+      skillManifest: createSkillManifest(skillFiles),
       systemPrompt: PRD_DOCUMENT_AGENT_PROMPT,
       visibleTools: [...VISIBLE_BUILTIN_TOOL_NAMES],
     },
@@ -128,13 +170,17 @@ export async function* runDocumentAgent(
 
   try {
     const agent = createDeepAgent({
-      model: createChatModel({
-        enableThinking: true,
-        temperature: 0.2,
-        maxTokens: 24000,
-      }) as any,
+      model: createChatModel(
+        {
+          enableThinking: true,
+          temperature: 0.2,
+          maxTokens: 24000,
+        },
+        modelSelection,
+      ) as any,
       systemPrompt: PRD_DOCUMENT_AGENT_PROMPT,
       name: "document-agent-prd",
+      skills: options.skills ?? [],
       subagents: options.subagents as any,
       middleware: [
         documentToolAllowlistMiddleware,
@@ -146,6 +192,7 @@ export async function* runDocumentAgent(
     const run = await agent.stream(
       {
         messages: [new HumanMessage(JSON.stringify(options.payload))],
+        ...(hasSkillFiles ? { files: skillFiles } : {}),
       },
       { streamMode: "messages", signal: options.signal },
     );
@@ -153,8 +200,31 @@ export async function* runDocumentAgent(
     let currentTextBlock = "";
     /** 跟踪 task 工具调用中 tool_call_id -> subagentType 的映射，用于结果匹配。 */
     const taskCallToSubagent = new Map<string, string>();
+    /** Debug-only Skill 读取审计；不进入 SSE 或业务持久化。 */
+    const skillReadCallPaths = new Map<string, string>();
     const subagentTaskCallExtractor = createSubagentTaskCallExtractor();
+    const skillReadCallExtractor = createNamedToolCallExtractor(
+      SKILL_READER_TOOL_NAME,
+      (input) =>
+        typeof input.file_path === "string" &&
+        input.file_path.startsWith("/skills/") &&
+        input.file_path.endsWith("/SKILL.md"),
+    );
     for await (const [message] of run) {
+      for (const skillRead of skillReadCallExtractor.extract(message)) {
+        const filePath = String(skillRead.input.file_path);
+        if (skillRead.toolCallId) {
+          skillReadCallPaths.set(skillRead.toolCallId, filePath);
+        }
+        summaryRecorder.recordToolCall({
+          toolCallId: skillRead.toolCallId,
+          toolName: "read_file",
+          toolArgs: {
+            file_path: filePath,
+            auditScope: "virtual-skill",
+          },
+        });
+      }
       const subagentTaskCalls = subagentTaskCallExtractor.extract(message);
       for (const taskCall of subagentTaskCalls) {
         if (taskCall.toolCallId) {
@@ -194,6 +264,24 @@ export async function* runDocumentAgent(
       }
       if (hasAnyToolCalls) {
         // 带工具调用的 AI 文本通常是 DeepAgents 子任务编排说明，不属于最终 PRD 正文。
+        currentTextBlock = "";
+        continue;
+      }
+
+      const skillReadResult = getSkillReadToolResult(
+        message,
+        skillReadCallPaths,
+      );
+      if (skillReadResult) {
+        summaryRecorder.recordToolResult({
+          toolCallId: skillReadResult.toolCallId,
+          toolName: "read_file",
+          toolResult: {
+            filePath: skillReadResult.filePath,
+            success: skillReadResult.success,
+            sha256: skillReadResult.sha256,
+          },
+        });
         currentTextBlock = "";
         continue;
       }
@@ -280,6 +368,7 @@ export async function* runDocumentAgent(
         tokenUsage.cacheMissInputTokens,
         tokenUsage.cacheHitInputTokens,
         tokenUsage.outputTokens,
+        toLlmPricing(modelSelection),
       );
       yield {
         type: "token-usage",
@@ -298,7 +387,9 @@ export async function* runDocumentAgent(
 
     const markdown = sanitizePrdMarkdown(responseText);
     if (!markdown) {
-      throw new Error("Document Agent completed without PRD markdown.");
+      throw new Error(
+        "Document Agent returned no PRD markdown. The model may have exhausted maxTokens during reasoning; increase the Document model maxTokens or lower its reasoning effort.",
+      );
     }
 
     await summaryRecorder.finish({
@@ -345,6 +436,69 @@ export function sanitizePrdMarkdown(markdown: string): string {
  */
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 构建只包含虚拟路径和内容摘要的 Skill 清单，供本地 Debug 汇总审计。
+ */
+function createSkillManifest(skillFiles: Record<string, FileData>) {
+  return Object.entries(skillFiles).map(([filePath, file]) => ({
+    filePath,
+    sha256: hashContent(file.content),
+  }));
+}
+
+/**
+ * 将虚拟 Skill 读取结果压缩为成功状态和内容 hash。
+ */
+function getSkillReadToolResult(
+  message: BaseMessage,
+  skillReadCallPaths: ReadonlyMap<string, string>,
+): {
+  toolCallId?: string;
+  filePath: string;
+  success: boolean;
+  sha256: string | null;
+} | null {
+  if (!ToolMessage.isInstance(message) || message.name !== "read_file") {
+    return null;
+  }
+  const toolCallId = (message as { tool_call_id?: string }).tool_call_id;
+  const filePath = toolCallId
+    ? skillReadCallPaths.get(toolCallId)
+    : undefined;
+  if (!filePath) return null;
+  const content = stringifyToolContent(message.content);
+  const success = !/^Error:/i.test(content.trim());
+
+  return {
+    toolCallId,
+    filePath,
+    success,
+    sha256: success ? hashContent(content) : null,
+  };
+}
+
+/**
+ * 将工具内容稳定转换为 hash 输入。
+ */
+function stringifyToolContent(content: unknown): string {
+  return typeof content === "string"
+    ? content
+    : JSON.stringify(content ?? "");
+}
+
+/**
+ * 计算本地调试所需的 SHA-256 内容摘要。
+ */
+function hashContent(content: unknown): string {
+  const normalized =
+    typeof content === "string"
+      ? content
+      : content instanceof Uint8Array
+        ? Buffer.from(content)
+        : JSON.stringify(content ?? "");
+  return createHash("sha256").update(normalized).digest("hex");
 }
 
 /**

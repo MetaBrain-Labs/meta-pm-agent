@@ -43,6 +43,8 @@ export interface AgentRunSummaryOptions {
   agentName: string;
   agentType: string;
   context?: unknown;
+  /** 当前 Agent 实际使用的模型与价格快照，不得包含 API Key。 */
+  model?: unknown;
 }
 
 export interface AgentRunSummaryFinishOptions {
@@ -80,6 +82,15 @@ export interface SubagentTaskResultRecord {
 
 export interface SubagentTaskCallExtractor {
   extract(message: BaseMessage): SubagentTaskCallRecord[];
+}
+
+export interface NamedToolCallRecord {
+  toolCallId?: string;
+  input: Record<string, unknown>;
+}
+
+export interface NamedToolCallExtractor {
+  extract(message: BaseMessage): NamedToolCallRecord[];
 }
 
 interface PendingRawSubagentTaskCall {
@@ -374,6 +385,28 @@ export function extractSubagentTaskCalls(
  * 创建带状态的 task 工具调用提取器，用于拼接 provider 原始流式参数。
  */
 export function createSubagentTaskCallExtractor(): SubagentTaskCallExtractor {
+  const extractor = createNamedToolCallExtractor(
+    "task",
+    isReadySubagentTaskInput,
+  );
+
+  return {
+    extract(message) {
+      return extractor.extract(message).map((call) =>
+        createSubagentTaskCallRecord(call.toolCallId, call.input),
+      );
+    },
+  };
+}
+
+/**
+ * 创建带状态的指定工具调用提取器，兼容规范化调用和流式参数分片。
+ */
+export function createNamedToolCallExtractor(
+  toolName: string,
+  isReady: (input: Record<string, unknown>) => boolean = (input) =>
+    Object.keys(input).length > 0,
+): NamedToolCallExtractor {
   const pendingRawCalls = new Map<string, PendingRawSubagentTaskCall>();
   const emittedKeys = new Set<string>();
 
@@ -381,8 +414,8 @@ export function createSubagentTaskCallExtractor(): SubagentTaskCallExtractor {
     extract(message) {
       if (!AIMessage.isInstance(message)) return [];
 
-      const calls: SubagentTaskCallRecord[] = [];
-      const pushCall = (key: string, call: SubagentTaskCallRecord) => {
+      const calls: NamedToolCallRecord[] = [];
+      const pushCall = (key: string, call: NamedToolCallRecord) => {
         const emitKey = call.toolCallId ? `id:${call.toolCallId}` : key;
         if (emittedKeys.has(emitKey)) return;
         emittedKeys.add(emitKey);
@@ -390,15 +423,15 @@ export function createSubagentTaskCallExtractor(): SubagentTaskCallExtractor {
       };
 
       for (const toolCall of message.tool_calls ?? []) {
-        if (toolCall.name !== "task") continue;
+        if (toolCall.name !== toolName) continue;
         const input = normalizeToolCallArgs(toolCall.args);
-        if (!isReadySubagentTaskInput(input)) continue;
+        if (!isReady(input)) continue;
 
         pushCall(
           toolCall.id
             ? `normalized:${toolCall.id}`
             : `normalized:${calls.length}`,
-          createSubagentTaskCallRecord(toolCall.id, input),
+          { toolCallId: toolCall.id, input },
         );
       }
 
@@ -421,7 +454,7 @@ export function createSubagentTaskCallExtractor(): SubagentTaskCallExtractor {
         if (nameChunk) {
           pending.name = mergeStreamedString(pending.name, nameChunk);
         }
-        if (pending.name !== "task") continue;
+        if (pending.name !== toolName) continue;
 
         const argumentsChunk =
           functionRecord.arguments ?? rawRecord.args ?? rawRecord.arguments;
@@ -436,9 +469,9 @@ export function createSubagentTaskCallExtractor(): SubagentTaskCallExtractor {
 
         const input =
           pending.input ?? normalizeToolCallArgs(pending.argumentsText);
-        if (!isReadySubagentTaskInput(input)) continue;
+        if (!isReady(input)) continue;
 
-        pushCall(key, createSubagentTaskCallRecord(pending.toolCallId, input));
+        pushCall(key, { toolCallId: pending.toolCallId, input });
       }
 
       return calls;
@@ -608,6 +641,15 @@ function renderAgentRunMarkdown({
     `- Ended at: ${endedAt.toISOString()}`,
     `- Duration: ${endedAt.getTime() - startedAt.getTime()} ms`,
   ];
+
+  if (summaryOptions.model) {
+    lines.push(
+      "",
+      "## Model Configuration",
+      "",
+      formatJsonBlock(summaryOptions.model),
+    );
+  }
 
   if (finishOptions.tokenUsage) {
     lines.push(
@@ -1116,6 +1158,8 @@ function extractRawToolCalls(message: BaseMessage): unknown[] {
     ? record.response_metadata
     : {};
   const rawToolCalls = [
+    record.tool_call_chunks,
+    record.toolCallChunks,
     additionalKwargs.tool_calls,
     additionalKwargs.toolCalls,
     responseMetadata.tool_calls,

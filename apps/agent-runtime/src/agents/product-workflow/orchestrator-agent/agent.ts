@@ -19,11 +19,20 @@ import {
   type TaskExecutionPlan,
 } from "@repo/shared";
 
-import { resolveJsonOutput, runAgent } from "../../common/run-agent";
+import {
+  AgentSubagentExecutionError,
+  resolveJsonOutput,
+  runAgent,
+} from "../../common/run-agent";
+import {
+  createModelSummarySnapshot,
+  resolveAgentModelSelection,
+} from "../../common/model-profile";
 import type {
   OrchestratorAgentInput,
   ProductWorkflowStreamEvent,
 } from "../types";
+import { classifyProductWorkflowRound } from "../round-classification";
 import { ORCHESTRATOR_AGENT_PROMPT } from "./prompt";
 import {
   createPlannerSubagent,
@@ -57,6 +66,10 @@ export async function* streamOrchestratorAgent(
   void
 > {
   const isPreCheck = isPreOrchestratorInput(input);
+  const preCheckContext = isPreCheck
+    ? JSON.stringify(buildPreOrchPayload(input))
+    : undefined;
+  const plannerContext = isPreCheck ? undefined : createPlannerContext(input);
 
   let preOrchSubagentResult: unknown = undefined;
   let plannerSubagentResult: unknown = undefined;
@@ -64,13 +77,14 @@ export async function* streamOrchestratorAgent(
   let plannerInvocationStarted = false;
 
   const payload = isPreCheck
-    ? { mode: "pre-check", pre_check_payload: buildPreOrchPayload(input) }
+    ? { mode: "pre-check", has_existing_project: input.hasExistingProject }
     : createOrchestratorPayload(input);
   const outputSchema = isPreCheck
     ? PreOrchResultSchema
     : OrchestratorAgentResultSchema;
 
   let rawOutput: unknown;
+  let retryError = "required-subagent-not-invoked: planner";
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const runner = runAgent({
       agentType: "orchestrator" as any,
@@ -78,13 +92,41 @@ export async function* streamOrchestratorAgent(
       name: "orchestrator-agent",
       // json_object 会导致模型跳过 task 工具调用直接生成 JSON 输出，
       // 因此两种模式都不能使用 responseFormat: "json_object"。
-      modelOptions: { enableThinking: true, temperature: 0, maxTokens: 8192 },
+      modelOptions: {
+        enableThinking: true,
+        temperature: 0,
+        maxTokens: 16384,
+        timeout: 120_000,
+      },
+      modelProfile: input.modelProfile,
+      modelGroup: "orchestrator",
+      modelSummary: {
+        current: createModelSummarySnapshot(
+          resolveAgentModelSelection(input.modelProfile, "orchestrator"),
+        ),
+        delegatedSubagent: createModelSummarySnapshot(
+          resolveAgentModelSelection(
+            input.modelProfile,
+            isPreCheck ? "pre-orchestrator" : "planner",
+          ),
+        ),
+      },
       systemPrompt: ORCHESTRATOR_AGENT_PROMPT,
       // pre-check 模式只需 Pre-Orchestrator SubAgent；full 模式只需 Planner SubAgent。
       // 不混用可避免 LLM 在同一轮次中调用不该出现的 SubAgent。
       subagents: isPreCheck
-        ? [createPreOrchestratorSubagent()]
-        : [createPlannerSubagent()],
+        ? [createPreOrchestratorSubagent(input.modelProfile, preCheckContext)]
+        : [
+            createPlannerSubagent(
+              input.modelProfile,
+              attempt === 1
+                ? plannerContext
+                : `${plannerContext}\n\nRuntime validation feedback from the rejected plan:\n${retryError}\nReturn a corrected plan that resolves every listed issue.`,
+            ),
+          ],
+      subagentModelGroups: isPreCheck
+        ? { "pre-orchestrator": "pre-orchestrator" }
+        : { planner: "planner" },
       payload:
         attempt === 1
           ? payload
@@ -92,23 +134,40 @@ export async function* streamOrchestratorAgent(
               ...payload,
               retry_context: {
                 attempt,
-                error: "required-subagent-not-invoked: planner",
-                previous_raw_output:
-                  "No Planner task call was emitted by the previous attempt.",
+                error: retryError,
+                previous_raw_output: "The previous Planner result was unavailable or invalid.",
               },
             },
       resolveOutput: (context) =>
-        resolveJsonOutput(context, outputSchema as any),
+        resolveJsonOutput(context, {
+          safeParse: (value: unknown) =>
+            (outputSchema as any).safeParse(
+              isPreCheck ? value : sanitizeOrchestratorModelOutput(value),
+            ),
+        }),
       requiredSubagentType:
         !isPreCheck && input.requestAnalysis.business_model.length > 0
           ? "planner"
           : undefined,
+      // Planner 失败必须由本层执行一次定点重试，不能降级为缺少 DAG 的 Orchestrator fallback。
+      throwOnSubagentError: !isPreCheck,
       fallback: (reason: string) =>
         isPreCheck
           ? createFallbackPreOrchResult(input)
           : createFallbackOrchestratorDecision(input, reason),
       signal: input.signal,
     });
+    let runnerFinished = false;
+    let runnerClosed = false;
+    const closeRunner = async () => {
+      if (runnerFinished || runnerClosed) return;
+      runnerClosed = true;
+      try {
+        await runner.return(undefined as never);
+      } catch {
+        // 关闭旧流的次生异常不得覆盖 Planner 校验错误或调用方中止。
+      }
+    };
 
     try {
       let next = await runner.next();
@@ -167,15 +226,23 @@ export async function* streamOrchestratorAgent(
         next = await runner.next();
       }
       rawOutput = next.value;
+      runnerFinished = true;
       break;
     } catch (error) {
+      // 计划校验会在收到 subagent-result 后同步抛错；此时底层生成器仍停在 yield。
+      // 主动 return 才会触发 runAgent 的 finally，中止旧 provider 流并完成本次诊断汇总。
+      await closeRunner();
       if (!shouldRetryPlannerDelegation(error, attempt)) throw error;
+      retryError = error instanceof Error ? error.message : String(error);
       yield {
         type: "reasoning",
         agentType: "orchestrator",
         content:
-          "Planner SubAgent was not invoked; retrying delegation once.\n",
+          "Planner SubAgent did not produce a usable evidence-resolution plan; retrying delegation once.\n",
       };
+    } finally {
+      // 外层消费者在任意可见事件处停止迭代时，同样释放当前 DeepAgent/provider 流。
+      await closeRunner();
     }
   }
 
@@ -238,8 +305,28 @@ export function shouldRetryPlannerDelegation(
   return (
     attempt === 1 &&
     error instanceof Error &&
-    error.message === "required-subagent-not-invoked: planner"
+    ((error instanceof AgentSubagentExecutionError &&
+      error.subagentType === "planner") ||
+      error.message === "required-subagent-not-invoked: planner" ||
+      error.message.startsWith("document-evidence-planner-invalid:"))
   );
+}
+
+/**
+ * 在业务 schema 校验前收口 Orchestrator 的展示字段。
+ *
+ * Planner 摘要始终由运行时依据最终 DAG 重建，因此丢弃模型副本不会改变路由或计划语义。
+ */
+export function sanitizeOrchestratorModelOutput(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  const record = { ...(value as Record<string, unknown>) };
+  if (typeof record.reason_summary === "string") {
+    record.reason_summary = record.reason_summary.slice(0, 800);
+  }
+  delete record.planner_delegation_summary;
+  return record;
 }
 
 /**
@@ -268,6 +355,8 @@ export function requireDelegatedPlannerPlan(
   capturedPlan: TaskExecutionPlan | undefined,
   plannerInvocationStarted: boolean,
 ): TaskExecutionPlan | undefined {
+  // conversation 路由是权威终止信号；即使模型误调用 Planner 也不得执行其计划。
+  if (route !== "product_workflow") return undefined;
   if (route === "product_workflow" && !capturedPlan) {
     throw new Error(
       plannerInvocationStarted
@@ -308,25 +397,16 @@ function isPreOrchestratorInput(
   return "hasExistingProject" in input && "userMessage" in input;
 }
 
-function createOrchestratorPayload(input: OrchestratorAgentInput) {
-  const compactGraph = compactGraphForPlanner(
-    input.knowledgeGraph,
-    isWorkflowSupplementInput(input),
-  );
-
+export function createOrchestratorPayload(input: OrchestratorAgentInput) {
   return {
     mode: "full",
     workspace_id: input.workspaceId ?? null,
     context_source: input.contextSource ?? "none",
-    product_context:
-      input.productContext?.trim() || "No product context provided.",
-    request_analysis: input.requestAnalysis,
-    user_input: input.userInput,
-    supplement_agents: input.supplementAgentTypes ?? [],
-    answered_open_question_ids: input.answeredOpenQuestionIds ?? [],
+    has_business_request: input.requestAnalysis.business_model.length > 0,
+    has_project_context: hasMeaningfulProjectContext(input),
+    is_supplement: isWorkflowSupplementInput(input),
     graph_stats: {
       current_state: input.knowledgeGraph.current_state ?? null,
-      description: input.knowledgeGraph.description ?? "",
       entities: input.knowledgeGraph.entities.length,
       relations: input.knowledgeGraph.relations.length,
       decisions: input.knowledgeGraph.decisions.length,
@@ -334,50 +414,90 @@ function createOrchestratorPayload(input: OrchestratorAgentInput) {
       open_questions: input.knowledgeGraph.open_questions.length,
       summary_items: input.knowledgeGraph.summary.length,
     },
-    recent_graph_nodes: input.knowledgeGraph.entities.slice(-6).map((node) => ({
-      id: node.id,
-      type: node.type,
-      name: node.name,
-      status: node.status,
-    })),
-    planner_context: JSON.stringify({
-      product_context: input.productContext || "No product context provided.",
-      product_knowledge_graph: compactGraph,
-      request_analysis: input.requestAnalysis,
-      user_input: input.userInput,
-      supplement_agents: input.supplementAgentTypes ?? [],
-      answered_open_question_ids: input.answeredOpenQuestionIds ?? [],
-    }),
   };
 }
 
 /**
- * 为 Planner SubAgent 生成精简知识图谱摘要，去除 entity description 和 relation description。
- * Planner 仅需了解图谱结构（有哪些节点、什么类型、关系拓扑）即可生成 DAG，
- * 无需完整节点描述（每个 entity description 约 200-600 字符，在 100+ 节点时浪费严重）。
+ * 构造仅绑定给 Planner SubAgent 的权威规划上下文。
+ */
+export function createPlannerContext(input: OrchestratorAgentInput): string {
+  const compactGraph = compactGraphForPlanner(
+    input.knowledgeGraph,
+    isWorkflowSupplementInput(input),
+    input.supplementSourceTaskIds,
+    input.supplementAffectedTaskIds,
+    input.supplementRelatedNodeIds,
+  );
+  return JSON.stringify({
+    workflow_purpose: input.workflowPurpose ?? "standard",
+    product_context: input.productContext || "No product context provided.",
+    product_knowledge_graph: compactGraph,
+    request_analysis: input.requestAnalysis,
+    user_input: input.userInput,
+    supplement_agents: input.supplementAgentTypes ?? [],
+    supplement_source_task_ids: input.supplementSourceTaskIds ?? [],
+    supplement_affected_task_ids: input.supplementAffectedTaskIds ?? [],
+    supplement_related_node_ids: input.supplementRelatedNodeIds ?? [],
+    answered_open_question_ids: input.answeredOpenQuestionIds ?? [],
+  });
+}
+
+/**
+ * 为 Planner SubAgent 生成精简知识图谱摘要。
+ * 初始轮次仅提供结构；补充轮次为来源任务和一跳影响节点保留截断描述，
+ * 让 Planner 能识别语义冲突，同时避免复制完整图谱。
  */
 export function compactGraphForPlanner(
   knowledgeGraph: OrchestratorAgentInput["knowledgeGraph"],
   supplement = false,
+  sourceTaskIds: string[] = [],
+  affectedTaskIds: string[] = [],
+  relatedNodeIds: string[] = [],
 ) {
   const MAX_ENTITY_NAME = 120;
+  const MAX_ENTITY_DESCRIPTION = 240;
+  const MAX_RELATION_DESCRIPTION = 180;
   const MAX_SUMMARY_LEN = 600;
   const entities = supplement
-    ? selectSupplementPlannerEntities(knowledgeGraph.entities)
+    ? selectSupplementPlannerEntities(
+        knowledgeGraph,
+        sourceTaskIds,
+        affectedTaskIds,
+        relatedNodeIds,
+      )
     : knowledgeGraph.entities;
   const entityIds = new Set(entities.map((entity) => entity.id));
+  const sourceEntityIds = new Set(
+    knowledgeGraph.entities
+      .filter(
+        (entity) =>
+          entity.source_task_id &&
+          sourceTaskIds.includes(entity.source_task_id),
+      )
+      .map((entity) => entity.id),
+  );
   const relations = supplement
     ? knowledgeGraph.relations
         .filter(
           (relation) =>
             entityIds.has(relation.source) && entityIds.has(relation.target),
         )
-        .slice(-24)
+        .sort(
+          (left, right) =>
+            Number(
+              sourceEntityIds.has(right.source) ||
+                sourceEntityIds.has(right.target),
+            ) -
+            Number(
+              sourceEntityIds.has(left.source) ||
+                sourceEntityIds.has(left.target),
+            ),
+        )
+        .slice(0, 64)
     : knowledgeGraph.relations;
 
   return {
     current_state: knowledgeGraph.current_state,
-    description: (knowledgeGraph.description ?? "").slice(0, 800),
     counts: {
       entities: knowledgeGraph.entities.length,
       relations: knowledgeGraph.relations.length,
@@ -405,23 +525,84 @@ export function compactGraphForPlanner(
           : node.name,
       source_task_id: node.source_task_id,
       status: node.status,
+      ...(supplement && node.description
+        ? {
+            description:
+              node.description.length > MAX_ENTITY_DESCRIPTION
+                ? `${node.description.slice(0, MAX_ENTITY_DESCRIPTION)}...`
+                : node.description,
+          }
+        : {}),
+      ...(supplement && node.replacement_node_id
+        ? { replacement_node_id: node.replacement_node_id }
+        : {}),
     })),
     relations: relations.map((rel) => ({
       id: rel.id,
       type: rel.type,
       source: rel.source,
       target: rel.target,
+      source_task_id: rel.source_task_id,
+      ...(supplement && rel.description
+        ? {
+            description:
+              rel.description.length > MAX_RELATION_DESCRIPTION
+                ? `${rel.description.slice(0, MAX_RELATION_DESCRIPTION)}...`
+                : rel.description,
+          }
+        : {}),
     })),
   };
 }
 
 /**
- * 补充轮次只传目标、决策、待确认问题和最近节点，避免为少量表单答案复制全图。
+ * 补充轮次优先传递来源任务、受影响任务、一跳邻居及替换节点，并用少量全局节点补足语境。
  */
 function selectSupplementPlannerEntities(
-  entities: OrchestratorAgentInput["knowledgeGraph"]["entities"],
+  knowledgeGraph: OrchestratorAgentInput["knowledgeGraph"],
+  sourceTaskIds: string[],
+  affectedTaskIds: string[],
+  relatedNodeIds: string[],
 ) {
+  const entities = knowledgeGraph.entities;
+  const sourceTasks = new Set(sourceTaskIds);
+  const affectedTasks = new Set([...sourceTaskIds, ...affectedTaskIds]);
+  const entityById = new Map(entities.map((entity) => [entity.id, entity]));
   const selected = new Map<string, (typeof entities)[number]>();
+
+  for (const nodeId of relatedNodeIds) {
+    const entity = entityById.get(nodeId);
+    if (entity) selected.set(entity.id, entity);
+  }
+
+  for (const entity of entities) {
+    if (entity.source_task_id && sourceTasks.has(entity.source_task_id)) {
+      selected.set(entity.id, entity);
+    }
+  }
+  for (const entity of entities) {
+    if (entity.source_task_id && affectedTasks.has(entity.source_task_id)) {
+      selected.set(entity.id, entity);
+    }
+  }
+  const directlyAffectedIds = new Set(selected.keys());
+  for (const relation of knowledgeGraph.relations) {
+    if (
+      !directlyAffectedIds.has(relation.source) &&
+      !directlyAffectedIds.has(relation.target)
+    ) {
+      continue;
+    }
+    const source = entityById.get(relation.source);
+    const target = entityById.get(relation.target);
+    if (source) selected.set(source.id, source);
+    if (target) selected.set(target.id, target);
+  }
+  for (const entity of [...selected.values()]) {
+    if (!entity.replacement_node_id) continue;
+    const replacement = entityById.get(entity.replacement_node_id);
+    if (replacement) selected.set(replacement.id, replacement);
+  }
   for (const entity of entities) {
     if (["Goal", "Decision", "OpenQuestion"].includes(entity.type)) {
       selected.set(entity.id, entity);
@@ -430,7 +611,7 @@ function selectSupplementPlannerEntities(
   for (const entity of entities.slice(-10)) {
     selected.set(entity.id, entity);
   }
-  return [...selected.values()].slice(-20);
+  return [...selected.values()].slice(0, 40);
 }
 
 export function createFallbackOrchestratorDecision(
@@ -510,10 +691,5 @@ function hasMeaningfulProjectContext(input: OrchestratorAgentInput): boolean {
 }
 
 function isWorkflowSupplementInput(input: OrchestratorAgentInput): boolean {
-  return (
-    Boolean(input.supplementAgentTypes?.length) ||
-    input.userInput.some((item) =>
-      /\[form answers - [^\]]+\]/i.test(item.content),
-    )
-  );
+  return classifyProductWorkflowRound(input) === "supplement";
 }

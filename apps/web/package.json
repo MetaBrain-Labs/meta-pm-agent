@@ -10,9 +10,11 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@repo/shared": "workspace:*",
     "@ant-design/icons": "^6.2.5",
     "@antv/g6": "^5.1.1",
     "antd": "^6.4.4",
+    "echarts": "^5.6.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-markdown": "^10.1.0",

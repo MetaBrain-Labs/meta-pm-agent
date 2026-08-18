@@ -1,4 +1,4 @@
-import { Button, Menu } from "antd";
+import { Avatar, Button, Menu } from "antd";
 import type { MenuProps } from "antd";
 import type { AccountInfo, ThreadInfo, WorkspaceInfo } from "../../types";
 import { DEFAULT_CHAT_TITLE } from "../../constants/app";
@@ -191,8 +191,12 @@ export function WorkspacePage({
           <span>×</span>
         </div>
         <section className="workspace-brand">
-          <div className="workspace-logo" />
-          <h1>问澜</h1>
+          <Avatar
+            shape="square"
+            size={128}
+            src={<img draggable={false} src="/icon.svg" alt="avatar" />}
+          />
+          <h1>问渠</h1>
           <p>V1.01</p>
         </section>
 

@@ -18,13 +18,16 @@ import { z } from "zod";
 import { DocumentKindSchema } from "@repo/shared";
 import {
   StartDocumentGenerationRequestSchema,
+  ResumeDocumentGenerationRequestSchema,
   StopDocumentGenerationRequestSchema,
 } from "../schemas";
 import {
   DocumentGenerationServiceError,
+  createDocumentEvidenceResolutionConversation,
   getDocumentGenerationStatusByRunId,
   getLatestDocumentGenerationStatus,
   startDocumentGeneration,
+  resumeDocumentGeneration,
   stopDocumentGeneration,
 } from "../services/document-generation-service";
 
@@ -53,8 +56,37 @@ export async function startDocumentGenerationHandler(c: Context) {
     const data = await startDocumentGeneration({
       workspaceId: params.data.workspaceId,
       kind: parsed.data.kind,
+      profileId: parsed.data.profileId,
     });
     return c.json(data, 202);
+  } catch (error) {
+    return jsonServiceError(c, error);
+  }
+}
+
+/**
+ * 创建或恢复 PRD 证据阻断专用会话。
+ */
+export async function createDocumentEvidenceResolutionHandler(c: Context) {
+  const params = StopDocumentGenerationRequestSchema.safeParse({
+    runId: c.req.param("runId"),
+  });
+  if (!params.success) {
+    return c.json({ error: "文档任务 ID 不合法。" }, 400);
+  }
+  const body = await readJsonBody(c.req.raw);
+  const parsed = ResumeDocumentGenerationRequestSchema.safeParse(body ?? {});
+  if (!parsed.success) {
+    return c.json({ error: parsed.error.flatten() }, 400);
+  }
+  try {
+    return c.json(
+      await createDocumentEvidenceResolutionConversation({
+        runId: params.data.runId,
+        profileId: parsed.data.profileId,
+      }),
+      201,
+    );
   } catch (error) {
     return jsonServiceError(c, error);
   }
@@ -130,6 +162,36 @@ export async function stopDocumentGenerationHandler(c: Context) {
 }
 
 /**
+ * 使用更新后的知识图谱继续等待补充信息的 PRD run。
+ */
+export async function resumeDocumentGenerationHandler(c: Context) {
+  const params = StopDocumentGenerationRequestSchema.safeParse({
+    runId: c.req.param("runId"),
+  });
+  if (!params.success) {
+    return c.json({ error: "文档任务 ID 不合法。" }, 400);
+  }
+
+  const body = await readJsonBody(c.req.raw);
+  const parsed = ResumeDocumentGenerationRequestSchema.safeParse(body ?? {});
+  if (!parsed.success) {
+    return c.json({ error: parsed.error.flatten() }, 400);
+  }
+
+  try {
+    return c.json(
+      await resumeDocumentGeneration({
+        runId: params.data.runId,
+        profileId: parsed.data.profileId,
+      }),
+      202,
+    );
+  } catch (error) {
+    return jsonServiceError(c, error);
+  }
+}
+
+/**
  * 安全读取 JSON 请求体。
  */
 async function readJsonBody(request: Request): Promise<unknown> {
@@ -145,7 +207,8 @@ async function readJsonBody(request: Request): Promise<unknown> {
  */
 function jsonServiceError(c: Context, error: unknown) {
   if (error instanceof DocumentGenerationServiceError) {
-    const status = error.statusCode === 409 ? 409 : 400;
+    const status =
+      error.statusCode === 404 ? 404 : error.statusCode === 409 ? 409 : 400;
     return c.json({ error: error.message }, status);
   }
 

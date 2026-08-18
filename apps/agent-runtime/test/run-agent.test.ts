@@ -14,8 +14,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { AIMessage } from "langchain";
 import {
+  AgentSubagentExecutionError,
   adaptAgentEventStream,
   getMissingRequiredSubagentError,
+  getMissingRequiredSuccessfulToolError,
   resolveJsonOutput,
   resolveTextOutput,
   type AgentEventStreamProjection,
@@ -23,10 +25,16 @@ import {
   type AgentRunEvent,
 } from "../src/agents/common/run-agent";
 import type { AgentRunSummaryRecorder } from "../src/agents/common/agent-run-summary";
+import { SYSTEM_DEFAULT_MODEL_PROFILE } from "@repo/shared";
+import {
+  resolveAgentModelSelection,
+  type ResolvedAgentModelSelection,
+} from "../src/agents/common/model-profile";
 
 /** 构造不含 provider token 数据的解析上下文。 */
-const context = (text: string) => ({
+const context = (text: string, reasoningText = "") => ({
   text,
+  reasoningText,
   tokenUsage: null,
   maxTokens: 100,
 });
@@ -44,6 +52,7 @@ async function collectEventStream(
     "kg_file_add_nodes",
     "kg_file_raise_blocker",
   ]),
+  subagentSelections?: ReadonlyMap<string, ResolvedAgentModelSelection>,
 ): Promise<{
   events: AgentRunEvent<"executor">[];
   result: AgentEventStreamResult;
@@ -52,6 +61,7 @@ async function collectEventStream(
     agentType: "executor",
     visibleToolNames,
     summaryRecorder: recorder,
+    subagentSelections,
   });
   const events: AgentRunEvent<"executor">[] = [];
   let next = await generator.next();
@@ -108,6 +118,32 @@ test("resolves valid JSON through the supplied schema", () => {
   });
 
   assert.deepEqual(result, { success: true, data: { ok: true } });
+});
+
+test("recovers schema-valid JSON from reasoning when final text is invalid", () => {
+  const schema = {
+    safeParse: (value: unknown) =>
+      typeof value === "object" &&
+      value !== null &&
+      (value as { ok?: unknown }).ok === true
+        ? { success: true as const, data: value as { ok: true } }
+        : { success: false as const, error: new Error("invalid") },
+  };
+
+  assert.deepEqual(
+    resolveJsonOutput(
+      context(
+        "",
+        'analysis before output\n```json\n{"ok":true}\n```\n',
+      ),
+      schema,
+    ),
+    { success: true, data: { ok: true } },
+  );
+  assert.equal(
+    resolveJsonOutput(context('{"ok":false}', '{"ok":true}'), schema).success,
+    false,
+  );
 });
 
 test("reports invalid JSON and schema failures", () => {
@@ -280,7 +316,12 @@ test("adapts native tool and SubAgent projections without parsing tool_calls", a
     ["planner result A", "planner result B"],
   );
   assert.equal(result.responseText, "coordinator output");
+  assert.equal(result.reasoningText, "coordinator reasoning");
   assert.deepEqual([...result.invokedSubagentTypes], ["planner"]);
+  assert.deepEqual([...result.successfulToolNames].sort(), [
+    "kg_file_add_nodes",
+    "kg_file_raise_blocker",
+  ]);
   assert.equal(
     JSON.stringify(probe.toolResults).includes("private Skill instructions"),
     false,
@@ -298,6 +339,194 @@ test("adapts native tool and SubAgent projections without parsing tool_calls", a
     probe.subagentCalls.map((record) => record.input),
     [{ description: "Plan A" }, { description: "Plan B" }],
   );
+});
+
+test("requires at least one successful correction write tool", () => {
+  const required = new Set(["kg_file_add_nodes", "kg_file_add_relations"]);
+  assert.equal(
+    getMissingRequiredSuccessfulToolError(required, new Set()),
+    "required-structured-write-not-invoked",
+  );
+  assert.equal(
+    getMissingRequiredSuccessfulToolError(
+      required,
+      new Set(["kg_file_add_relations"]),
+    ),
+    null,
+  );
+});
+
+test("observes a SubAgent output rejection before delayed task input resolves", async () => {
+  const probe = createSummaryProbe();
+  const plannerFailure = new Error("Subagent planner failed");
+  let rejectOutput!: (reason: unknown) => void;
+  const output = new Promise<unknown>((_resolve, reject) => {
+    rejectOutput = reject;
+  });
+  const taskInput = new Promise<string>((resolve) => {
+    setTimeout(() => resolve("Delayed planner task"), 20);
+  });
+  const run: AgentEventStreamProjection = {
+    messages: streamOf(),
+    toolCalls: streamOf(),
+    subagents: streamOf({
+      name: "planner",
+      taskInput,
+      messages: streamOf(),
+      output,
+    }),
+    output: Promise.resolve({ messages: [] }),
+  };
+
+  setTimeout(() => rejectOutput(plannerFailure), 0);
+
+  await assert.rejects(
+    collectEventStream(run, probe.recorder),
+    (error: unknown) =>
+      error instanceof AgentSubagentExecutionError &&
+      error.subagentType === "planner" &&
+      error.message === plannerFailure.message,
+  );
+  assert.deepEqual(probe.subagentResults, [
+    {
+      toolCallId: probe.subagentResults[0]?.toolCallId,
+      subagentType: "planner",
+      output: { error: "Subagent planner failed" },
+    },
+  ]);
+});
+
+test("drains SubAgent watchers when the projection iterator also fails", async () => {
+  const probe = createSummaryProbe();
+  const plannerFailure = new Error("Subagent planner failed");
+  const projectionFailure = new Error("subagent projection stream failed");
+  const unhandledRejections: unknown[] = [];
+  const onUnhandledRejection = (reason: unknown) => {
+    unhandledRejections.push(reason);
+  };
+  let rejectOutput!: (reason: unknown) => void;
+  const output = new Promise<unknown>((_resolve, reject) => {
+    rejectOutput = reject;
+  });
+  const subagent = {
+    name: "planner",
+    taskInput: Promise.resolve("Plan after projection failure"),
+    messages: streamOf(),
+    output,
+  };
+  async function* failingSubagents() {
+    yield subagent;
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    rejectOutput(plannerFailure);
+    throw projectionFailure;
+  }
+  const run: AgentEventStreamProjection = {
+    messages: streamOf(),
+    toolCalls: streamOf(),
+    subagents: failingSubagents(),
+    output: Promise.resolve({ messages: [] }),
+  };
+
+  process.on("unhandledRejection", onUnhandledRejection);
+  try {
+    await assert.rejects(
+      collectEventStream(run, probe.recorder),
+      (error: unknown) =>
+        error instanceof AgentSubagentExecutionError &&
+        error.subagentType === "planner" &&
+        error.message === plannerFailure.message,
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  } finally {
+    process.off("unhandledRejection", onUnhandledRejection);
+  }
+
+  assert.deepEqual(unhandledRejections, []);
+});
+
+test("observes top-level message output before delayed chunks finish", async () => {
+  const probe = createSummaryProbe();
+  const messageFailure = new Error("top-level message output failed");
+  const unhandledRejections: unknown[] = [];
+  const onUnhandledRejection = (reason: unknown) => {
+    unhandledRejections.push(reason);
+  };
+  let rejectOutput!: (reason: unknown) => void;
+  const output = new Promise<unknown>((_resolve, reject) => {
+    rejectOutput = reject;
+  });
+  async function* delayedText() {
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    yield "late text";
+  }
+  const run: AgentEventStreamProjection = {
+    messages: streamOf({
+      text: delayedText(),
+      reasoning: streamOf(),
+      output,
+    }),
+    toolCalls: streamOf(),
+    subagents: streamOf(),
+    output: Promise.resolve({ messages: [] }),
+  };
+
+  process.on("unhandledRejection", onUnhandledRejection);
+  try {
+    setTimeout(() => rejectOutput(messageFailure), 0);
+    await assert.rejects(
+      collectEventStream(run, probe.recorder),
+      messageFailure,
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  } finally {
+    process.off("unhandledRejection", onUnhandledRejection);
+  }
+
+  assert.deepEqual(unhandledRejections, []);
+});
+
+test("prices SubAgent usage with its own responsibility model", async () => {
+  const probe = createSummaryProbe();
+  const plannerSelection = resolveAgentModelSelection(
+    SYSTEM_DEFAULT_MODEL_PROFILE,
+    "planner",
+  );
+  assert.ok(plannerSelection);
+  const usageMessage = new AIMessage({
+    content: "planner result",
+    usage_metadata: {
+      input_tokens: 1_000_000,
+      output_tokens: 1_000_000,
+      total_tokens: 2_000_000,
+      input_token_details: { cache_read: 0 },
+    },
+  });
+  const run: AgentEventStreamProjection = {
+    messages: streamOf(),
+    toolCalls: streamOf(),
+    subagents: streamOf({
+      name: "planner",
+      taskInput: Promise.resolve("Plan"),
+      messages: streamOf({
+        text: streamOf("planner result"),
+        reasoning: streamOf(),
+        output: Promise.resolve(usageMessage),
+      }),
+      output: Promise.resolve({ messages: [usageMessage] }),
+    }),
+    output: Promise.resolve({ messages: [] }),
+  };
+
+  const { events } = await collectEventStream(
+    run,
+    probe.recorder,
+    new Set(),
+    new Map([["planner", plannerSelection]]),
+  );
+  const usage = events.find((event) => event.type === "token-usage");
+  assert.equal(usage?.agentType, "planner");
+  assert.equal(usage?.costInput, 3);
+  assert.equal(usage?.costOutput, 6);
 });
 
 test("emits structured tool errors and propagates projection failures", async () => {
@@ -351,8 +580,14 @@ test("emits structured tool errors and propagates projection failures", async ()
         new Error(String((toolResult as { error: unknown }).error)),
     },
   );
-  assert.equal((await promotedToolGenerator.next()).value.type, "tool-call");
-  assert.equal((await promotedToolGenerator.next()).value.type, "tool-result");
+  const promotedToolCall = await promotedToolGenerator.next();
+  assert.equal(promotedToolCall.done, false);
+  if (promotedToolCall.done) return;
+  assert.equal(promotedToolCall.value.type, "tool-call");
+  const promotedToolResult = await promotedToolGenerator.next();
+  assert.equal(promotedToolResult.done, false);
+  if (promotedToolResult.done) return;
+  assert.equal(promotedToolResult.value.type, "tool-result");
   await assert.rejects(
     promotedToolGenerator.next(),
     /provenance rejected/,

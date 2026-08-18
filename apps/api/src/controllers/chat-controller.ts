@@ -16,14 +16,24 @@
 import type { Context } from "hono";
 import { stream } from "hono/streaming";
 import {
+  createDocumentEvidenceAnswerResult,
+  createDocumentEvidenceResolutionFormId,
+  createDocumentEvidenceResolutionThreadId,
   createHumanInTheLoopThreadId,
   createWorkflowThreadId,
   extractQuestionFormId,
   getFormAnswerId,
+  isAcceptedWorkflowResultForPurpose,
+  isDocumentEvidenceResolutionFormId,
+  isProductWorkflowAcceptanceAnswer,
   isProductWorkflowOptionalStopAnswer,
+  isProductWorkflowStopWithIssuesAnswer,
+  normalizeDocumentEvidenceWorkflowResult,
   isPreOrchGraphConflictFormId,
   parseGraphConflictAction,
   releaseQuestionFormHumanInterrupt,
+  resolveAnsweredGraphOpenQuestions,
+  resumeDocumentEvidenceResolutionWorkflow,
   resumeQuestionFormHumanInterrupt,
   streamConversation,
 } from "@repo/agent-runtime";
@@ -47,6 +57,8 @@ import {
   persistAgentTokenUsage,
   persistConversationResult,
   persistConversationStart,
+  recoverDocumentEvidenceCorrectionDecision,
+  shouldRejectStaleWorkflowFormSubmission,
 } from "../services/chat-service";
 import { loadProductRuntimeContextForConversation } from "../services/product-context-service";
 import {
@@ -59,7 +71,25 @@ import {
   getAccount,
   listWorkspaces,
 } from "../services/workspace-service";
-import { writeSse, writeSseDone } from "../utils/sse";
+import { writeSse, writeSseDone, writeSseKeepalive } from "../utils/sse";
+import {
+  STOP_REQUEST_GRACE_MS,
+  abortChatRun,
+  registerChatRun,
+  resolveChatAbortOrigin,
+  resolveEffectiveAbortOrigin,
+  unregisterChatRun,
+} from "../services/chat-run-registry";
+import { writeAbnormalWorkflowAbortReport } from "../process-crash-report";
+import { getConversationModelProfile } from "../repositories/model-profile-repository";
+import {
+  completeDocumentEvidenceResolutionItem,
+  getDocumentEvidenceResolutionByConversationId,
+  getDocumentEvidenceResolutionByRequestFormId,
+  markDocumentEvidenceSupplementRunning,
+  persistDocumentEvidenceResolutionPlan,
+  type DocumentEvidenceResolutionRecord,
+} from "../repositories/request-form-repository";
 
 /**
  * SSE 处理期间的 Agent 输出累加器，内部始终保留可写的工具调用数组和 token 用量。
@@ -72,7 +102,100 @@ type AgentOutputAccumulator = AgentConversationOutput & {
   tokenUsageRecordIds: string[];
 };
 
-const activeChatRuns = new Map<string, AbortController>();
+/** SSE 心跳注释帧的发送间隔，用于防止空闲连接被代理或 NAT 回收。 */
+const SSE_KEEPALIVE_INTERVAL_MS = 15_000;
+
+/**
+ * 使用服务端会话关联选择专用补证上下文，并拒绝客户端表单串线。
+ */
+export function resolveDocumentEvidenceResolutionContext({
+  chatId,
+  requestFormId,
+  resolutionByConversation,
+  resolutionByRequestForm,
+}: {
+  chatId: string | undefined;
+  requestFormId: string | undefined;
+  resolutionByConversation: DocumentEvidenceResolutionRecord | null;
+  resolutionByRequestForm: DocumentEvidenceResolutionRecord | null;
+}): {
+  resolution: DocumentEvidenceResolutionRecord | null;
+  effectiveRequestFormId: string | undefined;
+} {
+  if (
+    resolutionByRequestForm &&
+    resolutionByRequestForm.conversationId !== chatId
+  ) {
+    throw new Error(
+      "Document evidence resolution request form does not belong to this conversation.",
+    );
+  }
+  if (
+    resolutionByConversation &&
+    requestFormId &&
+    resolutionByConversation.requestFormId !== requestFormId
+  ) {
+    throw new Error(
+      "Document evidence resolution conversation has a different request form.",
+    );
+  }
+  const resolution = resolutionByConversation ?? resolutionByRequestForm;
+  return {
+    resolution,
+    effectiveRequestFormId: resolution?.requestFormId ?? requestFormId,
+  };
+}
+
+/**
+ * 从持久化后重新展示的补证表单答案重建 LangGraph resume 命令。
+ *
+ * 浏览器刷新后 Question Form 仍可由消息历史恢复，但瞬态 human-interrupt 不会落入消息正文；
+ * 因此以服务端专用会话记录和精确的 run/form 关联作为恢复依据。
+ */
+export function createDocumentEvidenceResumeFromFormAnswer({
+  messages,
+  resolution,
+}: {
+  messages: Array<{ role: string; content: string }>;
+  resolution: DocumentEvidenceResolutionRecord;
+}) {
+  const latestUserMessage = messages
+    .filter((message) => message.role === "user")
+    .at(-1);
+  if (!latestUserMessage) return null;
+
+  const submittedFormId = getFormAnswerId(latestUserMessage.content);
+  if (!submittedFormId) return null;
+
+  const expectedFormId = createDocumentEvidenceResolutionFormId(
+    resolution.runId,
+  );
+  if (submittedFormId !== expectedFormId) {
+    if (isDocumentEvidenceResolutionFormId(submittedFormId)) {
+      throw new Error(
+        "Document evidence resolution form does not belong to the current document run.",
+      );
+    }
+    return null;
+  }
+  if (resolution.status !== "collecting" || !resolution.resolution) {
+    throw new Error(
+      "Document evidence resolution form is not awaiting an answer.",
+    );
+  }
+
+  return {
+    threadId: createDocumentEvidenceResolutionThreadId({
+      conversationId: resolution.conversationId,
+      runId: resolution.runId,
+    }),
+    response: {
+      decisions: [
+        { type: "respond" as const, message: latestUserMessage.content },
+      ],
+    },
+  };
+}
 
 /**
  * 获取当前本地用户的账户信息。
@@ -173,12 +296,12 @@ export async function stopChatHandler(c: Context) {
     return c.json({ error: parsed.error.flatten() }, 400);
   }
 
-  const controller = activeChatRuns.get(parsed.data.chatId);
-  if (controller && !controller.signal.aborted) {
-    controller.abort();
-  }
-
-  return c.json({ stopped: Boolean(controller) });
+  return c.json({
+    stopped: abortChatRun(
+      parsed.data.chatId,
+      parsed.data.origin ?? "manual_stop",
+    ),
+  });
 }
 
 /**
@@ -201,19 +324,33 @@ export async function chatStreamHandler(c: Context) {
 
   return stream(c, async (writer) => {
     const runtimeController = new AbortController();
-    const abortRuntime = () => runtimeController.abort();
+    const abortRuntime = () => {
+      if (!runtimeController.signal.aborted) {
+        runtimeController.abort("client_disconnect");
+      }
+    };
     const chatId = parsed.data.chatId;
+    let effectiveRequestFormId = parsed.data.requestFormId;
     let requestFormStatus: string | null = null;
 
     if (chatId) {
-      activeChatRuns.set(chatId, runtimeController);
+      registerChatRun(chatId, runtimeController);
     }
     c.req.raw.signal.addEventListener("abort", abortRuntime, { once: true });
 
+    // SSE 心跳保活：工作流内部阶段（如 Planner 子代理重试）可能数分钟无可见事件，
+    // 定期写入注释帧防止代理/NAT 回收空闲连接；写入失败说明连接已断开，停止心跳。
+    const heartbeat = setInterval(() => {
+      writeSseKeepalive(writer).catch(() => {
+        clearInterval(heartbeat);
+      });
+    }, SSE_KEEPALIVE_INTERVAL_MS);
+    heartbeat.unref?.();
+
     const markStatus = async (status: string) => {
       if (requestFormStatus === status) return;
+      await markRequestFormStatus(effectiveRequestFormId, status);
       requestFormStatus = status;
-      await markRequestFormStatus(parsed.data.requestFormId, status);
     };
 
     // 发送 SSE 开始事件
@@ -226,43 +363,149 @@ export async function chatStreamHandler(c: Context) {
     let latestKnowledgeGraph: ProductKnowledgeGraph | null = null;
     let runtimeWorkspaceId: string | undefined;
     let autoFinalizedWorkflowRound = false;
+    let documentEvidenceCompletionPending = false;
     let terminalStreamError = false;
     const shouldFinalizeWorkflowRound = isProductWorkflowFinalConfirmationAnswer(
       parsed.data.messages,
     );
 
     try {
+      const [resolutionByConversation, resolutionByRequestForm] =
+        await Promise.all([
+          getDocumentEvidenceResolutionByConversationId(chatId),
+          getDocumentEvidenceResolutionByRequestFormId(
+            parsed.data.requestFormId,
+          ),
+        ]);
+      const resolvedEvidenceContext = resolveDocumentEvidenceResolutionContext({
+        chatId,
+        requestFormId: parsed.data.requestFormId,
+        resolutionByConversation,
+        resolutionByRequestForm,
+      });
+      const documentEvidenceResolution = resolvedEvidenceContext.resolution;
+      effectiveRequestFormId =
+        resolvedEvidenceContext.effectiveRequestFormId;
+      let documentEvidenceAnswer = null;
       if (parsed.data.hitlResume) {
         // 先恢复 LangGraph HITL 中断，再让现有 Conversation Agent 消费表单答案。
-        await resumeQuestionFormHumanInterrupt(parsed.data.hitlResume);
+        if (parsed.data.hitlResume.threadId.startsWith("document-evidence:")) {
+          const expectedThreadId = documentEvidenceResolution
+            ? createDocumentEvidenceResolutionThreadId({
+                conversationId: documentEvidenceResolution.conversationId,
+                runId: documentEvidenceResolution.runId,
+              })
+            : null;
+          if (
+            !expectedThreadId ||
+            parsed.data.hitlResume.threadId !== expectedThreadId
+          ) {
+            throw new Error(
+              "Document evidence resolution does not belong to this request form.",
+            );
+          }
+          documentEvidenceAnswer =
+            await resumeDocumentEvidenceResolutionWorkflow(
+              parsed.data.hitlResume,
+            );
+          await markDocumentEvidenceSupplementRunning(
+            effectiveRequestFormId,
+            documentEvidenceAnswer.answerText,
+          );
+        } else {
+          await resumeQuestionFormHumanInterrupt(parsed.data.hitlResume);
+        }
+      } else if (documentEvidenceResolution?.status === "collecting") {
+        // 历史消息不保存瞬态 interrupt；刷新后依据专用会话及精确表单 ID 重建恢复命令。
+        const restoredResume = createDocumentEvidenceResumeFromFormAnswer({
+          messages: parsed.data.messages,
+          resolution: documentEvidenceResolution,
+        });
+        if (restoredResume) {
+          documentEvidenceAnswer =
+            await resumeDocumentEvidenceResolutionWorkflow(restoredResume);
+          await markDocumentEvidenceSupplementRunning(
+            effectiveRequestFormId,
+            documentEvidenceAnswer.answerText,
+          );
+        }
+      } else if (
+        documentEvidenceResolution?.status === "supplement_running" &&
+        documentEvidenceResolution.resolution &&
+        documentEvidenceResolution.answer
+      ) {
+        // 下游失败重试时复用已持久化答案，避免要求用户重复填写已消费的 Question Form。
+        documentEvidenceAnswer = createDocumentEvidenceAnswerResult({
+          runId: documentEvidenceResolution.runId,
+          sourceGraphVersion: documentEvidenceResolution.sourceGraphVersion,
+          answerText: documentEvidenceResolution.answer,
+          resolution: documentEvidenceResolution.resolution,
+        });
       }
 
       // 持久化用户发送的消息
       const workflowAnswerResolution = parsed.data.workflowRetry
         ? null
-        : await persistConversationStart(
+          : await persistConversationStart(
             parsed.data.chatId,
-            parsed.data.requestFormId,
+            effectiveRequestFormId,
             parsed.data.messages,
+            documentEvidenceResolution
+              ? "document_evidence_resolution"
+              : "standard",
           );
+      const submittedWorkflowFormId = parsed.data.workflowRetry
+        ? null
+        : getFormAnswerId(
+            parsed.data.messages
+              .filter((message) => message.role === "user")
+              .at(-1)?.content ?? "",
+          );
+      // 产品工作流表单必须命中服务端待处理决策，禁止过期答案退回普通编排。
+      if (shouldRejectStaleWorkflowFormSubmission({
+        isWorkflowRetry: Boolean(parsed.data.workflowRetry),
+        submittedFormId: submittedWorkflowFormId,
+        answerResolved: Boolean(workflowAnswerResolution),
+      })) {
+        throw new Error(
+          "The submitted product workflow question form is stale or does not match a pending decision.",
+        );
+      }
       const workflowRetryFailure = parsed.data.workflowRetry
         ? await loadExecutorRetryFailure(
             parsed.data.chatId,
             parsed.data.workflowRetry.taskId,
           )
         : undefined;
+      if (parsed.data.workflowRetry && !workflowRetryFailure) {
+        throw new Error(
+          "The Executor retry target is stale or no longer has a persisted retryable failure.",
+        );
+      }
       await markStatus(
         parsed.data.workflowRetry ? "workflow_running" : "received",
       );
 
+      if (
+        !parsed.data.workflowRetry &&
+        !workflowAnswerResolution &&
+        documentEvidenceResolution?.status === "supplement_running"
+      ) {
+        await recoverDocumentEvidenceCorrectionDecision({
+          conversationId: chatId,
+          requestFormId: effectiveRequestFormId,
+        });
+      }
+
       const pendingDecisionForm =
         shouldFinalizeWorkflowRound || parsed.data.workflowRetry
         ? null
-        : await loadPendingDecisionQuestionForm(parsed.data.requestFormId);
+        : await loadPendingDecisionQuestionForm(effectiveRequestFormId);
       if (pendingDecisionForm) {
         await markStatus("pending_user_confirmation");
-        const promptText =
-          "Conversation Agent 正在根据 Planner SubAgent 的决策项向你确认信息。";
+        const promptText = pendingDecisionForm.includes('title="审查错误处理"')
+          ? "Critique Agent 已完成审查，工作流正在等待你选择修正或停止。"
+          : "Conversation Agent 正在根据 Planner SubAgent 的决策项向你确认信息。";
         const output = getAgentOutput(
           agentOutputs,
           "conversation_confirmation",
@@ -286,7 +529,7 @@ export async function chatStreamHandler(c: Context) {
         });
         const pendingInterrupt = await releaseQuestionFormHumanInterrupt({
           threadId: createHumanInTheLoopThreadId({
-            scopeId: parsed.data.requestFormId ?? parsed.data.chatId,
+            scopeId: effectiveRequestFormId ?? parsed.data.chatId,
             formId: extractQuestionFormId(pendingDecisionForm),
           }),
           questionForm: pendingDecisionForm,
@@ -302,7 +545,7 @@ export async function chatStreamHandler(c: Context) {
 
         await persistConversationResult({
           conversationId: parsed.data.chatId,
-          requestFormId: parsed.data.requestFormId,
+          requestFormId: effectiveRequestFormId,
           agentOutputs: [...agentOutputs.values()],
           messages: parsed.data.messages,
         });
@@ -313,6 +556,40 @@ export async function chatStreamHandler(c: Context) {
       // Request Agent 需要产品概述上下文；按会话加载工作区概述文档
       const runtimeContext = await loadProductRuntimeContextForConversation(
         parsed.data.chatId,
+      );
+      const answeredOpenQuestionIds = [
+        ...new Set(
+          (workflowAnswerResolution?.questions ?? []).flatMap((question) =>
+            question.answered
+              ? question.sources.flatMap((source) =>
+                  source.open_question_id ? [source.open_question_id] : [],
+                )
+              : [],
+          ),
+        ),
+      ];
+      // 在启动下一轮 Agent 前归档回答状态，确保失败重试也不会复活旧问题。
+      if (runtimeContext.knowledgeGraph && answeredOpenQuestionIds.length > 0) {
+        const resolvedKnowledgeGraph = resolveAnsweredGraphOpenQuestions(
+          runtimeContext.knowledgeGraph,
+          answeredOpenQuestionIds,
+          workflowAnswerResolution,
+        );
+        if (!resolvedKnowledgeGraph) {
+          throw new Error("Failed to apply resolved product workflow questions.");
+        }
+        runtimeContext.knowledgeGraph = resolvedKnowledgeGraph;
+        await finalizeWorkspaceKnowledgeGraph({
+          workspaceId: runtimeContext.workspaceId,
+          conversationId: parsed.data.chatId,
+          requestFormId: effectiveRequestFormId,
+          knowledgeGraph: runtimeContext.knowledgeGraph,
+          advanceVersion: false,
+        });
+      }
+      // 在 SSE 开始执行 Agent 前只解析一次，保证本轮剩余节点使用同一不可变快照。
+      const modelProfile = await getConversationModelProfile(
+        parsed.data.chatId!,
       );
       runtimeWorkspaceId = runtimeContext.workspaceId;
       if (
@@ -330,29 +607,72 @@ export async function chatStreamHandler(c: Context) {
         {
           enabledTools: parsed.data.enabledTools,
           workspaceId: runtimeContext.workspaceId,
-          requestFormId: parsed.data.requestFormId,
+          requestFormId: effectiveRequestFormId,
           workflowThreadId: createWorkflowThreadId({
             conversationId: parsed.data.chatId,
-            requestFormId: parsed.data.requestFormId,
+            requestFormId: effectiveRequestFormId,
           }),
           productContext: runtimeContext.productContext,
           contextSource: runtimeContext.contextSource,
           knowledgeGraph: runtimeContext.knowledgeGraph,
+          modelProfile,
           workflowAnswerResolution,
+          serverWorkflowRecoveryContext:
+            workflowAnswerResolution?.serverRecoveryContext,
           workflowRetry: parsed.data.workflowRetry,
           workflowRetryFailure,
+          documentEvidenceResolution:
+            documentEvidenceResolution &&
+            documentEvidenceResolution.status !== "completed"
+            ? {
+                conversationId: documentEvidenceResolution.conversationId,
+                runId: documentEvidenceResolution.runId,
+                sourceGraphVersion:
+                  documentEvidenceResolution.sourceGraphVersion,
+                blockers: documentEvidenceResolution.blockers,
+              }
+            : undefined,
+          documentEvidenceAnswer: documentEvidenceAnswer ?? undefined,
           signal: runtimeController.signal,
         },
       )) {
+        if (event.type === "document-evidence-resolution-plan") {
+          await persistDocumentEvidenceResolutionPlan(
+            effectiveRequestFormId,
+            event.resolution,
+          );
+          continue;
+        }
+        if (event.type === "document-evidence-resolution-complete") {
+          documentEvidenceCompletionPending = true;
+          continue;
+        }
         if (event.type === "workflow-round-start") {
           currentWorkflowRoundId = event.roundId;
-          await writeSse(writer, toApiEvent(event));
+          const apiEvent = toApiEvent(event);
+          if (apiEvent) {
+            await writeSse(writer, apiEvent);
+          }
           continue;
         }
         if (event.type === "complete") {
           // 捕获工作流完整结构化结果，供最终知识图谱归档使用
-          productWorkflowResult = event.result;
-          autoFinalizedWorkflowRound = event.result.status === "completed";
+          const workflowResult = documentEvidenceResolution
+            ? normalizeDocumentEvidenceWorkflowResult(event.result)
+            : event.result;
+          productWorkflowResult = workflowResult;
+          autoFinalizedWorkflowRound =
+            workflowResult.status === "completed" ||
+            workflowResult.status === "discarded";
+          if (
+            documentEvidenceResolution?.status === "supplement_running" &&
+            isAcceptedWorkflowResultForPurpose(
+              workflowResult,
+              "document_evidence_resolution",
+            )
+          ) {
+            documentEvidenceCompletionPending = true;
+          }
           continue;
         }
         if (
@@ -367,7 +687,7 @@ export async function chatStreamHandler(c: Context) {
           await finalizeWorkspaceKnowledgeGraph({
             workspaceId: runtimeContext.workspaceId,
             conversationId: parsed.data.chatId,
-            requestFormId: parsed.data.requestFormId,
+            requestFormId: effectiveRequestFormId,
             knowledgeGraph: event.knowledgeGraph,
             advanceVersion: false,
           });
@@ -522,8 +842,12 @@ export async function chatStreamHandler(c: Context) {
             output.tokenUsageRecordIds.push(tokenUsageId);
           }
 
+          const apiEvent = toApiEvent(event);
+          if (!apiEvent) {
+            continue;
+          }
           await writeSse(writer, {
-            ...toApiEvent(event),
+            ...apiEvent,
             id: tokenUsageId ?? undefined,
             createdAt: new Date().toISOString(),
           });
@@ -541,13 +865,16 @@ export async function chatStreamHandler(c: Context) {
             currentWorkflowRoundId,
           ).content += event.content;
         }
-        await writeSse(writer, toApiEvent(event));
+        const apiEvent = toApiEvent(event);
+        if (apiEvent) {
+          await writeSse(writer, apiEvent);
+        }
       }
 
       // Agent 完成后持久化结果
       const titleUpdate = await persistConversationResult({
         conversationId: parsed.data.chatId,
-        requestFormId: parsed.data.requestFormId,
+        requestFormId: effectiveRequestFormId,
         agentOutputs: [...agentOutputs.values()],
         messages: parsed.data.messages,
         // 是否跳过待确认条目由结构化 workflow 状态决定；新表单会重置该标记。
@@ -561,8 +888,10 @@ export async function chatStreamHandler(c: Context) {
         await finalizeWorkspaceKnowledgeGraph({
           workspaceId: runtimeContext.workspaceId,
           conversationId: parsed.data.chatId,
-          requestFormId: parsed.data.requestFormId,
-          advanceVersion: true,
+          requestFormId: effectiveRequestFormId,
+          advanceVersion:
+            !isProductWorkflowResult(productWorkflowResult) ||
+            productWorkflowResult.status !== "discarded",
           // 最终归档优先使用运行时累计快照，避免 Critique Agent 的模型汇总覆盖成局部图谱。
           knowledgeGraph:
             latestKnowledgeGraph ??
@@ -570,6 +899,35 @@ export async function chatStreamHandler(c: Context) {
               ? productWorkflowResult.knowledge_graph_update
               : undefined),
         });
+
+        if (
+          documentEvidenceCompletionPending &&
+          documentEvidenceResolution &&
+          isProductWorkflowResult(productWorkflowResult) &&
+          isAcceptedWorkflowResultForPurpose(
+            productWorkflowResult,
+            "document_evidence_resolution",
+          )
+        ) {
+          const resolvedGraph = await getWorkspaceKnowledgeGraph(
+            runtimeContext.workspaceId!,
+          );
+          if (
+            resolvedGraph &&
+            resolvedGraph.version >
+              documentEvidenceResolution.sourceGraphVersion
+          ) {
+            await completeDocumentEvidenceResolutionItem({
+              requestFormId: effectiveRequestFormId,
+              resolvedGraphVersion: resolvedGraph.version,
+            });
+            await writeSse(writer, {
+              type: "document-evidence-resolution-complete",
+              runId: documentEvidenceResolution.runId,
+              workspaceId: runtimeContext.workspaceId!,
+            });
+          }
+        }
 
         if (titleUpdate) {
           await writeSse(writer, {
@@ -579,21 +937,32 @@ export async function chatStreamHandler(c: Context) {
           });
         }
 
-        if (requestFormStatus !== "pending_user_confirmation") {
+        const pendingDecisionAfterRetry = parsed.data.workflowRetry
+          ? await loadPendingDecisionQuestionForm(effectiveRequestFormId)
+          : null;
+        if (pendingDecisionAfterRetry) {
+          await markStatus("pending_user_confirmation");
+        } else if (requestFormStatus !== "pending_user_confirmation") {
           await markStatus("completed");
         }
       }
 
-      console.log(
-        `[chat] Stream complete, response length: ${responseLength}`,
-      );
+      if (terminalStreamError) {
+        console.warn(
+          `[chat] Stream closed with terminal error, response length: ${responseLength}`,
+        );
+      } else {
+        console.log(
+          `[chat] Stream complete, response length: ${responseLength}`,
+        );
+      }
     } catch (error) {
       if (runtimeWorkspaceId && latestKnowledgeGraph) {
         try {
           await finalizeWorkspaceKnowledgeGraph({
             workspaceId: runtimeWorkspaceId,
             conversationId: parsed.data.chatId,
-            requestFormId: parsed.data.requestFormId,
+            requestFormId: effectiveRequestFormId,
             knowledgeGraph: latestKnowledgeGraph,
             advanceVersion: true,
           });
@@ -603,32 +972,102 @@ export async function chatStreamHandler(c: Context) {
       }
 
       if (isAbortError(error) || runtimeController.signal.aborted) {
-        await persistConversationResult({
-          conversationId: parsed.data.chatId,
-          requestFormId: parsed.data.requestFormId,
-          agentOutputs: [...agentOutputs.values()],
-          messages: parsed.data.messages,
-          skipPendingDecisionItems: true,
-        });
-        await markStatus("stopped");
-        await writeSse(writer, { type: "abort" });
+        const abortOrigin = resolveChatAbortOrigin(runtimeController.signal);
+        if (abortOrigin === "client_disconnect" || abortOrigin === "unknown") {
+          // 页面卸载的 stop 请求可能晚于传输层断开到达；延迟到宽限窗口结束后
+          // 再判定有效来源，避免把用户主动离开误报为异常断连。
+          const reportChatId = parsed.data.chatId;
+          const reportError = error;
+          const reportTimer = setTimeout(() => {
+            const effectiveOrigin = resolveEffectiveAbortOrigin(
+              reportChatId,
+              runtimeController.signal,
+            );
+            if (
+              effectiveOrigin === "client_disconnect" ||
+              effectiveOrigin === "unknown"
+            ) {
+              writeAbnormalWorkflowAbortReport({
+                activeAgentTypes: [
+                  ...new Set(
+                    [...agentOutputs.values()].map((output) => output.type),
+                  ),
+                ],
+                conversationId: reportChatId,
+                error: reportError,
+                origin: effectiveOrigin,
+                requestFormId: effectiveRequestFormId,
+              });
+            }
+          }, STOP_REQUEST_GRACE_MS + 500);
+          reportTimer.unref?.();
+        }
+        try {
+          await persistConversationResult({
+            conversationId: parsed.data.chatId,
+            requestFormId: effectiveRequestFormId,
+            agentOutputs: [...agentOutputs.values()],
+            messages: parsed.data.messages,
+            skipPendingDecisionItems: true,
+          });
+        } catch (persistError) {
+          console.error(
+            "[chat] Failed to persist aborted conversation:",
+            persistError,
+          );
+        }
+        try {
+          await markStatus("stopped");
+        } catch (statusError) {
+          console.error("[chat] Failed to mark request as stopped:", statusError);
+        }
+        try {
+          await writeSse(writer, { type: "abort" });
+        } catch (streamError) {
+          console.error("[chat] Failed to write abort event:", streamError);
+        }
       } else {
-        await markStatus("failed");
         console.error("[chat] Error:", error);
-        await writeSse(writer, {
-          type: "error",
-          error: getErrorMessage(error),
-        });
+        try {
+          await persistConversationResult({
+            conversationId: parsed.data.chatId,
+            requestFormId: effectiveRequestFormId,
+            agentOutputs: [...agentOutputs.values()],
+            messages: parsed.data.messages,
+            skipPendingDecisionItems: true,
+          });
+        } catch (persistError) {
+          console.error(
+            "[chat] Failed to persist failed conversation:",
+            persistError,
+          );
+        }
+        try {
+          await markStatus("failed");
+        } catch (statusError) {
+          console.error("[chat] Failed to mark request as failed:", statusError);
+        }
+        try {
+          await writeSse(writer, {
+            type: "error",
+            error: getErrorMessage(error),
+          });
+        } catch (streamError) {
+          console.error("[chat] Failed to write error event:", streamError);
+        }
       }
     } finally {
-      if (chatId && activeChatRuns.get(chatId) === runtimeController) {
-        activeChatRuns.delete(chatId);
-      }
+      clearInterval(heartbeat);
+      if (chatId) unregisterChatRun(chatId, runtimeController);
       c.req.raw.signal.removeEventListener("abort", abortRuntime);
     }
 
-    // 发送 SSE 结束信号
-    await writeSseDone(writer);
+    // 客户端断连或 writer 已关闭时，结束信号失败不得逃逸请求边界。
+    try {
+      await writeSseDone(writer);
+    } catch (error) {
+      console.error("[chat] Failed to write SSE completion marker:", error);
+    }
   });
 }
 
@@ -975,9 +1414,9 @@ function isProductWorkflowFinalConfirmationAnswer(
     .filter((message) => message.role === "user")
     .at(-1);
   return (
-    getFormAnswerId(latestUserMessage?.content ?? "") ===
-      "product-workflow-confirmation" ||
-    isProductWorkflowOptionalStopAnswer(latestUserMessage?.content ?? "")
+    isProductWorkflowAcceptanceAnswer(latestUserMessage?.content ?? "") ||
+    isProductWorkflowOptionalStopAnswer(latestUserMessage?.content ?? "") ||
+    isProductWorkflowStopWithIssuesAnswer(latestUserMessage?.content ?? "")
   );
 }
 

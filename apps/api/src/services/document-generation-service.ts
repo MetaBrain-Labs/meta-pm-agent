@@ -15,7 +15,10 @@
 
 import { randomUUID } from "node:crypto";
 import {
+  type DocumentEvidenceBlocker,
+  createScoreRetryFeedback,
   createDocumentWorkflowThreadId,
+  DOCUMENT_SCORE_MAX_ATTEMPTS,
   streamDocumentWorkflow,
 } from "@repo/agent-runtime";
 import type {
@@ -24,24 +27,39 @@ import type {
   DocumentReasoningLogEntry,
   DocumentScoreAttempt,
   DocumentTodo,
-  DocumentWorkflowStage,
   KnowledgeGraphEntity,
   KnowledgeGraphRelation,
+  ModelUsageProfile,
 } from "@repo/shared";
 import {
   completeDocumentGenerationRun,
   createDocumentGenerationRun,
+  ensureDocumentArtifactSourceGraphVersion,
   failDocumentGenerationRun,
   getActiveDocumentGenerationRun,
   getDocumentArtifactByRunId,
   getDocumentGenerationRunById,
   getLatestDocumentGenerationRun,
   markDocumentGenerationRunRunning,
+  resumeAwaitingDocumentGenerationRun,
   stopDocumentGenerationRun,
   updateDocumentGenerationRunProgress,
   type DocumentArtifactDto,
   type DocumentGenerationRunDto,
 } from "../repositories/document-generation-repository";
+import {
+  getConversationById,
+} from "../repositories/chat-repository";
+import {
+  createDocumentEvidenceResolutionItem,
+  findDocumentEvidenceResolutionCycle,
+} from "../repositories/request-form-repository";
+import {
+  getLocalModelProfile,
+  ModelProfileNotFoundError,
+  selectConversationModelProfile,
+} from "../repositories/model-profile-repository";
+import { createChat } from "./chat-service";
 import { getWorkspaceKnowledgeGraph } from "./product-knowledge-graph-service";
 
 /**
@@ -50,6 +68,25 @@ import { getWorkspaceKnowledgeGraph } from "./product-knowledge-graph-service";
 export interface DocumentGenerationStatusDto {
   run: DocumentGenerationRunDto | null;
   artifact: DocumentArtifactDto | null;
+  evidenceResolution?: {
+    status: string;
+    sourceGraphVersion: number;
+    resolvedGraphVersion?: number;
+  } | null;
+}
+
+/** 文档页创建或恢复专用对话后的导航数据。 */
+export interface DocumentEvidenceResolutionConversationDto {
+  thread: {
+    id: string;
+    workspaceId: string;
+    requestFormId: string;
+    title: string;
+    messageCount: number;
+    createdAt: string;
+    updatedAt: string;
+  };
+  autoStart: boolean;
 }
 
 /**
@@ -65,6 +102,8 @@ export class DocumentGenerationServiceError extends Error {
 }
 
 const activeDocumentRuns = new Map<string, AbortController>();
+/** reasoning 日志批量持久化的最短间隔。 */
+export const DOCUMENT_REASONING_PERSIST_INTERVAL_MS = 1_000;
 
 /**
  * 启动指定工作区的文档生成任务。
@@ -72,21 +111,44 @@ const activeDocumentRuns = new Map<string, AbortController>();
 export async function startDocumentGeneration({
   workspaceId,
   kind,
+  profileId,
 }: {
   workspaceId: string;
   kind: DocumentKind;
+  profileId: string;
 }): Promise<DocumentGenerationStatusDto> {
   if (kind !== "prd") {
     throw new DocumentGenerationServiceError("当前仅支持生成 PRD。", 400);
   }
 
+  let modelProfile: ModelUsageProfile;
+  try {
+    modelProfile = await getLocalModelProfile(profileId);
+  } catch (error) {
+    if (error instanceof ModelProfileNotFoundError) {
+      throw new DocumentGenerationServiceError("模型使用列表不存在。", 404);
+    }
+    throw error;
+  }
+
   const existingRun = await getActiveDocumentGenerationRun(workspaceId, kind);
   if (existingRun) {
+    const artifact = existingRun.documentArtifactId
+      ? await getDocumentArtifactByRunId(existingRun.id)
+      : null;
+    const sourceGraphVersion = artifact?.content?.sourceGraphStats.version;
+    const evidenceResolution =
+      existingRun.status === "awaiting_input" &&
+      typeof sourceGraphVersion === "number"
+        ? await findDocumentEvidenceResolutionCycle(
+            existingRun.id,
+            sourceGraphVersion,
+          )
+        : null;
     return {
       run: existingRun,
-      artifact: existingRun.documentArtifactId
-        ? await getDocumentArtifactByRunId(existingRun.id)
-        : null,
+      artifact,
+      evidenceResolution: toEvidenceResolutionSummary(evidenceResolution),
     };
   }
 
@@ -104,7 +166,7 @@ export async function startDocumentGeneration({
     workflowThreadId,
   });
 
-  launchDocumentGenerationRun(run, graph);
+  launchDocumentGenerationRun(run, graph, modelProfile);
 
   return { run, artifact: null };
 }
@@ -121,12 +183,19 @@ export async function getLatestDocumentGenerationStatus({
 }): Promise<DocumentGenerationStatusDto> {
   const run = await getLatestDocumentGenerationRun(workspaceId, kind);
   if (!run) return { run: null, artifact: null };
+  const artifact = run.documentArtifactId
+    ? await getDocumentArtifactByRunId(run.id)
+    : null;
+  const sourceGraphVersion = artifact?.content?.sourceGraphStats.version;
+  const evidenceResolution =
+    run.status === "awaiting_input" && typeof sourceGraphVersion === "number"
+      ? await findDocumentEvidenceResolutionCycle(run.id, sourceGraphVersion)
+      : null;
 
   return {
     run,
-    artifact: run.documentArtifactId
-      ? await getDocumentArtifactByRunId(run.id)
-      : null,
+    artifact,
+    evidenceResolution: toEvidenceResolutionSummary(evidenceResolution),
   };
 }
 
@@ -138,12 +207,19 @@ export async function getDocumentGenerationStatusByRunId(
 ): Promise<DocumentGenerationStatusDto> {
   const run = await getDocumentGenerationRunById(runId);
   if (!run) return { run: null, artifact: null };
+  const artifact = run.documentArtifactId
+    ? await getDocumentArtifactByRunId(run.id)
+    : null;
+  const sourceGraphVersion = artifact?.content?.sourceGraphStats.version;
+  const evidenceResolution =
+    run.status === "awaiting_input" && typeof sourceGraphVersion === "number"
+      ? await findDocumentEvidenceResolutionCycle(run.id, sourceGraphVersion)
+      : null;
 
   return {
     run,
-    artifact: run.documentArtifactId
-      ? await getDocumentArtifactByRunId(run.id)
-      : null,
+    artifact,
+    evidenceResolution: toEvidenceResolutionSummary(evidenceResolution),
   };
 }
 
@@ -160,11 +236,224 @@ export async function stopDocumentGeneration(runId: string): Promise<void> {
 }
 
 /**
+ * 为 awaiting_input PRD run 创建或恢复专用证据解决会话。
+ */
+export async function createDocumentEvidenceResolutionConversation({
+  runId,
+  profileId,
+}: {
+  runId: string;
+  profileId: string;
+}): Promise<DocumentEvidenceResolutionConversationDto> {
+  const run = await getDocumentGenerationRunById(runId);
+  if (!run) throw new DocumentGenerationServiceError("文档任务不存在。", 404);
+  if (run.status !== "awaiting_input") {
+    throw new DocumentGenerationServiceError(
+      "只有等待补充信息的文档任务可以解决证据阻断。",
+      409,
+    );
+  }
+
+  const artifact = await getDocumentArtifactByRunId(runId);
+  let sourceGraphVersion = artifact?.content?.sourceGraphStats.version;
+  if (typeof sourceGraphVersion !== "number") {
+    const currentGraph = await loadDocumentSourceGraph(run.workspaceId);
+    sourceGraphVersion =
+      await ensureDocumentArtifactSourceGraphVersion({
+        runId,
+        workspaceId: run.workspaceId,
+        sourceGraphVersion: currentGraph.version,
+      });
+  }
+  if (typeof sourceGraphVersion !== "number") {
+    throw new DocumentGenerationServiceError(
+      "无法为当前文档产物补齐源知识图谱版本，请刷新后重试。",
+      409,
+    );
+  }
+
+  const existing = await findDocumentEvidenceResolutionCycle(
+    runId,
+    sourceGraphVersion,
+  );
+  if (existing) {
+    const conversation = await getConversationById(existing.conversationId);
+    if (conversation && conversation.workspaceId === run.workspaceId) {
+      return {
+        thread: {
+          id: conversation.id,
+          workspaceId: conversation.workspaceId,
+          requestFormId: existing.requestFormId,
+          title: conversation.title,
+          messageCount: existing.status === "ready" ? 0 : 1,
+          createdAt: conversation.createdAt,
+          updatedAt: conversation.updatedAt,
+        },
+        autoStart: existing.status === "ready",
+      };
+    }
+  }
+
+  try {
+    await getLocalModelProfile(profileId);
+  } catch (error) {
+    if (error instanceof ModelProfileNotFoundError) {
+      throw new DocumentGenerationServiceError("模型使用列表不存在。", 404);
+    }
+    throw error;
+  }
+
+  const latestAttempt = run.scoringAttempts.at(-1);
+  const blockers: DocumentEvidenceBlocker[] =
+    latestAttempt?.evidenceBlockerGroups?.length
+      ? latestAttempt.evidenceBlockerGroups.map((group, index) => ({
+          index,
+          reviewerId: "document-evidence-blocker-consolidator",
+          reviewerName: "PRD Evidence Blocker Consolidator",
+          text: `${group.title}: ${group.description}`,
+          sources: group.sources,
+          relatedNodeIds: group.relatedNodeIds,
+        }))
+      : latestAttempt?.reviewerScores.flatMap((reviewer) =>
+          (reviewer.evidenceBlockers ?? []).map((text, index) => ({
+            index,
+            reviewerId: reviewer.reviewerId,
+            reviewerName: reviewer.reviewerName,
+            text,
+            relatedNodeIds:
+              reviewer.evidenceBlockerDetails?.[index]?.relatedNodeIds ?? [],
+          })),
+        ) ?? [];
+  blockers.forEach((blocker, index) => {
+    blocker.index = index;
+  });
+  if (blockers.length === 0) {
+    throw new DocumentGenerationServiceError(
+      "当前评分结果没有可解决的证据阻断。",
+      409,
+    );
+  }
+
+  const created = await createChat(run.workspaceId, "解决 PRD 证据阻断");
+  await selectConversationModelProfile(created.chat.id, profileId);
+  await createDocumentEvidenceResolutionItem({
+    requestFormId: created.requestForm.id,
+    runId,
+    sourceGraphVersion,
+    blockers,
+  });
+  return {
+    thread: {
+      id: created.chat.id,
+      workspaceId: created.chat.workspaceId,
+      requestFormId: created.requestForm.id,
+      title: created.chat.title,
+      messageCount: 0,
+      createdAt: created.chat.createdAt,
+      updatedAt: created.chat.updatedAt,
+    },
+    autoStart: true,
+  };
+}
+
+/**
+ * 在知识图谱补充完成后恢复原 PRD run 的剩余评分轮次。
+ */
+export async function resumeDocumentGeneration({
+  runId,
+  profileId,
+}: {
+  runId: string;
+  profileId: string;
+}): Promise<DocumentGenerationStatusDto> {
+  const run = await getDocumentGenerationRunById(runId);
+  if (!run) {
+    throw new DocumentGenerationServiceError("文档任务不存在。", 404);
+  }
+  if (run.status !== "awaiting_input") {
+    throw new DocumentGenerationServiceError(
+      "只有等待补充信息的文档任务可以继续。",
+      409,
+    );
+  }
+  if (run.scoringAttempts.length >= DOCUMENT_SCORE_MAX_ATTEMPTS) {
+    throw new DocumentGenerationServiceError("文档评分轮次已经用完。", 409);
+  }
+
+  const artifact = await getDocumentArtifactByRunId(runId);
+  const sourceVersion = artifact?.content?.sourceGraphStats.version;
+  const graph = await loadDocumentSourceGraph(run.workspaceId);
+  const evidenceResolution =
+    typeof sourceVersion === "number"
+      ? await findDocumentEvidenceResolutionCycle(runId, sourceVersion)
+      : null;
+  if (
+    typeof sourceVersion !== "number" ||
+    evidenceResolution?.status !== "completed" ||
+    typeof evidenceResolution.resolvedGraphVersion !== "number" ||
+    evidenceResolution.resolvedGraphVersion <= sourceVersion ||
+    typeof graph.version !== "number" ||
+    graph.version < evidenceResolution.resolvedGraphVersion
+  ) {
+    throw new DocumentGenerationServiceError(
+      "产品知识图谱尚未更新，请先完成证据阻断解决流程。",
+      409,
+    );
+  }
+
+  let modelProfile: ModelUsageProfile;
+  try {
+    modelProfile = await getLocalModelProfile(profileId);
+  } catch (error) {
+    if (error instanceof ModelProfileNotFoundError) {
+      throw new DocumentGenerationServiceError("模型使用列表不存在。", 404);
+    }
+    throw error;
+  }
+
+  if (!(await resumeAwaitingDocumentGenerationRun(runId))) {
+    throw new DocumentGenerationServiceError("文档任务已被其他请求恢复。", 409);
+  }
+
+  const latestAttempt = run.scoringAttempts.at(-1);
+  launchDocumentGenerationRun(run, graph, modelProfile, {
+    priorScoreAttempts: run.scoringAttempts,
+    revisionFeedback: latestAttempt
+      ? createScoreRetryFeedback(latestAttempt)
+      : "",
+    workflowThreadId: `${run.workflowThreadId}:attempt:${run.scoringAttempts.length + 1}`,
+    alreadyRunning: true,
+  });
+
+  return {
+    run: { ...run, status: "running", finishedAt: null },
+    artifact,
+    evidenceResolution: toEvidenceResolutionSummary(evidenceResolution),
+  };
+}
+
+/** 将内部 request-form 记录压缩为文档页只读状态。 */
+function toEvidenceResolutionSummary(
+  resolution: Awaited<ReturnType<typeof findDocumentEvidenceResolutionCycle>>,
+): DocumentGenerationStatusDto["evidenceResolution"] {
+  return resolution
+    ? {
+        status: resolution.status,
+        sourceGraphVersion: resolution.sourceGraphVersion,
+        ...(typeof resolution.resolvedGraphVersion === "number"
+          ? { resolvedGraphVersion: resolution.resolvedGraphVersion }
+          : {}),
+      }
+    : null;
+}
+
+/**
  * 从产品知识图谱服务加载文档生成所需图谱。
  */
 async function loadDocumentSourceGraph(workspaceId: string): Promise<{
   nodes: KnowledgeGraphEntity[];
   relations: KnowledgeGraphRelation[];
+  version: number;
 }> {
   const graph = await getWorkspaceKnowledgeGraph(workspaceId);
   if (!graph || graph.nodes.length === 0) {
@@ -177,6 +466,7 @@ async function loadDocumentSourceGraph(workspaceId: string): Promise<{
   return {
     nodes: graph.nodes,
     relations: graph.relations,
+    version: graph.version,
   };
 }
 
@@ -188,16 +478,71 @@ function launchDocumentGenerationRun(
   graph: {
     nodes: KnowledgeGraphEntity[];
     relations: KnowledgeGraphRelation[];
+    version: number;
+  },
+  modelProfile: ModelUsageProfile,
+  resume?: {
+    priorScoreAttempts: DocumentScoreAttempt[];
+    revisionFeedback: string;
+    workflowThreadId: string;
+    alreadyRunning: boolean;
   },
 ): void {
   const controller = new AbortController();
   activeDocumentRuns.set(run.id, controller);
 
-  void executeDocumentGenerationRun(run, graph, controller).finally(() => {
-    if (activeDocumentRuns.get(run.id) === controller) {
-      activeDocumentRuns.delete(run.id);
+  observeDetachedDocumentRun(
+    executeDocumentGenerationRun(
+      run,
+      graph,
+      modelProfile,
+      controller,
+      resume,
+    ),
+    () => {
+      if (activeDocumentRuns.get(run.id) === controller) {
+        activeDocumentRuns.delete(run.id);
+      }
+    },
+  );
+}
+
+/**
+ * 接管后台文档 Promise 的最终拒绝，并保证清理阶段异常也不会逃逸为未处理 rejection。
+ */
+export function observeDetachedDocumentRun(
+  task: Promise<void>,
+  cleanup: () => void,
+  reportError: (error: unknown) => void = (error) => {
+    console.error("[document-generation] Detached run failed:", error);
+  },
+): void {
+  const safelyReport = (error: unknown) => {
+    try {
+      reportError(error);
+    } catch (reportingError) {
+      console.error(
+        "[document-generation] Failed to report detached run error:",
+        reportingError,
+      );
     }
-  });
+  };
+  const safelyCleanup = () => {
+    try {
+      cleanup();
+    } catch (cleanupError) {
+      safelyReport(cleanupError);
+    }
+  };
+
+  // 同时安装成功与失败处理器；清理失败单独上报，不能覆盖原始任务错误。
+  void task.then(
+    () => safelyCleanup(),
+    (error: unknown) => {
+      safelyCleanup();
+      safelyReport(error);
+    },
+  );
 }
 
 /**
@@ -208,8 +553,16 @@ async function executeDocumentGenerationRun(
   graph: {
     nodes: KnowledgeGraphEntity[];
     relations: KnowledgeGraphRelation[];
+    version: number;
   },
+  modelProfile: ModelUsageProfile,
   controller: AbortController,
+  resume?: {
+    priorScoreAttempts: DocumentScoreAttempt[];
+    revisionFeedback: string;
+    workflowThreadId: string;
+    alreadyRunning: boolean;
+  },
 ): Promise<void> {
   let latestTodos = run.todos;
   let latestReasoning = run.reasoningLog;
@@ -217,17 +570,24 @@ async function executeDocumentGenerationRun(
   let result: DocumentGenerationResult | null = null;
 
   try {
-    await markDocumentGenerationRunRunning({ runId: run.id });
+    if (!resume?.alreadyRunning) {
+      await markDocumentGenerationRunRunning({ runId: run.id });
+    }
     const stream = streamDocumentWorkflow({
       workspaceId: run.workspaceId,
       runId: run.id,
       kind: run.kind,
       graph,
-      workflowThreadId: run.workflowThreadId,
+      priorScoreAttempts: resume?.priorScoreAttempts,
+      revisionFeedback: resume?.revisionFeedback,
+      modelProfile,
+      workflowThreadId: resume?.workflowThreadId ?? run.workflowThreadId,
       signal: controller.signal,
     });
 
     let next = await stream.next();
+    let reasoningDirty = false;
+    let reasoningPersistedAt = Date.now();
     while (!next.done) {
       if (controller.signal.aborted) {
         throw createAbortError();
@@ -235,32 +595,43 @@ async function executeDocumentGenerationRun(
 
       const event = next.value;
       if (event.type === "document-stage" && event.status === "started") {
-        await updateRunStage(run.id, event.stage);
         latestReasoning = appendReasoningLog(latestReasoning, {
           agentType: "document-workflow",
           content: `进入阶段：${event.label}`,
         });
         await updateDocumentGenerationRunProgress({
           runId: run.id,
+          currentStage: event.stage,
           reasoningLog: latestReasoning,
         });
+        reasoningDirty = false;
+        reasoningPersistedAt = Date.now();
       }
       if (event.type === "todo-update") {
         latestTodos = event.todos;
         await updateDocumentGenerationRunProgress({
           runId: run.id,
           todos: latestTodos,
+          ...(reasoningDirty ? { reasoningLog: latestReasoning } : {}),
         });
+        reasoningDirty = false;
+        reasoningPersistedAt = Date.now();
       }
       if (event.type === "reasoning") {
         latestReasoning = appendReasoningLog(latestReasoning, {
           agentType: event.agentType,
           content: event.content,
         });
-        await updateDocumentGenerationRunProgress({
-          runId: run.id,
-          reasoningLog: latestReasoning,
-        });
+        reasoningDirty = true;
+        const now = Date.now();
+        if (shouldPersistDocumentReasoning(reasoningPersistedAt, now)) {
+          await updateDocumentGenerationRunProgress({
+            runId: run.id,
+            reasoningLog: latestReasoning,
+          });
+          reasoningDirty = false;
+          reasoningPersistedAt = now;
+        }
       }
       if (event.type === "document-score-attempt") {
         latestScoringAttempts = upsertScoreAttempt(
@@ -270,7 +641,10 @@ async function executeDocumentGenerationRun(
         await updateDocumentGenerationRunProgress({
           runId: run.id,
           scoringAttempts: latestScoringAttempts,
+          ...(reasoningDirty ? { reasoningLog: latestReasoning } : {}),
         });
+        reasoningDirty = false;
+        reasoningPersistedAt = Date.now();
       }
       if (event.type === "document-complete") {
         result = event.result;
@@ -283,16 +657,26 @@ async function executeDocumentGenerationRun(
     result = result ?? next.value.result;
     latestTodos = next.value.todos.length > 0 ? next.value.todos : latestTodos;
 
+    if (reasoningDirty) {
+      await updateDocumentGenerationRunProgress({
+        runId: run.id,
+        reasoningLog: latestReasoning,
+      });
+    }
+
     if (controller.signal.aborted) {
       throw createAbortError();
     }
 
+    const awaitingInput =
+      result.qualityScore.disposition === "awaiting_input";
     await completeDocumentGenerationRun({
       runId: run.id,
       workspaceId: run.workspaceId,
       kind: run.kind,
       result,
       todos: latestTodos,
+      status: awaitingInput ? "awaiting_input" : "completed",
     });
   } catch (error) {
     if (isAbortError(error) || controller.signal.aborted) {
@@ -358,28 +742,21 @@ function shouldMergeReasoningEntry(
   );
 }
 
-/**
- * 写入或替换同一轮评分结果。
- */
+/** 判断合并后的 reasoning 是否达到下一次持久化时间。 */
+export function shouldPersistDocumentReasoning(
+  lastPersistedAt: number,
+  now: number,
+): boolean {
+  return now - lastPersistedAt >= DOCUMENT_REASONING_PERSIST_INTERVAL_MS;
+}
+
+/** 写入或替换同一轮评分结果。 */
 function upsertScoreAttempt(
   attempts: DocumentScoreAttempt[],
   next: DocumentScoreAttempt,
 ): DocumentScoreAttempt[] {
   const filtered = attempts.filter((attempt) => attempt.attempt !== next.attempt);
   return [...filtered, next].sort((a, b) => a.attempt - b.attempt);
-}
-
-/**
- * 同步当前文档工作流阶段。
- */
-async function updateRunStage(
-  runId: string,
-  stage: DocumentWorkflowStage,
-): Promise<void> {
-  await markDocumentGenerationRunRunning({
-    runId,
-    currentStage: stage,
-  });
 }
 
 /**

@@ -110,10 +110,10 @@ Copy-Item .env.example .env
 | `POSTGRES_HOST`、`POSTGRES_PORT`、`POSTGRES_USER`、`POSTGRES_PASSWORD`、`POSTGRES_DB` | PostgreSQL 连接；也支持 `DATABASE_URL` |
 | `REDIS_HOST`、`REDIS_PORT` | BullMQ Worker 连接 |
 | `OPENAI_API_KEY` | 模型服务密钥 |
-| `LLM_MODEL` | OpenAI-compatible 模型名 |
-| `LLM_BASE_URL` | 模型服务 Base URL |
 | `TAVILY_API_KEY` | 可选 Tavily 搜索；缺省时使用公开索引 |
 | `LANGGRAPH_CHECKPOINT_DATABASE_URL` | 可选独立 checkpoint 数据库地址 |
+
+Chat 与 Document 的模型 ID、服务 Base URL、推理参数和计价统一在 Setting 的模型使用列表中配置。
 
 不得提交 `.env` 或 `resources/product-contexts/` 下的运行时产物。
 
@@ -125,6 +125,12 @@ pnpm --filter @repo/database db:push
 ```
 
 `db:generate` 只生成 Prisma Client；`db:push` 会修改已配置的数据库。
+
+已有数据库升级到支持 PRD 证据阻断等待状态时，执行：
+
+```bash
+pnpm --filter @repo/database db:upgrade-document-status
+```
 
 #### 数据库结构说明
 

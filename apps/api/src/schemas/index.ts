@@ -13,3 +13,4 @@ export * from "./chat.schema";
 export * from "./workspace.schema";
 export * from "./request.schema";
 export * from "./document.schema";
+export * from "./model-profile.schema";

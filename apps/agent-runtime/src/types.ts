@@ -17,13 +17,21 @@
 import type { RequestAnalysis } from "@repo/shared";
 import type {
   AgentRuntimeTool,
+  ExecutorAgentResult,
   OrchestratorContextSource,
   ProductWorkflowResult,
   ProductKnowledgeGraph,
+  ModelUsageProfile,
+  TaskExecutionPlan,
   WorkflowRetryAction,
   WorkflowRetryRequest,
 } from "@repo/shared";
 import type { HumanInTheLoopInterrupt } from "./graph/human-in-the-loop";
+import type {
+  DocumentEvidenceAnswerResult,
+} from "./graph/document-evidence-resolution-workflow";
+import type { DocumentEvidenceBlocker } from "./agents/product-workflow/orchestrator-agent/document-evidence-resolver-subagent";
+import type { WorkflowPurpose } from "./agents/product-workflow/types";
 
 /**
  * 标识当前流式内容所属的 Agent，便于 API 持久化和前端按阶段展示。
@@ -140,6 +148,16 @@ export type ConversationStreamEvent =
       terminal?: boolean;
     }
   | { type: "complete"; result: ProductWorkflowResult }
+  | {
+      type: "document-evidence-resolution-plan";
+      runId: string;
+      resolution: DocumentEvidenceAnswerResult["resolution"];
+    }
+  | {
+      type: "document-evidence-resolution-complete";
+      runId: string;
+      workspaceId: string;
+    }
   | { type: "knowledge-graph-update"; knowledgeGraph: ProductKnowledgeGraph };
 
 /**
@@ -153,13 +171,26 @@ export interface ConversationStreamOptions {
   productContext?: string;
   contextSource?: OrchestratorContextSource;
   knowledgeGraph?: ProductKnowledgeGraph | null;
+  /** API 在 SSE 开始前解析的不可变模型使用列表快照。 */
+  modelProfile?: ModelUsageProfile;
   workflowAnswerResolution?: WorkflowAnswerResolution | null;
+  /** API 从持久化消息组装的权威工作流恢复上下文，不属于 HTTP 请求契约。 */
+  serverWorkflowRecoveryContext?: Readonly<WorkflowRecoveryContext>;
   workflowRetry?: WorkflowRetryRequest;
   /** API 从持久化错误中恢复的可信重试上下文，不属于客户端请求契约。 */
   workflowRetryFailure?: {
     taskId: string;
     error: string;
   };
+  /** 服务端从文档 run 与 artifact 恢复的可信证据阻断上下文。 */
+  documentEvidenceResolution?: {
+    conversationId: string;
+    runId: string;
+    sourceGraphVersion: number;
+    blockers: DocumentEvidenceBlocker[];
+  };
+  /** API 按 document-evidence 线程恢复 LangGraph 后返回的表单答案。 */
+  documentEvidenceAnswer?: DocumentEvidenceAnswerResult;
   signal?: AbortSignal;
   /** "chat" 模式使用纯闲聊提示词，不产生标记块或表单 */
   mode?: "project" | "chat";
@@ -170,6 +201,18 @@ export interface ConversationStreamOptions {
  */
 export interface WorkflowAnswerResolution {
   formId: string;
+  /** 服务端根据持久化 decision 与精确答案解析出的控制动作。 */
+  action:
+    | "submit_answers"
+    | "retry_correction"
+    | "stop_with_issues"
+    | "stop_optional_questions";
+  /** 最终确认由服务端持久化记录恢复，避免依赖客户端回传完整工作流历史。 */
+  workflow?: ProductWorkflowResult;
+  /** Critique 修正 decision 中持久化的稳定任务引用。 */
+  correctionTaskIds?: readonly string[];
+  /** 仅由 API 注入的服务端恢复快照；不会从 HTTP 请求反序列化。 */
+  serverRecoveryContext?: Readonly<WorkflowRecoveryContext>;
   questions: Array<{
     label: string;
     answered: boolean;
@@ -179,4 +222,23 @@ export interface WorkflowAnswerResolution {
       open_question_id?: string;
     }>;
   }>;
+}
+
+/**
+ * 服务端为表单恢复组装的最小权威工作流上下文。
+ *
+ * 只保存稳定的业务分析、DAG、Executor 快照与 Critique 结论；完整图谱继续由独立图谱存储提供。
+ */
+export interface WorkflowRecoveryContext {
+  /** 服务端恢复时确认的工作流用途。 */
+  readonly workflowPurpose: WorkflowPurpose;
+  readonly requestAnalysis: RequestAnalysis;
+  readonly planner: TaskExecutionPlan;
+  readonly executorResults: readonly ExecutorAgentResult[];
+  readonly critique: ProductWorkflowResult;
+  readonly correctionSource: {
+    readonly formId: string;
+    readonly action: WorkflowAnswerResolution["action"];
+    readonly retryTaskIds: readonly string[];
+  };
 }

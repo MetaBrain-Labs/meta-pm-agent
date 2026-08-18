@@ -18,6 +18,7 @@ import {
 } from "../../agents/request/agent";
 import { parseUserInputBlock } from "../../agents/request/user-input";
 import type { WorkflowGraphStateValue } from "../state";
+import { getModelProfileFromRunnableConfig } from "../../agents/common/model-profile";
 
 /**
  * 将 Conversation Agent 的 <user-input> block 解析成结构化独立语句。
@@ -60,6 +61,7 @@ export async function requestAgentNode(
   writer?.({ type: "request-analysis-start", agentType: "request" });
 
   for await (const event of streamRequestAgent({
+    modelProfile: getModelProfileFromRunnableConfig(config),
     productContext: state.productContext,
     userInput: state.userInput,
     signal: config?.signal,

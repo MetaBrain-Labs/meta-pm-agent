@@ -110,10 +110,10 @@ Edit `.env` with at least:
 | `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | PostgreSQL connection; `DATABASE_URL` is also supported |
 | `REDIS_HOST`, `REDIS_PORT` | BullMQ worker connection |
 | `OPENAI_API_KEY` | Model-provider key |
-| `LLM_MODEL` | OpenAI-compatible model name |
-| `LLM_BASE_URL` | Provider base URL |
 | `TAVILY_API_KEY` | Optional Tavily search; public indexes are used when absent |
 | `LANGGRAPH_CHECKPOINT_DATABASE_URL` | Optional separate checkpoint database URL |
+
+Chat and Document model IDs, provider base URLs, reasoning parameters, and pricing are configured through Model Usage Profiles in Settings.
 
 Do not commit `.env` or runtime output under `resources/product-contexts/`.
 
@@ -125,6 +125,12 @@ pnpm --filter @repo/database db:push
 ```
 
 `db:generate` only generates Prisma Client. `db:push` changes the configured database.
+
+For an existing database, enable the PRD evidence-blocker waiting status with:
+
+```bash
+pnpm --filter @repo/database db:upgrade-document-status
+```
 
 #### Database schema note
 

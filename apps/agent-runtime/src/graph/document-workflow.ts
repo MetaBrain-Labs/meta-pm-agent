@@ -3,13 +3,14 @@
  *
  * 构建独立于产品知识图谱生产链路的 Document Agent 图，固定阶段为
  * parseKg → normalizeGraph → buildSectionDossiers → draftSection →
- * crossCheck → scoreDraft → aggregateScore → humanReview → exportPrd。图状态由 checkpointer 保存，
+ * crossCheck → scoreDraft → groupEvidenceBlockers → aggregateScore →
+ * humanReview → exportPrd。图状态由 checkpointer 保存，
  * 便于后续恢复、回放与 thread 级连续性扩展。
  *
  * Responsibilities:
  * - 定义文档生成图输入、输出和流事件
  * - 组装 Document Agent PRD 工作流节点
- * - 将 Deep Agents write_todos/task 事件透传给 API 后台任务
+ * - 将 Document Agent 与评分事件透传给 API 后台任务
  *
  * Notes:
  * - 当前 PRD 后台生成不主动打断等待人工审核；humanReview 节点先做自动通过，
@@ -33,6 +34,7 @@ import type {
   DocumentTodo,
   KnowledgeGraphEntity,
   KnowledgeGraphRelation,
+  ModelUsageProfile,
 } from "@repo/shared";
 import {
   streamPrdDocumentAgent,
@@ -43,14 +45,22 @@ import {
   DOCUMENT_SCORE_MAX_SPREAD,
   DOCUMENT_SCORE_THRESHOLD,
   calculateScoreSpread,
-  createScoreRetryFeedback,
+  createDeterministicConsensusScore,
   createSkippedConsensusScore,
+  finalizeDocumentScoreAttempt,
+  groupPrdEvidenceBlockers,
   runPrdScoringReviewers,
-  runPrdWeightedScoringAgent,
   selectFinalScoreAttempt,
+  resolveDocumentScoreDisposition,
+  validatePrdSourceGrounding,
+  type DocumentScoreAttempt,
   type DocumentScoringStreamEvent,
 } from "../agents/document-agent/scoring";
 import { getWorkflowCheckpointer } from "./workflow-checkpointer";
+import {
+  getModelProfileFromRunnableConfig,
+  MODEL_PROFILE_RUN_CONFIG_KEY,
+} from "../agents/common/model-profile";
 import {
   DocumentWorkflowGraphState,
   type DocumentCrossCheck,
@@ -67,6 +77,9 @@ export interface DocumentWorkflowInput {
   runId: string;
   kind: DocumentKind;
   graph: DocumentWorkflowGraphSnapshot;
+  priorScoreAttempts?: DocumentScoreAttempt[];
+  revisionFeedback?: string;
+  modelProfile: ModelUsageProfile;
   workflowThreadId?: string;
   signal?: AbortSignal;
 }
@@ -114,6 +127,7 @@ const STAGE_LABELS: Record<DocumentWorkflowStage, string> = {
   draftSection: "Document Agent 生成 PRD",
   crossCheck: "交叉检查文档一致性",
   scoreDraft: "三方评分 Agent 打分",
+  groupEvidenceBlockers: "合并三方证据阻断",
   aggregateScore: "分差合格后共识评分",
   humanReview: "人工审核节点",
   exportPrd: "导出 PRD 文档",
@@ -130,6 +144,7 @@ function createDocumentWorkflowGraph(checkpointer: BaseCheckpointSaver) {
     .addNode("draftSection", draftSectionNode)
     .addNode("crossCheck", crossCheckNode)
     .addNode("scoreDraft", scoreDraftNode)
+    .addNode("groupEvidenceBlockers", groupEvidenceBlockersNode)
     .addNode("rejectScore", rejectScoreNode)
     .addNode("aggregateScore", aggregateScoreNode)
     .addNode("humanReview", humanReviewNode)
@@ -141,17 +156,24 @@ function createDocumentWorkflowGraph(checkpointer: BaseCheckpointSaver) {
     .addEdge("buildSectionDossiers", "draftSection")
     .addEdge("draftSection", "crossCheck")
     .addEdge("crossCheck", "scoreDraft")
-    .addConditionalEdges("scoreDraft", selectNextNodeAfterReviewerScore, {
-      reject: "rejectScore",
-      aggregate: "aggregateScore",
-    })
+    .addEdge("scoreDraft", "groupEvidenceBlockers")
+    .addConditionalEdges(
+      "groupEvidenceBlockers",
+      selectNextNodeAfterReviewerScore,
+      {
+        reject: "rejectScore",
+        aggregate: "aggregateScore",
+      },
+    )
     .addConditionalEdges("rejectScore", selectNextNodeAfterScore, {
       retry: "draftSection",
-      pass: "humanReview",
+      review: "humanReview",
+      export: "exportPrd",
     })
     .addConditionalEdges("aggregateScore", selectNextNodeAfterScore, {
       retry: "draftSection",
-      pass: "humanReview",
+      review: "humanReview",
+      export: "exportPrd",
     })
     .addEdge("humanReview", "exportPrd")
     .addEdge("exportPrd", END)
@@ -211,6 +233,8 @@ function createDocumentWorkflowInitialState(input: DocumentWorkflowInput) {
     runId: input.runId,
     kind: input.kind,
     sourceGraph: input.graph,
+    scoreAttempts: input.priorScoreAttempts ?? [],
+    scoreFeedback: input.revisionFeedback ?? "",
   };
 }
 
@@ -230,6 +254,7 @@ function createDocumentWorkflowRunConfig(input: DocumentWorkflowInput) {
           runId: input.runId,
           kind: input.kind,
         }),
+      [MODEL_PROFILE_RUN_CONFIG_KEY]: input.modelProfile,
     },
   };
 }
@@ -284,11 +309,27 @@ function normalizeGraphNode(
 ) {
   emitStage(config, "normalizeGraph", "started");
   emitTodoUpdate(config, createWorkflowTodos("normalizeGraph"));
+  const normalizedGraph = normalizeDocumentWorkflowGraph(state.sourceGraph);
 
-  const nodes = dedupeByKey(state.sourceGraph.nodes, (node) => node.id);
+  emitStage(config, "normalizeGraph", "completed");
+  const todos = createWorkflowTodos("normalizeGraph", true);
+  emitTodoUpdate(config, todos);
+  return {
+    normalizedGraph,
+    todos,
+  };
+}
+
+/**
+ * 规范化文档输入图谱，同时保留用于证据阻断恢复的源版本。
+ */
+export function normalizeDocumentWorkflowGraph(
+  graph: DocumentWorkflowGraphSnapshot,
+): DocumentWorkflowGraphSnapshot {
+  const nodes = dedupeByKey(graph.nodes, (node) => node.id);
   const nodeIds = new Set(nodes.map((node) => node.id));
   const relations = dedupeByKey(
-    state.sourceGraph.relations.filter(
+    graph.relations.filter(
       (relation) =>
         nodeIds.has(relation.source) && nodeIds.has(relation.target),
     ),
@@ -297,13 +338,7 @@ function normalizeGraphNode(
       `${relation.type}:${relation.source}:${relation.target}:${relation.source_task_id ?? ""}`,
   );
 
-  emitStage(config, "normalizeGraph", "completed");
-  const todos = createWorkflowTodos("normalizeGraph", true);
-  emitTodoUpdate(config, todos);
-  return {
-    normalizedGraph: { nodes, relations },
-    todos,
-  };
+  return { nodes, relations, version: graph.version };
 }
 
 /**
@@ -344,6 +379,7 @@ async function draftSectionNode(
       dossiers: state.dossiers,
       attemptNumber: state.scoreAttempts.length + 1,
       revisionFeedback: state.scoreFeedback,
+      modelProfile: getModelProfileFromRunnableConfig(config),
       signal: config?.signal,
     }),
     (event) => {
@@ -385,6 +421,13 @@ function crossCheckNode(
   if (state.sectionDrafts.length < 4) {
     notes.push("PRD 章节识别较少，建议人工复核文档结构。");
   }
+  const graph = requireNormalizedGraph(state);
+  const sourceGroundingIssues = validatePrdSourceGrounding({
+    markdown,
+    nodes: graph.nodes,
+    relations: graph.relations,
+  });
+  notes.push(...sourceGroundingIssues);
 
   const crossCheckResult: DocumentCrossCheck = {
     passed: notes.length === 0,
@@ -394,11 +437,11 @@ function crossCheckNode(
   emitStage(config, "crossCheck", "completed");
   const todos = createWorkflowTodos("crossCheck", true);
   emitTodoUpdate(config, todos);
-  return { crossCheckResult, todos };
+  return { crossCheckResult, sourceGroundingIssues, todos };
 }
 
 /**
- * 调用三位独立评分 Agent，按高考作文阅卷模式给 PRD 草稿打分。
+ * 调用三位职责明确的独立评分 Agent 给 PRD 草稿打分。
  */
 async function scoreDraftNode(
   state: DocumentWorkflowGraphStateValue,
@@ -410,7 +453,10 @@ async function scoreDraftNode(
   const reviewerScores = await runPrdScoringReviewers({
     markdown: state.draftMarkdown,
     sections: state.sectionDrafts,
+    sourceGraph: requireNormalizedGraph(state),
+    sourceGroundingIssues: state.sourceGroundingIssues,
     attempt: state.scoreAttempts.length + 1,
+    modelProfile: getModelProfileFromRunnableConfig(config),
     signal: config?.signal,
     onEvent: (event) => writer?.(event),
   });
@@ -418,7 +464,33 @@ async function scoreDraftNode(
   emitStage(config, "scoreDraft", "completed");
   const todos = createWorkflowTodos("scoreDraft", true);
   emitTodoUpdate(config, todos);
-  return { scoreReviewerReports: reviewerScores, todos };
+  return {
+    scoreReviewerReports: reviewerScores,
+    todos,
+  };
+}
+
+/**
+ * 在三位评分 Agent 全部完成后合并完整的证据阻断意见。
+ */
+async function groupEvidenceBlockersNode(
+  state: DocumentWorkflowGraphStateValue,
+  config?: LangGraphRunnableConfig,
+) {
+  emitStage(config, "groupEvidenceBlockers", "started");
+  emitTodoUpdate(config, createWorkflowTodos("groupEvidenceBlockers"));
+  const writer = getWriter(config);
+  const blockerGrouping = await groupPrdEvidenceBlockers({
+    reviewerScores: state.scoreReviewerReports,
+    modelProfile: getModelProfileFromRunnableConfig(config),
+    signal: config?.signal,
+    onEvent: (event) => writer?.(event),
+  });
+
+  emitStage(config, "groupEvidenceBlockers", "completed");
+  const todos = createWorkflowTodos("groupEvidenceBlockers", true);
+  emitTodoUpdate(config, todos);
+  return { scoreEvidenceBlockerGrouping: blockerGrouping, todos };
 }
 
 /**
@@ -428,11 +500,15 @@ function rejectScoreNode(
   state: DocumentWorkflowGraphStateValue,
   config?: LangGraphRunnableConfig,
 ) {
+  const evidenceBlockers = state.scoreEvidenceBlockerGrouping.groups.map(
+    formatEvidenceBlockerGroup,
+  );
   const scoreSpread = calculateScoreSpread(state.scoreReviewerReports);
   const varianceAccepted = scoreSpread <= DOCUMENT_SCORE_MAX_SPREAD;
   const aggregate = createSkippedConsensusScore({
     reviewerScores: state.scoreReviewerReports,
     scoreSpread,
+    sourceGroundingIssues: state.sourceGroundingIssues,
   });
   const attempt = {
     attempt: state.scoreAttempts.length + 1,
@@ -442,33 +518,31 @@ function rejectScoreNode(
     varianceAccepted,
     aggregate,
     passed: false,
+    evidenceBlocked: evidenceBlockers.length > 0,
+    evidenceBlockers,
+    evidenceBlockerGroups: state.scoreEvidenceBlockerGrouping.groups,
+    evidenceBlockerGroupingStatus: state.scoreEvidenceBlockerGrouping.status,
     selected: false,
   };
-  const scoreAttempts = [...state.scoreAttempts, attempt];
-  const selected = selectFinalScoreAttempt(scoreAttempts);
-  const shouldRetry =
-    !attempt.passed && scoreAttempts.length < DOCUMENT_SCORE_MAX_ATTEMPTS;
-  const persistedAttempt = {
-    ...attempt,
-    selected: !shouldRetry && selected?.attempt.attempt === attempt.attempt,
-  };
+  const finalized = finalizeDocumentScoreAttempt({
+    priorAttempts: state.scoreAttempts,
+    attempt,
+  });
 
   getWriter(config)?.({
     type: "document-score-attempt",
-    attempt: persistedAttempt,
+    attempt: finalized.persistedAttempt,
   });
 
   return {
-    scoreAttempts: [...state.scoreAttempts, persistedAttempt],
-    scoreFeedback: shouldRetry ? createScoreRetryFeedback(attempt) : "",
-    draftMarkdown: shouldRetry
-      ? state.draftMarkdown
-      : (selected?.attempt.markdown ?? state.draftMarkdown),
+    scoreAttempts: finalized.attempts,
+    scoreFeedback: finalized.scoreFeedback,
+    draftMarkdown: finalized.draftMarkdown,
   };
 }
 
 /**
- * 调用共识评分系统汇总三方评分，并决定是否进入下一轮重写。
+ * 确定性汇总三方评分，并决定是否进入下一轮重写。
  */
 async function aggregateScoreNode(
   state: DocumentWorkflowGraphStateValue,
@@ -476,17 +550,19 @@ async function aggregateScoreNode(
 ) {
   emitStage(config, "aggregateScore", "started");
   emitTodoUpdate(config, createWorkflowTodos("aggregateScore"));
-  const writer = getWriter(config);
   const scoreSpread = calculateScoreSpread(state.scoreReviewerReports);
   const varianceAccepted = scoreSpread <= DOCUMENT_SCORE_MAX_SPREAD;
-  const aggregate = await runPrdWeightedScoringAgent({
+  const reviewerEvidenceBlockers = state.scoreEvidenceBlockerGrouping.groups.map(
+    formatEvidenceBlockerGroup,
+  );
+  const aggregate = createDeterministicConsensusScore({
     markdown: state.draftMarkdown,
     reviewerScores: state.scoreReviewerReports,
     scoreSpread,
-    varianceAccepted,
-    attempt: state.scoreAttempts.length + 1,
-    signal: config?.signal,
-    onEvent: (event) => writer?.(event),
+    blockingEvidenceIssues: [
+      ...state.sourceGroundingIssues,
+      ...reviewerEvidenceBlockers,
+    ],
   });
   const attempt = {
     attempt: state.scoreAttempts.length + 1,
@@ -496,31 +572,29 @@ async function aggregateScoreNode(
     varianceAccepted,
     aggregate,
     passed: aggregate.passed,
+    evidenceBlocked: reviewerEvidenceBlockers.length > 0,
+    evidenceBlockers: reviewerEvidenceBlockers,
+    evidenceBlockerGroups: state.scoreEvidenceBlockerGrouping.groups,
+    evidenceBlockerGroupingStatus: state.scoreEvidenceBlockerGrouping.status,
     selected: false,
   };
-  const scoreAttempts = [...state.scoreAttempts, attempt];
-  const selected = selectFinalScoreAttempt(scoreAttempts);
-  const shouldRetry =
-    !attempt.passed && scoreAttempts.length < DOCUMENT_SCORE_MAX_ATTEMPTS;
-  const persistedAttempt = {
-    ...attempt,
-    selected: !shouldRetry && selected?.attempt.attempt === attempt.attempt,
-  };
+  const finalized = finalizeDocumentScoreAttempt({
+    priorAttempts: state.scoreAttempts,
+    attempt,
+  });
   getWriter(config)?.({
     type: "document-score-attempt",
-    attempt: persistedAttempt,
+    attempt: finalized.persistedAttempt,
   });
 
   emitStage(config, "aggregateScore", "completed");
   const todos = createWorkflowTodos("aggregateScore", true);
   emitTodoUpdate(config, todos);
   return {
-    scoreAttempts: [...state.scoreAttempts, persistedAttempt],
-    scoreFeedback: shouldRetry ? createScoreRetryFeedback(attempt) : "",
+    scoreAttempts: finalized.attempts,
+    scoreFeedback: finalized.scoreFeedback,
     // 三轮后仍未通过时，将最终导出草稿回退为最终选择版本。
-    draftMarkdown: shouldRetry
-      ? state.draftMarkdown
-      : (selected?.attempt.markdown ?? state.draftMarkdown),
+    draftMarkdown: finalized.draftMarkdown,
     todos,
   };
 }
@@ -538,12 +612,26 @@ function selectNextNodeAfterReviewerScore(
 /**
  * 根据评分门禁决定继续审核或回到草稿节点重写。
  */
-function selectNextNodeAfterScore(state: DocumentWorkflowGraphStateValue) {
+export function selectNextNodeAfterScore(
+  state: DocumentWorkflowGraphStateValue,
+): "retry" | "review" | "export" {
   const latestAttempt = state.scoreAttempts.at(-1);
   if (!latestAttempt) return "retry";
-  if (latestAttempt.passed) return "pass";
-  if (state.scoreAttempts.length >= DOCUMENT_SCORE_MAX_ATTEMPTS) return "pass";
-  return "retry";
+  const disposition = resolveDocumentScoreDisposition({
+    attempt: latestAttempt,
+    attemptCount: state.scoreAttempts.length,
+  });
+  if (disposition === "passed") return "review";
+  return disposition === "retry" ? "retry" : "export";
+}
+
+/**
+ * 将语义阻断组压缩为既有评分门禁使用的文本描述。
+ */
+function formatEvidenceBlockerGroup(
+  group: DocumentScoreAttempt["evidenceBlockerGroups"][number],
+): string {
+  return `${group.title}: ${group.description}`;
 }
 
 /**
@@ -573,6 +661,7 @@ function exportPrdNode(
   emitTodoUpdate(config, createWorkflowTodos("exportPrd"));
   const graph = requireNormalizedGraph(state);
   const selectedScoreAttempt = selectFinalScoreAttempt(state.scoreAttempts);
+  const latestScoreAttempt = state.scoreAttempts.at(-1);
   const finalMarkdown =
     selectedScoreAttempt?.attempt.markdown ?? state.draftMarkdown;
   const result: DocumentGenerationResult = {
@@ -583,6 +672,7 @@ function exportPrdNode(
     sourceGraphStats: {
       nodeCount: graph.nodes.length,
       relationCount: graph.relations.length,
+      version: graph.version,
     },
     crossCheck: state.crossCheckResult ?? {
       passed: false,
@@ -595,6 +685,12 @@ function exportPrdNode(
       selectedAttempt: selectedScoreAttempt?.attempt.attempt ?? 1,
       finalScore: selectedScoreAttempt?.attempt.aggregate.score ?? 0,
       passed: selectedScoreAttempt?.attempt.passed ?? false,
+      disposition: latestScoreAttempt
+        ? resolveDocumentScoreDisposition({
+            attempt: latestScoreAttempt,
+            attemptCount: state.scoreAttempts.length,
+          })
+        : "export_best_attempt",
       selectionReason: selectedScoreAttempt?.reason ?? "highest_score",
       attempts: state.scoreAttempts.map((attempt) => ({
         attempt: attempt.attempt,
@@ -604,6 +700,10 @@ function exportPrdNode(
         varianceAccepted: attempt.varianceAccepted,
         aggregate: attempt.aggregate,
         passed: attempt.passed,
+        evidenceBlocked: attempt.evidenceBlocked,
+        evidenceBlockers: attempt.evidenceBlockers,
+        evidenceBlockerGroups: attempt.evidenceBlockerGroups,
+        evidenceBlockerGroupingStatus: attempt.evidenceBlockerGroupingStatus,
         selected: selectedScoreAttempt?.attempt.attempt === attempt.attempt,
       })),
     },
@@ -668,6 +768,7 @@ const WORKFLOW_TODO_STAGES: DocumentWorkflowStage[] = [
   "draftSection",
   "crossCheck",
   "scoreDraft",
+  "groupEvidenceBlockers",
   "aggregateScore",
   "humanReview",
   "exportPrd",

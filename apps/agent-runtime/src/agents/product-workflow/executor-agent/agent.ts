@@ -19,6 +19,7 @@
  */
 
 import {
+  type AgentRuntimeTool,
   type ExecutorAgentResult,
   type TaskExecutionNode,
   type KnowledgeGraphEntity,
@@ -64,8 +65,62 @@ const STRUCTURED_TOOL_NAMES = new Set([
   "kg_file_add_risks",
   "kg_file_add_open_questions",
 ]);
+const STRUCTURED_WRITE_FAILURE_PREFIXES = [
+  "unauthorized_entity_type:",
+  "unauthorized_relation_type:",
+  "invalid_relation_direction:",
+  "missing_relation_",
+  "missing_deprecation_target",
+  "missing_active_replacement_node",
+  "source_task_id_mismatch",
+] as const;
 
 const BLOCKER_TOOL_NAME = "kg_file_raise_blocker";
+const REQUIRED_STRUCTURED_WRITE_ERROR =
+  "required-structured-write-not-invoked";
+export const EXECUTOR_CORRECTION_TOOL_CALL_LIMIT = 8;
+
+/**
+ * 判断当前调用是否为受限修正尝试；手动重试从第一次调用起即属于修正模式。
+ */
+export function isExecutorCorrectionAttempt(
+  attempt: number,
+  externalCorrection: boolean,
+): boolean {
+  return externalCorrection || attempt > 1;
+}
+
+/** 外部确认的修正本身已经是修正机会，不再嵌套第二次模型重试。 */
+export function getExecutorMaxAttempts(externalCorrection: boolean): number {
+  return externalCorrection ? 1 : 2;
+}
+
+/** 纯孤立证据修正禁止创建节点，但保留关系写入和受控废弃能力。 */
+export function restrictExecutorCorrectionToolNames(
+  toolNames: AgentRuntimeTool[],
+  forbidNewEvidence: boolean,
+): AgentRuntimeTool[] {
+  return forbidNewEvidence
+    ? toolNames.filter((toolName) => toolName !== "kg_file_add_nodes")
+    : toolNames;
+}
+
+/**
+ * 判断失败是否还能通过原任务重放修复；历史 OpenQuestion 缺失可由新增幂等关闭能力修复。
+ */
+export function isSameTaskExecutorRetryable(details: string): boolean {
+  if (!details.includes("missing_deprecation_target")) return true;
+
+  const missingTargetIds = [
+    ...details.matchAll(
+      /(?:^|[\s,])([^,:\s]+):missing_deprecation_target(?=$|[\s,])/g,
+    ),
+  ].map((match) => match[1]);
+  return (
+    missingTargetIds.length > 0 &&
+    missingTargetIds.every((targetId) => targetId?.startsWith("OQ-"))
+  );
+}
 
 /**
  * Executor 上报的硬阻塞信息，用于由 Conversation Agent 释放 HITL 表单。
@@ -163,11 +218,34 @@ export async function* streamExecutorAgent(
   const webSearchEvidenceRegistry = createWebSearchEvidenceRegistry();
   // 手动迭代生成器以在透传事件给上游的同时收集结构化数据。
   let patch = "";
-  let retryInstruction = input.retryInstruction ?? "";
+  let retryInstruction =
+    input.retryInstruction ?? input.correctionInstruction ?? "";
+  const manualRetry = Boolean(input.retryInstruction?.trim());
+  const critiqueCorrection = Boolean(input.correctionInstruction?.trim());
+  const externalCorrection = manualRetry || critiqueCorrection;
+  const maxAttempts = getExecutorMaxAttempts(externalCorrection);
+  // 外部 correction 仍只有一次真实执行机会；仅当第一次完全没有调用写入工具时，
+  // 才允许一次不增加工具预算的纯空执行修正。
+  const runAttemptLimit = externalCorrection ? maxAttempts + 1 : maxAttempts;
   const attemptErrors: string[] = [];
+  const persistedNumericGap =
+    input.documentEvidenceResolution && manualRetry
+      ? createDocumentEvidenceNumericInputRequired({
+          details: retryInstruction,
+          task: input.task,
+          agentType: definition.agentType,
+          displayName: definition.displayName,
+          knowledgeGraph: input.knowledgeGraph,
+        })
+      : null;
+  if (persistedNumericGap) throw persistedNumericGap;
   try {
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
+    for (let attempt = 1; attempt <= runAttemptLimit; attempt += 1) {
       // 重试时基于同一工作副本继续执行，保留首次已完成的工具写入。
+      const correctionAttempt = isExecutorCorrectionAttempt(
+        attempt,
+        externalCorrection,
+      );
       const graphContextSummary = createGraphContextSummary(toolKnowledgeGraph);
       const recentNodeIds = new Set(
         graphContextSummary.recent_nodes.map((node) => node.id),
@@ -178,14 +256,18 @@ export async function* streamExecutorAgent(
         previousResults: input.previousResults,
         excludeNodeIds: recentNodeIds,
       });
+      const selectedToolNames = correctionAttempt
+        ? getExecutorRetryToolNames(input.plan.status === "supplement")
+        : getExecutorDefaultToolNames(
+            definition.agentType,
+            input.plan.status === "supplement",
+          );
       const tools = createToolsForAgent(
         definition.agentType,
-        attempt > 1
-          ? getExecutorRetryToolNames(input.plan.status === "supplement")
-          : getExecutorDefaultToolNames(
-              definition.agentType,
-              input.plan.status === "supplement",
-            ),
+        restrictExecutorCorrectionToolNames(
+          selectedToolNames,
+          input.forbidNewEvidence === true,
+        ),
         {
           knowledgeGraph: toolKnowledgeGraph,
           allowedEntityTypes: definition.allowedEntityTypes,
@@ -193,6 +275,8 @@ export async function* streamExecutorAgent(
           requiredBlockingOpenQuestionCount:
             input.task.required_open_question_count ?? 0,
           allowNodeDeprecation: input.plan.status === "supplement",
+          allowRiskDeprecation: input.documentEvidenceResolution === true,
+          allowOpenQuestionDeprecation: input.plan.status === "supplement",
           sourceTaskId: input.task.task_id,
           userInput: input.userInput,
           webSearchEvidenceRegistry,
@@ -207,6 +291,8 @@ export async function* streamExecutorAgent(
           maxTokens: 16384,
           timeout: 60_000,
         },
+        modelProfile: input.modelProfile,
+        modelGroup: "executors",
         systemPrompt: createExecutorAgentPrompt(definition),
         tools,
         skills: skillBundle.sources,
@@ -217,7 +303,16 @@ export async function* streamExecutorAgent(
             "No product context provided.",
           graph_context_summary: graphContextSummary,
           task_relevant_context: taskRelevantContext,
+          ...(input.correctionTargetNodeIds?.length
+            ? {
+                correction_target_context: createCorrectionTargetContext(
+                  toolKnowledgeGraph,
+                  input.correctionTargetNodeIds,
+                ),
+              }
+            : {}),
           user_input: input.userInput,
+          valid_user_input_indexes: input.userInput.map((item) => item.index),
           task: input.task,
           ...(retryInstruction
             ? {
@@ -230,11 +325,13 @@ export async function* streamExecutorAgent(
         suppressFallbackReasoning: true,
         signal: input.signal,
         throwOnError: true,
-        getToolResultError: (toolName, toolResult) =>
-          STRUCTURED_TOOL_NAMES.has(toolName) &&
-          isNodeProvenanceValidationFailure(toolResult)
-            ? new Error(getErrorMessage(toolResult))
-            : null,
+        requiredSuccessfulToolNames: correctionAttempt
+          ? STRUCTURED_TOOL_NAMES
+          : undefined,
+        toolCallRunLimit: correctionAttempt
+          ? EXECUTOR_CORRECTION_TOOL_CALL_LIMIT
+          : undefined,
+        getToolResultError: getStructuredWriteError,
       });
 
       try {
@@ -254,16 +351,6 @@ export async function* streamExecutorAgent(
               toolResult: event.toolResult,
             });
           }
-          if (
-            event.type === "tool-result" &&
-            STRUCTURED_TOOL_NAMES.has(event.toolName)
-          ) {
-            // 结构化写入工具完成后立即发出累计图谱快照，避免后续中断丢失已完成工具产物。
-            yield {
-              type: "knowledge-graph-update",
-              knowledgeGraph: cloneKnowledgeGraph(toolKnowledgeGraph),
-            };
-          }
           genResult = await textGen.next();
         }
         patch = genResult.value;
@@ -272,11 +359,46 @@ export async function* streamExecutorAgent(
           throw error;
         }
         attemptErrors.push(getErrorMessage(error));
-        if (attempt === 1 && isNodeProvenanceValidationFailure(error)) {
-          retryInstruction = createNodeProvenanceRetryInstruction(
+        const numericInputRequired = input.documentEvidenceResolution
+          ? createDocumentEvidenceNumericInputRequired({
+              details: error,
+              task: input.task,
+              agentType: definition.agentType,
+              displayName: definition.displayName,
+              knowledgeGraph: input.knowledgeGraph,
+            })
+          : null;
+        if (numericInputRequired) throw numericInputRequired;
+        if (
+          shouldRetryEmptyExternalCorrection(
+            externalCorrection,
+            attempt,
             error,
-            webSearchEvidenceRegistry,
-          );
+          )
+        ) {
+          retryInstruction = [
+            "Your previous correction response called no structured graph write tool.",
+            "This is the only no-op correction retry. Call the minimum required write tool immediately; do not describe future work.",
+          ].join(" ");
+          yield {
+            type: "reasoning",
+            agentType: definition.agentType,
+            content: `${definition.displayName} 未执行任何结构化写入，正在进行唯一一次空执行修正。\n`,
+          };
+          continue;
+        }
+        if (
+          attempt < maxAttempts &&
+          (isNodeProvenanceValidationFailure(error) ||
+            isStructuredWriteValidationFailure(error))
+        ) {
+          retryInstruction = isNodeProvenanceValidationFailure(error)
+            ? createNodeProvenanceRetryInstruction(
+                error,
+                webSearchEvidenceRegistry,
+                input.userInput.map((item) => item.index),
+              )
+            : createStructuredWriteRetryInstruction(error);
           yield {
             type: "reasoning",
             agentType: definition.agentType,
@@ -303,23 +425,17 @@ export async function* streamExecutorAgent(
         requiredBlockingCount,
       });
       if (!validationError) break;
-      if (attempt === 2) {
+      if (attempt === maxAttempts) {
         throw new Error(
           `Executor output validation failed after retry: ${validationError}`,
         );
       }
 
-      retryInstruction = [
-        "The previous attempt failed executor output validation. This is the only retry and exposes write tools only; do not repeat research or analysis.",
-        !hasStructuredItems
-          ? "Write the minimum required graph items immediately."
-          : "",
-        blockingQuestionCount < requiredBlockingCount
-          ? `Persist at least ${requiredBlockingCount} new open questions with blocking=true in one kg_file_add_open_questions call; currently ${blockingQuestionCount} are committed.`
-          : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
+      retryInstruction = createOutputValidationRetryInstruction({
+        hasStructuredItems,
+        blockingQuestionCount,
+        requiredBlockingCount,
+      });
       attemptErrors.push(retryInstruction);
 
       yield {
@@ -335,11 +451,15 @@ export async function* streamExecutorAgent(
     if (isAbortError(error) || isExecutorRetryRequiredError(error)) {
       throw error;
     }
+    const attemptSummary = formatExecutorAttemptErrors(attemptErrors, error);
     throw new ExecutorRetryRequiredError({
       taskId: input.task.task_id,
       agentType: definition.agentType,
       displayName: definition.displayName,
-      details: formatExecutorAttemptErrors(attemptErrors, error),
+      details: appendMissingEndpointRecoveryGuidance(
+        attemptSummary,
+        toolKnowledgeGraph,
+      ),
     });
   }
   const graphDelta = getKnowledgeGraphDelta(
@@ -364,6 +484,49 @@ export async function* streamExecutorAgent(
     risks: graphDelta.risks,
     openQuestions: graphDelta.open_questions,
   });
+}
+
+/**
+ * 为定点修正提供目标节点及其一跳关系，避免 Executor 重复执行全图查询。
+ */
+function createCorrectionTargetContext(
+  knowledgeGraph: ProductKnowledgeGraph,
+  targetNodeIds: string[],
+) {
+  const targetIdSet = new Set(targetNodeIds);
+  const relations = knowledgeGraph.relations.filter(
+    (relation) =>
+      targetIdSet.has(relation.source) || targetIdSet.has(relation.target),
+  );
+  const relatedIds = new Set([
+    ...targetNodeIds,
+    ...relations.flatMap((relation) => [relation.source, relation.target]),
+  ]);
+  return {
+    nodes: knowledgeGraph.entities.filter((entity) => relatedIds.has(entity.id)),
+    relations,
+  };
+}
+
+/**
+ * 当失败包含缺失关系端点时，在详情中追加确定性的自愈指引与当前图谱实体 ID 样本。
+ *
+ * 该文本会随持久化错误进入手动重试卡片与 correction 指令，
+ * 使重试具备「核实并用正确 ID 改写」的完整信息，不再盲写同一错误端点。
+ */
+export function appendMissingEndpointRecoveryGuidance(
+  details: string,
+  knowledgeGraph: ProductKnowledgeGraph,
+): string {
+  if (!details.includes("missing_relation_endpoint")) return details;
+  const knownIds = knowledgeGraph.entities
+    .map((entity) => entity.id)
+    .slice(0, 20);
+  return [
+    details,
+    `Known entity ID sample from the current graph (first ${knownIds.length}): ${knownIds.join(", ") || "(empty)"}`,
+    "On retry, verify referenced IDs with kg_file_query_nodes and use the exact persisted IDs from the graph; if a node must be created first, create it and use its returned ID.",
+  ].join("\n");
 }
 
 /**
@@ -518,12 +681,191 @@ export function isNodeProvenanceValidationFailure(error: unknown): boolean {
   return getErrorMessage(error).includes("Node provenance validation failed:");
 }
 
+/** 判断 correction mode 是否只返回了承诺文本而没有成功执行写入工具。 */
+export function isRequiredStructuredWriteMissing(error: unknown): boolean {
+  return getErrorMessage(error).includes(REQUIRED_STRUCTURED_WRITE_ERROR);
+}
+
+/** 仅允许外部 correction 的第一次纯空执行获得一次定向重试。 */
+export function shouldRetryEmptyExternalCorrection(
+  externalCorrection: boolean,
+  attempt: number,
+  error: unknown,
+): boolean {
+  return (
+    externalCorrection &&
+    attempt === 1 &&
+    isRequiredStructuredWriteMissing(error)
+  );
+}
+
+/** 从当前及历史 provenance 错误中提取未被用户输入支持的精确数值声明。 */
+export function extractUnsupportedNumericClaims(error: unknown): string[] {
+  const claims = [...getErrorMessage(error).matchAll(
+    /unsupported_numeric_claims:([^;\r\n]*?)(?=\s+\|\s+Attempt\s+\d+:|;|$)/g,
+  )].flatMap((match) =>
+    (match[1] ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+  return [...new Set(claims)];
+}
+
+/**
+ * 将 Document 补证中的精确数值来源缺口提升为定点 HITL。
+ *
+ * 候选图谱值仅展示在表单说明中；用户必须在答案中重新写出并明确确认，
+ * 从而避免 QuestionForm 标签本身被错误计入 user_input provenance。
+ */
+export function createDocumentEvidenceNumericInputRequired({
+  details,
+  task,
+  agentType,
+  displayName,
+  knowledgeGraph,
+}: {
+  details: unknown;
+  task: TaskExecutionNode;
+  agentType: ExecutorAgentType;
+  displayName: string;
+  knowledgeGraph: ProductKnowledgeGraph;
+}): ExecutorHumanInputRequiredError | null {
+  const claims = extractUnsupportedNumericClaims(details);
+  if (claims.length === 0) return null;
+
+  const taskText = JSON.stringify(task);
+  const normalizedClaims = claims.map(normalizeExactClaim);
+  const candidateNodeIds = knowledgeGraph.entities
+    .filter((node) => {
+      if (node.status === "deprecated" || !taskText.includes(node.id)) {
+        return false;
+      }
+      const nodeText = normalizeExactClaim(`${node.name} ${node.description}`);
+      return normalizedClaims.some((claim) => nodeText.includes(claim));
+    })
+    .map((node) => node.id);
+  const candidateSummary = candidateNodeIds.length
+    ? `关联候选节点：${candidateNodeIds.join(", ")}；候选值：${claims.join(", ")}。`
+    : `待确认候选值：${claims.join(", ")}。`;
+
+  return new ExecutorHumanInputRequiredError({
+    taskId: task.task_id,
+    agentType,
+    displayName,
+    category: "hard_conflict",
+    title: "性能实测数值尚未得到用户确认",
+    details: `${candidateSummary}关联图谱中的候选值不能单独作为本次实测证据。`,
+    neededUserInput:
+      "请填写 p95、p99、冲突率、锚点漂移率的具体值及监控/日志来源；如采用上方候选基线，请在答案中完整写出四项数值并明确确认采用。",
+  });
+}
+
+/** 对精确数值及单位做最小归一化，仅用于候选节点 ID 的确定性定位。 */
+function normalizeExactClaim(value: string): string {
+  return value.normalize("NFKC").toLowerCase().replace(/\s+/g, "");
+}
+
+/**
+ * 将结构化写工具的不可接受跳过项提升为一次本地修正。
+ */
+export function getStructuredWriteError(
+  toolName: string,
+  toolResult: unknown,
+): Error | null {
+  if (!STRUCTURED_TOOL_NAMES.has(toolName)) return null;
+  if (isNodeProvenanceValidationFailure(toolResult)) {
+    return new Error(getErrorMessage(toolResult));
+  }
+  const result = parseStructuredToolResult(toolResult);
+  const failures = result?.skipped?.filter((item) =>
+    STRUCTURED_WRITE_FAILURE_PREFIXES.some((prefix) =>
+      item.reason.startsWith(prefix),
+    ),
+  );
+  return failures?.length
+    ? new Error(
+        `Structured graph write validation failed: ${failures
+          .map((item) => `${item.id}:${item.reason}`)
+          .join(", ")}`,
+      )
+    : null;
+}
+
+/** 判断异常是否为结构化图谱写入校验失败。 */
+export function isStructuredWriteValidationFailure(error: unknown): boolean {
+  return getErrorMessage(error).includes(
+    "Structured graph write validation failed:",
+  );
+}
+
+/**
+ * 构造输出校验失败后的唯一一次原地重试指令。
+ *
+ * 重试仍提供只读图谱查询工具，要求先核实引用的节点 ID 再写最小结构化条目，
+ * 避免在「任务引用 ID 已失效/笔误」时把同一错误写入重复执行。
+ */
+export function createOutputValidationRetryInstruction({
+  hasStructuredItems,
+  blockingQuestionCount,
+  requiredBlockingCount,
+}: {
+  hasStructuredItems: boolean;
+  blockingQuestionCount: number;
+  requiredBlockingCount: number;
+}): string {
+  return [
+    "The previous attempt failed executor output validation. This is the only retry and exposes write tools plus read-only graph queries; verify every referenced node ID with kg_file_query_nodes before writing the minimum items.",
+    !hasStructuredItems
+      ? "Write the minimum required graph items immediately."
+      : "",
+    blockingQuestionCount < requiredBlockingCount
+      ? `Persist at least ${requiredBlockingCount} new open questions with blocking=true in one kg_file_add_open_questions call; currently ${blockingQuestionCount} are committed.`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/** 为唯一一次原地修正提供精确的失败原因与核实指引。 */
+export function createStructuredWriteRetryInstruction(error: unknown): string {
+  return [
+    "The previous graph write was partially rejected. This is the only local correction attempt; keep all successful writes and verify each rejected endpoint with kg_file_query_nodes before rewriting.",
+    `Validation error: ${getErrorMessage(error)}`,
+    "Immediately rewrite only the rejected items using authorized entity and relation types, valid typed directions, and the exact persisted endpoint IDs found via kg_file_query_nodes. Do not merely describe the correction.",
+  ].join(" ");
+}
+
+/** 兼容工具运行时返回对象或 JSON 字符串。 */
+function parseStructuredToolResult(
+  value: unknown,
+): { skipped?: Array<{ id: string; reason: string }> } | null {
+  const parsed = typeof value === "string" ? parseJsonObject(value) : value;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const skipped = (parsed as { skipped?: unknown }).skipped;
+  if (!Array.isArray(skipped)) return {};
+  return {
+    skipped: skipped.filter(
+      (item): item is { id: string; reason: string } =>
+        Boolean(
+          item &&
+            typeof item === "object" &&
+            typeof (item as { id?: unknown }).id === "string" &&
+            typeof (item as { reason?: unknown }).reason === "string",
+        ),
+    ),
+  };
+}
+
 /**
  * 用本轮真实搜索来源构造唯一一次本地修正指令。
  */
 export function createNodeProvenanceRetryInstruction(
   error: unknown,
   registry: ReturnType<typeof createWebSearchEvidenceRegistry>,
+  validUserInputIndexes: number[] = [],
 ): string {
   const verifiedSources = [...registry.sources.values()].sort(
     (left, right) =>
@@ -533,8 +875,9 @@ export function createNodeProvenanceRetryInstruction(
   return [
     "The previous graph write failed node provenance validation. This is the only local correction attempt; do not repeat web research.",
     `Validation error: ${getErrorMessage(error)}`,
+    `Valid user_input indexes from this payload: ${JSON.stringify(validUserInputIndexes)}. These are payload indexes, not question ordinals or blocker indexes. If the rejected fact came from a submitted form answer, keep the Evidence and rewrite its provenance with the exact matching index from this list.`,
     `Verified web sources from this run: ${JSON.stringify(verifiedSources)}`,
-    "Rewrite invalid Evidence with an exact sourceId, title, and URL from this list. If no listed source supports a claim, omit that Evidence and record the uncertainty as a Risk or unverified assumption.",
+    "For web-backed Evidence, rewrite provenance with an exact sourceId, title, and URL from this list. If neither submitted user input nor a listed source supports a claim, omit that Evidence and record the uncertainty as a Risk or unverified assumption.",
     "For unsupported_infrastructure_scope, omit the rejected infrastructure detail and record it as a Risk or open question unless the exact scope appears in user input.",
   ].join(" ");
 }

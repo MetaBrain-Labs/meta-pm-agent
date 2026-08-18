@@ -16,9 +16,10 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { AIMessage, ToolMessage } from "langchain";
+import { AIMessage, AIMessageChunk, ToolMessage } from "langchain";
 import {
   createAgentRunSummaryRecorder,
+  createNamedToolCallExtractor,
   createSubagentTaskCallExtractor,
   type AgentRunSummaryRecorder,
 } from "../src/agents/common/agent-run-summary";
@@ -84,6 +85,11 @@ test("writes enabled summary sections as markdown after finish", async () => {
           agentLabel: "Test Agent",
           agentName: "test-agent",
           agentType: "test",
+          model: {
+            profileName: "测试模型列表",
+            modelId: "deepseek-v4-pro",
+            pricingCnyPerMillionTokens: { outputPricePerMillion: 6 },
+          },
           context: {
             payload: { request: "build" },
             systemPrompt: "## System Title\n\n- Follow the supplied context.",
@@ -135,7 +141,7 @@ test("writes enabled summary sections as markdown after finish", async () => {
             validation_report: {
               issues: [],
               semantic_integrity: {
-                uncovered_user_input_indexes: [],
+                stale_deprecated_downstream_node_ids: [],
               },
             },
             knowledge_graph_update: {
@@ -160,6 +166,8 @@ test("writes enabled summary sections as markdown after finish", async () => {
           "utf8",
         );
         assert.match(markdown, /# Agent Run Summary/);
+        assert.match(markdown, /## Model Configuration/);
+        assert.match(markdown, /deepseek-v4-pro/);
         assert.match(markdown, /## 1\. Agent 思考过程汇总/);
         assert.match(markdown, /## 2\. Agent 工具调用汇总/);
         assert.match(markdown, /## 3\. Agent 接收上下文汇总/);
@@ -423,6 +431,77 @@ test("extracts streamed raw task tool call arguments from additional kwargs", ()
     String(calls[0].input.description),
     /设计一个文档协同工具/,
   );
+});
+
+test("extracts streamed task arguments from LangChain tool_call_chunks", () => {
+  const extractor = createSubagentTaskCallExtractor();
+  const messages = [
+    new AIMessageChunk({
+      content: "",
+      tool_call_chunks: [
+        {
+          index: 0,
+          id: "call_chunked_task",
+          name: "task",
+          args: '{"description":"review draft",',
+        },
+      ],
+    }),
+    new AIMessageChunk({
+      content: "",
+      tool_call_chunks: [
+        {
+          index: 0,
+          args: '"subagent_type":"prd-consistency-reviewer"}',
+        },
+      ],
+    }),
+  ];
+
+  const calls = messages.flatMap((message) => extractor.extract(message));
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].toolCallId, "call_chunked_task");
+  assert.equal(calls[0].subagentType, "prd-consistency-reviewer");
+  assert.equal(calls[0].input.description, "review draft");
+});
+
+test("extracts virtual skill reads without exposing partial arguments", () => {
+  const extractor = createNamedToolCallExtractor(
+    "read_file",
+    (input) =>
+      typeof input.file_path === "string" &&
+      input.file_path.startsWith("/skills/") &&
+      input.file_path.endsWith("/SKILL.md"),
+  );
+  const messages = [
+    new AIMessageChunk({
+      content: "",
+      tool_call_chunks: [
+        {
+          index: 0,
+          id: "call_skill_read",
+          name: "read_file",
+          args: '{"file_path":"/skills/deliver-',
+        },
+      ],
+    }),
+    new AIMessageChunk({
+      content: "",
+      tool_call_chunks: [
+        {
+          index: 0,
+          args: 'prd/SKILL.md","limit":100}',
+        },
+      ],
+    }),
+  ];
+
+  const calls = messages.flatMap((message) => extractor.extract(message));
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].toolCallId, "call_skill_read");
+  assert.equal(calls[0].input.file_path, "/skills/deliver-prd/SKILL.md");
 });
 
 /**

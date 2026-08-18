@@ -7,7 +7,7 @@
  * Responsibilities:
  * - 覆盖 Critique Agent 结构化 proposal_questions 的去重
  * - 覆盖旧版 Executor open_questions 降级表单的去重
- * - 校验来源 help 文案仍保留所有相关 Executor/task
+ * - 校验阻断问题资料通过 Modal 展示且不暴露内部来源
  */
 
 import { test } from "node:test";
@@ -17,6 +17,7 @@ import type {
   ProductWorkflowResult,
 } from "@repo/shared";
 import {
+  formatProductWorkflowCorrectionQuestionForm,
   formatProductWorkflowConfirmationQuestionForm,
   formatProductWorkflowProposalQuestionForm,
 } from "../src/agents/product-workflow/agent";
@@ -24,14 +25,17 @@ import { reconcileProposalQuestions } from "../src/agents/product-workflow/criti
 import { isAcceptedWorkflowResult } from "../src/agents/conversation/stream";
 import {
   isProductWorkflowAcceptanceAnswer,
+  isProductWorkflowCorrectionRetryAnswer,
   isProductWorkflowOptionalStopAnswer,
+  isProductWorkflowStopWithIssuesAnswer,
 } from "../src/utils/form-parser";
 
-test("uses final confirmation when retry has no proposal question", () => {
+test("uses a correction decision when retry has no proposal question", () => {
   const result = createWorkflowResult({
     proposalQuestions: [],
     executorResults: [],
   });
+  result.status = "requires_executor_retry";
   result.review.retry_task_ids = ["task-01"];
   result.review.issues = [
     {
@@ -44,9 +48,24 @@ test("uses final confirmation when retry has no proposal question", () => {
 
   assert.equal(isAcceptedWorkflowResult(result), false);
   assert.equal(formatProductWorkflowProposalQuestionForm(result), null);
-  assert.match(
-    formatProductWorkflowConfirmationQuestionForm(result),
-    /id="product-workflow-confirmation"/,
+  const form = formatProductWorkflowCorrectionQuestionForm(result);
+  assert.match(form, /title="审查错误处理"/);
+  assert.match(form, /生成补充修正任务/);
+  assert.match(form, /停止并保留问题结果/);
+});
+
+test("recognizes explicit Critique correction control actions", () => {
+  assert.equal(
+    isProductWorkflowCorrectionRetryAnswer(
+      "[form answers - review-proposal-decision]\n- 请选择如何处理审查错误？: 生成补充修正任务",
+    ),
+    true,
+  );
+  assert.equal(
+    isProductWorkflowStopWithIssuesAnswer(
+      "[form answers - review-proposal-decision]\n- 请选择如何处理审查错误？: 停止并保留问题结果",
+    ),
+    true,
   );
 });
 
@@ -67,6 +86,31 @@ test("uses a supplement form when a graph blocking question remains", () => {
   assert.match(form ?? "", /title="补充信息确认"/);
   assert.match(form ?? "", /OQ-deployment/);
   assert.doesNotMatch(form ?? "", /设计结果确认/);
+});
+
+test("does not restore resolved graph questions into the proposal form", () => {
+  const result = createWorkflowResult({
+    proposalQuestions: [],
+    executorResults: [],
+  });
+  result.knowledge_graph_update.open_questions = [
+    {
+      id: "OQ-resolved",
+      text: "确认部署环境？",
+      blocking: true,
+    },
+  ];
+  result.knowledge_graph_update.resolved_open_question_ids = ["OQ-resolved"];
+
+  assert.deepEqual(
+    reconcileProposalQuestions(
+      [],
+      [],
+      result.knowledge_graph_update,
+      result.planner,
+    ),
+    [],
+  );
 });
 
 test("allows warning-only completion and recognizes explicit acceptance", () => {
@@ -144,6 +188,10 @@ test("rejects fabricated question sources and restores actual blocking questions
     questions.some((question) => question.id === "fabricated"),
     false,
   );
+  assert.equal(
+    questions.every((question) => question.help?.includes("当前已知资料：")),
+    true,
+  );
 });
 
 test("merges duplicate planner proposal questions and preserves sources", () => {
@@ -156,6 +204,7 @@ test("merges duplicate planner proposal questions and preserves sources", () => 
             label: "请确认首批目标用户是谁？",
             type: "textarea",
             required: true,
+            help: "当前已知资料：首批目标用户尚未确定。\n阻断原因：目标用户会影响 MVP 范围。",
             source_task_id: "task-01",
             source_agent: "executor-product-strategy",
             sources: [
@@ -189,11 +238,10 @@ test("merges duplicate planner proposal questions and preserves sources", () => 
 
   assert.equal(form.questions.length, 1);
   assert.equal(form.questions[0]?.label, "请确认首批目标用户是谁？");
-  assert.match(
-    form.questions[0]?.help ?? "",
-    /executor-product-strategy \/ task-01/,
-  );
-  assert.match(form.questions[0]?.help ?? "", /executor-gtm \/ task-02/);
+  assert.match(form.questions[0]?.help ?? "", /首批目标用户尚未确定/);
+  assert.equal(form.questions[0]?.helpMode, "modal");
+  assert.equal(form.questions[0]?.collapsible, false);
+  assert.doesNotMatch(form.questions[0]?.help ?? "", /executor-|task-/);
 });
 
 test("merges legacy executor open questions by actual question text", () => {
@@ -217,11 +265,11 @@ test("merges legacy executor open questions by actual question text", () => {
 
   assert.equal(form.questions.length, 1);
   assert.equal(form.questions[0]?.label, "请确认首批目标用户是谁？");
-  assert.match(
-    form.questions[0]?.help ?? "",
-    /executor-product-strategy \/ task-01/,
-  );
-  assert.match(form.questions[0]?.help ?? "", /executor-gtm \/ task-02/);
+  assert.match(form.questions[0]?.help ?? "", /当前已知资料：/);
+  assert.match(form.questions[0]?.help ?? "", /阻断原因：/);
+  assert.equal(form.questions[0]?.helpMode, "modal");
+  assert.equal(form.questions[0]?.collapsible, false);
+  assert.doesNotMatch(form.questions[0]?.help ?? "", /executor-|task-/);
 });
 
 test("shows blocking and optional questions in one mixed form", () => {
@@ -248,6 +296,15 @@ test("shows blocking and optional questions in one mixed form", () => {
   assert.equal(
     form.questions.filter((question) => question.defaultCollapsed).length,
     7,
+  );
+  assert.equal(
+    form.questions
+      .filter((question) => question.required)
+      .every(
+        (question) =>
+          question.helpMode === "modal" && question.collapsible === false,
+      ),
+    true,
   );
   assert.equal(form.requireAnyAnswer, undefined);
 });
@@ -291,7 +348,9 @@ interface ParsedQuestionForm {
   questions: Array<{
     label: string;
     help?: string;
+    helpMode?: "inline" | "modal";
     required?: boolean;
+    collapsible?: boolean;
     defaultCollapsed?: boolean;
   }>;
   requireAnyAnswer?: boolean;

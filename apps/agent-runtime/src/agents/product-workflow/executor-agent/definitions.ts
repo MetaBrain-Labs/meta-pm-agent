@@ -26,7 +26,7 @@ interface ExecutorAgentProfile {
   domain: string;
   focusLayer: ExecutorFocusLayer;
   graphRole: string;
-  skillSource: string;
+  webSearchEnabled: boolean;
   referencePath: string;
   allowedEntityTypes: readonly ExecutorFocusLayer[];
   allowedRelationTypes: readonly string[];
@@ -43,7 +43,7 @@ export const EXECUTOR_DEFINITIONS = [
     domain: "product-strategy",
     focusLayer: "Goal",
     graphRole: "Create and refine Goal, Decision, Requirement, and Evidence entities, establishing the top-level product causal chain.",
-    skillSource: "pm-skills/pm-product-strategy/",
+    webSearchEnabled: false,
     referencePath: "references/executor/product-strategy-executor",
     allowedEntityTypes: ["Goal", "Decision", "Requirement", "Evidence"],
     allowedRelationTypes: ["Composes", "Drives", "Produces", "References", "Validates"],
@@ -76,7 +76,7 @@ export const EXECUTOR_DEFINITIONS = [
     domain: "market-research",
     focusLayer: "Evidence",
     graphRole: "Create and refine Evidence, Requirement, Metric, and Custom research entities to support decisions with factual context.",
-    skillSource: "pm-skills/pm-market-research/",
+    webSearchEnabled: true,
     referencePath: "references/executor/market-research-executor",
     allowedEntityTypes: ["Evidence", "Requirement", "Metric", "Custom"],
     allowedRelationTypes: ["Validates", "References", "Drives", "Composes", "Measures"],
@@ -103,7 +103,7 @@ export const EXECUTOR_DEFINITIONS = [
     domain: "go-to-market",
     focusLayer: "Decision",
     graphRole: "Create and refine Decision, Component, Requirement, Metric, and Evidence entities, translating strategy into go-to-market actions.",
-    skillSource: "pm-skills/pm-go-to-market/",
+    webSearchEnabled: true,
     referencePath: "references/executor/gtm-executor",
     allowedEntityTypes: ["Decision", "Component", "Requirement", "Metric", "Evidence"],
     allowedRelationTypes: ["Drives", "Produces", "Implements", "Constrains", "Measures", "References"],
@@ -129,7 +129,7 @@ export const EXECUTOR_DEFINITIONS = [
     domain: "product-discovery",
     focusLayer: "Requirement",
     graphRole: "Create and refine Requirement, Feature, Evidence, and Metric entities, translating ambiguous intent into testable feature hypotheses.",
-    skillSource: "pm-skills/pm-product-discovery/",
+    webSearchEnabled: false,
     referencePath: "references/executor/product-discovery-executor",
     allowedEntityTypes: ["Requirement", "Feature", "Evidence", "Metric"],
     allowedRelationTypes: ["Drives", "Satisfies", "Composes", "Validates", "References", "Measures"],
@@ -162,7 +162,7 @@ export const EXECUTOR_DEFINITIONS = [
     domain: "product-execution",
     focusLayer: "Feature",
     graphRole: "Break Feature nodes into sub-features and Components, establishing an implementation hierarchy in the graph.",
-    skillSource: "pm-skills/pm-execution/",
+    webSearchEnabled: false,
     referencePath: "references/executor/product-execution-executor",
     allowedEntityTypes: [
       "Feature",
@@ -218,7 +218,7 @@ export const EXECUTOR_DEFINITIONS = [
     domain: "marketing-growth",
     focusLayer: "Metric",
     graphRole: "Create and refine Metric, Decision, and Requirement entities, establishing measurement systems and marketing-growth decision chains.",
-    skillSource: "pm-skills/pm-marketing-growth/",
+    webSearchEnabled: true,
     referencePath: "references/executor/marketing-growth-executor",
     allowedEntityTypes: ["Metric", "Decision", "Requirement"],
     allowedRelationTypes: ["Measures", "Composes", "Drives", "Produces"],
@@ -243,7 +243,7 @@ export const EXECUTOR_DEFINITIONS = [
     domain: "data-analytics",
     focusLayer: "Evidence",
     graphRole: "Create and refine Metric, Evidence, and Component entities, injecting quantitative analysis results into the knowledge graph.",
-    skillSource: "pm-skills/pm-data-analytics/",
+    webSearchEnabled: true,
     referencePath: "references/executor/data-analytics-executor",
     allowedEntityTypes: ["Evidence", "Metric", "Component"],
     allowedRelationTypes: ["Validates", "Measures", "Implements"],
@@ -262,7 +262,7 @@ export const EXECUTOR_DEFINITIONS = [
     domain: "ai-shipping",
     focusLayer: "Component",
     graphRole: "Create and refine Component and Evidence entities, filling in technical specifications, constraints, and implementation gaps.",
-    skillSource: "pm-skills/pm-ai-shipping/",
+    webSearchEnabled: true,
     referencePath: "references/executor/ai-shipping-executor",
     allowedEntityTypes: ["Component", "Evidence"],
     allowedRelationTypes: [
@@ -288,7 +288,7 @@ export const EXECUTOR_DEFINITIONS = [
     domain: "toolkit",
     focusLayer: "Custom",
     graphRole: "Handle auxiliary and compliance artifacts by creating Custom entities and a small number of Component constraint nodes.",
-    skillSource: "pm-skills/pm-toolkit/",
+    webSearchEnabled: true,
     referencePath: "references/executor/toolkit-executor",
     allowedEntityTypes: ["Component", "Custom"],
     allowedRelationTypes: ["Constrains", "Custom", "References"],
@@ -308,7 +308,7 @@ export const EXECUTOR_DEFINITIONS = [
     domain: "interface-craft",
     focusLayer: "Component",
     graphRole: "Review UI-related Component nodes, fill in craft constraints, and record evidence for anti-pattern detection.",
-    skillSource: "references/impeccable/",
+    webSearchEnabled: true,
     referencePath: "references/executor/interface-craft-executor",
     allowedEntityTypes: ["Component", "Evidence"],
     allowedRelationTypes: ["Constrains", "Implements", "Validates"],
@@ -356,7 +356,13 @@ export function isExecutorAgentType(value: string): value is ExecutorAgentType {
 export function getExecutorDefinition(
   agentType: ExecutorAgentType,
 ): ExecutorAgentDefinition {
-  return EXECUTOR_DEFINITIONS.find((item) => item.agentType === agentType)!;
+  const definition = EXECUTOR_DEFINITIONS.find(
+    (item) => item.agentType === agentType,
+  );
+  if (!definition) {
+    throw new Error(`Unknown Executor Agent type: ${agentType}`);
+  }
+  return definition;
 }
 
 /**

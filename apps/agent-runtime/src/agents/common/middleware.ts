@@ -23,14 +23,22 @@ import {
 } from "langchain";
 
 const DEFAULT_CONTEXT_EDIT_TRIGGER_TOKENS = 124_000;
-const DEFAULT_CONTEXT_EDIT_KEEP_TOOL_RESULTS = 30;
-const DEFAULT_MODEL_CALL_RUN_LIMIT = 30;
-const DEFAULT_TOOL_CALL_RUN_LIMIT = 30;
+const DEFAULT_CONTEXT_EDIT_KEEP_TOOL_RESULTS = 40;
+const DEFAULT_MODEL_CALL_RUN_LIMIT = 40;
+const DEFAULT_TOOL_CALL_RUN_LIMIT = 40;
+
+/** 单次 Agent 运行的可选中间件覆盖。 */
+export interface DefaultAgentMiddlewareOptions {
+  toolCallRunLimit?: number;
+}
 
 /**
  * 创建所有 Agent 默认共享的 LangChain middleware。
  */
-export function createDefaultAgentMiddleware(): AnyAgentMiddleware[] {
+export function createDefaultAgentMiddleware(
+  options: DefaultAgentMiddlewareOptions = {},
+): AnyAgentMiddleware[] {
+  const hasStrictToolCallLimit = options.toolCallRunLimit !== undefined;
   return [
     contextEditingMiddleware({
       edits: [
@@ -48,8 +56,8 @@ export function createDefaultAgentMiddleware(): AnyAgentMiddleware[] {
       exitBehavior: "error",
     }),
     toolCallLimitMiddleware({
-      runLimit: DEFAULT_TOOL_CALL_RUN_LIMIT,
-      exitBehavior: "continue",
+      runLimit: options.toolCallRunLimit ?? DEFAULT_TOOL_CALL_RUN_LIMIT,
+      exitBehavior: hasStrictToolCallLimit ? "error" : "continue",
     }),
   ];
 }

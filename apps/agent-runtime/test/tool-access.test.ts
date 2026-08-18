@@ -24,6 +24,7 @@ import {
   getExecutorRetryToolNames,
 } from "../src/agents/common/tool-access";
 import { filterToolsByAllowedNames } from "../src/agents/common/deep-agent-tool-policy";
+import { EXECUTOR_DEFINITIONS } from "../src/agents/product-workflow/executor-agent/definitions";
 
 test("conversation web search remains controlled by enabledTools", () => {
   assert.equal(
@@ -64,7 +65,17 @@ test("strategy executor does not receive web search by default", () => {
   assert.equal(toolNames.includes("kg_file_read"), true);
 });
 
-test("executor structured retry exposes write tools only", () => {
+test("all executor web-search capabilities come from definitions", () => {
+  for (const definition of EXECUTOR_DEFINITIONS) {
+    assert.equal(
+      getExecutorDefaultToolNames(definition.agentType).includes("web_search"),
+      definition.webSearchEnabled,
+      definition.agentType,
+    );
+  }
+});
+
+test("executor structured retry exposes write and read-only query tools", () => {
   const toolNames = createToolsForAgent(
     "executor-ai-shipping",
     getExecutorRetryToolNames(),
@@ -73,8 +84,10 @@ test("executor structured retry exposes write tools only", () => {
 
   assert.equal(toolNames.includes("kg_file_add_nodes"), true);
   assert.equal(toolNames.includes("kg_file_add_relations"), true);
+  assert.equal(toolNames.includes("kg_file_read"), true);
+  assert.equal(toolNames.includes("kg_file_query_nodes"), true);
+  assert.equal(toolNames.includes("kg_file_query_relations"), true);
   assert.equal(toolNames.includes("web_search"), false);
-  assert.equal(toolNames.includes("kg_file_read"), false);
   assert.equal(toolNames.includes("kg_file_add_summary"), false);
 });
 

@@ -12,8 +12,19 @@
  */
 
 export {
+  isAcceptedDocumentEvidenceWorkflowResult,
+  isAcceptedWorkflowResultForPurpose,
+  normalizeDocumentEvidenceWorkflowResult,
   streamConversation,
 } from "./agents/conversation/stream";
+export {
+  isSameTaskExecutorRetryable,
+} from "./agents/product-workflow/executor-agent/agent";
+export type { WorkflowPurpose } from "./agents/product-workflow/types";
+export {
+  createRecoveredRequestAnalysis,
+  resolveAnsweredGraphOpenQuestions,
+} from "./agents/conversation/workflow-resume";
 export {
   createRequestAgent,
   formatRequestAnalysisBlock,
@@ -23,6 +34,7 @@ export {
   formatProductWorkflowBlock,
   formatProductWorkflowConfirmationQuestionForm,
   formatProductWorkflowProposalQuestionForm,
+  formatProductWorkflowCorrectionQuestionForm,
   getProposalDecisionId,
 } from "./agents/product-workflow/agent";
 export {
@@ -43,8 +55,43 @@ export {
 export {
   createDocumentWorkflowThreadId,
   documentGraph,
+  selectNextNodeAfterScore,
   streamDocumentWorkflow,
 } from "./graph/document-workflow";
+export {
+  createScoreRetryFeedback,
+  DOCUMENT_SCORE_MAX_ATTEMPTS,
+  finalizeDocumentScoreAttempt,
+  resolveDocumentScoreDisposition,
+} from "./agents/document-agent/scoring";
+export {
+  collectDownstreamTaskIds,
+  packParallelExecutorTasks,
+  selectReadyTasks,
+  validateTaskDag,
+} from "./agents/product-workflow/dag";
+export {
+  classifyProductWorkflowRound,
+  type ProductWorkflowRoundType,
+} from "./agents/product-workflow/round-classification";
+export {
+  createDocumentEvidenceAnswerResult,
+  createDocumentEvidenceResolutionFormId,
+  createDocumentEvidenceResolutionThreadId,
+  formatDocumentEvidenceQuestionForm,
+  isDocumentEvidenceResolutionFormId,
+  resumeDocumentEvidenceResolutionWorkflow,
+  startDocumentEvidenceResolutionWorkflow,
+  type DocumentEvidenceAnswerResult,
+  type DocumentEvidenceResolutionWorkflowInput,
+} from "./graph/document-evidence-resolution-workflow";
+export {
+  createFallbackDocumentEvidenceResolution,
+  normalizeDocumentEvidenceResolution,
+  type DocumentEvidenceBlocker,
+  type DocumentEvidenceResolution,
+  type DocumentEvidenceResolutionInput,
+} from "./agents/product-workflow/orchestrator-agent/document-evidence-resolver-subagent";
 export type {
   DocumentWorkflowInput,
   DocumentWorkflowResult,
@@ -66,10 +113,14 @@ export type {
   ConversationStreamOptions,
   StreamChunk,
   WorkflowAnswerResolution,
+  WorkflowRecoveryContext,
 } from "./types";
 export {
   getFormAnswerId,
   isFormAnswer,
+  isProductWorkflowAcceptanceAnswer,
+  isProductWorkflowCorrectionRetryAnswer,
   isProductWorkflowOptionalStopAnswer,
+  isProductWorkflowStopWithIssuesAnswer,
 } from "./utils/form-parser";
 export { parseGraphConflictAction, isPreOrchGraphConflictFormId } from "./agents/product-workflow/orchestrator-agent/pre-orchestrator-subagent";

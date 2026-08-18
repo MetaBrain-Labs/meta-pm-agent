@@ -9,6 +9,7 @@
  * - formatExecutorResultBlock()：格式化 Executor 结果块
  * - formatProductWorkflowBlock()：格式化完整产出块
  * - formatProductWorkflowConfirmationQuestionForm / ProposalQuestionForm：生成确认表单
+ * - formatProductWorkflowCorrectionQuestionForm：生成 Critique 硬错误处理表单
  * - 聚合导出子模块（knowledge-graph、tasks、executor-agent、critique-agent）
  *
  * Notes:
@@ -128,13 +129,21 @@ export function formatProductWorkflowProposalQuestionForm(
 
   const form = {
     description: hasBlockingQuestions
-      ? "Planner SubAgent 汇总了 Executor Agent 需要你补充确认的信息。必填问题默认展开，选填问题默认折叠。"
+      ? "Planner SubAgent 汇总了需要你补充确认的信息。必填问题始终显示，可通过“查看相关资料”了解上下文；选填问题默认折叠。"
       : "以下问题均为可选优化项。你可以填写任意一项后继续下一轮 DAG，也可以选择“不再继续”并直接确认当前已有设计成果。",
-    questions: questions.map((question) => ({
-      ...question,
-      collapsible: true,
-      defaultCollapsed: hasBlockingQuestions && !question.required,
-    })),
+    questions: questions.map((question) =>
+      question.required
+        ? {
+            ...question,
+            collapsible: false,
+            helpMode: "modal",
+          }
+        : {
+            ...question,
+            collapsible: true,
+            defaultCollapsed: hasBlockingQuestions,
+          },
+    ),
     submitLabel: "提交补充信息",
     ...(!hasBlockingQuestions
       ? {
@@ -149,6 +158,53 @@ export function formatProductWorkflowProposalQuestionForm(
   return `<question-form id="${escapeAttribute(
     getProposalDecisionId(result),
   )}" title="${hasBlockingQuestions ? "补充信息确认" : "可选优化问题"}">\n${JSON.stringify(form, null, 2)}\n</question-form>`;
+}
+
+/**
+ * 生成 Critique 硬错误的显式处理表单。
+ *
+ * 用户必须先选择修正或停止；可选问题只作为修正补充，不得把硬错误降级成普通优化项。
+ */
+export function formatProductWorkflowCorrectionQuestionForm(
+  result: ProductWorkflowResult,
+): string {
+  const supplementalQuestions = getProposalFormQuestions(result).map(
+    (question) => ({
+      ...question,
+      collapsible: true,
+      defaultCollapsed: true,
+    }),
+  );
+  const form = {
+    description:
+      "Critique Agent 发现当前结果存在必须修正的错误。请选择生成补充修正任务，或停止流程并保留当前问题报告；未经确认不会继续生成 DAG。",
+    questions: [
+      {
+        id: "workflow_action",
+        label: "请选择如何处理审查错误？",
+        type: "radio",
+        required: true,
+        options: ["生成补充修正任务", "停止并保留问题结果"],
+        help: `待修正任务：${result.review.retry_task_ids?.join("、") || "未指定"}`,
+        collapsible: false,
+      },
+      ...supplementalQuestions,
+      {
+        id: "correction_notes",
+        label: "补充修正要求",
+        type: "textarea",
+        required: false,
+        placeholder: "可选：补充本轮修正需要遵守的事实或约束。",
+        collapsible: true,
+        defaultCollapsed: true,
+      },
+    ],
+    submitLabel: "提交处理决定",
+  };
+
+  return `<question-form id="${escapeAttribute(
+    getProposalDecisionId(result),
+  )}" title="审查错误处理">\n${JSON.stringify(form, null, 2)}\n</question-form>`;
 }
 
 /**
@@ -170,6 +226,25 @@ function getProposalFormQuestions(result: ProductWorkflowResult) {
  */
 function toQuestionFormQuestion(question: ProductWorkflowProposalQuestion) {
   const type = normalizeQuestionFormType(question);
+  const help =
+    question.help?.trim() ||
+    (question.required
+      ? [
+          "当前已知资料：暂无更多已确认资料。",
+          `阻断原因：${question.label}`,
+        ].join("\n")
+      : formatProposalQuestionSources(
+          question.sources.length > 0
+            ? question.sources
+            : question.source_task_id && question.source_agent
+              ? [
+                  {
+                    source_task_id: question.source_task_id,
+                    source_agent: question.source_agent,
+                  },
+                ]
+              : [],
+        ));
 
   return {
     id: question.id,
@@ -181,20 +256,7 @@ function toQuestionFormQuestion(question: ProductWorkflowProposalQuestion) {
       : {}),
     ...(question.placeholder ? { placeholder: question.placeholder } : {}),
     ...(question.maxSelections ? { maxSelections: question.maxSelections } : {}),
-    help:
-      question.help ??
-      formatProposalQuestionSources(
-        question.sources.length > 0
-          ? question.sources
-          : question.source_task_id && question.source_agent
-            ? [
-                {
-                  source_task_id: question.source_task_id,
-                  source_agent: question.source_agent,
-                },
-              ]
-            : [],
-      ),
+    ...(help ? { help } : {}),
   };
 }
 

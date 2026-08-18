@@ -15,6 +15,7 @@
 
 import { randomUUID } from "node:crypto";
 import { prisma } from "@repo/database";
+import { DocumentScoreAttemptSchema } from "@repo/shared";
 import type {
   DocumentGenerationResult,
   DocumentGenerationStatus,
@@ -157,7 +158,7 @@ export async function getActiveDocumentGenerationRun(
     FROM "document_generation_run"
     WHERE "workspace_id" = ${workspaceId}
       AND "kind" = ${kind}
-      AND "status" IN ('queued', 'running')
+      AND "status" IN ('queued', 'running', 'awaiting_input')
     ORDER BY "created_at" DESC
     LIMIT 1
   `;
@@ -217,6 +218,43 @@ export async function getDocumentArtifactByRunId(
 }
 
 /**
+ * 为等待补充证据的旧 artifact 补齐源图谱版本，并返回最终保存的版本。
+ *
+ * 已存在的版本不会被覆盖，避免改变历史生成基线。
+ */
+export async function ensureDocumentArtifactSourceGraphVersion({
+  runId,
+  workspaceId,
+  sourceGraphVersion,
+}: {
+  runId: string;
+  workspaceId: string;
+  sourceGraphVersion: number;
+}): Promise<number | undefined> {
+  await prisma.$executeRaw`
+    UPDATE "document_artifact" AS artifact
+    SET
+      "content_json" = jsonb_set(
+        artifact."content_json",
+        '{sourceGraphStats,version}',
+        to_jsonb(${sourceGraphVersion}::integer),
+        true
+      ),
+      "updated_at" = CURRENT_TIMESTAMP
+    FROM "document_generation_run" AS run
+    WHERE artifact."run_id" = run."id"
+      AND run."id" = ${runId}
+      AND run."workspace_id" = ${workspaceId}
+      AND run."status" = 'awaiting_input'
+      AND jsonb_typeof(artifact."content_json"->'sourceGraphStats') = 'object'
+      AND artifact."content_json"#>>'{sourceGraphStats,version}' IS NULL
+  `;
+
+  const artifact = await getDocumentArtifactByRunId(runId);
+  return artifact?.content?.sourceGraphStats.version;
+}
+
+/**
  * 将 run 标记为运行中，并写入当前阶段。
  */
 export async function markDocumentGenerationRunRunning({
@@ -236,6 +274,25 @@ export async function markDocumentGenerationRunRunning({
     WHERE "id" = ${runId}
       AND "status" IN ('queued', 'running')
   `;
+}
+
+/**
+ * 原子恢复一条等待用户补充的文档任务，避免重复点击启动两个后台执行器。
+ */
+export async function resumeAwaitingDocumentGenerationRun(
+  runId: string,
+): Promise<boolean> {
+  const updated = await prisma.$executeRaw`
+    UPDATE "document_generation_run"
+    SET
+      "status" = 'running',
+      "finished_at" = NULL,
+      "updated_at" = CURRENT_TIMESTAMP
+    WHERE "id" = ${runId}
+      AND "status" = 'awaiting_input'
+  `;
+
+  return updated === 1;
 }
 
 /**
@@ -280,12 +337,14 @@ export async function completeDocumentGenerationRun({
   kind,
   result,
   todos,
+  status = "completed",
 }: {
   runId: string;
   workspaceId: string;
   kind: DocumentKind;
   result: DocumentGenerationResult;
   todos: DocumentTodo[];
+  status?: "completed" | "awaiting_input";
 }): Promise<DocumentArtifactDto> {
   const artifact = await prisma.$transaction(async (tx) => {
     const contentJson = JSON.stringify(result);
@@ -332,13 +391,16 @@ export async function completeDocumentGenerationRun({
     await tx.$executeRaw`
       UPDATE "document_generation_run"
       SET
-        "status" = 'completed',
+        "status" = ${status},
         "current_stage" = 'exportPrd',
         "task_planning" = ${JSON.stringify(todos)}::jsonb,
         "scoring_attempts" = ${JSON.stringify(result.qualityScore.attempts)}::jsonb,
         "document_artifact_id" = ${artifact.id},
         "error_message" = NULL,
-        "finished_at" = CURRENT_TIMESTAMP,
+        "finished_at" = CASE
+          WHEN ${status} = 'completed' THEN CURRENT_TIMESTAMP
+          ELSE NULL
+        END,
         "updated_at" = CURRENT_TIMESTAMP
       WHERE "id" = ${runId}
     `;
@@ -360,7 +422,7 @@ export async function stopDocumentGenerationRun(runId: string): Promise<void> {
       "finished_at" = CURRENT_TIMESTAMP,
       "updated_at" = CURRENT_TIMESTAMP
     WHERE "id" = ${runId}
-      AND "status" IN ('queued', 'running')
+      AND "status" IN ('queued', 'running', 'awaiting_input')
   `;
 }
 
@@ -399,7 +461,7 @@ function mapRunRow(row: DocumentGenerationRunRow): DocumentGenerationRunDto {
     currentStage: row.current_stage,
     todos: parseJsonColumn(row.task_planning, []),
     reasoningLog: parseJsonColumn(row.reasoning_log, []),
-    scoringAttempts: parseJsonColumn(row.scoring_attempts, []),
+    scoringAttempts: parseDocumentScoreAttempts(row.scoring_attempts),
     documentArtifactId: row.document_artifact_id,
     errorMessage: row.error_message,
     startedAt: row.started_at?.toISOString() ?? null,
@@ -447,4 +509,14 @@ function parseJsonColumn<T>(value: unknown, fallback: T): T {
   }
 
   return fallback;
+}
+
+/**
+ * 解析评分历史并为旧记录补齐语义阻断分组默认字段。
+ */
+function parseDocumentScoreAttempts(value: unknown): DocumentScoreAttempt[] {
+  return parseJsonColumn<unknown[]>(value, []).flatMap((attempt) => {
+    const parsed = DocumentScoreAttemptSchema.safeParse(attempt);
+    return parsed.success ? [parsed.data] : [];
+  });
 }

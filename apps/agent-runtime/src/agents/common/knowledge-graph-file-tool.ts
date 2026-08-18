@@ -112,7 +112,9 @@ const nodeDeprecationInputSchema = z.object({
     .string()
     .min(1)
     .optional()
-    .describe("Optional active replacement node already present in the graph"),
+    .describe(
+      "Optional active replacement node already present in the graph; omit this field when no replacement exists and never pass null",
+    ),
   source_task_id: z
     .string()
     .min(1)
@@ -247,6 +249,8 @@ export interface KnowledgeGraphToolPolicy {
   allowedRelationTypes?: readonly ProductKnowledgeGraph["relations"][number]["type"][];
   requiredBlockingOpenQuestionCount?: number;
   allowNodeDeprecation?: boolean;
+  allowRiskDeprecation?: boolean;
+  allowOpenQuestionDeprecation?: boolean;
   sourceTaskId?: string;
   userInput?: ReadonlyArray<{ index: number; content: string }>;
   verifiedWebSources?: ReadonlyMap<string, VerifiedWebSource>;
@@ -450,7 +454,61 @@ export function createKnowledgeGraphTools(
           const nodeIndex = state.entities.findIndex(
             (entity) => entity.id === deprecation.node_id,
           );
-          const existing = state.entities[nodeIndex];
+          let existing = state.entities[nodeIndex];
+          const riskIndex = state.risks.findIndex(
+            (risk) => risk.id === deprecation.node_id,
+          );
+          const risk = state.risks[riskIndex];
+          const openQuestionIndex = state.open_questions.findIndex(
+            (question) => question.id === deprecation.node_id,
+          );
+          const openQuestion = state.open_questions[openQuestionIndex];
+          const openQuestionAlreadyResolved = (
+            state.resolved_open_question_ids ?? []
+          ).includes(deprecation.node_id);
+          if (
+            policy.allowOpenQuestionDeprecation &&
+            openQuestionAlreadyResolved &&
+            !openQuestion &&
+            (!existing ||
+              (existing.type === "OpenQuestion" &&
+                existing.status === "deprecated"))
+          ) {
+            skipped.push({
+              id: deprecation.node_id,
+              reason: "already_resolved",
+            });
+            continue;
+          }
+          if (!existing && risk && policy.allowRiskDeprecation) {
+            existing = {
+              id: risk.id,
+              type: "Risk",
+              name: risk.text.slice(0, 120),
+              description: risk.text,
+              source_task_id: risk.source_task_id,
+              status: "proposed",
+              provenance: [{ kind: "existing_graph", node_id: risk.id }],
+            };
+          }
+          if (
+            !existing &&
+            openQuestion &&
+            policy.allowOpenQuestionDeprecation
+          ) {
+            existing = {
+              id: openQuestion.id,
+              type: "OpenQuestion",
+              name: openQuestion.text.slice(0, 120),
+              description: openQuestion.text,
+              source_task_id: openQuestion.source_task_id,
+              status: "proposed",
+              blocking: openQuestion.blocking,
+              provenance: [
+                { kind: "existing_graph", node_id: openQuestion.id },
+              ],
+            };
+          }
           if (!existing) {
             skipped.push({
               id: deprecation.node_id,
@@ -459,6 +517,11 @@ export function createKnowledgeGraphTools(
             continue;
           }
           if (
+            !(existing.type === "Risk" && policy.allowRiskDeprecation) &&
+            !(
+              existing.type === "OpenQuestion" &&
+              policy.allowOpenQuestionDeprecation
+            ) &&
             policy.allowedEntityTypes &&
             !policy.allowedEntityTypes.includes(existing.type)
           ) {
@@ -500,7 +563,25 @@ export function createKnowledgeGraphTools(
             deprecation_reason: deprecation.reason,
             replacement_node_id: replacement?.id,
           };
-          state.entities[nodeIndex] = deprecated;
+          if (nodeIndex >= 0) {
+            state.entities[nodeIndex] = deprecated;
+          } else {
+            state.entities.push(deprecated);
+          }
+          if (existing.type === "Risk" && riskIndex >= 0) {
+            state.risks.splice(riskIndex, 1);
+          }
+          if (existing.type === "OpenQuestion") {
+            if (openQuestionIndex >= 0) {
+              state.open_questions.splice(openQuestionIndex, 1);
+            }
+            state.resolved_open_question_ids = [
+              ...new Set([
+                ...(state.resolved_open_question_ids ?? []),
+                existing.id,
+              ]),
+            ];
+          }
           items.push(deprecated);
         }
 
@@ -518,7 +599,7 @@ export function createKnowledgeGraphTools(
       {
         name: "kg_file_deprecate_nodes",
         description:
-          "Deprecate active graph nodes during a supplement workflow without deleting history. Use the domain owner for each node type. Provide the concrete correction reason and an active replacement node when one exists.",
+          `Deprecate active graph nodes during a supplement workflow without deleting history. Use the domain owner for each node type. Provide the concrete correction reason and an active replacement node when one exists.${policy.allowOpenQuestionDeprecation ? " A fully answered active OpenQuestion explicitly assigned to this task may be deprecated without a replacement; an already resolved OpenQuestion is treated as an idempotent success." : ""}${policy.allowRiskDeprecation ? " In document evidence resolution, directly answered active Risk IDs may also be deprecated without a replacement." : ""}`,
         schema: z.object({
           deprecations: z
             .array(nodeDeprecationInputSchema)
@@ -708,6 +789,29 @@ export function createKnowledgeGraphTools(
 
 type NodeWriteInput = z.infer<typeof nodeInputSchema>;
 
+/** 数值 Evidence 来源校验的结构化问题，供运行时转为定点 HITL。 */
+export interface UnsupportedNumericClaimsIssue {
+  code: "unsupported_numeric_claims";
+  nodeName: string;
+  claims: string[];
+  userInputIndexes: number[];
+  existingGraphNodeIds: string[];
+}
+
+/** 保留兼容错误文本，同时向同进程调用方暴露结构化 provenance 问题。 */
+export class NodeProvenanceValidationError extends Error {
+  readonly numericClaimIssues: UnsupportedNumericClaimsIssue[];
+
+  constructor(
+    errors: string[],
+    numericClaimIssues: UnsupportedNumericClaimsIssue[],
+  ) {
+    super(`Node provenance validation failed: ${errors.join("; ")}`);
+    this.name = "NodeProvenanceValidationError";
+    this.numericClaimIssues = numericClaimIssues;
+  }
+}
+
 /**
  * 在状态写入前校验来源真实性和用户未声明的基础设施细节。
  */
@@ -720,8 +824,8 @@ function validateNodeWrites(
     (policy.userInput ?? []).map((item) => [item.index, item.content] as const),
   );
   const entityById = new Map(state.entities.map((entity) => [entity.id, entity]));
-  const allUserInput = [...userInputByIndex.values()].join("\n");
   const errors: string[] = [];
+  const numericClaimIssues: UnsupportedNumericClaimsIssue[] = [];
 
   for (const node of nodes) {
     if (node.status === "deprecated") {
@@ -804,27 +908,27 @@ function validateNodeWrites(
         (value) => !sourceNumbers.has(value),
       );
       if (unsupportedNumbers.length > 0) {
+        const uniqueUnsupportedNumbers = [...new Set(unsupportedNumbers)];
+        numericClaimIssues.push({
+          code: "unsupported_numeric_claims",
+          nodeName: node.name,
+          claims: uniqueUnsupportedNumbers,
+          userInputIndexes: node.provenance.flatMap((item) =>
+            item.kind === "user_input" ? [item.user_input_index] : [],
+          ),
+          existingGraphNodeIds: node.provenance.flatMap((item) =>
+            item.kind === "existing_graph" ? [item.node_id] : [],
+          ),
+        });
         errors.push(
-          `Evidence "${node.name}": unsupported_numeric_claims:${[
-            ...new Set(unsupportedNumbers),
-          ].join(",")}`,
+          `Evidence "${node.name}": unsupported_numeric_claims:${uniqueUnsupportedNumbers.join(",")}`,
         );
       }
-    }
-
-    const unsupportedInfrastructureTerms = findUnsupportedInfrastructureTerms(
-      nodeText,
-      allUserInput,
-    );
-    if (unsupportedInfrastructureTerms.length > 0) {
-      errors.push(
-        `${node.type} "${node.name}": unsupported_infrastructure_scope:${unsupportedInfrastructureTerms.join(",")}`,
-      );
     }
   }
 
   if (errors.length > 0) {
-    throw new Error(`Node provenance validation failed: ${errors.join("; ")}`);
+    throw new NodeProvenanceValidationError(errors, numericClaimIssues);
   }
 }
 
@@ -839,28 +943,6 @@ function extractNumericClaims(value: string): string[] {
       .match(/\b\d+(?:\.\d+)?\s*(?:%|ms|s|mbps|gbps|kb|mb|gb|tb|万|亿)?\b/g) ??
     []
   ).map((item) => item.replace(/\s+/g, ""));
-}
-
-/**
- * 检查用户未声明的高风险基础设施范围，要求 Executor 改写成 Risk。
- */
-function findUnsupportedInfrastructureTerms(
-  nodeText: string,
-  userInput: string,
-): string[] {
-  const terms = [
-    ["bandwidth", /bandwidth|带宽/i],
-    ["data-residency", /data\s+(?:residency|locality)|数据(?:地域|驻留|主权)/i],
-    ["deployment-topology", /deployment\s+topology|部署拓扑/i],
-    ["hosting-model", /hosting\s+model|托管模式/i],
-    ["deployment-region", /deployment\s+region|部署地域|部署区域/i],
-  ] as const;
-
-  return terms
-    .filter(
-      ([, pattern]) => pattern.test(nodeText) && !pattern.test(userInput),
-    )
-    .map(([name]) => name);
 }
 
 /**
@@ -984,7 +1066,10 @@ function filterAppendOnlyRelations<
     if (!source || !target) {
       skipped.push({
         id: relation.id,
-        reason: "missing_relation_endpoint",
+        // 携带缺失侧与端点 ID，让模型在当回合即可定位并核实具体引用。
+        reason: !source
+          ? `missing_relation_endpoint:source=${relation.source}`
+          : `missing_relation_endpoint:target=${relation.target}`,
       });
       continue;
     }

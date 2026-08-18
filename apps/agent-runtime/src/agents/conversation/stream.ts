@@ -14,18 +14,29 @@
  * - 在工作流完成后格式化并输出最终结果 block 和确认表单
  */
 
-import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "langchain";
+import {
+  AIMessage,
+  HumanMessage,
+  ToolMessage,
+  type BaseMessage,
+} from "langchain";
 import type {
   ChatMessage,
   ProductKnowledgeGraph,
   ProductWorkflowResult,
+  RequestAnalysis,
 } from "@repo/shared";
 import { calculateCost } from "../../config";
 import { createAgentRunSummaryRecorder } from "../common/agent-run-summary";
 import {
   createConversationAgent,
   createConversationAgentSystemPrompt,
+  resolveConversationModel,
 } from "./agent";
+import {
+  createModelSummarySnapshot,
+  toLlmPricing,
+} from "../common/model-profile";
 import {
   getReasoningContent,
   getTextContent,
@@ -37,24 +48,31 @@ import {
   getFormAnswerId,
   isFormAnswer,
   isProductWorkflowAcceptanceAnswer,
+  isProductWorkflowCorrectionRetryAnswer,
   isProductWorkflowOptionalStopAnswer,
+  isProductWorkflowStopWithIssuesAnswer,
 } from "../../utils/form-parser";
 import {
   formatProductWorkflowBlock,
   formatProductWorkflowConfirmationQuestionForm,
+  formatProductWorkflowCorrectionQuestionForm,
   formatProductWorkflowProposalQuestionForm,
 } from "../product-workflow/agent";
 import { updateProductContextMetadata } from "../product-workflow/common/context-metadata";
 import {
   isExecutorHumanInputRequiredError,
   isExecutorRetryRequiredError,
-  type ExecutorHumanInputRequired,
+  isSameTaskExecutorRetryable,
 } from "../product-workflow/executor-agent/agent";
 import {
   createWorkflowContinuationResumeContextFromMessages,
   createWorkflowExecutorRetryResumeContextFromMessages,
   createWorkflowResumeContextFromMessages,
+  formatExecutorHumanInputQuestionForm,
+  inferSupplementAffectedTaskIds,
+  resolveAnsweredGraphOpenQuestions,
 } from "./workflow-resume";
+import { isExecutorAgentType } from "../product-workflow/executor-agent/definitions";
 import {
   hasRetryableWorkflowTaskCheckpoint,
   streamWorkflowGraph,
@@ -64,6 +82,10 @@ import {
   extractQuestionFormId,
   releaseQuestionFormHumanInterrupt,
 } from "../../graph/human-in-the-loop";
+import {
+  isDocumentEvidenceResolutionFormId,
+  startDocumentEvidenceResolutionWorkflow,
+} from "../../graph/document-evidence-resolution-workflow";
 import type {
   AgentMessageType,
   ConversationStreamEvent,
@@ -77,9 +99,8 @@ import {
   formatPreOrchGraphConflictForm,
   type PreOrchResult,
 } from "../product-workflow/orchestrator-agent/pre-orchestrator-subagent";
-import {
-  streamOrchestratorPreCheck,
-} from "../product-workflow/orchestrator-agent/agent";
+import { streamOrchestratorPreCheck } from "../product-workflow/orchestrator-agent/agent";
+import type { WorkflowPurpose } from "../product-workflow/types";
 
 const PRODUCT_WORKFLOW_CONFIRMATION_FORM_ID = "product-workflow-confirmation";
 const EXECUTOR_BLOCKER_FORM_PREFIX = "executor-blocker-";
@@ -101,12 +122,15 @@ async function* streamAgentEvents(
   let failedError: unknown = null;
   const baseAgentOptions = {
     enabledTools: options.enabledTools,
+    modelProfile: options.modelProfile,
     mode: options.mode,
   };
+  const modelSelection = resolveConversationModel(baseAgentOptions);
   const summaryRecorder = createAgentRunSummaryRecorder({
     agentLabel: "Conversation Agent",
     agentName: "conversation-agent",
     agentType: "conversation",
+    model: createModelSummarySnapshot(modelSelection),
     context: {
       enabledTools: options.enabledTools ?? [],
       knowledgeGraph: options.knowledgeGraph ?? null,
@@ -196,6 +220,7 @@ async function* streamAgentEvents(
         tokenUsage.cacheMissInputTokens,
         tokenUsage.cacheHitInputTokens,
         tokenUsage.outputTokens,
+        toLlmPricing(modelSelection),
       );
       yield {
         type: "token-usage",
@@ -262,9 +287,22 @@ export async function* streamConversation(
     return;
   }
 
+  if (
+    options.documentEvidenceResolution &&
+    !isFormAnswer(lastMessage.content)
+  ) {
+    yield* streamDocumentEvidenceResolutionStart(options);
+    return;
+  }
+
   // 处理表单答案
   if (lastMessage.role === "user" && isFormAnswer(lastMessage.content)) {
     const formId = getFormAnswerId(lastMessage.content);
+
+    if (formId && isDocumentEvidenceResolutionFormId(formId)) {
+      yield* streamDocumentEvidenceResolutionAnswer(messages, options);
+      return;
+    }
 
     // Pre-Orchestrator 澄清表单答案 → 整合后直接进入产品工作流
     if (formId && isPreOrchClarificationFormId(formId)) {
@@ -292,6 +330,164 @@ export async function* streamConversation(
 }
 
 /**
+ * 启动专用证据解决图并把其必填 Question Form 与 interrupt 投影到聊天流。
+ */
+async function* streamDocumentEvidenceResolutionStart(
+  options: ConversationStreamOptions,
+): AsyncGenerator<ConversationStreamEvent> {
+  const context = options.documentEvidenceResolution;
+  if (!context || !options.knowledgeGraph) {
+    throw new Error("Document evidence resolution context is unavailable.");
+  }
+  const stream = startDocumentEvidenceResolutionWorkflow({
+    conversationId: context.conversationId,
+    runId: context.runId,
+    workspaceId: options.workspaceId ?? "",
+    sourceGraphVersion: context.sourceGraphVersion,
+    blockers: context.blockers,
+    knowledgeGraph: options.knowledgeGraph,
+    modelProfile: options.modelProfile,
+    signal: options.signal,
+  });
+  let next = await stream.next();
+  while (!next.done) {
+    yield next.value as ConversationStreamEvent;
+    next = await stream.next();
+  }
+  const interrupt = next.value;
+  const action = interrupt.value.actionRequests[0];
+  const questionForm = action?.args.questionForm;
+  if (!questionForm)
+    throw new Error("Evidence resolution form is unavailable.");
+  yield { type: "question-form-start", agentType: "orchestrator" };
+  yield {
+    type: "question-form-complete",
+    content: questionForm,
+    agentType: "orchestrator",
+  };
+  yield { type: "human-interrupt", interrupt, agentType: "orchestrator" };
+}
+
+/**
+ * 将专用表单答案强制转为 supplement DAG，知识图谱写入仍由现有 Executor 完成。
+ */
+async function* streamDocumentEvidenceResolutionAnswer(
+  messages: ChatMessage[],
+  options: ConversationStreamOptions,
+): AsyncGenerator<ConversationStreamEvent> {
+  const answer = options.documentEvidenceAnswer;
+
+  if (!answer || !options.knowledgeGraph) {
+    throw new Error("Document evidence resolution interrupt was not resumed.");
+  }
+  const supplementContext = createDocumentEvidenceSupplementContext(
+    answer,
+    options.knowledgeGraph,
+  );
+  const userInputBlock = createFormAnswerUserInputBlock(
+    [
+      `Resolve persisted PRD evidence blockers for document run ${answer.runId}.`,
+      answer.answerText,
+      `Resolved OpenQuestion IDs: ${JSON.stringify(supplementContext.answeredOpenQuestionIds)}. These questions are already closed and must not be assigned to an Executor.`,
+      `Blocker-to-question mapping: ${JSON.stringify(supplementContext.blockerQuestionMapping)}`,
+    ].join("\n\n"),
+  );
+  yield { type: "user-input-start" };
+  yield { type: "user-input-complete", content: userInputBlock };
+
+  const supplementAgentTypes =
+    answer.suggestedAgentTypes.filter(isExecutorAgentType);
+  const selectedAgentTypes =
+    supplementAgentTypes.length > 0
+      ? supplementAgentTypes
+      : ["executor-product-discovery" as const];
+  for await (const event of streamPlanningAfterUserInput(
+    userInputBlock,
+    options,
+    messages,
+    {
+      resumeContext: {
+        workflowPurpose: "document_evidence_resolution",
+        userInputBlock,
+        requestAnalysis: createDocumentEvidenceRequestAnalysis(),
+        knowledgeGraph: supplementContext.knowledgeGraph,
+        forceSupplementPlan: true,
+        supplementAgentTypes: selectedAgentTypes,
+        supplementSourceTaskIds: [`document-evidence:${answer.runId}`],
+        supplementRelatedNodeIds: supplementContext.relatedNodeIds,
+        answeredOpenQuestionIds: supplementContext.answeredOpenQuestionIds,
+      },
+      suppressRestoredRequestAnalysis: true,
+    },
+  )) {
+    yield event;
+  }
+}
+
+/**
+ * 在补证答案进入 Planner 前精确关闭其关联的活动问题，并从 Executor 映射中移除问题 ID。
+ * Resolver 负责语义关联；此处只对图中存在的完整 ID 做确定性交集。
+ */
+export function createDocumentEvidenceSupplementContext(
+  answer: NonNullable<ConversationStreamOptions["documentEvidenceAnswer"]>,
+  knowledgeGraph: ProductKnowledgeGraph,
+) {
+  const activeOpenQuestionIds = new Set(
+    knowledgeGraph.open_questions.map((question) => question.id),
+  );
+  const validRelatedNodeIds = new Set([
+    ...knowledgeGraph.entities.map((entity) => entity.id),
+    ...knowledgeGraph.risks.map((risk) => risk.id),
+    ...knowledgeGraph.open_questions.map((question) => question.id),
+  ]);
+  const relatedNodeIds = answer.relatedNodeIds.filter((nodeId) =>
+    validRelatedNodeIds.has(nodeId),
+  );
+  const answeredOpenQuestionIds = relatedNodeIds.filter((nodeId) =>
+    activeOpenQuestionIds.has(nodeId),
+  );
+  const answeredIdSet = new Set(answeredOpenQuestionIds);
+  return {
+    relatedNodeIds,
+    answeredOpenQuestionIds,
+    knowledgeGraph:
+      resolveAnsweredGraphOpenQuestions(
+        knowledgeGraph,
+        answeredOpenQuestionIds,
+      ) ?? knowledgeGraph,
+    blockerQuestionMapping: answer.resolution.questions.map((question) => ({
+      questionId: question.id,
+      blockerIndexes: question.blockerIndexes,
+      relatedNodeIds: question.relatedNodeIds.filter(
+        (nodeId) => !answeredIdSet.has(nodeId),
+      ),
+    })),
+  };
+}
+
+/**
+ * 专用补证表单已完成语义解析，直接构造可信业务请求，避免 Request Agent 二次改写答案。
+ */
+export function createDocumentEvidenceRequestAnalysis(): RequestAnalysis {
+  return {
+    business_model: [
+      {
+        index: 1,
+        user_goal:
+          "Resolve persisted PRD evidence blockers with the submitted authoritative answers.",
+        goal_constraints: [
+          "Update only the related product knowledge graph facts and decisions.",
+        ],
+        missing_information: [],
+        covered_user_input_indexes: [1],
+      },
+    ],
+    questions: [],
+    chitchat: [],
+  };
+}
+
+/**
  * 新消息统一通过 Pre-Orchestrator 完成恢复判断和意图分类。
  * Pre-Orchestrator 会优先检测 checkpoint 恢复需求，再按意图分类路由。
  */
@@ -312,6 +508,7 @@ async function* streamWithPreOrchestrator(
   lastMessage: ChatMessage,
 ): AsyncGenerator<ConversationStreamEvent> {
   const orchStream = streamOrchestratorPreCheck({
+    modelProfile: options.modelProfile,
     userMessage: lastMessage.content ?? "",
     productContext: options.productContext,
     knowledgeGraph: options.knowledgeGraph,
@@ -352,7 +549,10 @@ async function* streamWithPreOrchestrator(
   // 恢复判断优先于意图分类：Pre-Orchestrator 判定需要从 checkpoint 恢复中断的工作流。
   if (preOrchResult.decision === "RESUME_WORKFLOW") {
     let emitted = false;
-    for await (const event of streamWorkflowCheckpointResume(options, messages)) {
+    for await (const event of streamWorkflowCheckpointResume(
+      options,
+      messages,
+    )) {
       emitted = true;
       yield event;
     }
@@ -414,10 +614,10 @@ async function* streamChatOnlyFlow(
   messages: ChatMessage[],
   options: ConversationStreamOptions,
 ): AsyncGenerator<ConversationStreamEvent> {
-  for await (const event of streamAgentEvents(
-    toLangChainMessages(messages),
-    { ...options, mode: "chat" },
-  )) {
+  for await (const event of streamAgentEvents(toLangChainMessages(messages), {
+    ...options,
+    mode: "chat",
+  })) {
     yield event;
   }
 }
@@ -602,25 +802,95 @@ async function* streamWorkflowResumeAfterFormAnswer(
   options: ConversationStreamOptions,
   formId: string,
 ): AsyncGenerator<ConversationStreamEvent> {
-  const resumeContext = createWorkflowResumeContextFromMessages({
+  let resumeContext = createWorkflowResumeContextFromMessages({
     messages,
     knowledgeGraph: options.knowledgeGraph,
     workflowAnswerResolution: options.workflowAnswerResolution,
+    serverWorkflowRecoveryContext: options.serverWorkflowRecoveryContext,
   });
+  // 证据补证会话的消息历史没有 request-analysis 块；此处注入与首轮补证同源的
+  // 权威业务请求，避免表单答案被 Request Agent 当作新业务重新解释。
+  if (
+    resumeContext &&
+    !resumeContext.requestAnalysis &&
+    options.documentEvidenceResolution
+  ) {
+    resumeContext = {
+      ...resumeContext,
+      requestAnalysis: createDocumentEvidenceRequestAnalysis(),
+    };
+  }
+  const latestUserMessage = messages.at(-1);
+  const acceptsCurrentResult = Boolean(
+    latestUserMessage &&
+    isProductWorkflowAcceptanceAnswer(latestUserMessage.content),
+  );
+  const workflowResult =
+    options.workflowAnswerResolution?.workflow ??
+    resumeContext?.productWorkflow;
+  const answerAction =
+    options.workflowAnswerResolution?.action ??
+    (latestUserMessage &&
+    isProductWorkflowCorrectionRetryAnswer(latestUserMessage.content)
+      ? "retry_correction"
+      : latestUserMessage &&
+          isProductWorkflowStopWithIssuesAnswer(latestUserMessage.content)
+        ? "stop_with_issues"
+        : latestUserMessage &&
+            isProductWorkflowOptionalStopAnswer(latestUserMessage.content)
+          ? "stop_optional_questions"
+          : "submit_answers");
 
-  if (!resumeContext) {
-    yield* streamUserInputIntegration(messages, options);
+  if (acceptsCurrentResult && !workflowResult) {
+    yield {
+      type: "error",
+      error:
+        "无法完成确认：服务端未找到对应的持久化产品工作流结果。请刷新后重试，不会将该确认作为新请求处理。",
+      agentType: "conversation_confirmation",
+      terminal: true,
+    };
     return;
   }
 
-  const latestUserMessage = messages.at(-1);
-  if (
-    latestUserMessage &&
-    resumeContext.productWorkflow &&
-    isProductWorkflowAcceptanceAnswer(latestUserMessage.content)
-  ) {
+  // Executor 阻塞表单在 DAG 中途产生，本轮没有已完成的工作流结果；
+  // 其恢复只消费消息历史中的 DAG 与 rerunTaskIds，直接进入定点补充规划，
+  // 不经过依赖 workflowResult 的确认/停止/修正分支。
+  const isExecutorBlockerAnswer = formId.startsWith(EXECUTOR_BLOCKER_FORM_PREFIX);
+  if (isExecutorBlockerAnswer) {
+    if (!resumeContext) {
+      yield {
+        type: "error",
+        error:
+          "无法恢复对应的产品工作流上下文。该表单答案不会作为新业务请求处理，请刷新后重试。",
+        agentType: "conversation_confirmation",
+        terminal: true,
+      };
+      return;
+    }
+    const userInputBlock = createFormAnswerUserInputBlock(
+      latestUserMessage?.content ?? "",
+    );
+    yield* streamPlanningAfterUserInput(userInputBlock, options, messages, {
+      resumeContext,
+      suppressRestoredRequestAnalysis: true,
+    });
+    return;
+  }
+
+  if (!resumeContext || !workflowResult) {
+    yield {
+      type: "error",
+      error:
+        "无法恢复对应的产品工作流上下文。该表单答案不会作为新业务请求处理，请刷新后重试。",
+      agentType: "conversation_confirmation",
+      terminal: true,
+    };
+    return;
+  }
+
+  if (acceptsCurrentResult) {
     const result = {
-      ...resumeContext.productWorkflow,
+      ...workflowResult,
       status: "completed" as const,
       confirmation_message: "用户已确认接受当前产品知识图谱结果。",
     };
@@ -634,19 +904,58 @@ async function* streamWorkflowResumeAfterFormAnswer(
     return;
   }
 
-  if (
-    latestUserMessage &&
-    resumeContext.productWorkflow &&
-    isProductWorkflowOptionalStopAnswer(latestUserMessage.content)
-  ) {
+  if (answerAction === "stop_with_issues") {
+    const result: ProductWorkflowResult = {
+      ...workflowResult,
+      status: "discarded",
+      proposal_questions: [],
+      confirmation_message:
+        "用户已停止修正流程；当前结果及其审查错误已保留，但未被验收通过。",
+    };
+    yield {
+      type: "text",
+      content: formatProductWorkflowBlock(result),
+      agentType: "critique",
+    };
+    yield { type: "complete", result };
+    yield {
+      type: "text",
+      content:
+        "本轮修正流程已停止。当前结果及审查问题已保留，系统没有生成新的 DAG，也没有把结果标记为验收通过。",
+      agentType: "conversation_confirmation",
+    };
+    return;
+  }
+
+  if (answerAction === "stop_optional_questions") {
+    const hasHardErrors =
+      workflowResult.status === "requires_executor_retry" ||
+      (workflowResult.review.retry_task_ids?.length ?? 0) > 0;
+    if (hasHardErrors) {
+      const result: ProductWorkflowResult = {
+        ...workflowResult,
+        status: "discarded",
+        proposal_questions: [],
+        confirmation_message:
+          "用户已停止包含审查错误的流程；当前结果未被验收通过。",
+      };
+      yield { type: "complete", result };
+      yield {
+        type: "text",
+        content:
+          "本轮流程已停止并保留审查错误，系统没有继续生成修正 DAG。",
+        agentType: "conversation_confirmation",
+      };
+      return;
+    }
     const knowledgeGraph = updateProductContextMetadata({
-      knowledgeGraph: resumeContext.productWorkflow.knowledge_graph_update,
+      knowledgeGraph: workflowResult.knowledge_graph_update,
       currentState: "stable",
       descriptionEntry:
         "User skipped optional follow-up questions and accepted the current result with its recorded review issues.",
     });
     const result: ProductWorkflowResult = {
-      ...resumeContext.productWorkflow,
+      ...workflowResult,
       status: "completed",
       proposal_questions: [],
       knowledge_graph_update: knowledgeGraph,
@@ -666,6 +975,81 @@ async function* streamWorkflowResumeAfterFormAnswer(
         "本轮产品工作流已正式结束。你已选择不再继续补充可选优化问题，当前成果及已记录的审查问题均已归档。",
       agentType: "conversation_confirmation",
     };
+    return;
+  }
+
+  if (answerAction === "retry_correction") {
+    const retryTaskIds = getCritiqueCorrectionTaskIds(workflowResult);
+    if (retryTaskIds.length === 0) {
+      yield {
+        type: "error",
+        error: "无法生成修正 DAG：持久化 Critique 结果中没有待修正任务。",
+        agentType: "conversation_confirmation",
+        terminal: true,
+      };
+      return;
+    }
+    const affectedTaskIds = inferSupplementAffectedTaskIds(
+      retryTaskIds,
+      workflowResult.planner,
+      options.knowledgeGraph ?? workflowResult.knowledge_graph_update,
+    );
+    const affectedTaskIdSet = new Set(affectedTaskIds);
+    const supplementAgentTypes = [
+      ...new Set(
+        workflowResult.planner.tasks
+          .filter((task) => affectedTaskIdSet.has(task.task_id))
+          .map((task) => task.assigned_agent)
+          .filter(isExecutorAgentType),
+      ),
+    ];
+    const userInputBlock = createCritiqueCorrectionUserInputBlock(
+      workflowResult,
+      latestUserMessage?.content ?? "",
+      retryTaskIds,
+    );
+    let correctionSettled = false;
+    for await (const event of streamPlanningAfterUserInput(
+      userInputBlock,
+      options,
+      messages,
+      {
+        resumeContext: {
+          ...resumeContext,
+          workflowPurpose:
+            resumeContext.workflowPurpose ??
+            (options.documentEvidenceResolution
+              ? "document_evidence_resolution"
+              : "standard"),
+          userInputBlock,
+          plan: workflowResult.planner,
+          productWorkflow: workflowResult,
+          forceSupplementPlan: true,
+          rerunTaskIds: retryTaskIds,
+          supplementSourceTaskIds: retryTaskIds,
+          supplementAffectedTaskIds: affectedTaskIds,
+          supplementAgentTypes,
+        },
+        suppressRestoredRequestAnalysis: true,
+      },
+    )) {
+      if (
+        event.type === "complete" ||
+        (event.type === "error" && event.terminal)
+      ) {
+        correctionSettled = true;
+      }
+      yield event;
+    }
+    if (!correctionSettled) {
+      yield {
+        type: "error",
+        error:
+          "Critique correction ended without a terminal workflow result. The request remains unresolved.",
+        agentType: "orchestrator",
+        terminal: true,
+      };
+    }
     return;
   }
 
@@ -692,17 +1076,32 @@ async function* streamPlanningAfterUserInput(
     resumeFromCheckpoint?: boolean;
   } = {},
 ): AsyncGenerator<ConversationStreamEvent> {
+  let workflowPurpose: WorkflowPurpose = options.documentEvidenceResolution
+    ? "document_evidence_resolution"
+    : (resumeOptions.resumeContext?.workflowPurpose ??
+      options.serverWorkflowRecoveryContext?.workflowPurpose ??
+      "standard");
   try {
-    const resumeContext = resumeOptions.resumeFromCheckpoint
+    const recoveredResumeContext = resumeOptions.resumeFromCheckpoint
       ? undefined
-      : resumeOptions.resumeContext ??
+      : (resumeOptions.resumeContext ??
         createWorkflowResumeContextFromMessages({
           messages,
           knowledgeGraph: options.knowledgeGraph,
+          workflowAnswerResolution: options.workflowAnswerResolution,
+          serverWorkflowRecoveryContext: options.serverWorkflowRecoveryContext,
         }) ??
-        undefined;
+        undefined);
+    workflowPurpose = options.documentEvidenceResolution
+      ? "document_evidence_resolution"
+      : (recoveredResumeContext?.workflowPurpose ?? "standard");
+    const resumeContext = recoveredResumeContext
+      ? { ...recoveredResumeContext, workflowPurpose }
+      : undefined;
 
     for await (const event of streamWorkflowGraph({
+      workflowPurpose,
+      modelProfile: options.modelProfile,
       workspaceId: options.workspaceId,
       productContext: options.productContext,
       contextSource: options.contextSource,
@@ -751,16 +1150,31 @@ async function* streamPlanningAfterUserInput(
       if (event.type === "complete") {
         // 将结构化工作流结果转发给 API 持久化层，供知识图谱归档
         // Critique 的结构化状态是唯一完成依据，表单是否存在只决定交互形式。
-        const proposalForm = formatProductWorkflowProposalQuestionForm(event.result);
-        const shouldFinalize = isAcceptedWorkflowResult(event.result);
+        const workflowResult =
+          workflowPurpose === "document_evidence_resolution"
+            ? normalizeDocumentEvidenceWorkflowResult(event.result)
+            : event.result;
+        const correctionForm =
+          workflowResult.status === "requires_executor_retry"
+            ? formatProductWorkflowCorrectionQuestionForm(workflowResult)
+            : null;
+        const proposalForm = correctionForm
+          ? null
+          : formatProductWorkflowProposalQuestionForm(workflowResult);
+        const shouldFinalize = isAcceptedWorkflowResultForPurpose(
+          workflowResult,
+          workflowPurpose,
+        );
         const questionForm = shouldFinalize
           ? null
-          : proposalForm ??
-            formatProductWorkflowConfirmationQuestionForm(event.result);
+          : (correctionForm ?? proposalForm ??
+            formatProductWorkflowConfirmationQuestionForm(workflowResult));
 
-        yield { type: "complete", result: event.result };
+        yield { type: "complete", result: workflowResult };
 
         if (shouldFinalize) {
+          // Document 补证必须等 API 完成图谱归档和版本递增后再展示专用成功卡。
+          if (workflowPurpose === "document_evidence_resolution") continue;
           yield {
             type: "text",
             content:
@@ -772,7 +1186,9 @@ async function* streamPlanningAfterUserInput(
         // Planner 只发起确认/补充请求，由 Conversation Agent 面向用户提问。
         yield {
           type: "text",
-          content: proposalForm
+          content: correctionForm
+            ? "Critique Agent 已完成审查，但当前结果存在必须修正的错误。请先确认是否生成补充修正任务。"
+            : proposalForm
             ? "Planner SubAgent 汇总了需要补充确认的信息，我需要你先回答这些问题。"
             : "Critique Agent 发现本轮结果仍需修正，我需要你确认下一步处理方式。",
           agentType: "conversation_confirmation",
@@ -796,20 +1212,24 @@ async function* streamPlanningAfterUserInput(
       }
     }
   } catch (error) {
+    // 调用方中止属于 SSE 生命周期事件，必须回到 API 边界按 stopped 处理，
+    // 不能伪装成 Request Agent 的业务错误并写入错误消息。
+    if (options.signal?.aborted) throw error;
     if (isExecutorRetryRequiredError(error)) {
+      const sameTaskRetryable = isSameTaskExecutorRetryable(error.details);
       yield {
         type: "error",
-        error: [
-          `来源：${error.displayName} / ${error.taskId}`,
-          "原因：requires_executor_retry（Executor 当前运行未能完成）",
-          `关键详情：${error.details}`,
-        ].join("\n"),
+        error: formatExecutorRetryRequiredErrorMessage(error, workflowPurpose),
         agentType: error.agentType,
-        retryAction: {
-          type: "resume_executor_task",
-          taskId: error.taskId,
-          agentType: error.agentType,
-        },
+        ...(sameTaskRetryable
+          ? {
+              retryAction: {
+                type: "resume_executor_task" as const,
+                taskId: error.taskId,
+                agentType: error.agentType,
+              },
+            }
+          : {}),
         terminal: true,
       };
       return;
@@ -817,6 +1237,7 @@ async function* streamPlanningAfterUserInput(
     if (isExecutorHumanInputRequiredError(error)) {
       const questionForm = formatExecutorHumanInputQuestionForm(
         error.interrupt,
+        options.knowledgeGraph,
       );
       yield {
         type: "text",
@@ -852,6 +1273,34 @@ async function* streamPlanningAfterUserInput(
 }
 
 /**
+ * 按可信工作流用途生成失效计划引用的下一步提示，避免 standard 流程误导到文档补证入口。
+ */
+export function formatExecutorRetryRequiredErrorMessage(
+  error: {
+    displayName: string;
+    taskId: string;
+    details: string;
+  },
+  workflowPurpose: WorkflowPurpose,
+): string {
+  const sameTaskRetryable = isSameTaskExecutorRetryable(error.details);
+  return [
+    `来源：${error.displayName} / ${error.taskId}`,
+    sameTaskRetryable
+      ? "原因：requires_executor_retry（Executor 当前运行未能完成）"
+      : "原因：invalid_plan_reference（计划引用的图谱目标已失效，原任务无法重放修复）",
+    `关键详情：${error.details}`,
+    ...(sameTaskRetryable
+      ? []
+      : [
+          workflowPurpose === "document_evidence_resolution"
+            ? "下一步：请重新启动“解决证据阻断”流程生成新的补充计划。"
+            : "下一步：请在当前产品工作流中基于已提交的补充信息重新生成新的补充计划。",
+        ]),
+  ].join("\n");
+}
+
+/**
  * 从失败任务的 checkpoint 定点恢复；checkpoint 丢失时才使用消息中的已有 DAG 兜底。
  */
 async function* streamWorkflowExecutorRetry(
@@ -883,12 +1332,11 @@ async function* streamWorkflowExecutorRetry(
     return;
   }
 
-  const resumeContext =
-    createWorkflowExecutorRetryResumeContextFromMessages({
-      messages,
-      knowledgeGraph: options.knowledgeGraph,
-      taskId: retry.taskId,
-    });
+  const resumeContext = createWorkflowExecutorRetryResumeContextFromMessages({
+    messages,
+    knowledgeGraph: options.knowledgeGraph,
+    taskId: retry.taskId,
+  });
   if (!resumeContext) {
     yield {
       type: "error",
@@ -1002,58 +1450,192 @@ export function isAcceptedWorkflowResult(
   return (
     result.status === "completed" &&
     (result.review.retry_task_ids?.length ?? 0) === 0 &&
-    ![...(result.review.issues ?? []), ...(result.knowledge_graph_review?.issues ?? [])].some(
-      (issue) => issue.severity === "error",
-    )
+    ![
+      ...(result.review.issues ?? []),
+      ...(result.knowledge_graph_review?.issues ?? []),
+    ].some((issue) => issue.severity === "error")
   );
 }
 
 /**
- * 将 Executor 硬阻塞转换为 Conversation Agent 对用户展示的 HITL 表单。
+ * 将 Critique 错误和用户可选补充要求转换为 Planner 可消费的修正输入。
+ * 流程控制字段会被过滤，不能写入产品知识图谱。
  */
-function formatExecutorHumanInputQuestionForm(
-  interrupt: ExecutorHumanInputRequired,
+export function createCritiqueCorrectionUserInputBlock(
+  workflow: ProductWorkflowResult,
+  answerText: string,
+  retryTaskIds: string[],
 ): string {
-  const form = {
-    description: [
-      `来源：${interrupt.displayName} / ${interrupt.taskId}`,
-      `原因：${interrupt.title}`,
-      `关键详情：${compactUserVisibleText(interrupt.details)}`,
+  const supplementalAnswers = answerText
+    .split("\n")
+    .filter(
+      (line) =>
+        line.startsWith("- ") &&
+        !line.includes("请选择如何处理审查错误？") &&
+        !line.endsWith(": (skipped)"),
+    );
+  const retryTaskIdSet = new Set(retryTaskIds);
+  const issueKeys = new Set<string>();
+  const issues = [
+    ...(workflow.review.issues ?? []),
+    ...(workflow.knowledge_graph_review?.issues ?? []),
+  ].filter((issue) => {
+    if (issue.severity !== "error") return false;
+    if (issue.task_id && !retryTaskIdSet.has(issue.task_id)) return false;
+    const key = `${issue.code}\u0000${issue.task_id ?? ""}\u0000${issue.message}`;
+    if (issueKeys.has(key)) return false;
+    issueKeys.add(key);
+    return true;
+  });
+  return createFormAnswerUserInputBlock(
+    [
+      "Create a supplement DAG that corrects only the persisted Critique errors below. Preserve accepted graph content and do not treat workflow controls as product facts.",
+      `Retry tasks: ${retryTaskIds.join(", ") || "none"}`,
+      ...issues.map(
+        (issue) =>
+          `- ${issue.code}${issue.task_id ? ` (${issue.task_id})` : ""}: ${issue.message}`,
+      ),
+      ...(supplementalAnswers.length > 0
+        ? ["User-supplied correction constraints:", ...supplementalAnswers]
+        : []),
     ].join("\n"),
-    questions: [
-      {
-        id: "resolution",
-        label: interrupt.neededUserInput,
-        type: "textarea",
-        required: true,
-        placeholder: "请补充事实、取舍或修正信息，提交后系统会基于已有上下文继续运行。",
-      },
-    ],
-    submitLabel: "提交并继续运行",
-  };
-
-  return `<question-form id="${escapeAttribute(
-    `executor-blocker-${interrupt.taskId}`,
-  )}" title="${escapeAttribute(interrupt.title)}">\n${JSON.stringify(
-    form,
-    null,
-    2,
-  )}\n</question-form>`;
+  );
 }
 
 /**
- * 压缩展示给用户的阻塞详情，只保留关键一行。
+ * 为 Critique 修正选择稳定任务来源。
+ *
+ * 优先使用显式 retry_task_ids，其次使用错误 issue 的任务引用；全局硬错误只能回退到原 DAG，
+ * 不能因为模型漏填 retry_task_ids 而让已展示的修正动作无法执行。
  */
-function compactUserVisibleText(text: string, maxLength = 180): string {
-  const compacted = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find(Boolean)
-    ?.replace(/\s+/g, " ") ?? "";
-  return compacted.length > maxLength
-    ? `${compacted.slice(0, maxLength).trimEnd()}...`
-    : compacted;
+function getCritiqueCorrectionTaskIds(
+  workflow: ProductWorkflowResult,
+): string[] {
+  const plannedTaskIds = new Set(
+    workflow.planner.tasks.map((task) => task.task_id),
+  );
+  const referencedTaskIds = [
+    ...(workflow.review.retry_task_ids ?? []),
+    ...(workflow.review.issues ?? []).flatMap((issue) =>
+      issue.severity === "error" && issue.task_id ? [issue.task_id] : [],
+    ),
+    ...(workflow.knowledge_graph_review?.issues ?? []).flatMap((issue) =>
+      issue.severity === "error" && issue.task_id ? [issue.task_id] : [],
+    ),
+  ].filter((taskId) => plannedTaskIds.has(taskId));
+  if (referencedTaskIds.length > 0) return [...new Set(referencedTaskIds)];
+  return workflow.planner.tasks.map((task) => task.task_id);
 }
+
+/**
+ * 文档补证必须通过更严格的证据消费门禁，不能把普通完成状态当作验收。
+ */
+export function isAcceptedDocumentEvidenceWorkflowResult(
+  result: ProductWorkflowResult,
+): boolean {
+  return isAcceptedWorkflowResultForPurpose(
+    result,
+    "document_evidence_resolution",
+  );
+}
+
+/** 根据可信工作流用途选择唯一的终态验收策略。 */
+export function isAcceptedWorkflowResultForPurpose(
+  result: ProductWorkflowResult,
+  workflowPurpose: WorkflowPurpose,
+): boolean {
+  if (!isAcceptedWorkflowResult(result)) return false;
+  if (workflowPurpose === "standard") return true;
+  return ![
+    ...(result.review.issues ?? []),
+    ...(result.knowledge_graph_review?.issues ?? []),
+  ].some((issue) => issue.code === "UNCONSUMED_EVIDENCE");
+}
+
+/**
+ * 将历史或异常模型输出中的 Document 证据消费问题归一化为硬修正状态。
+ *
+ * 该函数只提升确定性的证据消费问题，不对证据语义重复做后端判断。
+ */
+export function normalizeDocumentEvidenceWorkflowResult(
+  result: ProductWorkflowResult,
+): ProductWorkflowResult {
+  const normalizeIssues = (
+    issues: NonNullable<ProductWorkflowResult["review"]["issues"]>,
+  ) =>
+    issues.map((issue) =>
+      issue.code === "UNCONSUMED_EVIDENCE"
+        ? { ...issue, severity: "error" as const }
+        : issue,
+    );
+  const reviewIssues = normalizeIssues(result.review.issues ?? []);
+  const graphReview = result.knowledge_graph_review ?? {
+    notes: [],
+    accepted_task_ids: result.review.accepted_task_ids,
+    rejected_task_ids: result.review.rejected_task_ids,
+    retry_task_ids: result.review.retry_task_ids,
+    issues: [],
+  };
+  const graphIssues = normalizeIssues(graphReview.issues ?? []);
+  const unconsumedIssues = [...reviewIssues, ...graphIssues].filter(
+    (issue) => issue.code === "UNCONSUMED_EVIDENCE",
+  );
+  if (unconsumedIssues.length === 0) return result;
+
+  const plannedTaskIds = new Set(
+    result.planner.tasks.map((task) => task.task_id),
+  );
+  const retryTaskIds = [
+    ...new Set([
+      ...(result.review.retry_task_ids ?? []),
+      ...(result.knowledge_graph_review?.retry_task_ids ?? []),
+      ...unconsumedIssues.flatMap((issue) =>
+        issue.task_id && plannedTaskIds.has(issue.task_id)
+          ? [issue.task_id]
+          : [],
+      ),
+    ]),
+  ];
+  const retryTaskIdSet = new Set(retryTaskIds);
+  const acceptedTaskIds = result.review.accepted_task_ids.filter(
+    (taskId) => !retryTaskIdSet.has(taskId),
+  );
+  const rejectedTaskIds = [
+    ...new Set([
+      ...result.review.rejected_task_ids,
+      ...retryTaskIds,
+    ]),
+  ];
+
+  return {
+    ...result,
+    status: "requires_executor_retry",
+    review: {
+      ...result.review,
+      accepted_task_ids: acceptedTaskIds,
+      rejected_task_ids: rejectedTaskIds,
+      retry_task_ids: retryTaskIds,
+      issues: reviewIssues,
+    },
+    knowledge_graph_review: {
+      ...graphReview,
+      accepted_task_ids: graphReview.accepted_task_ids.filter(
+        (taskId) => !retryTaskIdSet.has(taskId),
+      ),
+      rejected_task_ids: [
+        ...new Set([
+          ...graphReview.rejected_task_ids,
+          ...retryTaskIds,
+        ]),
+      ],
+      retry_task_ids: retryTaskIds,
+      issues: graphIssues,
+    },
+    confirmation_message:
+      "证据补充结果仍包含未被需求、决策或功能关系消费的 Evidence，需要生成定点修正任务。",
+  };
+}
+
 
 /**
  * 格式化为 <user-input> 块，如果已经是该块则直接返回。
@@ -1117,16 +1699,6 @@ function getMessageType(message: BaseMessage): string {
 /**
  * 从模型消息中提取已完成的工具调用。
  */
-/**
- * 转义 tagged block 属性值，避免标题或 ID 破坏 question-form 标签。
- */
-function escapeAttribute(value: string): string {
-  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
-}
-
-/**
- * 从模型消息中提取已完成的工具调用。
- */
 function getToolCalls(
   message: BaseMessage,
 ): Array<{ id?: string; name: string; args?: Record<string, unknown> }> {
@@ -1173,7 +1745,7 @@ function isProductWorkflowResumeFormId(formId: string): boolean {
 /**
  * 将原始表单答案包装成合法 user_input，供恢复后的 Executor Agent 读取用户补充信息。
  */
-function createFormAnswerUserInputBlock(content: string): string {
+export function createFormAnswerUserInputBlock(content: string): string {
   return `<user-input>\n${JSON.stringify(
     {
       user_input: [
@@ -1201,4 +1773,3 @@ function createEmptyUserInputBlock(): string {
     2,
   )}\n</user-input>`;
 }
-
