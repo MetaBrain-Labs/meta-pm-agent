@@ -1,0 +1,842 @@
+[
+  {
+    "path": "references/executor/ai-shipping-executor/skills/intended-vs-implemented/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-ai-shipping/skills/intended-vs-implemented/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "b2f532a2843a2312bc821fe673251f2e089542d8a33fff9bf2b5df80fd28cd0f",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/ai-shipping-executor/skills/shipping-artifacts/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-ai-shipping/skills/shipping-artifacts/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "0af1628edb80b160a4098d6475abde07d791de461a397a9df1437a25e19e971d",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/data-analytics-executor/skills/ab-test-analysis/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-data-analytics/skills/ab-test-analysis/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "5f64b2d75f50976814d35cb8266087b4cc2c188c9d486892a55654a9869a9114",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/data-analytics-executor/skills/cohort-analysis/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-data-analytics/skills/cohort-analysis/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "b007c791f372b76c335405e48809e2a18b36c53a67a208987851a82948857653",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/data-analytics-executor/skills/sql-queries/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-data-analytics/skills/sql-queries/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "f82e51a5a36a690f0c27984003e1d42af7ac6068fa770d4977b4bda3b81dec27",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/gtm-executor/skills/beachhead-segment/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-go-to-market/skills/beachhead-segment/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "449d554c1a3766b79f50cfb7e445e39eea316fc240a9802be0c744e21d070728",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/gtm-executor/skills/competitive-battlecard/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-go-to-market/skills/competitive-battlecard/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "876397c774895e5ad2eec32bc764052522ec640d2867d6ecd6110f1264797ddc",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/gtm-executor/skills/growth-loops/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-go-to-market/skills/growth-loops/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "de412dc2afd06378e8f2d333ceef756d87d43f1efbd5229f541d5835c4d007ca",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/gtm-executor/skills/gtm-motions/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-go-to-market/skills/gtm-motions/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "7d62f211ebfa035d869f49297fb5bf401e6b164cd95841f5ee994eb165ad4e83",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/gtm-executor/skills/gtm-strategy/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-go-to-market/skills/gtm-strategy/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "4c53cc306e9ccbbc85f2b3311b42782c84c73605d31815b1ed94705d214e71b6",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/gtm-executor/skills/ideal-customer-profile/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-go-to-market/skills/ideal-customer-profile/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "88f22da4e1bb223a0a497161fce81d3c9f58644679ce58d3d857b9f40ba816d5",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/market-research-executor/skills/competitor-analysis/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-market-research/skills/competitor-analysis/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "558d9506bd7e35632bd167ff217dcc9e29e56806de13598c5647a45cc4dbb615",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/market-research-executor/skills/customer-journey-map/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-market-research/skills/customer-journey-map/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "d346b248ff14a815b8520ca21fcb80a20c8df8ef1c9c9e744d805ac1a01bed96",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/market-research-executor/skills/market-segments/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-market-research/skills/market-segments/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "e2c62ff2bad188415a02ad31eed27c326285d6253ee140f55f91076f00a00844",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/market-research-executor/skills/market-sizing/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-market-research/skills/market-sizing/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "48fa95c2126614b18599d2adee2b9a08fcd699a8c30a348a94711c31087f0252",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/market-research-executor/skills/sentiment-analysis/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-market-research/skills/sentiment-analysis/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "14bd06df471bfa58f63041ae4f2d1ec82e0aba91a9cd0343bf68e09b7fa00b29",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/market-research-executor/skills/user-personas/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-market-research/skills/user-personas/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "e2228cf20f04c4a858960e9c71dab8ad46b5eec22471104e93572174d2c55895",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/market-research-executor/skills/user-segmentation/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-market-research/skills/user-segmentation/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "dc401a35b598fc25e74b32cf68c79f9c6c878d18273d7de6475266c3cfa96b85",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/marketing-growth-executor/skills/marketing-ideas/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-marketing-growth/skills/marketing-ideas/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "09db39b714714d3080fe22be3d65e82a0537152595bfb301965ca096cde257f4",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/marketing-growth-executor/skills/north-star-metric/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-marketing-growth/skills/north-star-metric/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "45784bc152ab9e2e4743ca438659f8c1866d75777555fa3bd49ab42a665b5784",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/marketing-growth-executor/skills/positioning-ideas/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-marketing-growth/skills/positioning-ideas/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "3ebdbd8fe542288798e0b016f0996e9c4bd66cbd716fc6c74971460731c538db",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/marketing-growth-executor/skills/product-name/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-marketing-growth/skills/product-name/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "1314167b295159f7129aec1ad2dd02810f7bd135f2687e7078d7b778f83d2f34",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/marketing-growth-executor/skills/value-prop-statements/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-marketing-growth/skills/value-prop-statements/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "12883ac35a598fb210921fc4fe93552d93db5160cf45c1a429d55f9fedb652a0",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-discovery-executor/skills/analyze-feature-requests/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-discovery/skills/analyze-feature-requests/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "860c0a8b582f12f2f6a3b7edea7f8aa260dcaff4cda18f9d6e4ae18c97ae1560",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-discovery-executor/skills/brainstorm-experiments-existing/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-discovery/skills/brainstorm-experiments-existing/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "e99b78ba7930071ab0cb60c6bf250845d924a2e4666976eb95cb2c55ae68f2c8",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-discovery-executor/skills/brainstorm-experiments-new/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-discovery/skills/brainstorm-experiments-new/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "091c79e83ff7a689868c52dd02ed25cc011693496c768d3c0bc15d0e1f8e2860",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-discovery-executor/skills/brainstorm-ideas-existing/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-discovery/skills/brainstorm-ideas-existing/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "482cd42d2711f3239b002b8eb99f2669f5c56113f01181435ff57c1cd28c96d1",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-discovery-executor/skills/brainstorm-ideas-new/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-discovery/skills/brainstorm-ideas-new/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "a8e853ec7d5fdb2c72240fbf9d199320a840adfd5f6818b3fe20a53a191fc669",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-discovery-executor/skills/identify-assumptions-existing/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-discovery/skills/identify-assumptions-existing/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "70e2679cc2369aec12d59f7d4d7a0887b9c97ee20167e55111dd0d217344922c",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-discovery-executor/skills/identify-assumptions-new/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-discovery/skills/identify-assumptions-new/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "ca489b21d7c386fa7e0e293953a1b4485264695fadf20a0b4d4f880f06b02aae",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-discovery-executor/skills/interview-script/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-discovery/skills/interview-script/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "2d13e12a823bf34074e8fb57b7a0d1d4617c0586508bf19da513460be2089bd0",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-discovery-executor/skills/metrics-dashboard/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-discovery/skills/metrics-dashboard/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "da32b367dbddd6c3563f2282791552c1656c45c368b4360f93a375c134a67a66",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-discovery-executor/skills/opportunity-solution-tree/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-discovery/skills/opportunity-solution-tree/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "5b29dedf2318f8ecddb5efc1effbef11443317c089e1921fca593e8ba1d91d21",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-discovery-executor/skills/prioritize-assumptions/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-discovery/skills/prioritize-assumptions/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "e6e61d11c0395232a40219bb46b97d0252985554ca8b7336557d1ae1b5b86f2c",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-discovery-executor/skills/prioritize-features/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-discovery/skills/prioritize-features/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "e140ba0b1b68542966473060466256b30bd5902ddfa44552a255efa723129288",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-discovery-executor/skills/summarize-interview/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-discovery/skills/summarize-interview/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "de88dbe4c2b6cfce98d5caa4c87313c0f17a6879eee4d43aa4dbe37f6ddb8bec",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-execution-executor/skills/brainstorm-okrs/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-execution/skills/brainstorm-okrs/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "6c0c125999a96b6de0e7eb10cb6b485872a632c54680c2b876355b066fd754ae",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-execution-executor/skills/create-prd/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-execution/skills/create-prd/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "00af6f0aee8608d8195befab334c13f380e83e6c66e4691595d6edd3d89fcce1",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-execution-executor/skills/dummy-dataset/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-execution/skills/dummy-dataset/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "687620f15a01028700859fa380c291bbdec8cda6356f53ba6608ab2b9e969051",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-execution-executor/skills/job-stories/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-execution/skills/job-stories/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "34cd61c3d9859b8f95e4b45308b8ebd70bcf8278626ed3e4209a87edd3f89368",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-execution-executor/skills/outcome-roadmap/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-execution/skills/outcome-roadmap/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "d65c8e64e5f0ec7a6c606dcbf70d1016a91d48775726475a53d06fcb65ce02df",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-execution-executor/skills/pre-mortem/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-execution/skills/pre-mortem/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "7b0f3056c130a0f8f992b27906d3df45ddda7bf2be617d619487e3fda1e234ab",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-execution-executor/skills/prioritization-frameworks/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-execution/skills/prioritization-frameworks/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "317ba228fec54f700306120a7a110679fb5a1b5c7efe83f5b117a3846fc90de4",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-execution-executor/skills/release-notes/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-execution/skills/release-notes/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "e1e4f7be1a69dc41176981ba8d177d06659436e113f537576729ff77b78a81ff",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-execution-executor/skills/retro/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-execution/skills/retro/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "0b6fe9e387ee73c855e1411b108befc1880c0af4340ebdb021c7931503ba9ac2",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-execution-executor/skills/sprint-plan/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-execution/skills/sprint-plan/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "b258519ed31622f53b4127a9cfc641034f8f8bdfc41ce03e2c6ff756ce387ddb",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-execution-executor/skills/stakeholder-map/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-execution/skills/stakeholder-map/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "3aff161e7b62a8622ce10d645daa9a292408cbed4a7ad23185959641349b0792",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-execution-executor/skills/strategy-red-team/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-execution/skills/strategy-red-team/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "7e730d393c3b6c7786e2803a85f0c120fa857cd7feac52aa6fea420a8989b91c",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-execution-executor/skills/summarize-meeting/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-execution/skills/summarize-meeting/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "9fd0e59b42eb36827fc40c97cebdff73e14709d54821bb5b5cfb673ac331db94",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-execution-executor/skills/test-scenarios/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-execution/skills/test-scenarios/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "e1bee31e87697b523a5b4a09a80633aec054cc6bedade619012b71ca6f79d4c1",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-execution-executor/skills/user-stories/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-execution/skills/user-stories/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "a7e6aa0c8437be4febf13feb47124efc4cb5acc6cfc7c49d1b593cbaba755d63",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-execution-executor/skills/wwas/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-execution/skills/wwas/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "5823d662b8e848c6f83c64b267cad8e3eb92a85a035837ee038b04430cc11004",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-strategy-executor/skills/ansoff-matrix/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-strategy/skills/ansoff-matrix/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "e64fc386e78eeca178763bb3b3f1a57c50950a9db2ebd2ec909f153c25ce710e",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-strategy-executor/skills/business-model/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-strategy/skills/business-model/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "c5847d14e6a2574cde07ebbc66c76262208a41f727b6fc3943b19d2ff456f783",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-strategy-executor/skills/lean-canvas/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-strategy/skills/lean-canvas/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "6230e1906ded1b884f47ffe927d3b9484c031cf70cc0adaeabd3cfbdaf4f3493",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-strategy-executor/skills/monetization-strategy/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-strategy/skills/monetization-strategy/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "1f7e10bf096db9d4c4954b3d6d22d390ecd9cf0b73eac74258e351ea96672578",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-strategy-executor/skills/pestle-analysis/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-strategy/skills/pestle-analysis/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "62e1144f39e738a5c7ccbe73c3ca62a2a1bc339ee5d6a9f44916b6d69fb9aee2",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-strategy-executor/skills/porters-five-forces/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-strategy/skills/porters-five-forces/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "85ac9c92a578abe81419329b1cb50e1bbe46ebca079e4472ace97e7c724a0078",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-strategy-executor/skills/pricing-strategy/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-strategy/skills/pricing-strategy/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "9bcc3b993a3d7a0d501553c705f17639b6c66e5a7bc242a44ad804051fefb914",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-strategy-executor/skills/product-strategy/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-strategy/skills/product-strategy/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "3e47c2635d2c2e388d29871363b3875334a5e1cbb0168b9f6fd6821f0601fd7e",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-strategy-executor/skills/product-vision/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-strategy/skills/product-vision/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "832844553e408c325c787cbcdb590b00442222602845e554c852f57c3d3572a1",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-strategy-executor/skills/startup-canvas/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-strategy/skills/startup-canvas/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "9350af2c2ab0191d8282465f285ce498d53fa6751bd9aebb5e4f64c56348b085",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-strategy-executor/skills/swot-analysis/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-strategy/skills/swot-analysis/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "2ab4ae2845c0f86ec048a9dedc49e94a78cc9cf3e7d7f3e65bed1e8593bb55ef",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/product-strategy-executor/skills/value-proposition/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-product-strategy/skills/value-proposition/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "b2c862865e560e87463113645d3860f1f6e9e48ec84dfc4e4978c5955f2a8067",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/toolkit-executor/skills/draft-nda/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-toolkit/skills/draft-nda/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "988131ed41a4adf272b64424ec6646971444de5daedccadd0e97e6fdce7d862f",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/toolkit-executor/skills/grammar-check/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-toolkit/skills/grammar-check/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "0af805122119eece3ce17335fe8e79b9b226b4e4664fe34300d32c7d3c21ce76",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/toolkit-executor/skills/privacy-policy/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-toolkit/skills/privacy-policy/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "a2e50d23a6a582966e52da17e9bd4b04a1504e5939fba2149c2d46f1b26eda91",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/toolkit-executor/skills/review-resume/SKILL.md",
+    "upstream": "phuryn/pm-skills",
+    "verified_revision": "18468a95b427e70e258b51389796367c6f684e7d",
+    "upstream_path": "pm-toolkit/skills/review-resume/SKILL.md",
+    "license": "MIT",
+    "original_import_revision": "not recorded",
+    "local_sha256": "de860922113a31d8a7ea858e6d62fd51f7d947e5abc90c3786ee7f41f0bfac72",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/document-agent/skills/deliver-prd/SKILL.md",
+    "upstream": "product-on-purpose/pm-skills",
+    "verified_revision": "1cef1a9eae10017389863d51e289e0ae41e17fcb",
+    "upstream_path": "skills/deliver-prd/SKILL.md",
+    "license": "Apache-2.0",
+    "original_import_revision": "not recorded",
+    "local_sha256": "fc6ea1232d6a27b2e0a7d5e6bea3a386f083bdcc29fac5154d2c3c3135ed1636",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/document-agent/skills/deliver-acceptance-criteria/SKILL.md",
+    "upstream": "product-on-purpose/pm-skills",
+    "verified_revision": "1cef1a9eae10017389863d51e289e0ae41e17fcb",
+    "upstream_path": "skills/deliver-acceptance-criteria/SKILL.md",
+    "license": "Apache-2.0",
+    "original_import_revision": "not recorded",
+    "local_sha256": "18a992bc06c6c2f8f9ed0b816acfa94daa9f217955682a31903930d4e9c4bd7a",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/document-agent/skills/deliver-edge-cases/SKILL.md",
+    "upstream": "product-on-purpose/pm-skills",
+    "verified_revision": "1cef1a9eae10017389863d51e289e0ae41e17fcb",
+    "upstream_path": "skills/deliver-edge-cases/SKILL.md",
+    "license": "Apache-2.0",
+    "original_import_revision": "not recorded",
+    "local_sha256": "9742bb77ad78bb5668c20c0bc5933b0f365ca7d61d351415df2ad28041ae7678",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/interface-craft-executor/skills/animate/SKILL.md",
+    "upstream": "pbakaus/impeccable",
+    "verified_revision": "cb56ed6c19a07329a9fa0cd4e657bee040156593",
+    "upstream_path": "skill/reference/animate.md",
+    "license": "Apache-2.0",
+    "original_import_revision": "not recorded",
+    "local_sha256": "88a3ecb6c90e463d25e8e89d216216c850fc8af164ff7b9a0a8e010c59f09a65",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/interface-craft-executor/skills/audit/SKILL.md",
+    "upstream": "pbakaus/impeccable",
+    "verified_revision": "cb56ed6c19a07329a9fa0cd4e657bee040156593",
+    "upstream_path": "skill/reference/audit.md",
+    "license": "Apache-2.0",
+    "original_import_revision": "not recorded",
+    "local_sha256": "2b1fa5e1e995413603a61653c1a969c54bc74bb14b48e7ae6fcde3fb30ed76bb",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/interface-craft-executor/skills/bolder/SKILL.md",
+    "upstream": "pbakaus/impeccable",
+    "verified_revision": "cb56ed6c19a07329a9fa0cd4e657bee040156593",
+    "upstream_path": "skill/reference/bolder.md",
+    "license": "Apache-2.0",
+    "original_import_revision": "not recorded",
+    "local_sha256": "875454968481d4b6b3740252d4509091bc9a09c11a3e57efce61a114753a723c",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/interface-craft-executor/skills/codex/SKILL.md",
+    "upstream": "pbakaus/impeccable",
+    "verified_revision": "cb56ed6c19a07329a9fa0cd4e657bee040156593",
+    "upstream_path": "skill/SKILL.src.md",
+    "license": "Apache-2.0",
+    "original_import_revision": "not recorded",
+    "local_sha256": "f791645d065628f6049ca4508b7bf2bb06d18e6a4e47410dd3c921a812507657",
+    "changes": "Application adaptation of Impeccable anti-pattern guidance; original import revision not recorded."
+  },
+  {
+    "path": "references/executor/interface-craft-executor/skills/colorize/SKILL.md",
+    "upstream": "pbakaus/impeccable",
+    "verified_revision": "cb56ed6c19a07329a9fa0cd4e657bee040156593",
+    "upstream_path": "skill/reference/colorize.md",
+    "license": "Apache-2.0",
+    "original_import_revision": "not recorded",
+    "local_sha256": "f3989ea5d07d33785c20a66649ab689c4dfdd642f05be09ef4f7f83d8b38c6f3",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/interface-craft-executor/skills/craft/SKILL.md",
+    "upstream": "pbakaus/impeccable",
+    "verified_revision": "cb56ed6c19a07329a9fa0cd4e657bee040156593",
+    "upstream_path": "skill/reference/craft.md",
+    "license": "Apache-2.0",
+    "original_import_revision": "not recorded",
+    "local_sha256": "ad93af9f44399ce343f2446141045af1b0c7289d6ebfb96ae8dff463511469ce",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/interface-craft-executor/skills/critique/SKILL.md",
+    "upstream": "pbakaus/impeccable",
+    "verified_revision": "cb56ed6c19a07329a9fa0cd4e657bee040156593",
+    "upstream_path": "skill/reference/critique.md",
+    "license": "Apache-2.0",
+    "original_import_revision": "not recorded",
+    "local_sha256": "ebe5c52506b437c42fd4d18eb0d8015ec79550a691753a64f04bfedb372c378e",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/interface-craft-executor/skills/delight/SKILL.md",
+    "upstream": "pbakaus/impeccable",
+    "verified_revision": "cb56ed6c19a07329a9fa0cd4e657bee040156593",
+    "upstream_path": "skill/reference/delight.md",
+    "license": "Apache-2.0",
+    "original_import_revision": "not recorded",
+    "local_sha256": "92873a8b04a5974e55acaffc394754ef69562366253b270c06355b6786e50c0d",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/interface-craft-executor/skills/harden/SKILL.md",
+    "upstream": "pbakaus/impeccable",
+    "verified_revision": "cb56ed6c19a07329a9fa0cd4e657bee040156593",
+    "upstream_path": "skill/reference/harden.md",
+    "license": "Apache-2.0",
+    "original_import_revision": "not recorded",
+    "local_sha256": "3b014db64f298fc93b1519aaa1b7d1cfcc75721ba88856ecd2d50af64e34ee16",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/interface-craft-executor/skills/layout/SKILL.md",
+    "upstream": "pbakaus/impeccable",
+    "verified_revision": "cb56ed6c19a07329a9fa0cd4e657bee040156593",
+    "upstream_path": "skill/reference/layout.md",
+    "license": "Apache-2.0",
+    "original_import_revision": "not recorded",
+    "local_sha256": "fdcbed3c473de1a7e3c59259b71f1e9423906300b6a91ac5546b43a596c5056d",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/interface-craft-executor/skills/polish/SKILL.md",
+    "upstream": "pbakaus/impeccable",
+    "verified_revision": "cb56ed6c19a07329a9fa0cd4e657bee040156593",
+    "upstream_path": "skill/reference/polish.md",
+    "license": "Apache-2.0",
+    "original_import_revision": "not recorded",
+    "local_sha256": "02fc605508026a0c459536c7423cbe02309882c05e8e260fa6793f51a2523c8b",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/interface-craft-executor/skills/quieter/SKILL.md",
+    "upstream": "pbakaus/impeccable",
+    "verified_revision": "cb56ed6c19a07329a9fa0cd4e657bee040156593",
+    "upstream_path": "skill/reference/quieter.md",
+    "license": "Apache-2.0",
+    "original_import_revision": "not recorded",
+    "local_sha256": "aed1f49d08db6e09a939f848893e4907077411d9ed91c4943a688bd02d30af4f",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  },
+  {
+    "path": "references/executor/interface-craft-executor/skills/shape/SKILL.md",
+    "upstream": "pbakaus/impeccable",
+    "verified_revision": "cb56ed6c19a07329a9fa0cd4e657bee040156593",
+    "upstream_path": "skill/reference/shape.md",
+    "license": "Apache-2.0",
+    "original_import_revision": "not recorded",
+    "local_sha256": "ab64091fac5eb7ce5857111ec51776c14a387634c0f78247e604ad4bd89cbac3",
+    "changes": "Adapted for product knowledge graph execution; platform and interactive filesystem behavior omitted where applicable."
+  }
+]

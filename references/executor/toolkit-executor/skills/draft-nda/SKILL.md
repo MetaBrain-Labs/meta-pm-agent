@@ -158,3 +158,5 @@ Guidance on:
 - Consider mutual vs. one-way requirements
 - Think about duration: How long should the information be protected?
 - Always have an attorney review before any party signs
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

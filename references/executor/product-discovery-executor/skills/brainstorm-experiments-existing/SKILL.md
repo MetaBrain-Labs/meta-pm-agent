@@ -49,3 +49,5 @@ Think step by step. Present experiments in a clear table or structured format. S
 - [Assumption Prioritization Canvas: How to Identify And Test The Right Assumptions](https://www.productcompass.pm/p/assumption-prioritization-canvas)
 - [What Is Product Discovery? The Ultimate Guide Step-by-Step](https://www.productcompass.pm/p/what-exactly-is-product-discovery)
 - [Continuous Product Discovery Masterclass (CPDM)](https://www.productcompass.pm/p/cpdm) (video course)
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

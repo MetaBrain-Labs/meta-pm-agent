@@ -116,3 +116,5 @@ Ensure amplification maintains usability and coherence:
 **The test**: If you showed this to someone and said "AI made this bolder," would they believe you immediately? If yes, you've failed. Bold means distinctive, not "more AI effects."
 
 When the result feels right, hand off to `$impeccable polish` for the final pass.
+
+<!-- Third-party attribution: adapted from pbakaus/impeccable; Apache-2.0. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

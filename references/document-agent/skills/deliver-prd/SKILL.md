@@ -62,3 +62,5 @@ Confirm that a reader can answer:
 2. What problem are we solving, and for whom?
 3. What must the product do?
 4. What scope and observable outcomes define done?
+
+<!-- Third-party attribution: adapted from product-on-purpose/pm-skills; Apache-2.0. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

@@ -144,8 +144,12 @@ test("rejects a persisted evidence answer from another document run", () => {
   );
 });
 
+/** 使用显式替身绕过 Prisma 代理的虚拟属性描述符，测试结束后恢复。 */
 test("queries evidence resolution by run and source graph version", async (t) => {
-  const query = t.mock.method(prisma, "$queryRaw", async () => []);
+  const originalQuery = prisma.$queryRaw;
+  const query = t.mock.fn(async () => []);
+  prisma.$queryRaw = query as typeof prisma.$queryRaw;
+  t.after(() => { prisma.$queryRaw = originalQuery; });
 
   assert.equal(
     await findDocumentEvidenceResolutionCycle("run-1", 4),

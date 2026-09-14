@@ -91,3 +91,5 @@ A pre-mortem is a structured risk-identification exercise that forces teams to t
 
 - [How Meta and Instagram Use Pre-Mortems to Avoid Post-Mortems](https://www.productcompass.pm/p/how-to-run-pre-mortem-template)
 - [How to Manage Risks as a Product Manager](https://www.productcompass.pm/p/how-to-manage-risks-as-a-product-manager)
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

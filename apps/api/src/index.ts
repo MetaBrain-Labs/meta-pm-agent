@@ -11,9 +11,13 @@ installProcessCrashReporter();
 const { createApp } = await import("./app");
 
 const port = Number(process.env.PORT ?? 3001);
+const hostname = process.env.HOST ?? "127.0.0.1";
+if (!["127.0.0.1", "localhost", "::1"].includes(hostname)) {
+  throw new Error("HOST must be a loopback address for this local preview.");
+}
 const app = createApp();
 
 // 启动 Node.js HTTP 服务器，监听指定端口
-serve({ fetch: app.fetch, port });
+serve({ fetch: app.fetch, port, hostname });
 
-console.log(`[api] Listening on http://localhost:${port}`);
+console.log(`[api] Listening on http://${hostname === "::1" ? "[::1]" : hostname}:${port}`);

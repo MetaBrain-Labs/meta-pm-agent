@@ -207,3 +207,5 @@ Not every phrase needs fixing. Leave alone:
 - Personal voice and style (unless it undermines clarity or objective)
 
 Focus on clarity and correctness, not perfection or style uniformity.
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

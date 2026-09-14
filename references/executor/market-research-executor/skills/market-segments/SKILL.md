@@ -78,3 +78,5 @@ For each of the 3-5 segments, provide:
 - [Crossing the Chasm: The Ultimate Guide For PMs](https://www.productcompass.pm/p/crossing-the-chasm)
 - [How to Achieve Product-Market Fit? Part I: Market and Value Proposition](https://www.productcompass.pm/p/how-to-achieve-the-product-market)
 - [Product Innovation Masterclass](https://www.productcompass.pm/p/product-innovation-masterclass) (video course)
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

@@ -260,3 +260,5 @@ Heavy use of transparency (rgba, hsla) usually means an incomplete palette. Alph
 ---
 
 **Avoid**: Relying on color alone to convey information. Creating palettes without clear roles for each color. Skipping color blindness testing (8% of men affected).
+
+<!-- Third-party attribution: adapted from pbakaus/impeccable; Apache-2.0. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

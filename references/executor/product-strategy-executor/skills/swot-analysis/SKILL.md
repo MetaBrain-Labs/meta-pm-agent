@@ -94,3 +94,5 @@ What external factors could negatively impact us?
 - Update SWOT quarterly or when market conditions change
 - Use SWOT to inform product roadmap, partnerships, and resource allocation
 - Opportunities and threats should consider both current and emerging dynamics
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

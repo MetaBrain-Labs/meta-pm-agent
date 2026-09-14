@@ -160,3 +160,11 @@ resources/product-contexts/*.json
 !resources/product-contexts/.gitkeep
 
 fallback/
+# Local release audit and verification artifacts
+.release-audit/
+.release-verification/
+
+.tmp/
+
+!examples/
+!examples/**

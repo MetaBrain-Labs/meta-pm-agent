@@ -119,3 +119,5 @@ Lean Canvas (Ash Maurya) is a startup-focused adaptation of the Business Model C
 ### Further Reading
 
 - [Startup Canvas: Product Strategy and a Business Model for a New Product](https://www.productcompass.pm/p/startup-canvas)
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

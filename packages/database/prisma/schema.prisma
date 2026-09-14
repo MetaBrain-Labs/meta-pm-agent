@@ -101,7 +101,7 @@ model ProductKnowledgeGraph {
   workspaceId    String    @unique @map("workspace_id") @db.VarChar(36)
   conversationId String?   @map("conversation_id") @db.VarChar(36)
   requestFormId  String?   @map("request_form_id") @db.VarChar(36)
-  content        String
+  content        String    @default("")
   nodes          Json?     @db.JsonB                                             // JSON 数组：KnowledgeGraphNodeInput[]
   relations      Json?     @db.JsonB                                             // JSON 数组：KnowledgeGraphRelationInput[]
   version        Int       @default(1)

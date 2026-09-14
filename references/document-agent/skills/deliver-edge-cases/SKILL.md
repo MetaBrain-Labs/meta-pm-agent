@@ -28,3 +28,5 @@ expanding every lower-priority feature.
 
 Do not manufacture APIs, limits, messages, roles, or system behavior merely to
 fill a catalog.
+
+<!-- Third-party attribution: adapted from product-on-purpose/pm-skills; Apache-2.0. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

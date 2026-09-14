@@ -108,3 +108,5 @@ Prefer HTML/CSS/SVG/canvas when they can credibly reproduce an ingredient; reach
 ## After This File
 
 Once Steps A through F are complete, return to `craft.md` Step 5 (Build to Production Quality). The implementation builds against the confirmed palette, approved mock, and the assets the producer wrote.
+
+<!-- Third-party attribution: adapted from pbakaus/impeccable; Apache-2.0. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

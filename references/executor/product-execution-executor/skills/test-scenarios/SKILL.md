@@ -84,3 +84,5 @@ Create comprehensive test scenarios from user stories with test objectives, star
 - Observable expected outcomes after each step
 - Edge case and error scenario coverage
 - Ready for QA team execution and documentation
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

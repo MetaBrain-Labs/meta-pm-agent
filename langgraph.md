@@ -14,13 +14,13 @@ flowchart TD
     MAIN --> KG["归档知识图谱"]
 ```
 
-Pre-Orchestrator 和 Conversation Agent 当前主要在 LangGraph 外运行。Conversation Agent 生成 `<user-input>` 后，才调用产品主图：[conversation/stream.ts](E:/realProject/meta-pm-agent/apps/agent-runtime/src/agents/conversation/stream.ts:603)。
+Pre-Orchestrator 和 Conversation Agent 当前主要在 LangGraph 外运行。Conversation Agent 生成 `<user-input>` 后，才调用产品主图：[conversation/stream.ts](<repository-path>
 
 ---
 
 ## 2. 产品主工作流
 
-主图定义在 [workflow.ts](E:/realProject/meta-pm-agent/apps/agent-runtime/src/graph/workflow.ts:114)。
+主图定义在 [workflow.ts](<repository-path>
 
 ```mermaid
 flowchart TD
@@ -54,7 +54,7 @@ flowchart TD
 
 2. `request_agent`
 
-   将结构化输入分析成业务模型、缺失信息和问题，并通过 custom stream 输出 Request Agent 的推理、Token 和分析结果：[request-node.ts](E:/realProject/meta-pm-agent/apps/agent-runtime/src/graph/nodes/request-node.ts:30)。
+   将结构化输入分析成业务模型、缺失信息和问题，并通过 custom stream 输出 Request Agent 的推理、Token 和分析结果：[request-node.ts](<repository-path>
 
 3. `orchestrator_agent`
 
@@ -66,7 +66,7 @@ flowchart TD
 
 4. `planner_agent`
 
-   这个名称容易误解：**它目前不真正生成计划**。Planner SubAgent 已经在 Orchestrator 内生成 DAG，这个节点主要负责向前端回放计划和 checkpoint 中已有的 Executor 结果：[product-workflow-node.ts](E:/realProject/meta-pm-agent/apps/agent-runtime/src/graph/nodes/product-workflow-node.ts:41)。
+   这个名称容易误解：**它目前不真正生成计划**。Planner SubAgent 已经在 Orchestrator 内生成 DAG，这个节点主要负责向前端回放计划和 checkpoint 中已有的 Executor 结果：[product-workflow-node.ts](<repository-path>
 
 5. `executor_router`
 
@@ -77,7 +77,7 @@ flowchart TD
    - 没有未完成任务时回到 `orchestrator_agent` 执行 Critique。
    - 如果 DAG 无可执行节点，也回到 Orchestrator，由后续检查处理。
 
-   调度代码在 [product-workflow-node.ts](E:/realProject/meta-pm-agent/apps/agent-runtime/src/graph/nodes/product-workflow-node.ts:573)。
+   调度代码在 [product-workflow-node.ts](<repository-path>
 
 6. 十个 Executor 节点
 
@@ -103,7 +103,7 @@ flowchart TD
 
 ## 3. 共享状态与并行合并
 
-状态定义在 [state.ts](E:/realProject/meta-pm-agent/apps/agent-runtime/src/graph/state.ts:38)，主要包括：
+状态定义在 [state.ts](<repository-path>
 
 - `userInput`
 - `requestAnalysis`
@@ -140,7 +140,7 @@ flowchart TD
 workflow:{conversationId}:{requestFormId}
 ```
 
-默认优先使用 PostgreSQL `PostgresSaver`；数据库不可用时降级为 `MemorySaver`：[workflow-checkpointer.ts](E:/realProject/meta-pm-agent/apps/agent-runtime/src/graph/workflow-checkpointer.ts:35)。
+默认优先使用 PostgreSQL `PostgresSaver`；数据库不可用时降级为 `MemorySaver`：[workflow-checkpointer.ts](<repository-path>
 
 恢复有两种方式：
 
@@ -161,7 +161,7 @@ flowchart LR
     INTERRUPT --> END
 ```
 
-它只负责释放 `interrupt()` 和接收 `Command({ resume })`，不承载产品业务工作流：[human-in-the-loop.ts](E:/realProject/meta-pm-agent/apps/agent-runtime/src/graph/human-in-the-loop.ts:95)。
+它只负责释放 `interrupt()` 和接收 `Command({ resume })`，不承载产品业务工作流：[human-in-the-loop.ts](<repository-path>
 
 因此当前产品主图并没有在 Executor 或 Critique 节点中直接暂停；它先完成本轮，Conversation 层再把待确认问题包装成独立 HITL 表单。
 
@@ -202,6 +202,6 @@ flowchart TD
 - 最终选择规则会保留所有评分历史。
 - `humanReview` 当前只是自动批准占位节点，没有真正调用 `interrupt()`。
 
-定义见 [document-workflow.ts](E:/realProject/meta-pm-agent/apps/agent-runtime/src/graph/document-workflow.ts:125)。
+定义见 [document-workflow.ts](<repository-path>
 
 一句话概括：**Conversation 层决定何时进入图；产品主图负责“分析 → 规划 → 并行执行 → 审查”；文档图负责“读取知识图谱 → 写 PRD → 多评分重试 → 导出”；HITL 图只负责表单暂停和恢复。**

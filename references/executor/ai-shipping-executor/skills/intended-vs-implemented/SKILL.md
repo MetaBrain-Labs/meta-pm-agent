@@ -39,3 +39,5 @@ Use this when documented intent exists — `permissions.md`, `architecture.md`, 
 - Undocumented-but-enforced is usually fine, but flag it: the docs are now stale, which weakens the next audit.
 - This method feeds the security and performance audits; it does not replace their sink-level analysis — it adds the intent axis they lack.
 - Never fabricate intent to manufacture a gap. If the docs are silent, say the docs are silent.
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

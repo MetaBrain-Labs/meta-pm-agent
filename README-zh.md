@@ -66,11 +66,11 @@ Planner SubAgent 在 Orchestrator 内生成 DAG；图中的 `planner_agent` 节�
 
 ### 环境要求
 
-- Node.js 20+
+- Node.js >=22.13
 - pnpm 11.3.0
 - PostgreSQL
 - 运行 Worker 或 `pnpm dev` 时需要 Redis
-- OpenAI-compatible 模型 API
+- 支持模型使用列表中 DeepSeek 模型 ID 的服务商 API
 
 如尚未启用 pnpm，可使用 Corepack：
 
@@ -117,30 +117,22 @@ Chat 与 Document 的模型 ID、服务 Base URL、推理参数和计价统一�
 
 不得提交 `.env` 或 `resources/product-contexts/` 下的运行时产物。
 
-### 3. 初始化 Prisma
+### 3. 初始化数据库
+
+首次安装请使用**空的开发数据库**：
 
 ```bash
 pnpm --filter @repo/database db:generate
-pnpm --filter @repo/database db:push
+pnpm --filter @repo/database db:init
 ```
 
-`db:generate` 只生成 Prisma Client；`db:push` 会修改已配置的数据库。
-
-已有数据库升级到支持 PRD 证据阻断等待状态时，执行：
-
-```bash
-pnpm --filter @repo/database db:upgrade-document-status
-```
+`db:init` 先执行 Prisma `db:push`，再安装受版本管理的模型列表、token 用量、PRD 和上下文快照表。支持 `public` schema；不要对生产数据库直接运行初始化命令。
 
 #### 数据库结构说明
 
-当前 Prisma schema 覆盖核心应用表，但 API 还会使用尚未纳入受跟踪 Prisma migration 的 raw SQL 表：
+已有数据库先备份，再执行 `pnpm --filter @repo/database db:upgrade`。该命令添加缺失运行时表、缓存 token 列，更新 PRD 等待状态约束和索引，并为历史图谱 `content` 列设置空字符串默认值；不删除业务数据。它不迁移已有库的 Prisma 核心表，核心结构变更需单独审核后执行。可重复执行升级；结构冲突会报错，不自动覆盖。
 
-- `token_usage`：完整聊天与 token 持久化需要；
-- `document_generation_run`、`document_artifact`：PRD 生成需要；
-- `product_context_snapshot`：可选；缺失时 runtime 会降级到 resources 快照。
-
-启用对应流程前必须自行创建所需 raw SQL 表。配置数据库地址后，`PostgresSaver` 会自动初始化 LangGraph checkpoint 表。把其余 raw SQL 表正式纳入 migration 仍是仓库待完成的环境建设任务。
+SQL 位于 `packages/database/sql/20260914_runtime_tables.sql`。LangGraph checkpoint 表由 PostgresSaver 独立初始化。
 
 ### 4. 构建
 
@@ -298,3 +290,22 @@ pnpm build --force
 3. 保持 package、SSE、持久化和 Agent 边界。
 4. 先运行最小相关测试；涉及跨包契约时再运行 `pnpm build`。
 5. 不得提交 `dist/`、`.env`、运行时快照或 Agent 摘要。
+
+## 首次模型配置与本地运行边界
+
+这是单用户本地预览版，使用固定本地账号，尚无多人认证和数据隔离。API 默认仅监听 `127.0.0.1:3001`；`HOST` 只接受回环地址，`CORS_ORIGINS` 只接受明确的本地 HTTP/HTTPS origin。前端使用 `http://localhost:3000` 或 `http://127.0.0.1:3000`；Vite 切换端口时同步修改配置。跨域限制不替代认证。
+
+1. 在服务端 `.env` 中填写你自己的模型 API Key，重启 API；不要在浏览器输入或提交密钥。
+2. 打开 Setting 的模型使用列表。当前 UI 只支持代码中列出的 DeepSeek 模型 ID，并非任意 OpenAI-compatible 模型选择器。
+3. 新建自定义列表，选择通用或分类模式，检查 Chat 与 Document 的模型、Base URL、推理参数及计价；在聊天模型选择器中选用该列表。
+4. 使用合成需求验证一次流程；确认服务商支持选定 ID。显示的价格是配置快照，模型费用由你承担，多 Agent 与 PRD 评分会产生多次调用。
+
+模型服务会收到对话和相关产品上下文；搜索服务会收到查询文本。默认关闭的 LangSmith tracing 启用后可能上传 prompt、输出与执行记录。调试摘要及本地崩溃报告可能包含产品信息，分享前脱敏。首次发布移除了许可未确定的本地 tokenizer 资产，缺失用量不再通过该资产校正；以服务商用量和账单为准。
+
+## 开源许可与发布资料
+
+项目原创部分采用 [Apache License 2.0](LICENSE)，第三方内容保留原许可，详见 [第三方声明](THIRD_PARTY_NOTICES.md)。
+
+- [贡献指南](CONTRIBUTING.md) 与 [安全报告](SECURITY.md)
+- [完整合成示例](examples/local-preview.md) 与 [界面截图说明](assets/screenshots/README.md)
+- [已知限制](KNOWN_LIMITATIONS.md)、[预览版发布说明](RELEASE_NOTES.md) 与 [发布检查表](RELEASE_CHECKLIST.md)
