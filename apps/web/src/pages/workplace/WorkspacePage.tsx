@@ -194,7 +194,7 @@ export function WorkspacePage({
           <Avatar
             shape="square"
             size={128}
-            src={<img draggable={false} src="/icon.svg" alt="avatar" />}
+            src={<img draggable={false} src="/icon.png" alt="avatar" />}
           />
           <h1>问渠</h1>
           <p>V1.01</p>

@@ -27,3 +27,5 @@ supported by the graph.
 
 If the requirement, priority, or expected behavior is unclear, record a `TBD`
 or open question instead of inventing a criterion.
+
+<!-- Third-party attribution: adapted from product-on-purpose/pm-skills; Apache-2.0. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

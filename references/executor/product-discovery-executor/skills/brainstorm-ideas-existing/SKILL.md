@@ -52,3 +52,5 @@ If the output is substantial, save it as a markdown document in the user's works
 - [The Extended Opportunity Solution Tree](https://www.productcompass.pm/p/the-extended-opportunity-solution-tree)
 - [Product Model First Principles: Product Discovery, Product Delivery, and Product Culture In Depth](https://www.productcompass.pm/p/product-model-first-principles-discovery-deliver)
 - [Continuous Product Discovery Masterclass (CPDM)](https://www.productcompass.pm/p/cpdm) (video course)
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

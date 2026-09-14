@@ -236,3 +236,5 @@ Guidance on:
 - [ ] Document your legal basis for each type of processing
 - [ ] Have a Data Processing Agreement (DPA) with all third-party processors
 - [ ] Notify users of material changes; consider giving them a choice to opt-out
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

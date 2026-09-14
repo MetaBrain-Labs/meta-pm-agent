@@ -10,7 +10,7 @@
  * - 查询当前工作区指定文档类型的最新 run
  *
  * Notes:
- * - 表结构 SQL 由 docs/database/document-generation.sql 提供。
+ * - 表结构 SQL 由 packages/database/sql/20260914_runtime_tables.sql 提供。
  */
 
 import { randomUUID } from "node:crypto";

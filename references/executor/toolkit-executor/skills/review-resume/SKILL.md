@@ -219,3 +219,5 @@ Use clear, standard job titles and language. Avoid made-up or overly creative jo
 - [How to Land a PM Interview: A Step-by-Step Guide. Product Manager Resume Template.](https://www.productcompass.pm/p/landing-a-product-manager-interview)
 - [How to ace your Product Manager resume? 12 Tips + Templates](https://www.productcompass.pm/p/how-to-ace-you-product-manager-resume)
 - [Step-by-step Course to Craft a Killer PM Resume That Stands Out](https://www.productcompass.pm/p/pm-resume-course) (video course)
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

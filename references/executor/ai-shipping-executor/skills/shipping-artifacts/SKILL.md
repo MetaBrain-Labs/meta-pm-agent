@@ -77,3 +77,5 @@ Each entry: file · one-line purpose · what it must capture · how a reviewer u
 - The agent operating-context file (`CLAUDE.md` / `AGENTS.md`) is a *different* artifact — instructions derived from these docs, not system documentation. It is produced at the handoff step by `/ship-check`, not here.
 - `tests.md` is produced by `/derive-tests`; the rest are produced by `/document-app`.
 - Do not include an "updated date" line; the file's history is the source of truth.
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

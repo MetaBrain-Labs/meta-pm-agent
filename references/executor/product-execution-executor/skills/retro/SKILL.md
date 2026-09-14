@@ -74,3 +74,5 @@ If the user provides files (sprint data, velocity charts, team feedback, or prev
    ```
 
 Save as markdown. Keep the tone constructive — the goal is improvement, not blame.
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

@@ -1,7 +1,7 @@
 {
   "name": "meta-pm-agent",
   "version": "1.0.0",
-  "description": "",
+  "description": "AI-assisted product management with recoverable agent workflows, a product knowledge graph, and PRD generation.",
   "main": "index.js",
   "private": true,
   "packageManager": "pnpm@11.3.0",
@@ -12,7 +12,7 @@
   },
   "keywords": [],
   "author": "MetaBrain-Labs",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "devEngines": {
     "packageManager": {
       "name": "pnpm",

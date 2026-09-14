@@ -168,3 +168,5 @@ STOP and use Codex's structured user-input/question tool when available; if unav
 If the user disagrees with any part, revisit the relevant discovery questions. A shape run is incomplete until the user confirms direction.
 
 Once confirmed, the brief is complete. The user can now hand it to $impeccable, or use it to guide any other implementation approach. (If the user wants the full discovery-then-build flow in one step, they should use $impeccable craft instead, which runs this command internally.)
+
+<!-- Third-party attribution: adapted from pbakaus/impeccable; Apache-2.0. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

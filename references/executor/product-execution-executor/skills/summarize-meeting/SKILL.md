@@ -79,3 +79,5 @@ Meeting summaries are how knowledge spreads and accountability stays clear in pr
 - Highlight action items clearly so nothing falls through the cracks
 - If the meeting was large or complex, consider breaking points into sections by topic
 - Use "we" language to keep the team feel inclusive and collaborative
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

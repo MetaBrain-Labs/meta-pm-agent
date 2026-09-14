@@ -44,3 +44,5 @@ Think step by step. Save substantial output as a markdown document.
 - [Startup Canvas: Product Strategy and a Business Model for a New Product](https://www.productcompass.pm/p/startup-canvas)
 - [Product Innovation Masterclass](https://www.productcompass.pm/p/product-innovation-masterclass) (video course)
 - [Continuous Product Discovery Masterclass (CPDM)](https://www.productcompass.pm/p/cpdm) (video course)
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

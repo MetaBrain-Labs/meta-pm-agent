@@ -420,7 +420,7 @@ function PrototypeNodeView({ node }: { node: PrototypeNode }) {
 
     case "divider":
       return (
-        <Divider className="!my-1" orientation="left" plain>
+        <Divider className="!my-1" titlePlacement="left" plain>
           {text}
         </Divider>
       );

@@ -112,3 +112,5 @@ if __name__ == "__main__":
 **SQL:** INSERT statements, directly executable on relational databases
 
 **Python Script:** Executable generator for custom or large datasets
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

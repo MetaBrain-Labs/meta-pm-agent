@@ -204,3 +204,5 @@ Test animations thoroughly:
 - **Adds value**: Makes interface clearer or more delightful
 
 When the motion clarifies state instead of decorating it, hand off to `$impeccable polish` for the final pass.
+
+<!-- Third-party attribution: adapted from pbakaus/impeccable; Apache-2.0. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

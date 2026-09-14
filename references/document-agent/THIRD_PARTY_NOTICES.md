@@ -16,3 +16,5 @@ the workflows to this application's product knowledge graph.
 The reused `user-stories` and `grammar-check` skills remain in their existing
 repository locations and originate from
 [phuryn/pm-skills](https://github.com/phuryn/pm-skills), licensed under MIT.
+
+For the complete inventory, preserved license texts, and release exclusions, see [root third-party notices](../../THIRD_PARTY_NOTICES.md).

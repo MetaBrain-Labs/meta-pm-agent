@@ -61,3 +61,5 @@ If the user provides files (JIRA exports, Linear tickets, PRDs, Git logs, or int
 5. **Adjust tone** to match the product's voice — professional for B2B, friendly for consumer, developer-focused for APIs.
 
 Save as a markdown document. If the user wants HTML or another format, convert accordingly.
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

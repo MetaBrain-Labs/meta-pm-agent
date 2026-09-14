@@ -136,3 +136,5 @@ After presenting the summary, tell the user:
 - Forget to prioritize (everything can't be P0)
 - Report false positives without verification
 
+
+<!-- Third-party attribution: adapted from pbakaus/impeccable; Apache-2.0. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

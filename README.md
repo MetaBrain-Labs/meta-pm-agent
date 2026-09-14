@@ -4,7 +4,7 @@
 
 An AI-assisted product-management workspace that turns conversations into structured requirements, parallel execution plans, a persistent product knowledge graph, and PRD artifacts.
 
-> This project is under active development. Review the [database schema note](#database-schema-note) before running the complete chat or document workflow.
+> This project is under active development. This is a single-user local preview. Review the [database schema note](#database-schema-note) before running the complete workflow.
 
 ## Highlights
 
@@ -66,11 +66,11 @@ See [STRUCTURE.md](STRUCTURE.md) for module ownership, runtime state, persistenc
 
 ### Prerequisites
 
-- Node.js 20+
+- Node.js >=22.13
 - pnpm 11.3.0
 - PostgreSQL
 - Redis when running the worker or `pnpm dev`
-- An OpenAI-compatible model API
+- A provider supporting the DeepSeek model IDs configured in Model Usage Profiles
 
 Enable pnpm through Corepack if needed:
 
@@ -117,30 +117,22 @@ Chat and Document model IDs, provider base URLs, reasoning parameters, and prici
 
 Do not commit `.env` or runtime output under `resources/product-contexts/`.
 
-### 3. Initialize Prisma
+### 3. Initialize the database
+
+Use an **empty development database** for a first installation:
 
 ```bash
 pnpm --filter @repo/database db:generate
-pnpm --filter @repo/database db:push
+pnpm --filter @repo/database db:init
 ```
 
-`db:generate` only generates Prisma Client. `db:push` changes the configured database.
-
-For an existing database, enable the PRD evidence-blocker waiting status with:
-
-```bash
-pnpm --filter @repo/database db:upgrade-document-status
-```
+`db:init` runs Prisma `db:push`, then installs tracked model-profile, token-usage, PRD and context-snapshot tables. The supported schema is `public`. Do not initialize a production database with this command.
 
 #### Database schema note
 
-The current Prisma schema covers the core application tables, but the API also uses raw SQL tables that are not yet represented by tracked Prisma migrations:
+For an existing database, back it up first and run `pnpm --filter @repo/database db:upgrade`. This adds missing runtime tables and cached-token columns, updates PRD waiting-status constraints/indexes and defaults the legacy graph `content` column to an empty string. It does not delete business data or migrate existing Prisma core tables; review core schema changes separately. Upgrades are repeatable and conflicting schemas fail rather than being overwritten.
 
-- `token_usage` — required by full chat/token persistence;
-- `document_generation_run` and `document_artifact` — required by PRD generation;
-- `product_context_snapshot` — optional; the runtime falls back to resource snapshots when absent.
-
-Provision the required raw SQL tables before enabling those flows. LangGraph checkpoint tables are initialized automatically by `PostgresSaver` when a database URL is available. Tracking all remaining raw SQL tables as migrations is still an open repository setup task.
+The SQL is tracked at `packages/database/sql/20260914_runtime_tables.sql`. PostgresSaver initializes its own checkpoint tables independently.
 
 ### 4. Build
 
@@ -298,3 +290,22 @@ Before opening a pull request:
 3. Preserve package, SSE, persistence, and Agent boundaries.
 4. Run the narrowest relevant tests, then `pnpm build` for cross-package changes.
 5. Do not commit generated `dist/`, `.env`, runtime snapshots, or Agent summaries.
+
+## First model setup and local deployment boundary
+
+This is a single-user local preview with a fixed local account and no multi-user authentication or tenant isolation. The API binds to `127.0.0.1:3001` by default. `HOST` accepts loopback addresses only; `CORS_ORIGINS` accepts exact local HTTP/HTTPS origins only. Open the web app at `http://localhost:3000` or `http://127.0.0.1:3000`; update the origins if Vite changes ports. CORS does not replace authentication.
+
+1. Set your own provider API key in server-side `.env` and restart the API. Never put credentials into browser forms or commits.
+2. Open Model Usage Profiles in Settings. The current UI supports the DeepSeek IDs enumerated in the code; it is not a general-purpose OpenAI-compatible model selector.
+3. Create a universal or tiered profile; check Chat and Document model IDs, base URLs, reasoning parameters and pricing, then select it in the chat model selector.
+4. Try the synthetic example and confirm your provider supports the selected IDs. Prices displayed are configuration snapshots. You pay provider costs; parallel agents and PRD reviewers produce multiple calls.
+
+Model providers receive conversations and relevant product context; search providers receive search queries. Enabling optional LangSmith tracing can upload prompts, outputs and traces. Debug summaries and local crash reports may contain product data; redact before sharing. This release removes tokenizer assets whose standalone license was not established, so usage omitted by providers is no longer corrected using those assets. Provider usage and invoices are authoritative.
+
+## License and release resources
+
+Project-authored material is licensed under the [Apache License 2.0](LICENSE). Third-party material retains its original terms; see [Third-party notices](THIRD_PARTY_NOTICES.md).
+
+- [Contributing](CONTRIBUTING.md) and [Security reporting](SECURITY.md)
+- [Complete synthetic example](examples/local-preview.md) and [Screenshot notes](assets/screenshots/README.md)
+- [Known limitations](KNOWN_LIMITATIONS.md), [Preview release notes](RELEASE_NOTES.md) and [Release checklist](RELEASE_CHECKLIST.md)

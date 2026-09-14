@@ -15,7 +15,9 @@
     "db:push": "node scripts/with-database-url.mjs prisma db push",
     "db:migrate": "node scripts/with-database-url.mjs prisma migrate dev",
     "db:upgrade-document-status": "node scripts/with-database-url.mjs prisma db execute --file sql/20260802_document_generation_awaiting_input.sql --schema prisma/schema.prisma",
-    "db:studio": "node scripts/with-database-url.mjs prisma studio"
+    "db:studio": "node scripts/with-database-url.mjs prisma studio",
+    "db:init": "pnpm db:push && pnpm db:upgrade",
+    "db:upgrade": "node scripts/with-database-url.mjs prisma db execute --file sql/20260914_runtime_tables.sql --schema prisma/schema.prisma"
   },
   "dependencies": {
     "@prisma/client": "^6.2.1"

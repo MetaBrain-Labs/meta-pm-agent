@@ -72,3 +72,5 @@ Create user stories following the 3 C's (Card, Conversation, Confirmation) and I
 ### Further Reading
 
 - [How to Write User Stories: The Ultimate Guide](https://www.productcompass.pm/p/how-to-write-user-stories)
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

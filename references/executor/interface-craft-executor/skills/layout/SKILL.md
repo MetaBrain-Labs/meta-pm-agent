@@ -164,3 +164,5 @@ For variants whose topology genuinely changes (stacked vs. side-by-side, grid vs
 ```
 
 See `reference/live.md` for the full params contract.
+
+<!-- Third-party attribution: adapted from pbakaus/impeccable; Apache-2.0. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

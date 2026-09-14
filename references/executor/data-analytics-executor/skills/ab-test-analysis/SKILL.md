@@ -80,3 +80,5 @@ Think step by step. Save as markdown. Generate Python scripts for calculations i
 - [A/B Testing 101 + Examples](https://www.productcompass.pm/p/ab-testing-101-for-pms)
 - [Testing Product Ideas: The Ultimate Validation Experiments Library](https://www.productcompass.pm/p/the-ultimate-experiments-library)
 - [Are You Tracking the Right Metrics?](https://www.productcompass.pm/p/are-you-tracking-the-right-metrics)
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

@@ -83,3 +83,5 @@ Think step by step. Save as markdown. Flag any assumptions that need validation 
 
 - [Product Pricing Strategies 101](https://www.productcompass.pm/p/product-pricing-strategies-101)
 - [The AI Product Pricing Masterclass: OpenAI Product Lead on Why SaaS Pricing Fails in AI (and How to Fix It)](https://www.productcompass.pm/p/ai-product-pricing) (video course)
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

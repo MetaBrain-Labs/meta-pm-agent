@@ -244,3 +244,5 @@ After polishing, ensure code quality:
 - **Remove orphaned code**: Delete unused styles, components, or files made obsolete by polish.
 - **Consolidate tokens**: If you introduced new values, check whether they should be tokens.
 - **Verify DRYness**: Look for duplication introduced during polishing and consolidate.
+
+<!-- Third-party attribution: adapted from pbakaus/impeccable; Apache-2.0. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

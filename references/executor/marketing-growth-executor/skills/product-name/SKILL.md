@@ -45,3 +45,5 @@ Prioritize names that are:
 - Include any naming conventions or patterns used by your company
 - Share the product's core value proposition and key features
 - Mention geographic markets or languages to consider
+
+<!-- Third-party attribution: adapted from phuryn/pm-skills; MIT. Local changes bind guidance to this application. Original import revision was not recorded. See /THIRD_PARTY_NOTICES.md for license texts. -->

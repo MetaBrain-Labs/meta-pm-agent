@@ -1,0 +1,10 @@
+{
+  "ba2a5176eae536bd": {
+    "rule": "credential-url",
+    "reason": "Reviewed historical localhost PostgreSQL documentation placeholder; not a provider or deployment credential."
+  },
+  "b831e95f63761e50": {
+    "rule": "credential-url",
+    "reason": "Synthetic isolated CI PostgreSQL service credential, used only in disposable release_test database; not a deployment credential."
+  }
+}
