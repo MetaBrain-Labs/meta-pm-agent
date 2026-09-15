@@ -1,37 +1,90 @@
-# meta-pm-agent
+<div align="center">
+
+<img src="assets/logo.png" alt="Meta PM Agent" width="88">
+
+# Meta PM Agent
 
 [English](README.md) | [简体中文](README-zh.md)
 
-一个 AI 辅助产品管理工作区：把对话转化为结构化需求、可并行执行的任务计划、可持久化产品知识图谱和 PRD 产物。
+**从产品想法，到结构化需求、多 Agent 并行执行、产品知识图谱与 PRD 产物。**
 
-> v0.1 是单用户、同机运行的本地预览版：仅关联本地目录、调用外部模型 API，并生成 PRD。不支持云端同步/部署、附件、团队协作、MRD/BRD 或人工审批。运行完整聊天或文档工作流前，请先阅读下方“数据库结构说明”。
+`meta-pm-agent` 是仓库名；工作区界面品牌为「问渠」。
+
+[![Release](https://img.shields.io/github/v/release/MetaBrain-Labs/meta-pm-agent?include_prereleases&label=release)](https://github.com/MetaBrain-Labs/meta-pm-agent/releases)
+[![License](https://img.shields.io/github/license/MetaBrain-Labs/meta-pm-agent)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/MetaBrain-Labs/meta-pm-agent/ci.yml?branch=main&label=ci)](https://github.com/MetaBrain-Labs/meta-pm-agent/actions/workflows/ci.yml)
+[![Node](https://img.shields.io/badge/node-%3E%3D22.13-informational)](https://nodejs.org)
+
+**[快速开始](#快速开始)** · **[界面截图](#界面截图)** · **[工作原理](#工作原理)** · **[合成示例](examples/local-preview.md)**
+
+</div>
+
+<img src="assets/brand-hero.png" alt="Meta PM Agent 品牌主视觉" width="100%">
+
+<sub>品牌主视觉。图中的流程示意与文档大纲仅用于表达产品方向；真实界面见[界面截图](#界面截图)，真实 Agent 拓扑见[工作原理](#工作原理)。</sub>
+
+> **v0.1 本地预览版：** 单用户、同机运行、仅回环地址、仅支持 PRD。不支持云端同步/部署、附件、团队协作、MRD/BRD 或人工审批工作流。详见 [v0.1 边界](#v01-边界)与[已知限制](KNOWN_LIMITATIONS.md)。
+
+## 界面截图
+
+以下是在运行中的本地预览实例上、使用合成需求（"企业 Markdown 文档协同工具"）拍摄的真实截图。模糊区域由维护者自行打码；拍摄范围与遗留待办见[界面截图说明](assets/screenshots/README.md)。
+
+### Planner DAG 与并行 Executor
+
+<img src="assets/screenshots/chat-dag-executors.png" alt="聊天工作区中的 Planner DAG、并行 Executor 卡片与 Critique Agent" width="100%">
+
+<sub>产品主图把一次请求展开为 DAG：Orchestrator → Planner SubAgent → 依赖感知的并行 Executor → Critique。每个 Executor 的结果、工具调用、token 用量与费用都挂在对应 Agent 下。<em>流程示意截图，已打码，非生产数据。</em></sub>
+
+### 产品知识图谱
+
+<img src="assets/screenshots/knowledge-graph.png" alt="知识图谱弹窗，包含节点详情、关系类型与风险统计" width="100%">
+
+<sub>单个工作区持久化 134 个节点、161 条关系，支持节点详情、关系类型、来源与生命周期状态；由共享的 AntV G6 视图渲染。</sub>
+
+### 带证据复核的 PRD 生成
+
+<img src="assets/screenshots/prd-generation.png" alt="PRD 产物弹窗，包含每轮评分、评审意见与 Markdown 下载" width="100%">
+
+<sub>每轮 PRD 都会经过起草、一致性检查与三个独立评审打分；评分差超过 8 分直接驳回，可信草稿需要 85/100。未解决的证据问题会变成阻断项，而不是被编造补充。</sub>
+
+<details>
+<summary><strong>完整知识图谱导出</strong>（750 × 5592）</summary>
+
+<br>
+
+<img src="assets/screenshots/knowledge-graph-full.webp" alt="完整产品知识图谱导出" width="100%">
+
+</details>
 
 ## 核心能力
 
-- **意图感知对话**：Pre-Orchestrator 区分普通聊天、新产品、项目演进、澄清和中断工作流恢复。
-- **LangGraph 产品工作流**：Request 分析进入 Orchestrator、Planner SubAgent、依赖感知的并行 Executor 和 Critique 质量门禁。
-- **十个产品管理领域 Executor**：产品策略、市场研究、GTM、产品发现、产品执行、营销增长、数据分析、AI Shipping、工具箱和界面设计。
-- **持久化产品上下文**：维护结构化节点、关系、决策、风险、开放问题、来源、生命周期和补充轮修正。
-- **可恢复执行**：PostgreSQL checkpoint、表单 HITL 恢复、已完成任务回放和服务端取消。
-- **本地项目管理**：本地目录项目支持添加、重命名、修改路径和软移除；对话支持创建、恢复、重命名和软删除。
-- **文档生成**：独立 PRD 工作流，包含章节起草、一致性检查、自动质量审核、重试、产物预览和 Markdown 下载。
-- **实时前端**：展示 SSE reasoning/工具事件、并行 Agent 状态、token 用量、Planner DAG 进度和 G6 知识图谱。
-- **受控工具**：集中 allowlist、禁止任意 Agent 文件系统访问、可选 Tavily/公开索引搜索和 Evidence 来源校验。
+- **对话 → 结构化需求 → 并行执行 → PRD。** 意图感知路由、在规划前补齐缺口的 Request 分析、依赖感知 DAG，以及全部 Executor 完成后的 Critique 复核。
+- **持久化产品知识图谱。** 结构化节点、关系、决策、风险、开放问题、任务/来源溯源与补充轮修正——不是自由文本聊天记忆。
+- **可审计的 PRD。** 章节起草、跨章节一致性检查、三个独立评审、有界重试、保留全部草稿历史、产物预览与 Markdown 下载。
+- **可恢复执行。** PostgreSQL checkpoint、表单式人工介入恢复、已完成任务回放与服务端取消。
 
-## 架构
+本文档其余部分是工程细节：架构、环境准备、数据库、API 与故障排查。
+
+## 工作原理
 
 ```mermaid
-flowchart LR
-    U["用户"] --> PO["Pre-Orchestrator"]
+flowchart TD
+    U["用户请求"] --> PO["Pre-Orchestrator"]
     PO --> C["Conversation Agent"]
-    C --> R["Request Agent"]
-    R --> O["Orchestrator"]
-    O --> P["Planner SubAgent"]
-    P --> E["并行 Executors"]
-    E --> K["产品知识图谱"]
+    C --> UI["结构化用户输入"]
+    UI --> R["Request 分析"]
+    R --> O["Orchestrator Agent"]
+    O --> P["Planner SubAgent<br/>生成 DAG"]
+    P --> E1["Executor A"]
+    P --> E2["Executor B"]
+    P --> E3["Executor C"]
+    E1 --> K["产品知识图谱"]
+    E2 --> K
+    E3 --> K
     K --> Q["Critique Agent"]
-    K --> D["PRD 文档工作流"]
     Q --> C
+    K --> D["PRD 文档工作流"]
+    D --> PRD["PRD 产物"]
 ```
 
 产品主图使用固定骨架：
@@ -48,6 +101,13 @@ parse_user_input
 ```
 
 Planner SubAgent 在 Orchestrator 内生成 DAG；图中的 `planner_agent` 节点负责展示或恢复计划。所有 Executor 任务完成后，由 Orchestrator 调用 Critique。PRD 生成和 Question Form HITL 分别使用独立 LangGraph。
+
+| 环节 | 运行内容 |
+| --- | --- |
+| 意图与需求 | Pre-Orchestrator、Conversation Agent、Request 分析 |
+| 规划与执行 | Orchestrator、Planner SubAgent、10 个 Executor 领域、Critique |
+| 持久化状态 | PostgreSQL checkpoint，以及每个工作区一行结构化图谱 |
+| 交付物 | PRD 文档工作流（起草 → 一致性检查 → 评分 → 导出） |
 
 模块边界、运行时状态、持久化流程和详细图示见 [STRUCTURE.md](STRUCTURE.md)。
 
@@ -111,7 +171,7 @@ Copy-Item .env.example .env
 | `TAVILY_API_KEY` | 可选 Tavily 搜索；缺省时使用公开索引 |
 | `LANGGRAPH_CHECKPOINT_DATABASE_URL` | 可选独立 checkpoint 数据库地址 |
 
-Chat 与 Document 的模型 ID、服务 Base URL、推理参数和计价统一在“本地设置”的模型使用列表中配置。内置费用使用 DeepSeek [当前高峰价估算快照](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)（缓存命中 ¥0.04/M、未命中 ¥2/M、输出 ¥8/M），实际账单以服务商为准。根据 [V4.1 Flash 迁移公告](https://api-docs.deepseek.com/zh-cn/news/news260910/)，旧 `deepseek-v4-flash`、`deepseek-v4-pro` 配置会在读取或升级时归一化为 `deepseek-flash`。
+Chat 与 Document 的模型 ID、服务 Base URL、推理参数和计价统一在"本地设置"的模型使用列表中配置。内置费用使用 DeepSeek [当前高峰价估算快照](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)（缓存命中 ¥0.04/M、未命中 ¥2/M、输出 ¥8/M），实际账单以服务商为准。根据 [V4.1 Flash 迁移公告](https://api-docs.deepseek.com/zh-cn/news/news260910/)，旧 `deepseek-v4-flash`、`deepseek-v4-pro` 配置会在读取或升级时归一化为 `deepseek-flash`。
 
 不得提交 `.env` 或 `resources/product-contexts/` 下的运行时产物。
 
@@ -289,9 +349,11 @@ pnpm build --force
 4. 先运行最小相关测试；涉及跨包契约时再运行 `pnpm build`。
 5. 不得提交 `dist/`、`.env`、运行时快照或 Agent 摘要。
 
-## 首次模型配置与本地运行边界
+## v0.1 边界
 
 这是单用户本地预览版，不提供账号界面、认证和租户隔离；固定本地所有者 ID 仅用于内部持久化。API 默认仅监听 `127.0.0.1:3001`；`HOST` 只接受回环地址，`CORS_ORIGINS` 只接受明确的本地 HTTP/HTTPS origin。前端使用 `http://localhost:3000` 或 `http://127.0.0.1:3000`；Vite 切换端口时同步修改配置。跨域限制不替代认证。
+
+### 首次模型配置与本地运行边界
 
 1. 在服务端 `.env` 中填写你自己的模型 API Key，重启 API；不要在浏览器输入或提交密钥。
 2. 打开 Setting 的模型使用列表。当前 UI 只支持代码中列出的 DeepSeek 模型 ID，并非任意 OpenAI-compatible 模型选择器。
@@ -306,4 +368,4 @@ pnpm build --force
 
 - [贡献指南](CONTRIBUTING.md) 与 [安全报告](SECURITY.md)
 - [完整合成示例](examples/local-preview.md) 与 [界面截图说明](assets/screenshots/README.md)
-- [已知限制](KNOWN_LIMITATIONS.md)、[预览版发布说明](RELEASE_NOTES.md) 与 [发布检查表](RELEASE_CHECKLIST.md)
+- [已知限制](KNOWN_LIMITATIONS.md)、[v0.1.0 发布说明](RELEASE_NOTES.md) 与 [发布检查表](RELEASE_CHECKLIST.md)

@@ -29,7 +29,8 @@ Publish only after every blocking item is resolved. This file does not authorize
 - [x] Verify focused runtime-table and message-type PostgreSQL integration tests against the isolated first-install test database; reproduce and fix varchar(20) failures without shortening identifiers.
 - [ ] Obtain green normal CI, including fresh empty-database initialization and repeated upgrade. CI has not run remotely.
 - [ ] Run the synthetic end-to-end scenario from a clean clone, including chat, graph, PRD download, stop and recovery; record actual outcomes.
-- [ ] Capture and review actual synthetic screenshots. Local browser access was denied during preparation.
+- [x] Capture and review synthetic product screenshots; embed them in the README without claiming production data (`assets/screenshots/README.md` records the scope). Open items: one capture still contains a private test directory path and legacy model IDs, a demo GIF has not been produced, and every redacted region needs a final 100% review.
+- [ ] Replace the `chat-dag-executors.png` capture after cropping or masking the private test directory path, and re-capture the model-selector screenshots against a build using `deepseek-flash`.
 
 ## v0.1 local product gates
 
@@ -43,6 +44,7 @@ Publish only after every blocking item is resolved. This file does not authorize
 ## Publication gates
 
 - [x] Add contributing/security documents, issue and PR templates, synthetic walkthrough and known limitations.
-- [ ] Update RELEASE_NOTES.md with actual CI/manual outcomes and final revision.
-- [ ] After explicit user approval, commit reviewed source changes and create a preview tag and GitHub prerelease. Suggested tag: v0.1.0-preview.1; package versions are unchanged.
+- [x] Rewrite RELEASE_NOTES.md as the publishable v0.1.0 release body with highlights, limitations, upgrade notes, and the publish commands.
+- [ ] Record actual green CI and clean-clone manual outcomes in RELEASE_NOTES.md before publication; the preparation-environment results there are explicitly unverified.
+- [ ] After explicit user approval, commit reviewed source changes and create tag `v0.1.0` plus a GitHub prerelease. All package versions are now `0.1.0`.
 - [ ] After explicit user approval, make the chosen repository public and recheck release archive, installation links and private reporting.
