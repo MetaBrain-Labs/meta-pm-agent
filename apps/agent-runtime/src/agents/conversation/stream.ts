@@ -27,6 +27,7 @@ import type {
   RequestAnalysis,
 } from "@repo/shared";
 import { calculateCost } from "../../config";
+import { toUserVisibleAgentError } from "../common/agent-error-message";
 import { createAgentRunSummaryRecorder } from "../common/agent-run-summary";
 import {
   createConversationAgent,
@@ -1265,7 +1266,7 @@ async function* streamPlanningAfterUserInput(
     }
     yield {
       type: "error",
-      error: getErrorMessage(error),
+      error: toUserVisibleAgentError(error),
       agentType: "request",
       terminal: true,
     };

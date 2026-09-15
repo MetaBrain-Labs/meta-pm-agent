@@ -38,6 +38,8 @@ import {
   createPlannerSubagent,
   extractPlanFromSubagentResult,
   formatTaskExecutionPlanBlock,
+  PLANNER_REASONING_EFFORT,
+  PLANNER_RETRY_REASONING_EFFORT,
 } from "./planner-subagent";
 import {
   createPreOrchestratorSubagent,
@@ -53,6 +55,17 @@ export interface OrchestratorAgentOutput {
   decision: OrchestratorAgentResult;
   plan?: TaskExecutionPlan;
 }
+
+/**
+ * 单次 Orchestrator attempt 的墙钟上限。
+ *
+ * Planner 子代理可能长时间只产出推理而不返回计划，HTTP 空闲超时无法约束总耗时；
+ * 到期后由运行时中止本轮，交给一次降级重试或紧凑失败提示。
+ *
+ * 取值依据：本地诊断记录中成功的 full 模式 attempt 最长约 223 秒，
+ * 因此 5 分钟既能覆盖正常的慢轮次，又能中止真正卡死的 provider 流。
+ */
+export const ORCHESTRATOR_ATTEMPT_DEADLINE_MS = 300_000;
 
 /**
  * Orchestrator Agent 统一入口。
@@ -122,6 +135,14 @@ export async function* streamOrchestratorAgent(
               attempt === 1
                 ? plannerContext
                 : `${plannerContext}\n\nRuntime validation feedback from the rejected plan:\n${retryError}\nReturn a corrected plan that resolves every listed issue.`,
+              {
+                // 重试必须改变失败条件：首次限制在 high，重试降级到 low，
+                // 避免"原样重放"再次耗尽 completion 预算。
+                reasoningEffort:
+                  attempt === 1
+                    ? PLANNER_REASONING_EFFORT
+                    : PLANNER_RETRY_REASONING_EFFORT,
+              },
             ),
           ],
       subagentModelGroups: isPreCheck
@@ -156,6 +177,7 @@ export async function* streamOrchestratorAgent(
           ? createFallbackPreOrchResult(input)
           : createFallbackOrchestratorDecision(input, reason),
       signal: input.signal,
+      deadlineMs: isPreCheck ? undefined : ORCHESTRATOR_ATTEMPT_DEADLINE_MS,
     });
     let runnerFinished = false;
     let runnerClosed = false;
@@ -295,8 +317,11 @@ export async function* streamOrchestratorAgent(
   };
 }
 
+/** 运行时墙钟超时错误前缀，由 common/run-agent 在 deadlineMs 到期时抛出。 */
+export const AGENT_DEADLINE_EXCEEDED_PREFIX = "agent-deadline-exceeded:";
+
 /**
- * Planner 首次漏调时仅重试一次；第二次失败交给工作流错误处理。
+ * Planner 首次漏调或空输出时仅重试一次；第二次失败交给工作流错误处理。
  */
 export function shouldRetryPlannerDelegation(
   error: unknown,
@@ -308,7 +333,8 @@ export function shouldRetryPlannerDelegation(
     ((error instanceof AgentSubagentExecutionError &&
       error.subagentType === "planner") ||
       error.message === "required-subagent-not-invoked: planner" ||
-      error.message.startsWith("document-evidence-planner-invalid:"))
+      error.message.startsWith("document-evidence-planner-invalid:") ||
+      error.message.startsWith(AGENT_DEADLINE_EXCEEDED_PREFIX))
   );
 }
 
@@ -430,7 +456,7 @@ export function createPlannerContext(input: OrchestratorAgentInput): string {
   );
   return JSON.stringify({
     workflow_purpose: input.workflowPurpose ?? "standard",
-    product_context: input.productContext || "No product context provided.",
+    product_context: boundPlannerProductContext(input.productContext),
     product_knowledge_graph: compactGraph,
     request_analysis: input.requestAnalysis,
     user_input: input.userInput,
@@ -440,6 +466,30 @@ export function createPlannerContext(input: OrchestratorAgentInput): string {
     supplement_related_node_ids: input.supplementRelatedNodeIds ?? [],
     answered_open_question_ids: input.answeredOpenQuestionIds ?? [],
   });
+}
+
+/** Planner 上下文中产品概述的字符上限；结构化事实仍以 compact 图谱为准。 */
+export const MAX_PLANNER_PRODUCT_CONTEXT_CHARS = 12_000;
+
+/**
+ * 限制 Planner 收到的产品概述体量，保留首尾并显式标注中间截断。
+ *
+ * 结构化事实由 product_knowledge_graph 提供，产品概述只承担背景说明，
+ * 因此截断不会丢弃规划所需的权威节点与关系。
+ */
+export function boundPlannerProductContext(productContext?: string): string {
+  const text = productContext?.trim() || "No product context provided.";
+  if (text.length <= MAX_PLANNER_PRODUCT_CONTEXT_CHARS) return text;
+
+  const tailChars = Math.floor(MAX_PLANNER_PRODUCT_CONTEXT_CHARS * 0.25);
+  const headChars = MAX_PLANNER_PRODUCT_CONTEXT_CHARS - tailChars;
+  const omitted = text.length - MAX_PLANNER_PRODUCT_CONTEXT_CHARS;
+
+  return [
+    text.slice(0, headChars),
+    `[product context truncated: ${omitted} chars omitted]`,
+    text.slice(-tailChars),
+  ].join("\n\n");
 }
 
 /**

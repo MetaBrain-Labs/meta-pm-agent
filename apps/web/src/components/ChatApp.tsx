@@ -403,6 +403,36 @@ export function ChatApp({
     [disabledReason, isLoading, messages, onSend, webSearchEnabled],
   );
 
+  // MessageBubble 使用 React.memo：传给它的回调必须在多次渲染间保持同一引用，
+  // 最新状态统一经 ref 读取，避免 memo 命中时使用过期的闭包值。
+  const onSendRef = useRef(onSend);
+  const webSearchEnabledRef = useRef(webSearchEnabled);
+  const retryAssistantMessageRef = useRef(retryAssistantMessage);
+
+  useEffect(() => {
+    onSendRef.current = onSend;
+  }, [onSend]);
+  useEffect(() => {
+    webSearchEnabledRef.current = webSearchEnabled;
+  }, [webSearchEnabled]);
+  useEffect(() => {
+    retryAssistantMessageRef.current = retryAssistantMessage;
+  }, [retryAssistantMessage]);
+
+  const handleSendFormAnswer = useCallback(
+    (text: string, hitlResume?: HumanInTheLoopResume) => {
+      onSendRef.current(text, {
+        webSearchEnabled: webSearchEnabledRef.current,
+        hitlResume,
+      });
+    },
+    [],
+  );
+
+  const handleRetryMessage = useCallback((messageId: string) => {
+    retryAssistantMessageRef.current(messageId);
+  }, []);
+
   const doSubmit = useCallback(() => {
     if (!input.trim() || isLoading || disabledReason) return;
     onSend(input.trim(), { webSearchEnabled });
@@ -548,10 +578,8 @@ export function ChatApp({
                         nextUserContent={nextUserContentByAssistantId.get(
                           message.id,
                         )}
-                        onFormSubmit={(text, hitlResume) =>
-                          onSend(text, { webSearchEnabled, hitlResume })
-                        }
-                        onRetry={() => retryAssistantMessage(message.id)}
+                        onFormSubmit={handleSendFormAnswer}
+                        onRetry={handleRetryMessage}
                       />
                     ))}
 
@@ -837,10 +865,8 @@ export function ChatApp({
                       message.role === "agent"
                     }
                     nextUserContent={nextUserContentByAssistantId.get(message.id)}
-                    onFormSubmit={(text, hitlResume) =>
-                      onSend(text, { webSearchEnabled, hitlResume })
-                    }
-                    onRetry={() => retryAssistantMessage(message.id)}
+                    onFormSubmit={handleSendFormAnswer}
+                    onRetry={handleRetryMessage}
                   />
                 ))}
 

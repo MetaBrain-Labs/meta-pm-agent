@@ -304,6 +304,8 @@ test("injects every trusted blocker and the exact label contract into Resolver c
   assert.match(prompt, /Never ask the user to restate, categorize, prioritize, map/);
   assert.match(prompt, /Do not ask which requirements, metrics, or decisions/);
   assert.match(prompt, /Expand symbolic references such as FR-01~05/);
+  assert.match(prompt, /exactly one question per persisted blocker by default/);
+  assert.match(prompt, /Never deliberate over alternative question-count allocations/);
 });
 
 test("keeps Resolver context bounded when blockers provide no related node IDs", () => {

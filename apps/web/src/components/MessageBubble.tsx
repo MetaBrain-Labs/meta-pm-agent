@@ -13,7 +13,7 @@
  * - 本组件只负责展示和本地交互，不直接请求 API。
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Collapse, Modal, Spin, Tag, Tooltip } from "antd";
 import {
   CaretRightOutlined,
@@ -50,13 +50,23 @@ interface Props {
   viewMode?: MessageBubbleViewMode;
   nextUserContent?: string;
   onFormSubmit?: (text: string, hitlResume?: HumanInTheLoopResume) => void;
-  onRetry?: () => void;
+  /**
+   * 重试回调。
+   *
+   * 由消息 ID 触发而不是每条消息各生成一个闭包，调用方因此可以提供稳定引用，
+   * 让尚未变化的历史消息在流式期间跳过整棵子树的重渲染与 Markdown 重新解析。
+   */
+  onRetry?: (messageId: string) => void;
 }
 
 /**
  * 渲染单条聊天消息，并按 Agent 阶段放置推理、整理和分析卡片。
+ *
+ * Notes:
+ * - 使用 React.memo：流式期间消息数组每 50ms 更新一次，历史消息的内容没有变化，
+ *   不应重复解析 Markdown 或重建 DOM 子树。
  */
-export function MessageBubble({
+export const MessageBubble = memo(function MessageBubble({
   message,
   isLast,
   streaming,
@@ -186,6 +196,10 @@ export function MessageBubble({
     },
     [onFormSubmit],
   );
+  /** 把稳定的回调引用收敛为本条消息的重试动作。 */
+  const handleRetry = useCallback(() => {
+    onRetry?.(message.id);
+  }, [message.id, onRetry]);
 
   if (viewMode === "process" && !hasVisibleProcessContent && !streamActive) {
     return null;
@@ -386,7 +400,7 @@ export function MessageBubble({
         <AgentErrorCard
           agentType="request"
           message={requestError.message}
-          onRetry={onRetry}
+          onRetry={handleRetry}
         />
       )}
 
@@ -446,12 +460,12 @@ export function MessageBubble({
         <AgentErrorCard
           agentType={otherError.agentType}
           message={otherError.message}
-          onRetry={onRetry}
+          onRetry={handleRetry}
         />
       )}
 
       {showMainContent && message.interrupted && !message.agentError && (
-        <AgentInterruptedCard onContinue={onRetry} />
+        <AgentInterruptedCard onContinue={handleRetry} />
       )}
 
       {showMainContent &&
@@ -487,7 +501,7 @@ export function MessageBubble({
         )}
     </div>
   );
-}
+});
 
 /**
  * 展示当前助手消息内各 Agent 的 token 和费用用量，可折叠以减少聊天区干扰。
@@ -1142,20 +1156,9 @@ function NestedCollapseBlock({
   content: string;
   active: boolean;
 }) {
-  const [open, setOpen] = useState(active);
-  const [userToggled, setUserToggled] = useState(false);
+  // SubAgent 可能输出很长的推理；运行态默认折叠，只有用户主动查看时才挂载正文。
+  const [open, setOpen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (active) {
-      setOpen(true);
-      setUserToggled(false);
-      return;
-    }
-    if (!userToggled) {
-      setOpen(false);
-    }
-  }, [active, userToggled]);
 
   useEffect(() => {
     if (contentRef.current && open) {
@@ -1168,7 +1171,6 @@ function NestedCollapseBlock({
       <Collapse
         activeKey={open ? ["content"] : []}
         onChange={(keys) => {
-          setUserToggled(true);
           setOpen(
             Array.isArray(keys) ? keys.includes("content") : keys === "content",
           );
@@ -1285,7 +1287,7 @@ function ThinkingSection({
                 onScroll={handleScroll}
                 className="font-reading-compact max-h-[220px] overflow-y-auto whitespace-pre-wrap themed-scrollbar text-[13px] leading-relaxed text-[var(--ink-mute)]"
               >
-                {content}
+                {windowStreamingReasoning(content, active)}
               </div>
             ),
           },
@@ -1293,6 +1295,25 @@ function ThinkingSection({
       />
     </div>
   );
+}
+
+/** 流式期间在 DOM 中保留的推理尾部字符数；完整内容仍保留在消息状态中。 */
+const MAX_STREAMING_REASONING_DOM_CHARS = 8_000;
+
+/**
+ * 流式期间只渲染推理尾部窗口，避免滚动区承载整段思考文本。
+ *
+ * 运行结束后 active 为 false，此时渲染已由 stream-limits 限制过的完整内容。
+ */
+function windowStreamingReasoning(content: string, active: boolean): string {
+  if (!active || content.length <= MAX_STREAMING_REASONING_DOM_CHARS) {
+    return content;
+  }
+
+  const omitted = content.length - MAX_STREAMING_REASONING_DOM_CHARS;
+  return `[较早的思考过程已折叠以保护页面内存，省略 ${omitted} 字符]\n${content.slice(
+    -MAX_STREAMING_REASONING_DOM_CHARS,
+  )}`;
 }
 
 /**
@@ -1494,10 +1515,30 @@ function getSubagentTracesForParent(
   });
 }
 
+/** SubAgent 返回体在折叠区中的最大渲染字符数。 */
+const MAX_SUBAGENT_RESULT_CHARS = 20_000;
+
 /**
  * 将 SubAgent 返回结果格式化为可折叠文本。
+ *
+ * 超长返回体只保留前缀并显式标注截断：即使运行时误传大体量结果，
+ * 也不会把整块 JSON 塞进 DOM 触发页面内存压力。
  */
 function formatSubagentResult(result: unknown): string {
+  return boundRenderedText(formatSubagentResultBody(result));
+}
+
+/** 按渲染预算截断文本，保留截断说明。 */
+function boundRenderedText(text: string, maxChars = MAX_SUBAGENT_RESULT_CHARS): string {
+  if (text.length <= maxChars) return text;
+
+  return `${text.slice(0, maxChars)}\n\n[内容过长已截断，省略 ${
+    text.length - maxChars
+  } 字符]`;
+}
+
+/** 将 SubAgent 返回体序列化为可读文本，不做长度约束。 */
+function formatSubagentResultBody(result: unknown): string {
   if (typeof result === "string") {
     const trimmed = result.trim();
     const parsed = tryParseJson(trimmed);

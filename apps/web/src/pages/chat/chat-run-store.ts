@@ -50,6 +50,8 @@ interface StartChatRunInput {
 
 const runs = new Map<string, ChatRunState>();
 let beforeUnloadBound = false;
+/** 推理流按短时间窗合并，避免逐 token 触发 React 状态复制和布局计算。 */
+const REASONING_FLUSH_INTERVAL_MS = 50;
 
 /**
  * 订阅指定 thread 的运行快照。
@@ -252,58 +254,152 @@ async function readChatStream(
   const decoder = new TextDecoder();
   let buffer = "";
   let activeAgentMsgId = agentMsgId;
+  let pendingReasoningEvents: StreamEvent[] = [];
+  let reasoningFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  /** 一次提交当前时间窗内的推理片段，确保每次提交只通知 React 一次。 */
+  const flushReasoningEvents = () => {
+    if (reasoningFlushTimer) {
+      clearTimeout(reasoningFlushTimer);
+      reasoningFlushTimer = null;
+    }
+    if (pendingReasoningEvents.length === 0) return;
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() || "";
+    const events = pendingReasoningEvents;
+    pendingReasoningEvents = [];
+    updateMessages(threadId, (messages) =>
+      applyBufferedReasoningEventsToMessages(
+        messages,
+        activeAgentMsgId,
+        events,
+      ),
+    );
+  };
 
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      const payload = line.slice(6).trim();
-      if (payload === "[DONE]") continue;
+  /** 合并同一来源的连续片段，并用定时刷新限制 UI 更新频率。 */
+  const queueReasoningEvent = (event: StreamEvent) => {
+    pendingReasoningEvents = mergeBufferedReasoningEvent(
+      pendingReasoningEvents,
+      event,
+    );
+    if (!reasoningFlushTimer) {
+      reasoningFlushTimer = setTimeout(
+        flushReasoningEvents,
+        REASONING_FLUSH_INTERVAL_MS,
+      );
+    }
+  };
 
-      try {
-        const parsedEvent = ChatSseEventSchema.safeParse(JSON.parse(payload));
-        if (!parsedEvent.success) continue;
-        const event: StreamEvent = parsedEvent.data;
-        if (
-          event.type === "conversation-title" &&
-          event.chatId &&
-          event.title
-        ) {
-          onThreadTitleChange(event.chatId, event.title);
-          continue;
-        }
-        if (event.type === "workflow-round-start" && event.roundId) {
-          updateMessages(threadId, (messages) => {
-            const startedRound = startWorkflowRound(
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const payload = line.slice(6).trim();
+        if (payload === "[DONE]") continue;
+
+        try {
+          const parsedEvent = ChatSseEventSchema.safeParse(JSON.parse(payload));
+          if (!parsedEvent.success) continue;
+          const event: StreamEvent = parsedEvent.data;
+          if (isReasoningStreamEvent(event)) {
+            queueReasoningEvent(event);
+            continue;
+          }
+
+          // 结构化事件前必须先提交推理，保持 Agent 生命周期与展示顺序一致。
+          flushReasoningEvents();
+          if (
+            event.type === "conversation-title" &&
+            event.chatId &&
+            event.title
+          ) {
+            onThreadTitleChange(event.chatId, event.title);
+            continue;
+          }
+          if (event.type === "workflow-round-start" && event.roundId) {
+            updateMessages(threadId, (messages) => {
+              const startedRound = startWorkflowRound(
+                messages,
+                activeAgentMsgId,
+                event.roundId!,
+              );
+              activeAgentMsgId = startedRound.activeAgentMsgId;
+              return startedRound.messages;
+            });
+            continue;
+          }
+
+          updateMessages(threadId, (messages) =>
+            applyChatStreamEventToMessages(
               messages,
               activeAgentMsgId,
-              event.roundId!,
-            );
-            activeAgentMsgId = startedRound.activeAgentMsgId;
-            return startedRound.messages;
-          });
-          continue;
+              event,
+              reconcilePriorDag,
+            ),
+          );
+        } catch {
+          // 忽略格式异常的流片段，继续消费后续 SSE。
         }
-
-        updateMessages(threadId, (messages) =>
-          applyChatStreamEventToMessages(
-            messages,
-            activeAgentMsgId,
-            event,
-            reconcilePriorDag,
-          ),
-        );
-      } catch {
-        // 忽略格式异常的流片段，继续消费后续 SSE。
       }
     }
+  } finally {
+    flushReasoningEvents();
   }
+}
+
+/** 仅对纯文本推理事件启用时间窗合并。 */
+function isReasoningStreamEvent(
+  event: StreamEvent,
+): event is Extract<StreamEvent, { type: "thinking" | "subagent-thinking" }> {
+  return event.type === "thinking" || event.type === "subagent-thinking";
+}
+
+/**
+ * 合并同一 Agent 或 SubAgent 的相邻推理片段，保留不同来源的原始顺序。
+ */
+export function mergeBufferedReasoningEvent(
+  events: StreamEvent[],
+  event: StreamEvent,
+): StreamEvent[] {
+  if (!isReasoningStreamEvent(event)) return [...events, event];
+
+  const previous = events.at(-1);
+  if (!previous || !isReasoningStreamEvent(previous)) {
+    return [...events, event];
+  }
+  const sameSource =
+    previous.type === event.type &&
+    previous.agentType === event.agentType &&
+    (event.type !== "subagent-thinking" ||
+      (previous.type === "subagent-thinking" &&
+        previous.subagentType === event.subagentType &&
+        previous.toolCallId === event.toolCallId));
+  if (!sameSource) return [...events, event];
+
+  return [
+    ...events.slice(0, -1),
+    { ...previous, content: `${previous.content ?? ""}${event.content ?? ""}` },
+  ];
+}
+
+/** 将一个时间窗内的推理事件归并到消息，并且只创建一次消息数组。 */
+export function applyBufferedReasoningEventsToMessages(
+  messages: Message[],
+  agentMsgId: string,
+  events: StreamEvent[],
+): Message[] {
+  return messages.map((message) =>
+    message.id === agentMsgId
+      ? events.reduce(applyStreamEvent, message)
+      : message,
+  );
 }
 
 /**

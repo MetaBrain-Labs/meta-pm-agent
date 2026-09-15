@@ -13,6 +13,7 @@
  * - 本工具不发起网络请求，只做前端状态转换。
  */
 
+import { appendBoundedReasoning } from "@repo/shared";
 import type {
   ExecutorAgentResult,
   Message,
@@ -54,8 +55,10 @@ export function applyStreamEvent(
 
       return {
         ...message,
-        thinking:
-          (message.thinking ?? "") + (event.content ?? ""),
+        thinking: appendBoundedReasoning(
+          message.thinking,
+          event.content ?? "",
+        ),
         activeAgent: event.agentType ?? "conversation",
         activeAgents: addActiveAgent(
           message.activeAgents,
@@ -166,7 +169,7 @@ export function applyStreamEvent(
           message.toolCalls ?? [],
           event.toolCallId,
           event.toolName ?? "unknown",
-          event.toolResult,
+          boundDisplayPayload(event.toolResult),
           event.agentType,
         ),
       };
@@ -213,6 +216,35 @@ export function applyStreamEvent(
     default:
       return message;
   }
+}
+
+/**
+ * 展示型流式载荷的字符上限。
+ *
+ * 工具结果与 SubAgent 返回体只用于展示，权威数据仍在知识图谱、消息持久化和
+ * 结构化卡片中；这里防止超大载荷进入前端状态与 DOM。
+ */
+export const MAX_DISPLAY_PAYLOAD_CHARS = 24_000;
+
+/**
+ * 收敛仅用于展示的流式载荷，超限时保留前缀并显式标记截断。
+ */
+export function boundDisplayPayload(value: unknown): unknown {
+  if (value === undefined) return value;
+
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value) ?? "";
+  } catch {
+    return "[无法序列化的载荷]";
+  }
+  if (serialized.length <= MAX_DISPLAY_PAYLOAD_CHARS) return value;
+
+  return {
+    truncated: true,
+    originalChars: serialized.length,
+    preview: serialized.slice(0, MAX_DISPLAY_PAYLOAD_CHARS),
+  };
 }
 
 /**
@@ -350,7 +382,10 @@ function appendReasoningBlock(
   if (existingIndex === -1) {
     return {
       ...message,
-      reasoningBlocks: [...blocks, { agentType, content }],
+      reasoningBlocks: [
+        ...blocks,
+        { agentType, content: appendBoundedReasoning(undefined, content) },
+      ],
     };
   }
 
@@ -358,7 +393,10 @@ function appendReasoningBlock(
     ...message,
     reasoningBlocks: blocks.map((block, index) =>
       index === existingIndex
-        ? { ...block, content: block.content + content }
+        ? {
+            ...block,
+            content: appendBoundedReasoning(block.content, content),
+          }
         : block,
     ),
   };
@@ -452,7 +490,7 @@ function applySubagentResult(message: Message, event: StreamEvent): Message {
       id: event.toolCallId,
       parentAgentType: event.agentType,
       subagentType: event.subagentType,
-      result: event.result,
+      result: boundDisplayPayload(event.result),
     }),
   };
 }
@@ -502,7 +540,7 @@ function appendSubagentThinking(
         id: event.id,
         parentAgentType: event.parentAgentType,
         subagentType: event.subagentType,
-        thinking: event.content,
+        thinking: appendBoundedReasoning(undefined, event.content),
         status: "running",
       },
     ];
@@ -510,7 +548,10 @@ function appendSubagentThinking(
 
   return traces.map((trace, index) =>
     index === existingIndex
-      ? { ...trace, thinking: `${trace.thinking ?? ""}${event.content}` }
+      ? {
+          ...trace,
+          thinking: appendBoundedReasoning(trace.thinking, event.content),
+        }
       : trace,
   );
 }

@@ -19,6 +19,9 @@ export interface MessageNavigationEntry {
   preview: string;
 }
 
+/** 导航刻度测量的最小间隔；流式期间 DOM 每 50ms 变化一次，逐帧测量会持续强制布局。 */
+const MEASURE_THROTTLE_MS = 400;
+
 /** 绑定消息栏并返回刻度数据、阅读位置和定位操作。 */
 export function useMessageNavigation(
   containerRef: RefObject<HTMLDivElement | null>,
@@ -33,6 +36,8 @@ export function useMessageNavigation(
     const container = containerRef.current;
     if (!container) return;
     let frame: number | null = null;
+    let throttleTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastMeasuredAt = 0;
     let positions: MessagePosition[] = [];
     const observed = new Set<HTMLElement>();
 
@@ -42,39 +47,59 @@ export function useMessageNavigation(
         positions, container.scrollTop, container.clientHeight, container.scrollHeight,
       ));
     };
-    /** 合并同一帧的流式更新和尺寸变化，避免重复读取布局。 */
+    /** 读取锚点位置并生成导航摘要。 */
+    const measure = () => {
+      lastMeasuredAt = Date.now();
+      const containerTop = container.getBoundingClientRect().top;
+      const anchors = Array.from(container.querySelectorAll<HTMLElement>("[data-chat-message-id]"));
+      const nextEntries: MessageNavigationEntry[] = [];
+      positions = [];
+      for (const anchor of anchors) {
+        const rect = anchor.getBoundingClientRect();
+        // 使用 textContent 而非 innerText：后者会强制样式与布局计算，流式期间代价过高。
+        const preview = (anchor.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 180);
+        const id = anchor.dataset.chatMessageId;
+        if (!id || !preview || rect.height === 0) continue;
+        nextEntries.push({ id, role: anchor.dataset.chatMessageRole ?? "agent", preview });
+        positions.push({ id, top: container.scrollTop + rect.top - containerTop });
+        if (!observed.has(anchor)) {
+          observed.add(anchor);
+          resizeObserver.observe(anchor);
+        }
+      }
+      for (const anchor of observed) {
+        if (!container.contains(anchor)) {
+          resizeObserver.unobserve(anchor);
+          observed.delete(anchor);
+        }
+      }
+      setEntries((previous) => previous.length === nextEntries.length && previous.every(
+        (entry, index) => entry.id === nextEntries[index]!.id &&
+          entry.role === nextEntries[index]!.role && entry.preview === nextEntries[index]!.preview,
+      ) ? previous : nextEntries);
+      updateActive();
+    };
+    /** 合并同一帧的流式更新，并按最小间隔节流测量。 */
     const scheduleMeasure = () => {
-      if (frame !== null) return;
-      frame = requestAnimationFrame(() => {
-        frame = null;
-        const containerTop = container.getBoundingClientRect().top;
-        const anchors = Array.from(container.querySelectorAll<HTMLElement>("[data-chat-message-id]"));
-        const nextEntries: MessageNavigationEntry[] = [];
-        positions = [];
-        for (const anchor of anchors) {
-          const rect = anchor.getBoundingClientRect();
-          const preview = anchor.innerText.replace(/\s+/g, " ").trim().slice(0, 180);
-          const id = anchor.dataset.chatMessageId;
-          if (!id || !preview || rect.height === 0) continue;
-          nextEntries.push({ id, role: anchor.dataset.chatMessageRole ?? "agent", preview });
-          positions.push({ id, top: container.scrollTop + rect.top - containerTop });
-          if (!observed.has(anchor)) {
-            observed.add(anchor);
-            resizeObserver.observe(anchor);
-          }
-        }
-        for (const anchor of observed) {
-          if (!container.contains(anchor)) {
-            resizeObserver.unobserve(anchor);
-            observed.delete(anchor);
-          }
-        }
-        setEntries((previous) => previous.length === nextEntries.length && previous.every(
-          (entry, index) => entry.id === nextEntries[index]!.id &&
-            entry.role === nextEntries[index]!.role && entry.preview === nextEntries[index]!.preview,
-        ) ? previous : nextEntries);
-        updateActive();
-      });
+      if (frame !== null || throttleTimer !== null) return;
+
+      const elapsed = Date.now() - lastMeasuredAt;
+      if (elapsed >= MEASURE_THROTTLE_MS) {
+        frame = requestAnimationFrame(() => {
+          frame = null;
+          measure();
+        });
+        return;
+      }
+
+      throttleTimer = setTimeout(() => {
+        throttleTimer = null;
+        if (frame !== null) return;
+        frame = requestAnimationFrame(() => {
+          frame = null;
+          measure();
+        });
+      }, MEASURE_THROTTLE_MS - elapsed);
     };
     const resizeObserver = new ResizeObserver(scheduleMeasure);
     const mutationObserver = new MutationObserver(scheduleMeasure);
@@ -90,6 +115,7 @@ export function useMessageNavigation(
       mutationObserver.disconnect();
       container.removeEventListener("scroll", updateActive);
       if (frame !== null) cancelAnimationFrame(frame);
+      if (throttleTimer !== null) clearTimeout(throttleTimer);
       if (jumpFrameRef.current !== null) cancelAnimationFrame(jumpFrameRef.current);
     };
   }, [containerRef, layoutKey]);

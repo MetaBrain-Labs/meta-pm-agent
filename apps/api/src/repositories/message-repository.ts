@@ -16,6 +16,7 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@repo/database";
 import {
+  appendBoundedReasoning,
   ProductWorkflowResultSchema,
   TaskExecutionPlanSchema,
   type ChatMessage,
@@ -353,7 +354,12 @@ export function mapMessageRow(row: MessageRow): MessageDto {
     content: extractedSearch.content,
     timestamp,
     ...(typeof meta?.reasoningContent === "string"
-      ? { reasoningContent: meta.reasoningContent }
+      ? {
+          reasoningContent: appendBoundedReasoning(
+            undefined,
+            meta.reasoningContent,
+          ),
+        }
       : {}),
     ...(metaToolCalls.length > 0 || extractedSearch.toolCalls.length > 0
       ? { toolCalls: [...metaToolCalls, ...extractedSearch.toolCalls] }
@@ -665,7 +671,7 @@ function normalizeToolCalls(value: unknown[]): ToolCallDto[] {
         name: record.name,
         ...(isRecord(record.args) ? { args: record.args } : {}),
         ...(Object.prototype.hasOwnProperty.call(record, "result")
-          ? { result: record.result }
+          ? { result: boundRestoredDisplayPayload(record.result) }
           : {}),
         ...(typeof record.agentType === "string"
           ? { agentType: record.agentType }
@@ -676,6 +682,33 @@ function normalizeToolCalls(value: unknown[]): ToolCallDto[] {
       },
     ];
   });
+}
+
+/** 历史行读侧的展示型载荷上限，覆盖旧版本可能写入的未截断数据。 */
+const MAX_RESTORED_DISPLAY_PAYLOAD_CHARS = 24_000;
+
+/**
+ * 收敛历史行中的展示型载荷。
+ *
+ * 旧版本可能把 MB 级工具结果或 SubAgent 返回体写入 meta；读取时统一截断，
+ * 避免刷新页面时把巨型字符串交给浏览器渲染。
+ */
+function boundRestoredDisplayPayload(value: unknown): unknown {
+  if (value === undefined) return value;
+
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value) ?? "";
+  } catch {
+    return "[无法序列化的载荷]";
+  }
+  if (serialized.length <= MAX_RESTORED_DISPLAY_PAYLOAD_CHARS) return value;
+
+  return {
+    truncated: true,
+    originalChars: serialized.length,
+    preview: serialized.slice(0, MAX_RESTORED_DISPLAY_PAYLOAD_CHARS),
+  };
 }
 
 /**
@@ -701,10 +734,10 @@ function normalizeSubagentTraces(value: unknown[]): SubagentTraceDto[] {
           ? { description: record.description }
           : {}),
         ...(typeof record.thinking === "string"
-          ? { thinking: record.thinking }
+          ? { thinking: appendBoundedReasoning(undefined, record.thinking) }
           : {}),
         ...(Object.prototype.hasOwnProperty.call(record, "result")
-          ? { result: record.result }
+          ? { result: boundRestoredDisplayPayload(record.result) }
           : {}),
         status: record.status === "running" ? "running" : "complete",
       },

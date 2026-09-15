@@ -36,8 +36,13 @@ import {
   resumeDocumentEvidenceResolutionWorkflow,
   resumeQuestionFormHumanInterrupt,
   streamConversation,
+  toUserVisibleAgentError,
 } from "@repo/agent-runtime";
-import type { ProductKnowledgeGraph, ProductWorkflowResult } from "@repo/shared";
+import {
+  appendBoundedReasoning,
+  type ProductKnowledgeGraph,
+  type ProductWorkflowResult,
+} from "@repo/shared";
 import {
   ChatRequestSchema,
   CreateChatRequestSchema,
@@ -715,11 +720,15 @@ export async function chatStreamHandler(c: Context) {
         }
 
         if ("content" in event && event.type === "reasoning") {
-          getAgentOutput(
+          const output = getAgentOutput(
             agentOutputs,
             getEventAgentType(event),
             currentWorkflowRoundId,
-          ).reasoningContent += event.content;
+          );
+          output.reasoningContent = appendBoundedReasoning(
+            output.reasoningContent,
+            event.content,
+          );
         }
         if (event.type === "tool-call") {
           const output = getAgentOutput(
@@ -1050,7 +1059,8 @@ export async function chatStreamHandler(c: Context) {
         try {
           await writeSse(writer, {
             type: "error",
-            error: getErrorMessage(error),
+            // 用户可见错误必须压缩成「阻塞点 + 受影响 Agent + 下一步」。
+            error: toUserVisibleAgentError(error),
           });
         } catch (streamError) {
           console.error("[chat] Failed to write error event:", streamError);
@@ -1330,7 +1340,7 @@ function appendSubagentThinking(
       id: event.id,
       parentAgentType: event.parentAgentType,
       subagentType: event.subagentType,
-      thinking: event.content,
+      thinking: appendBoundedReasoning(undefined, event.content),
       status: "running",
     });
     return;
@@ -1338,7 +1348,10 @@ function appendSubagentThinking(
 
   traces[index] = {
     ...traces[index],
-    thinking: `${traces[index]?.thinking ?? ""}${event.content}`,
+    thinking: appendBoundedReasoning(
+      traces[index]?.thinking,
+      event.content,
+    ),
   };
 }
 

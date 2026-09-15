@@ -103,6 +103,31 @@ export function getTextContent(message: BaseMessage): string {
 }
 
 /**
+ * 从消息中读取 provider 返回的结束原因。
+ *
+ * 结束原因为 `length` 时说明本次 completion 已顶到输出上限，reasoning 与正文
+ * 共享同一预算，因此可能出现"只有思考、没有正文"的空输出。
+ */
+export function getFinishReason(message: BaseMessage): string | null {
+  const metadata = (message as { response_metadata?: Record<string, unknown> })
+    .response_metadata;
+  if (!metadata) return null;
+
+  const candidates = [
+    metadata.finish_reason,
+    metadata.stop_reason,
+    (metadata.usage as Record<string, unknown> | undefined)?.finish_reason,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+
+  return null;
+}
+
+/**
  * 从 AIMessage 中提取 token 用量。
  *
  * provider usage 仍然是输入 token、缓存命中和官方计费的主来源；本地 DeepSeek
