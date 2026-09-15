@@ -48,10 +48,7 @@ async function* streamOf<T>(...items: T[]): AsyncGenerator<T> {
 async function collectEventStream(
   run: AgentEventStreamProjection,
   recorder: AgentRunSummaryRecorder,
-  visibleToolNames = new Set([
-    "kg_file_add_nodes",
-    "kg_file_raise_blocker",
-  ]),
+  visibleToolNames = new Set(["kg_file_add_nodes", "kg_file_raise_blocker"]),
   subagentSelections?: ReadonlyMap<string, ResolvedAgentModelSelection>,
 ): Promise<{
   events: AgentRunEvent<"executor">[];
@@ -132,10 +129,7 @@ test("recovers schema-valid JSON from reasoning when final text is invalid", () 
 
   assert.deepEqual(
     resolveJsonOutput(
-      context(
-        "",
-        'analysis before output\n```json\n{"ok":true}\n```\n',
-      ),
+      context("", 'analysis before output\n```json\n{"ok":true}\n```\n'),
       schema,
     ),
     { success: true, data: { ok: true } },
@@ -292,13 +286,15 @@ test("adapts native tool and SubAgent projections without parsing tool_calls", a
 
   const starts = events.filter((event) => event.type === "subagent-start");
   assert.equal(starts.length, 2);
-  assert.equal(starts.every((event) => event.subagentType === "planner"), true);
+  assert.equal(
+    starts.every((event) => event.subagentType === "planner"),
+    true,
+  );
   assert.equal(new Set(starts.map((event) => event.toolCallId)).size, 2);
   assert.ok(
     events.some(
       (event) =>
-        event.type === "reasoning" &&
-        event.content === "coordinator reasoning",
+        event.type === "reasoning" && event.content === "coordinator reasoning",
     ),
   );
   assert.ok(
@@ -374,11 +370,23 @@ test("reports a compact diagnostic when a SubAgent produces no text", async () =
     }),
     output: Promise.resolve({ messages: [] }),
   };
-  const plannerSelection = resolveAgentModelSelection(
+  const resolvedPlannerSelection = resolveAgentModelSelection(
     SYSTEM_DEFAULT_MODEL_PROFILE,
     "planner",
   );
-  assert.ok(plannerSelection);
+  assert.ok(resolvedPlannerSelection);
+
+  const plannerSelection: ResolvedAgentModelSelection = {
+    ...resolvedPlannerSelection,
+    model: {
+      ...resolvedPlannerSelection.model,
+      pricing: {
+        cacheHitInputPricePerMillion: 0.5,
+        cacheMissInputPricePerMillion: 3,
+        outputPricePerMillion: 6,
+      },
+    },
+  };
 
   const { events } = await collectEventStream(
     run,
@@ -389,8 +397,10 @@ test("reports a compact diagnostic when a SubAgent produces no text", async () =
   const subagentResults = events.filter(
     (
       event,
-    ): event is Extract<AgentRunEvent<"executor">, { type: "subagent-result" }> =>
-      event.type === "subagent-result",
+    ): event is Extract<
+      AgentRunEvent<"executor">,
+      { type: "subagent-result" }
+    > => event.type === "subagent-result",
   );
 
   assert.equal(subagentResults.length, 1);
@@ -402,12 +412,15 @@ test("reports a compact diagnostic when a SubAgent produces no text", async () =
   });
   // 原始 SubAgent 状态不得进入事件流，避免整段推理被推送和持久化。
   assert.equal(
-    JSON.stringify(subagentResults[0]?.result).includes("planner reasoning only"),
+    JSON.stringify(subagentResults[0]?.result).includes(
+      "planner reasoning only",
+    ),
     false,
   );
 });
 
-test("requires at least one successful correction write tool", () => {  const required = new Set(["kg_file_add_nodes", "kg_file_add_relations"]);
+test("requires at least one successful correction write tool", () => {
+  const required = new Set(["kg_file_add_nodes", "kg_file_add_relations"]);
   assert.equal(
     getMissingRequiredSuccessfulToolError(required, new Set()),
     "required-structured-write-not-invoked",
@@ -552,11 +565,25 @@ test("observes top-level message output before delayed chunks finish", async () 
 
 test("prices SubAgent usage with its own responsibility model", async () => {
   const probe = createSummaryProbe();
-  const plannerSelection = resolveAgentModelSelection(
+
+  const resolvedPlannerSelection = resolveAgentModelSelection(
     SYSTEM_DEFAULT_MODEL_PROFILE,
     "planner",
   );
-  assert.ok(plannerSelection);
+  assert.ok(resolvedPlannerSelection);
+
+  const plannerSelection: ResolvedAgentModelSelection = {
+    ...resolvedPlannerSelection,
+    model: {
+      ...resolvedPlannerSelection.model,
+      pricing: {
+        cacheHitInputPricePerMillion: 0.5,
+        cacheMissInputPricePerMillion: 3,
+        outputPricePerMillion: 6,
+      },
+    },
+  };
+
   const usageMessage = new AIMessage({
     content: "planner result",
     usage_metadata: {
@@ -566,6 +593,7 @@ test("prices SubAgent usage with its own responsibility model", async () => {
       input_token_details: { cache_read: 0 },
     },
   });
+
   const run: AgentEventStreamProjection = {
     messages: streamOf(),
     toolCalls: streamOf(),
@@ -588,7 +616,9 @@ test("prices SubAgent usage with its own responsibility model", async () => {
     new Set(),
     new Map([["planner", plannerSelection]]),
   );
+
   const usage = events.find((event) => event.type === "token-usage");
+
   assert.equal(usage?.agentType, "planner");
   assert.equal(usage?.costInput, 3);
   assert.equal(usage?.costOutput, 6);
@@ -653,10 +683,7 @@ test("emits structured tool errors and propagates projection failures", async ()
   assert.equal(promotedToolResult.done, false);
   if (promotedToolResult.done) return;
   assert.equal(promotedToolResult.value.type, "tool-result");
-  await assert.rejects(
-    promotedToolGenerator.next(),
-    /provenance rejected/,
-  );
+  await assert.rejects(promotedToolGenerator.next(), /provenance rejected/);
 
   const projectionProbe = createSummaryProbe();
   const projectionError = new Error("projection failed");
