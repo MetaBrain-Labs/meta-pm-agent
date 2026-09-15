@@ -1,10 +1,10 @@
 /**
  * 模型使用列表设置面板
  *
- * 展示内置默认与账号自定义列表，并提供分类配置/通用模型双 Tab 编辑器。
+ * 展示内置默认与本地自定义列表，并提供分类配置/通用模型双 Tab 编辑器。
  *
  * Responsibilities:
- * - 加载与维护账号模型列表
+ * - 加载与维护本地模型列表
  * - 编辑每个模型的标识、名称、地址和高级参数
  * - 配置 Chat 与 Document 工作流的 Agent 职责映射
  *
@@ -67,11 +67,10 @@ function createModel(
   effort: DeepSeekModelConfig["reasoningEffort"],
   maxTokens: number,
 ): DeepSeekModelConfig {
-  const isPro = modelId === "deepseek-v4-pro";
   return {
     provider: "deepseek",
     modelId,
-    customName: isPro ? "DeepSeek V4 Pro" : "DeepSeek V4 Flash",
+    customName: "DeepSeek Flash",
     baseUrl: "https://api.deepseek.com",
     thinking: true,
     temperature: 1,
@@ -79,9 +78,9 @@ function createModel(
     maxTokens,
     reasoningEffort: effort,
     pricing: {
-      cacheHitInputPricePerMillion: isPro ? 0.025 : 0.02,
-      cacheMissInputPricePerMillion: isPro ? 3 : 1,
-      outputPricePerMillion: isPro ? 6 : 2,
+      cacheHitInputPricePerMillion: 0.04,
+      cacheMissInputPricePerMillion: 2,
+      outputPricePerMillion: 8,
     },
   };
 }
@@ -95,9 +94,9 @@ function createDraftProfile(): ModelUsageProfile {
     config: {
       mode: "tiered",
       models: {
-        reasoning: createModel("deepseek-v4-pro", "max", 16_384),
-        standard: createModel("deepseek-v4-flash", "high", 16_384),
-        fast: createModel("deepseek-v4-flash", "low", 4_096),
+        reasoning: createModel("deepseek-flash", "max", 65_536),
+        standard: createModel("deepseek-flash", "high", 16_384),
+        fast: createModel("deepseek-flash", "low", 4_096),
       },
       assignments: {
         conversation: "fast",
@@ -113,7 +112,7 @@ function createDraftProfile(): ModelUsageProfile {
   };
 }
 
-/** 账号模型列表设置主面板。 */
+/** 本地模型列表设置主面板。 */
 export function ModelProfilesPanel() {
   const [profiles, setProfiles] = useState<ModelUsageProfile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -188,17 +187,27 @@ export function ModelProfilesPanel() {
               <Tag color={profile.isSystem ? "blue" : "default"}>
                 {profile.isSystem ? "内置不可删除" : "自定义"}
               </Tag>
-              <Tag>{profile.config.mode === "tiered" ? "分类配置" : "通用模型"}</Tag>
+              <Tag>
+                {profile.config.mode === "tiered" ? "分类配置" : "通用模型"}
+              </Tag>
             </Space>
           }
           extra={
             !profile.isSystem ? (
               <Space>
-                <Button size="small" onClick={() => setDraft(structuredClone(profile))}>
+                <Button
+                  size="small"
+                  onClick={() => setDraft(structuredClone(profile))}
+                >
                   编辑
                 </Button>
-                <Popconfirm title="删除后相关会话将回退内置默认，确认删除？" onConfirm={() => void remove(profile.id)}>
-                  <Button size="small" danger>删除</Button>
+                <Popconfirm
+                  title="删除后相关会话将回退内置默认，确认删除？"
+                  onConfirm={() => void remove(profile.id)}
+                >
+                  <Button size="small" danger>
+                    删除
+                  </Button>
                 </Popconfirm>
               </Space>
             ) : null
@@ -231,15 +240,21 @@ export function ModelProfilesPanel() {
 
 /** 渲染列表中的模型组成摘要。 */
 function ProfileSummary({ profile }: { profile: ModelUsageProfile }) {
-  const entries = profile.config.mode === "universal"
-    ? [["全部 Agent", profile.config.model] as const]
-    : (Object.entries(profile.config.models) as Array<[ModelTier, DeepSeekModelConfig]>).map(
-        ([tier, model]) => [TIER_LABELS[tier], model] as const,
-      );
+  const entries =
+    profile.config.mode === "universal"
+      ? [["全部 Agent", profile.config.model] as const]
+      : (
+          Object.entries(profile.config.models) as Array<
+            [ModelTier, DeepSeekModelConfig]
+          >
+        ).map(([tier, model]) => [TIER_LABELS[tier], model] as const);
   return (
     <Space wrap size={[8, 8]}>
       {entries.map(([label, model]) => (
-        <Tag key={label}>{label}：{model.customName} · {model.reasoningEffort} · {model.maxTokens.toLocaleString()}</Tag>
+        <Tag key={label}>
+          {label}：{model.customName} · {model.reasoningEffort} ·{" "}
+          {model.maxTokens.toLocaleString()}
+        </Tag>
       ))}
     </Space>
   );
@@ -253,30 +268,68 @@ function ProfileEditor({
   profile: ModelUsageProfile;
   onChange: (profile: ModelUsageProfile) => void;
 }) {
-  const setConfig = (config: ModelUsageProfile["config"]) => onChange({ ...profile, config });
+  const setConfig = (config: ModelUsageProfile["config"]) =>
+    onChange({ ...profile, config });
   const changeMode = (mode: string) => {
     if (mode === profile.config.mode) return;
     if (mode === "universal") {
-      const model = profile.config.mode === "tiered" ? profile.config.models.reasoning : profile.config.model;
+      const model =
+        profile.config.mode === "tiered"
+          ? profile.config.models.reasoning
+          : profile.config.model;
       setConfig({ mode: "universal", model });
     } else {
-      const model = profile.config.mode === "universal" ? profile.config.model : profile.config.models.reasoning;
+      const model =
+        profile.config.mode === "universal"
+          ? profile.config.model
+          : profile.config.models.reasoning;
       const fresh = createDraftProfile().config;
-      if (fresh.mode === "tiered") setConfig({ ...fresh, models: { reasoning: model, standard: structuredClone(model), fast: structuredClone(model) } });
+      if (fresh.mode === "tiered")
+        setConfig({
+          ...fresh,
+          models: {
+            reasoning: model,
+            standard: structuredClone(model),
+            fast: structuredClone(model),
+          },
+        });
     }
   };
   return (
     <div className="flex flex-col gap-4 pt-2">
       <label className="flex flex-col gap-1">
         <Typography.Text strong>列表名称</Typography.Text>
-        <Input value={profile.name} maxLength={80} onChange={(event) => onChange({ ...profile, name: event.target.value })} />
+        <Input
+          value={profile.name}
+          maxLength={80}
+          onChange={(event) =>
+            onChange({ ...profile, name: event.target.value })
+          }
+        />
       </label>
       <Tabs
         activeKey={profile.config.mode}
         onChange={changeMode}
         items={[
-          { key: "tiered", label: "分类配置", children: profile.config.mode === "tiered" ? <TieredEditor config={profile.config} onChange={setConfig} /> : null },
-          { key: "universal", label: "通用模型", children: profile.config.mode === "universal" ? <ModelEditor model={profile.config.model} onChange={(model) => setConfig({ mode: "universal", model })} /> : null },
+          {
+            key: "tiered",
+            label: "分类配置",
+            children:
+              profile.config.mode === "tiered" ? (
+                <TieredEditor config={profile.config} onChange={setConfig} />
+              ) : null,
+          },
+          {
+            key: "universal",
+            label: "通用模型",
+            children:
+              profile.config.mode === "universal" ? (
+                <ModelEditor
+                  model={profile.config.model}
+                  onChange={(model) => setConfig({ mode: "universal", model })}
+                />
+              ) : null,
+          },
         ]}
       />
     </div>
@@ -284,59 +337,218 @@ function ProfileEditor({
 }
 
 /** 分类模式三个必填用途及高级职责映射。 */
-function TieredEditor({ config, onChange }: { config: Extract<ModelUsageProfile["config"], { mode: "tiered" }>; onChange: (config: ModelUsageProfile["config"]) => void }) {
+function TieredEditor({
+  config,
+  onChange,
+}: {
+  config: Extract<ModelUsageProfile["config"], { mode: "tiered" }>;
+  onChange: (config: ModelUsageProfile["config"]) => void;
+}) {
   return (
     <div className="flex flex-col gap-4">
       {(Object.keys(TIER_LABELS) as ModelTier[]).map((tier) => (
         <Card key={tier} size="small" title={TIER_LABELS[tier]}>
-          <ModelEditor model={config.models[tier]} onChange={(model) => onChange({ ...config, models: { ...config.models, [tier]: model } })} />
+          <ModelEditor
+            model={config.models[tier]}
+            onChange={(model) =>
+              onChange({
+                ...config,
+                models: { ...config.models, [tier]: model },
+              })
+            }
+          />
         </Card>
       ))}
-      <Collapse items={[{ key: "mapping", label: "高级设置：Agent 职责映射", children: (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {GROUPS.map((group) => (
-            <label key={group} className="flex items-center justify-between gap-3">
-              <span>{GROUP_LABELS[group]}</span>
-              <Select value={config.assignments[group]} className="w-40" options={(Object.keys(TIER_LABELS) as ModelTier[]).map((tier) => ({ value: tier, label: TIER_LABELS[tier] }))} onChange={(tier) => onChange({ ...config, assignments: { ...config.assignments, [group]: tier } })} />
-            </label>
-          ))}
-        </div>
-      ) }]} />
+      <Collapse
+        items={[
+          {
+            key: "mapping",
+            label: "高级设置：Agent 职责映射",
+            children: (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {GROUPS.map((group) => (
+                  <label
+                    key={group}
+                    className="flex items-center justify-between gap-3"
+                  >
+                    <span>{GROUP_LABELS[group]}</span>
+                    <Select
+                      value={config.assignments[group]}
+                      className="w-40"
+                      options={(Object.keys(TIER_LABELS) as ModelTier[]).map(
+                        (tier) => ({ value: tier, label: TIER_LABELS[tier] }),
+                      )}
+                      onChange={(tier) =>
+                        onChange({
+                          ...config,
+                          assignments: { ...config.assignments, [group]: tier },
+                        })
+                      }
+                    />
+                  </label>
+                ))}
+              </div>
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }
 
 /** 单模型基础字段与高级参数编辑器。 */
-function ModelEditor({ model, onChange }: { model: DeepSeekModelConfig; onChange: (model: DeepSeekModelConfig) => void }) {
-  const patch = (value: Partial<DeepSeekModelConfig>) => onChange({ ...model, ...value });
-  const numberField = (value: number, key: keyof DeepSeekModelConfig, min: number, max: number) => (
-    <InputNumber className="w-32" value={value} min={min} max={max} onChange={(next) => typeof next === "number" && patch({ [key]: next })} />
+function ModelEditor({
+  model,
+  onChange,
+}: {
+  model: DeepSeekModelConfig;
+  onChange: (model: DeepSeekModelConfig) => void;
+}) {
+  const patch = (value: Partial<DeepSeekModelConfig>) =>
+    onChange({ ...model, ...value });
+  const numberField = (
+    value: number,
+    key: keyof DeepSeekModelConfig,
+    min: number,
+    max: number,
+  ) => (
+    <InputNumber
+      className="w-32"
+      value={value}
+      min={min}
+      max={max}
+      onChange={(next) => typeof next === "number" && patch({ [key]: next })}
+    />
   );
   return (
     <div className="flex flex-col gap-3">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <label className="flex flex-col gap-1.5">模型类型<Select className="w-full" value={model.modelId} options={[{ value: "deepseek-v4-flash", label: "DeepSeek V4 Flash" }, { value: "deepseek-v4-pro", label: "DeepSeek V4 Pro" }]} onChange={(modelId) => patch({ modelId, reasoningEffort: modelId === "deepseek-v4-pro" && model.reasoningEffort === "low" ? "high" : model.reasoningEffort })} /></label>
-        <label className="flex flex-col gap-1.5">自定义名称<Input value={model.customName} maxLength={64} onChange={(event) => patch({ customName: event.target.value })} /></label>
+        <label className="flex flex-col gap-1.5">
+          模型类型
+          <Select
+            className="w-full"
+            value={model.modelId}
+            options={[{ value: "deepseek-flash", label: "DeepSeek Flash" }]}
+            onChange={(modelId) => patch({ modelId })}
+          />
+        </label>
+        <label className="flex flex-col gap-1.5">
+          自定义名称
+          <Input
+            value={model.customName}
+            maxLength={64}
+            onChange={(event) => patch({ customName: event.target.value })}
+          />
+        </label>
       </div>
-      <label className="flex flex-col gap-1.5">Base URL<Input value={model.baseUrl} onChange={(event) => patch({ baseUrl: event.target.value })} /></label>
-      <Collapse items={[{ key: "advanced", label: "高级设置", children: (
-        <div className="flex flex-col gap-3">
-          <Alert type="warning" showIcon message="思考模式固定开启；DeepSeek 思考模式会忽略 temperature 和 topP，因此两项当前仅保存和展示。" />
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <label className="flex min-h-14 items-center justify-between gap-4 rounded-md border border-black/10 px-3">thinking<Switch checked disabled /></label>
-            <label className="flex min-h-14 items-center justify-between gap-4 rounded-md border border-black/10 px-3">temperature{numberField(model.temperature, "temperature", 0, 2)}</label>
-            <label className="flex min-h-14 items-center justify-between gap-4 rounded-md border border-black/10 px-3">topP{numberField(model.topP, "topP", 0, 1)}</label>
-            <label className="flex min-h-14 items-center justify-between gap-4 rounded-md border border-black/10 px-3">maxTokens{numberField(model.maxTokens, "maxTokens", 1, 393216)}</label>
-            <label className="flex min-h-14 items-center justify-between gap-4 rounded-md border border-black/10 px-3">reasoning effort<Select className="w-32" value={model.reasoningEffort} options={(model.modelId === "deepseek-v4-pro" ? ["high", "max"] : ["low", "high", "max"]).map((value) => ({ value, label: value }))} onChange={(reasoningEffort) => patch({ reasoningEffort })} /></label>
-          </div>
-          <Typography.Text strong>人民币 / 百万 Token</Typography.Text>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <label className="flex min-h-14 items-center justify-between gap-4 rounded-md border border-black/10 px-3">缓存命中输入<InputNumber className="w-32" min={0} value={model.pricing.cacheHitInputPricePerMillion} onChange={(value) => typeof value === "number" && patch({ pricing: { ...model.pricing, cacheHitInputPricePerMillion: value } })} /></label>
-            <label className="flex min-h-14 items-center justify-between gap-4 rounded-md border border-black/10 px-3">缓存未命中输入<InputNumber className="w-32" min={0} value={model.pricing.cacheMissInputPricePerMillion} onChange={(value) => typeof value === "number" && patch({ pricing: { ...model.pricing, cacheMissInputPricePerMillion: value } })} /></label>
-            <label className="flex min-h-14 items-center justify-between gap-4 rounded-md border border-black/10 px-3">输出<InputNumber className="w-32" min={0} value={model.pricing.outputPricePerMillion} onChange={(value) => typeof value === "number" && patch({ pricing: { ...model.pricing, outputPricePerMillion: value } })} /></label>
-          </div>
-        </div>
-      ) }]} />
+      <label className="flex flex-col gap-1.5">
+        Base URL
+        <Input
+          value={model.baseUrl}
+          onChange={(event) => patch({ baseUrl: event.target.value })}
+        />
+      </label>
+      <Collapse
+        items={[
+          {
+            key: "advanced",
+            label: "高级设置",
+            children: (
+              <div className="flex flex-col gap-3">
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="思考模式固定开启；DeepSeek 思考模式会忽略 temperature 和 topP，因此两项当前仅保存和展示。"
+                />
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <label className="flex min-h-14 items-center justify-between gap-4 rounded-md border border-black/10 px-3">
+                    thinking
+                    <Switch checked disabled />
+                  </label>
+                  <label className="flex min-h-14 items-center justify-between gap-4 rounded-md border border-black/10 px-3">
+                    temperature
+                    {numberField(model.temperature, "temperature", 0, 2)}
+                  </label>
+                  <label className="flex min-h-14 items-center justify-between gap-4 rounded-md border border-black/10 px-3">
+                    topP{numberField(model.topP, "topP", 0, 1)}
+                  </label>
+                  <label className="flex min-h-14 items-center justify-between gap-4 rounded-md border border-black/10 px-3">
+                    maxTokens
+                    {numberField(model.maxTokens, "maxTokens", 1, 393216)}
+                  </label>
+                  <label className="flex min-h-14 items-center justify-between gap-4 rounded-md border border-black/10 px-3">
+                    reasoning effort
+                    <Select
+                      className="w-32"
+                      value={model.reasoningEffort}
+                      options={(["low", "high", "max"] as const).map(
+                        (value) => ({ value, label: value }),
+                      )}
+                      onChange={(reasoningEffort) => patch({ reasoningEffort })}
+                    />
+                  </label>
+                </div>
+                <Typography.Text strong>
+                  人民币 / 百万 Token（高峰价估算快照，实际账单以服务商为准）
+                </Typography.Text>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <label className="flex min-h-14 items-center justify-between gap-4 rounded-md border border-black/10 px-3">
+                    缓存命中输入
+                    <InputNumber
+                      className="w-32"
+                      min={0}
+                      value={model.pricing.cacheHitInputPricePerMillion}
+                      onChange={(value) =>
+                        typeof value === "number" &&
+                        patch({
+                          pricing: {
+                            ...model.pricing,
+                            cacheHitInputPricePerMillion: value,
+                          },
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="flex min-h-14 items-center justify-between gap-4 rounded-md border border-black/10 px-3">
+                    缓存未命中输入
+                    <InputNumber
+                      className="w-32"
+                      min={0}
+                      value={model.pricing.cacheMissInputPricePerMillion}
+                      onChange={(value) =>
+                        typeof value === "number" &&
+                        patch({
+                          pricing: {
+                            ...model.pricing,
+                            cacheMissInputPricePerMillion: value,
+                          },
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="flex min-h-14 items-center justify-between gap-4 rounded-md border border-black/10 px-3">
+                    输出
+                    <InputNumber
+                      className="w-32"
+                      min={0}
+                      value={model.pricing.outputPricePerMillion}
+                      onChange={(value) =>
+                        typeof value === "number" &&
+                        patch({
+                          pricing: {
+                            ...model.pricing,
+                            outputPricePerMillion: value,
+                          },
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+              </div>
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }

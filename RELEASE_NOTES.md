@@ -4,6 +4,10 @@ Status: preparation draft, **not published**. Package versions remain unchanged.
 
 ## Changes
 
+- Define v0.1 as a loopback-only, single-user local-directory release. Cloud sync, attachments, account identity, pin/archive, duplicate sidebar graph access, MRD/BRD controls and human-approval claims are hidden rather than shown as inert UI.
+- Add local workspace rename/path update/soft removal and conversation rename/soft deletion APIs and UI. Active runs block destructive management operations; removed records remain in PostgreSQL and local directories are never changed.
+- Canonicalize new and built-in model profiles to `deepseek-flash`, normalize legacy V4 IDs, and update the built-in high-peak estimate to ¥0.04/¥2/¥8 per million cache-hit input/cache-miss input/output tokens.
+- Root `pnpm dev` starts only Web and API. The Worker remains source-visible as an experimental scaffold and Redis is not part of the v0.1 normal setup.
 - Apache-2.0 project license and NOTICE, preserved upstream skill licenses, complete 84-file skill inventory and per-file adaptation notices.
 - Tracked runtime SQL for model profiles, token usage, PRD artifacts/runs and optional context snapshots. Empty local setup uses db:init; existing databases use additive db:upgrade. Circular document constraints are created after both tables exist.
 - Legacy structured graph writes default the unused content column instead of failing on a newly initialized database.
@@ -39,3 +43,5 @@ Complete RELEASE_CHECKLIST.md: provenance/history disposition, green real CI/dat
 A real first-install test exposed `message.type varchar(20)` rejecting the unchanged `conversation_confirmation` and Executor identifiers (PostgreSQL 22001). The core Prisma schema now uses text for this field; the tracked upgrade SQL widens existing columns without truncating data. No public DTO or Agent identifiers were changed.
 
 The repository-backed PostgreSQL regression test reproduced 22001 before upgrading the isolated test database. After applying the tracked SQL with the existing pg client (Prisma CLI execution was blocked by sandbox spawn EPERM), both database tests passed: runtime table/artifact writes and complete confirmation/all-ten-Executor message-type round trips. Test fixtures were rolled back. Previously failed stream output is not automatically backfilled; repeat the manual chat scenario.
+
+The v0.1 local-release closure build passed all six packages after the CRUD/UI/model changes, with the existing Vite large-chunk warnings. CRUD/database integration coverage and legacy-model normalization assertions were added; normal test commands and real clean-clone/CI acceptance remain publication gates rather than claimed passes.

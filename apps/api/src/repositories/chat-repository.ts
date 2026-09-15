@@ -1,3 +1,16 @@
+/**
+ * 本地会话持久化仓库
+ *
+ * 管理固定本地用户的会话、初始请求表单、标题更新与软删除。
+ *
+ * Responsibilities:
+ * - 仅查询 active 工作区中的 active 会话
+ * - 创建会话和初始请求表单
+ * - 支持手动标题更新与可恢复软删除
+ *
+ * Notes:
+ * - 消息、图谱、文档和 checkpoint 不会因软删除被清理。
+ */
 import { randomUUID } from "node:crypto";
 import { prisma } from "@repo/database";
 
@@ -129,6 +142,13 @@ export async function listActiveConversations(
     WHERE c."status" = 'active'
       AND c."workspace_id" = ${workspaceId}
       AND c."user_id" = ${LOCAL_USER_ID}
+      AND EXISTS (
+        SELECT 1
+        FROM "workspace" w
+        WHERE w."id" = c."workspace_id"
+          AND w."user_id" = ${LOCAL_USER_ID}
+          AND w."status" = 'active'
+      )
     ORDER BY COALESCE(c."last_message_at", c."created_at") DESC
   `;
 
@@ -228,6 +248,8 @@ export async function getConversationWorkspace(
     JOIN "workspace" w ON w."id" = c."workspace_id"
     WHERE c."id" = ${conversationId}
       AND c."user_id" = ${LOCAL_USER_ID}
+      AND c."status" = 'active'
+      AND w."status" = 'active'
     LIMIT 1
   `;
 
@@ -255,6 +277,13 @@ export async function getConversationById(
     FROM "conversation"
     WHERE "id" = ${conversationId}
       AND "user_id" = ${LOCAL_USER_ID}
+      AND "status" = 'active'
+      AND EXISTS (
+        SELECT 1 FROM "workspace" w
+        WHERE w."id" = "conversation"."workspace_id"
+          AND w."user_id" = ${LOCAL_USER_ID}
+          AND w."status" = 'active'
+      )
     LIMIT 1
   `;
   return rows[0] ? mapConversationRow(rows[0]) : null;
@@ -272,6 +301,13 @@ export async function updateFirstTurnConversationTitle(
     SET "title" = ${title}
     WHERE c."id" = ${conversationId}
       AND c."user_id" = ${LOCAL_USER_ID}
+      AND c."status" = 'active'
+      AND EXISTS (
+        SELECT 1 FROM "workspace" w
+        WHERE w."id" = c."workspace_id"
+          AND w."user_id" = ${LOCAL_USER_ID}
+          AND w."status" = 'active'
+      )
       AND (
         c."title" IS NULL
         OR btrim(c."title") = ''
@@ -296,6 +332,52 @@ export async function updateFirstTurnConversationTitle(
 
   const row = rows[0];
   return row ? mapConversationRow(row) : null;
+}
+
+/** 手动更新 active 会话标题，手动标题不会再被首轮自动标题覆盖。 */
+export async function updateActiveConversationTitle(
+  conversationId: string,
+  title: string,
+): Promise<ConversationDto | null> {
+  const rows = await prisma.$queryRaw<ConversationRow[]>`
+    UPDATE "conversation"
+    SET "title" = ${title}
+    WHERE "id" = ${conversationId}
+      AND "user_id" = ${LOCAL_USER_ID}
+      AND "status" = 'active'
+      AND EXISTS (
+        SELECT 1 FROM "workspace" w
+        WHERE w."id" = "conversation"."workspace_id"
+          AND w."user_id" = ${LOCAL_USER_ID}
+          AND w."status" = 'active'
+      )
+    RETURNING
+      "id", "workspace_id", "user_id", "title", "type", "status",
+      "last_message_at", "created_at"
+  `;
+  return rows[0] ? mapConversationRow(rows[0]) : null;
+}
+
+/** 将 active 会话标记为 deleted 并保留全部历史数据。 */
+export async function softDeleteActiveConversation(
+  conversationId: string,
+): Promise<boolean> {
+  const changed = await prisma.$executeRaw`
+    UPDATE "conversation"
+    SET
+      "status" = 'deleted',
+      "deleted_at" = CURRENT_TIMESTAMP
+    WHERE "id" = ${conversationId}
+      AND "user_id" = ${LOCAL_USER_ID}
+      AND "status" = 'active'
+      AND EXISTS (
+        SELECT 1 FROM "workspace" w
+        WHERE w."id" = "conversation"."workspace_id"
+          AND w."user_id" = ${LOCAL_USER_ID}
+          AND w."status" = 'active'
+      )
+  `;
+  return changed > 0;
 }
 
 /**

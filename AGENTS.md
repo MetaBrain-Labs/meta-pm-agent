@@ -22,7 +22,7 @@ Act as a pragmatic software-engineering agent for the `meta-pm-agent` monorepo. 
 - Preserve TypeScript project references and `composite: true` in `packages/shared`, `packages/database`, and `apps/agent-runtime`. Keep `"types": ["node"]` in `packages/database/tsconfig.json`.
 - `apps/web` uses React 19, Vite 6, Tailwind 4, and Ant Design 6. Preserve Ant Design 6 APIs and imports.
 - Run Prisma commands from `packages/database`: `pnpm db:generate`, `pnpm db:push`, or `pnpm db:migrate`. `allowBuilds` in `pnpm-workspace.yaml` permits Prisma installation scripts.
-- Copy `.env.example` to `.env`. PostgreSQL may be configured with `POSTGRES_*` or `DATABASE_URL`; configure Redis, `OPENAI_API_KEY`, `LLM_MODEL`, and `LLM_BASE_URL`. `TAVILY_API_KEY` enables Tavily; search otherwise falls back to public indexes.
+- Copy `.env.example` to `.env`. PostgreSQL may be configured with `POSTGRES_*` or `DATABASE_URL`; configure `OPENAI_API_KEY`, `LLM_MODEL`, and `LLM_BASE_URL`. `TAVILY_API_KEY` enables Tavily; search otherwise falls back to public indexes. Redis is only needed when explicitly developing the experimental worker.
 - Preserve routes `/workplace`, `/chat/:workspaceId`, `/chat/:workspaceId/:threadId`, and `/documents/:workspaceId`.
 - Browser folder selection may not expose an absolute path. Keep editable path fields and host-provided `file.path` handling.
 - Do not change dependency versions, generated files, unrelated modules, or repository-wide configuration unless required.
@@ -125,7 +125,7 @@ User-facing UI copy and final prose may be localized. Internal comments may be C
     -> draftSection|humanReview -> exportPrd
   ```
 
-- PRD is the only enabled document kind. Keep MRD/BRD controls disabled until distinct workflows exist.
+- PRD is the only enabled document kind. Do not render MRD/BRD controls until distinct workflows exist.
 - Three independent reviewers score each draft. A score spread over `8` rejects the attempt; a reliable draft also needs `85/100`. Try at most three drafts, retain every draft/score history, and after exhausted retries choose according to the existing smallest-spread/weighted logic.
 - `humanReview` currently auto-approves; do not claim it waits for a person unless an actual `interrupt()` is added.
 - Document runs continue in the API background across page navigation. Only the stop endpoint or server/runtime failure should interrupt them.

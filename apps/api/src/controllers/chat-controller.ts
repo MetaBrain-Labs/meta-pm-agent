@@ -1,7 +1,7 @@
 /**
  * 聊天 API 控制器
  *
- * 负责账号、工作区、会话和聊天 SSE 请求的 HTTP 入口处理。
+ * 负责本地工作区、会话和聊天 SSE 请求的 HTTP 入口处理。
  * 聊天流中会收集 Agent 输出用于最终消息持久化，并在每个 Agent 结束时即时写入 token 用量。
  *
  * Responsibilities:
@@ -49,11 +49,14 @@ import {
   CreateWorkspaceRequestSchema,
   ListChatsQuerySchema,
   StopChatRequestSchema,
+  UpdateChatRequestSchema,
+  UpdateWorkspaceRequestSchema,
 } from "../schemas";
 import { toApiEvent } from "../services/agent-stream-service";
 import {
   type AgentConversationOutput,
   createChat,
+  deleteChat,
   listMessages,
   listChats,
   loadExecutorRetryFailure,
@@ -64,6 +67,8 @@ import {
   persistConversationStart,
   recoverDocumentEvidenceCorrectionDecision,
   shouldRejectStaleWorkflowFormSubmission,
+  updateChat,
+  ChatServiceError,
 } from "../services/chat-service";
 import { loadProductRuntimeContextForConversation } from "../services/product-context-service";
 import {
@@ -73,8 +78,11 @@ import {
 } from "../services/product-knowledge-graph-service";
 import {
   createWorkspace,
-  getAccount,
   listWorkspaces,
+  removeWorkspace,
+  requireActiveWorkspace,
+  updateWorkspace,
+  WorkspaceServiceError,
 } from "../services/workspace-service";
 import { writeSse, writeSseDone, writeSseKeepalive } from "../utils/sse";
 import {
@@ -203,21 +211,14 @@ export function createDocumentEvidenceResumeFromFormAnswer({
 }
 
 /**
- * 获取当前本地用户的账户信息。
- */
-export async function getAccountHandler(c: Context) {
-  return c.json({
-    account: await getAccount(),
-  });
-}
-
-/**
  * 获取当前本地用户的所有工作区列表。
  */
 export async function listWorkspacesHandler(c: Context) {
-  return c.json({
-    workspaces: await listWorkspaces(),
-  });
+  try {
+    return c.json({ workspaces: await listWorkspaces() });
+  } catch (error) {
+    return mapManagementError(c, error);
+  }
 }
 
 /**
@@ -232,15 +233,45 @@ export async function createWorkspaceHandler(c: Context) {
     return c.json({ error: parsed.error.flatten() }, 400);
   }
 
-  return c.json(
-    {
-      workspace: await createWorkspace(
-        parsed.data.name,
-        parsed.data.localPath,
-      ),
-    },
-    201,
+  try {
+    return c.json(
+      {
+        workspace: await createWorkspace(
+          parsed.data.name,
+          parsed.data.localPath,
+        ),
+      },
+      201,
+    );
+  } catch (error) {
+    return mapManagementError(c, error);
+  }
+}
+
+/** 更新本地工作区名称或路径。 */
+export async function updateWorkspaceHandler(c: Context) {
+  const parsed = UpdateWorkspaceRequestSchema.safeParse(
+    await readJsonBody(c.req.raw),
   );
+  if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+
+  try {
+    return c.json({
+      workspace: await updateWorkspace(c.req.param("id")!, parsed.data),
+    });
+  } catch (error) {
+    return mapManagementError(c, error);
+  }
+}
+
+/** 软删除本地工作区，绝不删除对应磁盘目录。 */
+export async function deleteWorkspaceHandler(c: Context) {
+  try {
+    await removeWorkspace(c.req.param("id")!);
+    return c.json({ removed: true });
+  } catch (error) {
+    return mapManagementError(c, error);
+  }
 }
 
 /**
@@ -256,18 +287,22 @@ export async function listChatsHandler(c: Context) {
     return c.json({ error: parsed.error.flatten() }, 400);
   }
 
-  return c.json({
-    chats: await listChats(parsed.data.workspaceId),
-  });
+  try {
+    return c.json({ chats: await listChats(parsed.data.workspaceId) });
+  } catch (error) {
+    return mapManagementError(c, error);
+  }
 }
 
 /**
  * 获取指定会话的所有历史消息。
  */
 export async function listMessagesHandler(c: Context) {
-  return c.json({
-    messages: await listMessages(c.req.param("id")!),
-  });
+  try {
+    return c.json({ messages: await listMessages(c.req.param("id")!) });
+  } catch (error) {
+    return mapManagementError(c, error);
+  }
 }
 
 /**
@@ -282,12 +317,39 @@ export async function createChatHandler(c: Context) {
     return c.json({ error: parsed.error.flatten() }, 400);
   }
 
-  const { chat, requestForm } = await createChat(
-    parsed.data.workspaceId,
-    parsed.data.title,
-  );
+  try {
+    const { chat, requestForm } = await createChat(
+      parsed.data.workspaceId,
+      parsed.data.title,
+    );
+    return c.json({ chat, requestForm }, 201);
+  } catch (error) {
+    return mapManagementError(c, error);
+  }
+}
 
-  return c.json({ chat, requestForm }, 201);
+/** 手动重命名 active 会话。 */
+export async function updateChatHandler(c: Context) {
+  const parsed = UpdateChatRequestSchema.safeParse(await readJsonBody(c.req.raw));
+  if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+
+  try {
+    return c.json({
+      chat: await updateChat(c.req.param("id")!, parsed.data.title),
+    });
+  } catch (error) {
+    return mapManagementError(c, error);
+  }
+}
+
+/** 软删除空闲会话并保留历史数据。 */
+export async function deleteChatHandler(c: Context) {
+  try {
+    await deleteChat(c.req.param("id")!);
+    return c.json({ deleted: true });
+  } catch (error) {
+    return mapManagementError(c, error);
+  }
 }
 
 /**
@@ -1093,6 +1155,21 @@ async function readJsonBody(request: Request): Promise<unknown> {
 }
 
 /**
+ * 将本地项目与会话管理错误转换为稳定的 HTTP 响应。
+ */
+function mapManagementError(c: Context, error: unknown) {
+  if (error instanceof WorkspaceServiceError) {
+    return c.json({ error: error.message }, error.statusCode);
+  }
+  if (error instanceof ChatServiceError) {
+    return c.json({ error: error.message }, error.statusCode);
+  }
+
+  console.error("[management] API error:", error);
+  return c.json({ error: "本地项目服务暂时不可用，请稍后重试。" }, 503);
+}
+
+/**
  * 将 unknown 类型的错误对象转换为可读字符串。
  */
 function getErrorMessage(error: unknown): string {
@@ -1458,6 +1535,12 @@ export async function getWorkspaceKnowledgeGraphHandler(c: Context) {
   const workspaceId = c.req.param("workspaceId");
   if (!workspaceId) {
     return c.json({ error: "缺少工作区 ID" }, 400);
+  }
+
+  try {
+    await requireActiveWorkspace(workspaceId);
+  } catch (error) {
+    return mapManagementError(c, error);
   }
 
   const data = await getWorkspaceKnowledgeGraph(workspaceId);

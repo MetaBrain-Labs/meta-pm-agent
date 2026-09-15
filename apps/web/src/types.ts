@@ -20,7 +20,7 @@ export type StreamEvent = ChatSseEvent;
 /** DeepSeek 模型使用列表中的单模型配置。 */
 export interface DeepSeekModelConfig {
   provider: "deepseek";
-  modelId: "deepseek-v4-flash" | "deepseek-v4-pro";
+  modelId: "deepseek-flash";
   customName: string;
   baseUrl: string;
   thinking: true;
@@ -419,23 +419,10 @@ export interface ThreadInfo {
 
 export interface WorkspaceInfo {
   id: string;
-  userId: string;
   name: string;
-  storageType?: string | null;
   localPath?: string | null;
-  cloudPath?: string | null;
-  syncStatus?: string | null;
   createdAt: string;
   updatedAt: string;
-}
-
-export interface AccountInfo {
-  id: string;
-  email?: string | null;
-  username?: string | null;
-  avatar?: string | null;
-  createdAt?: string | null;
-  updatedAt?: string | null;
 }
 
 export interface PersistedMessageInfo {

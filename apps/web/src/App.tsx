@@ -18,6 +18,7 @@ import zhCN from "antd/locale/zh_CN";
 import { Sidebar } from "./components/Sidebar";
 import { ConfigModal } from "./components/modals/ConfigModal";
 import { ProjectCreateModal } from "./components/modals/ProjectCreateModal";
+import { TextValueModal } from "./components/modals/TextValueModal";
 import { useAppShell } from "./hooks/useAppShell";
 import { ThreadChatPage } from "./pages/chat/ThreadChatPage";
 import { DocumentPlanningPage } from "./pages/documents/DocumentPlanningPage";
@@ -36,7 +37,6 @@ export default function App() {
         {app.workspaceDetailOpen && app.activeWorkspaceId ? (
           <>
             <Sidebar
-              workspaces={app.workspaces}
               activeWorkspaceId={app.activeWorkspaceId}
               threads={app.threads}
               activeId={app.activeThread?.id ?? null}
@@ -47,6 +47,8 @@ export default function App() {
               onSelect={app.handleSelectThread}
               onDocuments={app.handleOpenDocuments}
               onNew={app.handleNewChat}
+              onThreadRename={app.handleThreadRename}
+              onThreadDelete={app.handleThreadDelete}
               onToggle={() => app.setSidebarCollapsed(!app.sidebarCollapsed)}
             />
             <Layout style={{ background: "transparent" }}>
@@ -76,25 +78,20 @@ export default function App() {
             workspaces={app.workspaces}
             activeWorkspaceId={app.activeWorkspaceId}
             threads={app.threads}
-            account={app.account}
             error={app.creationError}
-            creating={app.isCreatingChat}
             creatingWorkspace={app.isCreatingWorkspace}
             onOpenWorkspace={app.handleOpenWorkspace}
             onNewWorkspace={app.openProjectModal}
-            onAccountInfo={() => app.openConfigModal("account")}
-            onOpenProject={() => {
-              if (app.activeWorkspaceId) {
-                app.handleOpenWorkspace(app.activeWorkspaceId);
-                return;
-              }
-              void app.handleNewChat();
-            }}
+            onLocalSettings={() => app.openConfigModal("models")}
+            onWorkspaceRename={app.handleWorkspaceRename}
+            onWorkspaceMigrate={app.handleWorkspaceMigrate}
+            onWorkspaceRemove={app.handleWorkspaceRemove}
           />
         )}
       </Layout>
 
       <ProjectCreateModal
+        mode={app.projectModalMode}
         open={app.projectModalOpen}
         form={app.projectForm}
         locationHint={app.projectLocationHint}
@@ -105,22 +102,25 @@ export default function App() {
         onCreate={app.handleNewWorkspace}
         onCancel={() => app.setProjectModalOpen(false)}
       />
+      <TextValueModal
+        open={Boolean(app.renameTarget)}
+        title={
+          app.renameTarget?.kind === "workspace" ? "项目重命名" : "对话重命名"
+        }
+        label={app.renameTarget?.kind === "workspace" ? "项目名称" : "对话标题"}
+        value={app.renameValue}
+        saving={app.savingRename}
+        onChange={app.setRenameValue}
+        onSave={app.handleSaveRename}
+        onCancel={() => app.setRenameTarget(null)}
+      />
       <ConfigModal
         open={app.configModalOpen}
         activeTab={app.configTab}
         showWorkspace={app.configWorkspaceVisible}
-        accountRows={[
-          ["账号 ID", app.account?.id ?? "-"],
-          ["用户名", app.account?.username ?? "Local User"],
-          ["邮箱", app.account?.email ?? "-"],
-          ["头像", app.account?.avatar ?? "默认头像"],
-        ]}
         workspaceRows={[
-          ["工作区 ID", app.activeWorkspace?.id ?? "-"],
           ["名称", app.activeWorkspace?.name ?? "-"],
           ["本地路径", app.activeWorkspace?.localPath ?? "-"],
-          ["存储类型", app.activeWorkspace?.storageType ?? "-"],
-          ["同步状态", app.activeWorkspace?.syncStatus ?? "-"],
         ]}
         onTabChange={app.setConfigTab}
         onClose={() => app.setConfigModalOpen(false)}

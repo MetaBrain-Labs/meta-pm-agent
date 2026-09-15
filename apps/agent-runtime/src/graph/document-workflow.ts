@@ -4,7 +4,8 @@
  * 构建独立于产品知识图谱生产链路的 Document Agent 图，固定阶段为
  * parseKg → normalizeGraph → buildSectionDossiers → draftSection →
  * crossCheck → scoreDraft → groupEvidenceBlockers → aggregateScore →
- * humanReview → exportPrd。图状态由 checkpointer 保存，
+ * 自动质量审核 → exportPrd。内部节点标识仍为 humanReview 以兼容既有 checkpoint。
+ * 图状态由 checkpointer 保存，
  * 便于后续恢复、回放与 thread 级连续性扩展。
  *
  * Responsibilities:
@@ -13,8 +14,7 @@
  * - 将 Document Agent 与评分事件透传给 API 后台任务
  *
  * Notes:
- * - 当前 PRD 后台生成不主动打断等待人工审核；humanReview 节点先做自动通过，
- *   后续可在该节点接入 interrupt/resume 表单。
+ * - v0.1 的 humanReview 兼容节点只执行自动质量放行，不宣称有人参与。
  */
 
 import {
@@ -129,7 +129,7 @@ const STAGE_LABELS: Record<DocumentWorkflowStage, string> = {
   scoreDraft: "三方评分 Agent 打分",
   groupEvidenceBlockers: "合并三方证据阻断",
   aggregateScore: "分差合格后共识评分",
-  humanReview: "人工审核节点",
+  humanReview: "自动质量审核",
   exportPrd: "导出 PRD 文档",
 };
 
@@ -635,7 +635,7 @@ function formatEvidenceBlockerGroup(
 }
 
 /**
- * 人工审核占位节点，当前后台生成不阻塞等待审核。
+ * 自动质量审核兼容节点，当前后台生成不阻塞等待人工操作。
  */
 function humanReviewNode(
   _state: DocumentWorkflowGraphStateValue,
@@ -643,7 +643,7 @@ function humanReviewNode(
 ) {
   emitStage(config, "humanReview", "started");
   emitTodoUpdate(config, createWorkflowTodos("humanReview"));
-  // 当前 PRD 后台任务不自动弹出人工审核；后续可在此接入 interrupt()。
+  // 保留稳定节点名兼容已有 checkpoint，v0.1 仅执行自动放行。
   emitStage(config, "humanReview", "completed");
   const todos = createWorkflowTodos("humanReview", true);
   emitTodoUpdate(config, todos);

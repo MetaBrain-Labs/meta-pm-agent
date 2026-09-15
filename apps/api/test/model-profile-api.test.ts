@@ -11,6 +11,7 @@ import {
   createModelProfileHandler,
   selectConversationModelProfileHandler,
 } from "../src/controllers/model-profile-controller";
+import { createWorkspaceHandler } from "../src/controllers/chat-controller";
 import {
   registerChatRun,
   unregisterChatRun,
@@ -43,7 +44,7 @@ test("rejects an invalid model profile before database access", async () => {
         mode: "universal",
         model: {
           provider: "deepseek",
-          modelId: "deepseek-v4-pro",
+          modelId: "deepseek-flash",
           customName: "bad",
           baseUrl: "file:///unsafe",
           thinking: true,
@@ -59,6 +60,17 @@ test("rejects an invalid model profile before database access", async () => {
         },
       },
     }),
+  });
+  assert.equal(response.status, 400);
+});
+
+test("rejects a relative workspace path before database access", async () => {
+  const app = new Hono();
+  app.post("/workspaces", createWorkspaceHandler);
+  const response = await app.request("/workspaces", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Local project", localPath: "relative/path" }),
   });
   assert.equal(response.status, 400);
 });

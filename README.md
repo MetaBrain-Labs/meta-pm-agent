@@ -4,7 +4,7 @@
 
 An AI-assisted product-management workspace that turns conversations into structured requirements, parallel execution plans, a persistent product knowledge graph, and PRD artifacts.
 
-> This project is under active development. This is a single-user local preview. Review the [database schema note](#database-schema-note) before running the complete workflow.
+> v0.1 is a single-user, same-machine local preview: local-directory workspaces, external model APIs, and PRD generation only. It has no cloud sync/deployment, attachments, team collaboration, MRD/BRD generation, or human approval workflow. Review the [database schema note](#database-schema-note) before running the complete workflow.
 
 ## Highlights
 
@@ -13,7 +13,8 @@ An AI-assisted product-management workspace that turns conversations into struct
 - **Ten PM Executor domains** — Product strategy, market research, GTM, discovery, execution, marketing growth, analytics, AI shipping, toolkit, and interface craft.
 - **Persistent product context** — Structured nodes, relations, decisions, risks, open questions, provenance, lifecycle state, and supplement-round correction.
 - **Recoverable execution** — PostgreSQL checkpoints, form-based HITL resume, completed-task replay, and server-side cancellation.
-- **Document generation** — A separate PRD workflow with section drafting, consistency checks, three-reviewer scoring, retries, artifact preview, and Markdown download.
+- **Local project management** — Add, rename, relink, and soft-remove local-directory workspaces; create, restore, rename, and soft-delete conversations.
+- **Document generation** — A separate PRD workflow with section drafting, consistency checks, automatic quality review, retries, artifact preview, and Markdown download.
 - **Realtime frontend** — SSE reasoning and tool events, parallel-Agent status, token usage, Planner DAG progress, and a shared G6 knowledge-graph viewer.
 - **Controlled tools** — Central allowlists, no arbitrary Agent filesystem access, optional Tavily/public-index search, and verifiable Evidence provenance.
 
@@ -59,7 +60,6 @@ See [STRUCTURE.md](STRUCTURE.md) for module ownership, runtime state, persistenc
 | Web | React 19, Vite 6, Ant Design 6, Tailwind CSS 4, AntV G6 |
 | Database | PostgreSQL, Prisma, LangGraph PostgresSaver |
 | Search | Tavily when configured; public-index fallback |
-| Worker | BullMQ, Redis |
 | Monorepo | pnpm 11.3.0, Turborepo |
 
 ## Quick Start
@@ -69,8 +69,7 @@ See [STRUCTURE.md](STRUCTURE.md) for module ownership, runtime state, persistenc
 - Node.js >=22.13
 - pnpm 11.3.0
 - PostgreSQL
-- Redis when running the worker or `pnpm dev`
-- A provider supporting the DeepSeek model IDs configured in Model Usage Profiles
+- A DeepSeek-compatible external model API; the v0.1 default model ID is `deepseek-flash`
 
 Enable pnpm through Corepack if needed:
 
@@ -108,12 +107,11 @@ Edit `.env` with at least:
 | Variable | Purpose |
 | --- | --- |
 | `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | PostgreSQL connection; `DATABASE_URL` is also supported |
-| `REDIS_HOST`, `REDIS_PORT` | BullMQ worker connection |
 | `OPENAI_API_KEY` | Model-provider key |
 | `TAVILY_API_KEY` | Optional Tavily search; public indexes are used when absent |
 | `LANGGRAPH_CHECKPOINT_DATABASE_URL` | Optional separate checkpoint database URL |
 
-Chat and Document model IDs, provider base URLs, reasoning parameters, and pricing are configured through Model Usage Profiles in Settings.
+Chat and Document model IDs, provider base URLs, reasoning parameters, and pricing are configured through Model Usage Profiles in Local Settings. Built-in cost estimates use DeepSeek's [current high-peak pricing snapshot](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/) (cache hit ¥0.04/M, cache miss ¥2/M, output ¥8/M); actual provider billing is authoritative. Following the [V4.1 Flash migration notice](https://api-docs.deepseek.com/zh-cn/news/news260910/), legacy `deepseek-v4-flash` and `deepseek-v4-pro` profile values are normalized to `deepseek-flash` during read/upgrade.
 
 Do not commit `.env` or runtime output under `resources/product-contexts/`.
 
@@ -130,7 +128,7 @@ pnpm --filter @repo/database db:init
 
 #### Database schema note
 
-For an existing database, back it up first and run `pnpm --filter @repo/database db:upgrade`. This adds missing runtime tables and cached-token columns, updates PRD waiting-status constraints/indexes, widens `message.type` to text to preserve full Agent identifiers, and defaults the legacy graph `content` column to an empty string. It does not delete business data or migrate existing Prisma core tables; review core schema changes separately. Upgrades are repeatable and conflicting schemas fail rather than being overwritten.
+For an existing database, back it up first and run `pnpm --filter @repo/database db:upgrade`. This adds local soft-delete columns and missing runtime tables, normalizes legacy DeepSeek model IDs, updates cached-token/PRD constraints, widens `message.type`, and defaults the legacy graph `content` column. It never removes local files or business data. Upgrades are repeatable and conflicting schemas fail rather than being overwritten.
 
 The SQL is tracked at `packages/database/sql/20260914_runtime_tables.sql`. PostgresSaver initializes its own checkpoint tables independently.
 
@@ -144,7 +142,7 @@ Shared packages publish from `dist/`, so build at least once before starting app
 
 ### 5. Run
 
-Start all services:
+Start the v0.1 Web and API services:
 
 ```bash
 pnpm dev
@@ -156,7 +154,6 @@ Or start services separately:
 | --- | --- | --- |
 | Web | <http://localhost:3000> | `pnpm --filter web dev` |
 | API | <http://localhost:3001> | `pnpm --filter @repo/api dev` |
-| Worker | Redis-backed | `pnpm --filter @repo/worker dev` |
 
 The Vite server proxies `/api` to port `3001`.
 
@@ -173,9 +170,10 @@ The Vite server proxies `/api` to port `3001`.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/health` | Health check |
-| `GET` | `/api/account` | Load the local/default account |
 | `GET/POST` | `/api/workspaces` | List or create workspaces |
+| `PATCH/DELETE` | `/api/workspaces/:id` | Rename/relink or soft-remove a workspace |
 | `GET/POST` | `/api/chats` | List or create chats |
+| `PATCH/DELETE` | `/api/chats/:id` | Rename or soft-delete a chat |
 | `GET` | `/api/chats/:id/messages` | Restore messages and workflow state |
 | `POST` | `/api/chat` | Run a chat/product workflow over SSE |
 | `POST` | `/api/chat/stop` | Abort the server-side chat runtime |
@@ -194,7 +192,7 @@ apps/
   agent-runtime/  LangGraph/DeepAgents runtime and tests
   api/            Hono API, SSE, persistence, document jobs
   web/            React/Vite frontend
-  worker/         BullMQ worker scaffold
+  worker/         Experimental BullMQ scaffold; excluded from the v0.1 run path
 packages/
   shared/         Zod schemas, DTOs, events, runtime contracts
   database/       Prisma schema and client
@@ -211,7 +209,7 @@ Repository engineering rules are in [AGENTS.md](AGENTS.md), with a Chinese versi
 | Command | Purpose |
 | --- | --- |
 | `pnpm build` | Build packages and apps through Turbo |
-| `pnpm dev` | Start all development services |
+| `pnpm dev` | Start the v0.1 Web and API services |
 | `pnpm --filter @repo/agent-runtime test` | Run runtime tests |
 | `pnpm --filter @repo/api test` | Run API tests |
 | `pnpm --filter web build` | Type-check and build the frontend |
@@ -293,7 +291,7 @@ Before opening a pull request:
 
 ## First model setup and local deployment boundary
 
-This is a single-user local preview with a fixed local account and no multi-user authentication or tenant isolation. The API binds to `127.0.0.1:3001` by default. `HOST` accepts loopback addresses only; `CORS_ORIGINS` accepts exact local HTTP/HTTPS origins only. Open the web app at `http://localhost:3000` or `http://127.0.0.1:3000`; update the origins if Vite changes ports. CORS does not replace authentication.
+This is a single-user local preview with no account UI, authentication, or tenant isolation; a fixed local owner ID exists only inside persistence. The API binds to `127.0.0.1:3001` by default. `HOST` accepts loopback addresses only; `CORS_ORIGINS` accepts exact local HTTP/HTTPS origins only. Open the web app at `http://localhost:3000` or `http://127.0.0.1:3000`; update the origins if Vite changes ports. CORS does not replace authentication.
 
 1. Set your own provider API key in server-side `.env` and restart the API. Never put credentials into browser forms or commits.
 2. Open Model Usage Profiles in Settings. The current UI supports the DeepSeek IDs enumerated in the code; it is not a general-purpose OpenAI-compatible model selector.

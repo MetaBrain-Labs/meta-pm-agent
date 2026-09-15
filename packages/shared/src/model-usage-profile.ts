@@ -5,7 +5,7 @@
  * 供 API 持久化、Agent Runtime 解析和前端 DTO 校验共同使用。
  *
  * Responsibilities:
- * - 校验 DeepSeek V4 Flash/Pro 的可配置参数
+ * - 校验 DeepSeek Flash 的可配置参数并兼容归一化旧模型标识
  * - 定义三类模型用途与 Agent 职责映射
  * - 提供不可变的内置默认模型使用列表
  *
@@ -16,10 +16,13 @@
 
 import { z } from "zod";
 
-export const DeepSeekModelIdSchema = z.enum([
-  "deepseek-v4-flash",
-  "deepseek-v4-pro",
-]);
+export const DeepSeekModelIdSchema = z.preprocess(
+  (value) =>
+    value === "deepseek-v4-flash" || value === "deepseek-v4-pro"
+      ? "deepseek-flash"
+      : value,
+  z.literal("deepseek-flash"),
+);
 
 export const ModelTierSchema = z.enum(["reasoning", "standard", "fast"]);
 
@@ -40,37 +43,24 @@ export const ModelPricingSchema = z.object({
   outputPricePerMillion: z.number().finite().nonnegative(),
 });
 
-export const DeepSeekModelConfigSchema = z
-  .object({
-    provider: z.literal("deepseek"),
-    modelId: DeepSeekModelIdSchema,
-    customName: z.string().trim().min(1).max(64),
-    baseUrl: z
-      .string()
-      .trim()
-      .url()
-      .refine((value) => /^https?:\/\//i.test(value), {
-        message: "baseUrl must use http or https.",
-      }),
-    thinking: z.literal(true),
-    temperature: z.number().finite().min(0).max(2),
-    topP: z.number().finite().min(0).max(1),
-    maxTokens: z.number().int().min(1).max(393_216),
-    reasoningEffort: z.enum(["low", "high", "max"]),
-    pricing: ModelPricingSchema,
-  })
-  .superRefine((value, context) => {
-    if (
-      value.modelId === "deepseek-v4-pro" &&
-      value.reasoningEffort === "low"
-    ) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "deepseek-v4-pro supports high or max reasoning effort.",
-        path: ["reasoningEffort"],
-      });
-    }
-  });
+export const DeepSeekModelConfigSchema = z.object({
+  provider: z.literal("deepseek"),
+  modelId: DeepSeekModelIdSchema,
+  customName: z.string().trim().min(1).max(64),
+  baseUrl: z
+    .string()
+    .trim()
+    .url()
+    .refine((value) => /^https?:\/\//i.test(value), {
+      message: "baseUrl must use http or https.",
+    }),
+  thinking: z.literal(true),
+  temperature: z.number().finite().min(0).max(2),
+  topP: z.number().finite().min(0).max(1),
+  maxTokens: z.number().int().min(1).max(393_216),
+  reasoningEffort: z.enum(["low", "high", "max"]),
+  pricing: ModelPricingSchema,
+});
 
 export const AgentTierAssignmentsSchema = z.object({
   conversation: ModelTierSchema,
@@ -124,9 +114,7 @@ export type ModelPricing = z.infer<typeof ModelPricingSchema>;
 /** 单个 DeepSeek 模型的完整可持久化配置。 */
 export type DeepSeekModelConfig = z.infer<typeof DeepSeekModelConfigSchema>;
 /** 分类模式职责组到模型用途的完整映射。 */
-export type AgentTierAssignments = z.infer<
-  typeof AgentTierAssignmentsSchema
->;
+export type AgentTierAssignments = z.infer<typeof AgentTierAssignmentsSchema>;
 /** 分类或通用模式的模型使用列表配置。 */
 export type ModelUsageProfileConfig = z.infer<
   typeof ModelUsageProfileConfigSchema
@@ -147,19 +135,11 @@ export const DEFAULT_AGENT_TIER_ASSIGNMENTS: AgentTierAssignments = {
   document: "reasoning",
 };
 
-export const DEFAULT_DEEPSEEK_PRICING: Record<
-  DeepSeekModelId,
-  ModelPricing
-> = {
-  "deepseek-v4-flash": {
-    cacheHitInputPricePerMillion: 0.02,
-    cacheMissInputPricePerMillion: 1,
-    outputPricePerMillion: 2,
-  },
-  "deepseek-v4-pro": {
-    cacheHitInputPricePerMillion: 0.025,
-    cacheMissInputPricePerMillion: 3,
-    outputPricePerMillion: 6,
+export const DEFAULT_DEEPSEEK_PRICING: Record<DeepSeekModelId, ModelPricing> = {
+  "deepseek-flash": {
+    cacheHitInputPricePerMillion: 0.04,
+    cacheMissInputPricePerMillion: 2,
+    outputPricePerMillion: 8,
   },
 };
 
@@ -195,18 +175,18 @@ export const SYSTEM_DEFAULT_MODEL_PROFILE: ModelUsageProfile = {
   config: {
     mode: "tiered",
     models: {
-      reasoning: createDefaultDeepSeekModelConfig("deepseek-v4-pro", {
-        customName: "DeepSeek V4 Pro 强推理",
-        maxTokens: 16_384,
+      reasoning: createDefaultDeepSeekModelConfig("deepseek-flash", {
+        customName: "DeepSeek Flash 强推理",
+        maxTokens: 65_536,
         reasoningEffort: "max",
       }),
-      standard: createDefaultDeepSeekModelConfig("deepseek-v4-flash", {
-        customName: "DeepSeek V4 Flash 普通",
+      standard: createDefaultDeepSeekModelConfig("deepseek-flash", {
+        customName: "DeepSeek Flash 标准",
         maxTokens: 16_384,
         reasoningEffort: "high",
       }),
-      fast: createDefaultDeepSeekModelConfig("deepseek-v4-flash", {
-        customName: "DeepSeek V4 Flash 快速",
+      fast: createDefaultDeepSeekModelConfig("deepseek-flash", {
+        customName: "DeepSeek Flash 快速",
         maxTokens: 4_096,
         reasoningEffort: "low",
       }),

@@ -1,7 +1,21 @@
+/**
+ * 本地项目路径弹窗
+ *
+ * 负责添加本地项目和修改已关联项目路径的表单界面。
+ *
+ * Responsibilities:
+ * - 保留可手工编辑的绝对路径输入
+ * - 在浏览器可用时调用目录选择能力
+ *
+ * Notes:
+ * - 目录存在性、可读性与规范化由 API 校验。
+ */
+
 import type { ChangeEvent, RefObject } from "react";
 import { Button, Form, Input, Modal, Space, type FormInstance } from "antd";
 
 interface ProjectCreateModalProps {
+  mode: "create" | "path";
   open: boolean;
   form: FormInstance<{ name: string; location?: string }>;
   locationHint: boolean;
@@ -17,6 +31,7 @@ interface ProjectCreateModalProps {
  * 创建本地项目的弹窗，封装路径选择和表单展示。
  */
 export function ProjectCreateModal({
+  mode,
   open,
   form,
   locationHint,
@@ -45,8 +60,12 @@ export function ProjectCreateModal({
       }}
     >
       <div className="project-modal-head">
-        <h2>新建本地项目</h2>
-        <p>在指定文件夹下创建一个新的项目</p>
+        <h2>{mode === "create" ? "添加本地项目" : "修改本地路径"}</h2>
+        <p>
+          {mode === "create"
+            ? "关联 API 所在机器上的已有本地目录"
+            : "更新关联路径，不会移动或修改任何本地文件"}
+        </p>
       </div>
       <Form form={form} layout="vertical" className="project-form">
         <div className="project-form-panel">
@@ -54,6 +73,7 @@ export function ProjectCreateModal({
             label="项目名称"
             name="name"
             rules={[{ required: true, message: "请输入项目名称" }]}
+            hidden={mode === "path"}
           >
             <Input autoFocus />
           </Form.Item>
@@ -61,7 +81,7 @@ export function ProjectCreateModal({
 
           <Form.Item label="项目地址" name="location" className="mb-0">
             <Space.Compact style={{ width: "100%" }}>
-              <Input placeholder="选择后的位置" />
+              <Input placeholder="请输入 API 机器可访问的绝对目录路径" />
               <Button
                 className="w-[30%]"
                 type="primary"
@@ -73,9 +93,9 @@ export function ProjectCreateModal({
           </Form.Item>
 
           <div className="project-location-note">
-            指定项目在本地的存放位置，
+            浏览器可能只返回目录名称，请确认并手工填写 API 机器上的绝对路径。
             <button type="button" onClick={() => void onBrowseDirectory()}>
-              选择后的位置
+              重新选择
             </button>
           </div>
         </div>
@@ -89,7 +109,7 @@ export function ProjectCreateModal({
             loading={creating}
             onClick={() => void onCreate()}
           >
-            创建
+            {mode === "create" ? "添加" : "保存路径"}
           </Button>
         </div>
       </Form>

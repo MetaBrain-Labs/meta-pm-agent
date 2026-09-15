@@ -10,7 +10,7 @@
 | API | Hono (port 3001) | HTTP/SSE, abort propagation, persistence, background document runs |
 | Web | React 19, Vite 6 (port 3000), Ant Design 6, Tailwind 4, G6 | Workspace, chat, workflow, graph, and document UI |
 | Database | PostgreSQL, Prisma, raw SQL repositories | Durable application, graph, token, and document data |
-| Worker | BullMQ, Redis | Queue-worker scaffold |
+| Worker (experimental) | BullMQ, Redis | Scaffold excluded from the v0.1 run path |
 | Build | pnpm 11.3.0, Turbo, TypeScript | Node packages use TS 6.0.3; web uses TS 5.8.3 |
 
 All LLM-facing instructions, tool descriptions, and schema descriptions are English. User-facing UI may be localized.
@@ -126,7 +126,7 @@ apps/agent-runtime
   └─ @repo/shared
 
 apps/worker
-  └─ BullMQ/Redis runtime
+  └─ Experimental BullMQ/Redis scaffold (not started by root dev)
 
 packages/database
   └─ Prisma Client/PostgreSQL
@@ -264,7 +264,7 @@ Document Agent lives under `agents/document-agent/`; graph/state live in `graph/
 
 For each PRD draft, three independent reviewers score the same content. Spread must be at most `8`, weighted quality should reach `85/100`, and at most three drafts are attempted. All attempts remain in scoring history. `humanReview` currently auto-approves; it is a future extension point rather than a blocking human interrupt.
 
-The API starts document generation as a background task, persists progress, and keeps it running across frontend navigation. PRD is enabled; MRD and BRD remain UI placeholders.
+The API starts document generation as a background task, persists progress, and keeps it running across frontend navigation. PRD is the only v0.1 document capability; MRD and BRD are not rendered.
 
 ## Agents and Tools
 
@@ -309,7 +309,7 @@ Resource snapshots have priority for runtime-only lifecycle/summary fields; dura
 
 ### Durable data
 
-Prisma models cover the core account/workspace/conversation/message/request/task/graph data. API repositories also access raw SQL tables that are not represented in `schema.prisma`, including:
+Prisma models cover the internal owner/workspace/conversation/message/request/task/graph data. API repositories also access raw SQL tables that are not represented in `schema.prisma`, including:
 
 - `token_usage`;
 - `document_generation_run`;
@@ -338,9 +338,10 @@ Document runs store status, stage, task planning, reasoning, scoring attempts, a
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/health` | Health check |
-| `GET` | `/api/account` | Local/default account |
 | `GET/POST` | `/api/workspaces` | List/create workspaces |
+| `PATCH/DELETE` | `/api/workspaces/:id` | Rename/relink or soft-remove a workspace |
 | `GET/POST` | `/api/chats` | List/create chats |
+| `PATCH/DELETE` | `/api/chats/:id` | Rename or soft-delete a chat |
 | `GET` | `/api/chats/:id/messages` | Restore persisted messages and workflow state |
 | `POST` | `/api/chat` | Stream one chat/workflow turn |
 | `POST` | `/api/chat/stop` | Abort the server-side runtime for a chat |

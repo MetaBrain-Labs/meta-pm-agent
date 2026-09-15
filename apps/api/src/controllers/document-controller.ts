@@ -30,6 +30,10 @@ import {
   resumeDocumentGeneration,
   stopDocumentGeneration,
 } from "../services/document-generation-service";
+import {
+  requireActiveWorkspace,
+  WorkspaceServiceError,
+} from "../services/workspace-service";
 
 const WorkspaceParamSchema = z.object({
   workspaceId: z.string().uuid(),
@@ -53,6 +57,7 @@ export async function startDocumentGenerationHandler(c: Context) {
   }
 
   try {
+    await requireActiveWorkspace(params.data.workspaceId);
     const data = await startDocumentGeneration({
       workspaceId: params.data.workspaceId,
       kind: parsed.data.kind,
@@ -109,6 +114,7 @@ export async function getLatestDocumentGenerationHandler(c: Context) {
   }
 
   try {
+    await requireActiveWorkspace(params.data.workspaceId);
     return c.json(
       await getLatestDocumentGenerationStatus({
         workspaceId: params.data.workspaceId,
@@ -206,6 +212,9 @@ async function readJsonBody(request: Request): Promise<unknown> {
  * 将业务错误转换为 JSON 响应。
  */
 function jsonServiceError(c: Context, error: unknown) {
+  if (error instanceof WorkspaceServiceError) {
+    return c.json({ error: error.message }, error.statusCode);
+  }
   if (error instanceof DocumentGenerationServiceError) {
     const status =
       error.statusCode === 404 ? 404 : error.statusCode === 409 ? 409 : 400;

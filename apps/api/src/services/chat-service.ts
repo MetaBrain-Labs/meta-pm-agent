@@ -32,7 +32,10 @@ import {
 } from "@repo/agent-runtime";
 import {
   createConversationWithInitialRequestForm,
+  getConversationById,
   listActiveConversations,
+  softDeleteActiveConversation,
+  updateActiveConversationTitle,
   updateFirstTurnConversationTitle,
 } from "../repositories/chat-repository";
 import {
@@ -73,9 +76,21 @@ import {
   parseUserInputPayload,
   type UserInputRecord,
 } from "../utils/user-input";
+import { isChatRunActive } from "./chat-run-registry";
+import { requireActiveWorkspace } from "./workspace-service";
 
 const DEFAULT_CHAT_TITLE = "New Chat";
 const MAX_GENERATED_TITLE_LENGTH = 36;
+
+/** 可映射为 HTTP 状态码的会话管理错误。 */
+export class ChatServiceError extends Error {
+  constructor(
+    message: string,
+    readonly statusCode: 404 | 409,
+  ) {
+    super(message);
+  }
+}
 
 /**
  * 单个 Agent 在一轮对话中的输出，用于分 Agent 持久化消息和推理过程。
@@ -127,14 +142,18 @@ export interface ConversationTitleUpdate {
 /**
  * 获取指定工作区内的活跃会话列表。
  */
-export function listChats(workspaceId: string) {
+export async function listChats(workspaceId: string) {
+  await requireActiveWorkspace(workspaceId);
   return listActiveConversations(workspaceId);
 }
 
 /**
  * 获取指定会话的所有历史消息。
  */
-export function listMessages(conversationId: string) {
+export async function listMessages(conversationId: string) {
+  if (!(await getConversationById(conversationId))) {
+    throw new ChatServiceError("对话不存在或已被删除。", 404);
+  }
   return listConversationMessages(conversationId);
 }
 
@@ -173,6 +192,7 @@ export async function createChat(
   workspaceId: string,
   title = DEFAULT_CHAT_TITLE,
 ) {
+  await requireActiveWorkspace(workspaceId);
   const { conversation, requestForm } =
     await createConversationWithInitialRequestForm(workspaceId, title);
 
@@ -332,6 +352,25 @@ export function createServerWorkflowRecoveryContext({
         resolution.correctionTaskIds ?? workflow.review.retry_task_ids ?? [],
     },
   };
+}
+
+/** 手动更新 active 会话标题。 */
+export async function updateChat(conversationId: string, title: string) {
+  const updated = await updateActiveConversationTitle(conversationId, title);
+  if (!updated) {
+    throw new ChatServiceError("对话不存在或已被删除。", 404);
+  }
+  return updated;
+}
+
+/** 软删除空闲会话并保留全部历史数据。 */
+export async function deleteChat(conversationId: string): Promise<void> {
+  if (isChatRunActive(conversationId)) {
+    throw new ChatServiceError("当前对话仍在运行，停止后才能删除。", 409);
+  }
+  if (!(await softDeleteActiveConversation(conversationId))) {
+    throw new ChatServiceError("对话不存在或已被删除。", 404);
+  }
 }
 
 /**

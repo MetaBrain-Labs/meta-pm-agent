@@ -1,8 +1,20 @@
+/**
+ * 本地工作区持久化仓库
+ *
+ * 负责固定本地用户的工作区创建、查询、更新与软删除，不执行任何磁盘目录写入或删除。
+ *
+ * Responsibilities:
+ * - 仅返回 active 工作区并隐藏未来云端字段
+ * - 持久化工作区名称、本地路径和软删除状态
+ * - 提供服务层所需的所有权与重复路径查询
+ *
+ * Notes:
+ * - 工作区路径合法性与运行态冲突由服务层校验。
+ */
 import { randomUUID } from "node:crypto";
 import { prisma } from "@repo/database";
 
 const LOCAL_USER_ID = "local";
-const DEFAULT_WORKSPACE_NAME = "\u672c\u5730\u5de5\u4f5c\u533a";
 
 /**
  * 数据库 workspace 表原始行结构。
@@ -15,20 +27,10 @@ interface WorkspaceRow {
   local_path: string | null;
   cloud_path: string | null;
   sync_status: string | null;
+  status: string;
+  deleted_at: Date | null;
   created_at: Date;
   updated_at: Date;
-}
-
-/**
- * 数据库 user 表原始行结构。
- */
-interface UserRow {
-  id: string;
-  email: string | null;
-  username: string | null;
-  avatar: string | null;
-  created_at: Date | null;
-  updated_at: Date | null;
 }
 
 /**
@@ -36,53 +38,10 @@ interface UserRow {
  */
 export interface WorkspaceDto {
   id: string;
-  userId: string;
   name: string;
-  storageType: string | null;
   localPath: string | null;
-  cloudPath: string | null;
-  syncStatus: string | null;
   createdAt: string;
   updatedAt: string;
-}
-
-/**
- * 账户信息的数据传输对象。
- */
-export interface AccountDto {
-  id: string;
-  email: string | null;
-  username: string | null;
-  avatar: string | null;
-  createdAt: string | null;
-  updatedAt: string | null;
-}
-
-/**
- * 获取本地用户的账户信息，不存在时自动创建。
- */
-export async function getLocalUserAccount(): Promise<AccountDto> {
-  await ensureLocalUser();
-
-  const rows = await prisma.$queryRaw<UserRow[]>`
-    SELECT
-      "id",
-      "email",
-      "username",
-      "avatar",
-      "created_at",
-      "updated_at"
-    FROM "user"
-    WHERE "id" = ${LOCAL_USER_ID}
-    LIMIT 1
-  `;
-
-  const user = rows[0];
-  if (!user) {
-    throw new Error("Failed to load local user.");
-  }
-
-  return mapUserRow(user);
 }
 
 /**
@@ -100,10 +59,13 @@ export async function listLocalUserWorkspaces(): Promise<WorkspaceDto[]> {
       "local_path",
       "cloud_path",
       "sync_status",
+      "status",
+      "deleted_at",
       "created_at",
       "updated_at"
     FROM "workspace"
     WHERE "user_id" = ${LOCAL_USER_ID}
+      AND "status" = 'active'
     ORDER BY "updated_at" DESC, "created_at" DESC
   `;
 
@@ -114,8 +76,8 @@ export async function listLocalUserWorkspaces(): Promise<WorkspaceDto[]> {
  * 为本地用户创建新工作区，支持指定名称和本地存储路径。
  */
 export async function createLocalUserWorkspace(
-  name = DEFAULT_WORKSPACE_NAME,
-  localPath?: string,
+  name: string,
+  localPath: string,
 ): Promise<WorkspaceDto> {
   await ensureLocalUser();
 
@@ -137,6 +99,8 @@ export async function createLocalUserWorkspace(
       "local_path",
       "cloud_path",
       "sync_status",
+      "status",
+      "deleted_at",
       "created_at",
       "updated_at"
   `;
@@ -146,6 +110,80 @@ export async function createLocalUserWorkspace(
   }
 
   return mapWorkspaceRow(workspace);
+}
+
+/** 按 ID 读取固定本地用户拥有的 active 工作区。 */
+export async function getActiveLocalUserWorkspace(
+  workspaceId: string,
+): Promise<WorkspaceDto | null> {
+  const rows = await prisma.$queryRaw<WorkspaceRow[]>`
+    SELECT
+      "id", "user_id", "name", "storage_type", "local_path", "cloud_path",
+      "sync_status", "status", "deleted_at", "created_at", "updated_at"
+    FROM "workspace"
+    WHERE "id" = ${workspaceId}
+      AND "user_id" = ${LOCAL_USER_ID}
+      AND "status" = 'active'
+    LIMIT 1
+  `;
+  return rows[0] ? mapWorkspaceRow(rows[0]) : null;
+}
+
+/** 按规范化本地路径查找重复的 active 工作区。 */
+export async function findActiveLocalUserWorkspaceByPath(
+  localPath: string,
+  excludedId?: string,
+): Promise<WorkspaceDto | null> {
+  const rows = await prisma.$queryRaw<WorkspaceRow[]>`
+    SELECT
+      "id", "user_id", "name", "storage_type", "local_path", "cloud_path",
+      "sync_status", "status", "deleted_at", "created_at", "updated_at"
+    FROM "workspace"
+    WHERE "user_id" = ${LOCAL_USER_ID}
+      AND "status" = 'active'
+      AND "local_path" = ${localPath}
+      AND (${excludedId ?? null}::text IS NULL OR "id" <> ${excludedId ?? null})
+    LIMIT 1
+  `;
+  return rows[0] ? mapWorkspaceRow(rows[0]) : null;
+}
+
+/** 更新 active 工作区名称和本地路径。 */
+export async function updateActiveLocalUserWorkspace(
+  workspaceId: string,
+  input: { name: string; localPath: string },
+): Promise<WorkspaceDto | null> {
+  const rows = await prisma.$queryRaw<WorkspaceRow[]>`
+    UPDATE "workspace"
+    SET
+      "name" = ${input.name},
+      "local_path" = ${input.localPath},
+      "updated_at" = CURRENT_TIMESTAMP
+    WHERE "id" = ${workspaceId}
+      AND "user_id" = ${LOCAL_USER_ID}
+      AND "status" = 'active'
+    RETURNING
+      "id", "user_id", "name", "storage_type", "local_path", "cloud_path",
+      "sync_status", "status", "deleted_at", "created_at", "updated_at"
+  `;
+  return rows[0] ? mapWorkspaceRow(rows[0]) : null;
+}
+
+/** 将工作区标记为已删除并保留全部关联应用数据。 */
+export async function softDeleteActiveLocalUserWorkspace(
+  workspaceId: string,
+): Promise<boolean> {
+  const changed = await prisma.$executeRaw`
+    UPDATE "workspace"
+    SET
+      "status" = 'deleted',
+      "deleted_at" = CURRENT_TIMESTAMP,
+      "updated_at" = CURRENT_TIMESTAMP
+    WHERE "id" = ${workspaceId}
+      AND "user_id" = ${LOCAL_USER_ID}
+      AND "status" = 'active'
+  `;
+  return changed > 0;
 }
 
 /**
@@ -165,27 +203,9 @@ async function ensureLocalUser(): Promise<void> {
 function mapWorkspaceRow(row: WorkspaceRow): WorkspaceDto {
   return {
     id: row.id,
-    userId: row.user_id,
     name: row.name,
-    storageType: row.storage_type,
     localPath: row.local_path,
-    cloudPath: row.cloud_path,
-    syncStatus: row.sync_status,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
-  };
-}
-
-/**
- * 将数据库行映射为用户账户 DTO。
- */
-function mapUserRow(row: UserRow): AccountDto {
-  return {
-    id: row.id,
-    email: row.email,
-    username: row.username,
-    avatar: row.avatar,
-    createdAt: row.created_at?.toISOString() ?? null,
-    updatedAt: row.updated_at?.toISOString() ?? null,
   };
 }

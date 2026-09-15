@@ -51,6 +51,20 @@ test("serves the health endpoint", async () => {
   });
 });
 
+test("does not expose the local account route", async () => {
+  const response = await createApp().request("/api/account");
+  assert.equal(response.status, 404);
+});
+
+test("requires an explicit local path when adding a workspace", async () => {
+  const response = await createApp().request("/api/workspaces", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Local project" }),
+  });
+  assert.equal(response.status, 400);
+});
+
 test("keeps the chat endpoint at /api/chat", async () => {
   const response = await createApp().request("/api/chat", {
     method: "POST",
