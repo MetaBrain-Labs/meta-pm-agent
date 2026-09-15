@@ -6,8 +6,8 @@
  *
  * Responsibilities:
  * - 同步浏览器路径与当前工作区/会话/文档页状态
- * - 加载账号、工作区和会话列表
- * - 提供创建工作区、创建会话和导航动作
+ * - 加载本地工作区和会话列表
+ * - 提供工作区、会话的创建、重命名、软删除和导航动作
  *
  * Notes:
  * - 不直接消费聊天 SSE，也不管理文档生成后台轮询。
@@ -20,14 +20,17 @@ import {
   useState,
   type ChangeEvent,
 } from "react";
-import { Form } from "antd";
-import type { AccountInfo, ThreadInfo, WorkspaceInfo } from "../types";
+import { Form, Modal } from "antd";
+import type { ThreadInfo, WorkspaceInfo } from "../types";
 import {
   createChatRecord,
   createWorkspaceRecord,
-  fetchAccount,
+  deleteChatRecord,
+  deleteWorkspaceRecord,
   fetchChatRecords,
   fetchWorkspaces,
+  updateChatRecord,
+  updateWorkspaceRecord,
 } from "../api/chat-api";
 import {
   ACTIVE_WORKSPACE_KEY,
@@ -52,8 +55,8 @@ const DEFAULT_DRAFT_CHAT_TITLES = new Set([DEFAULT_CHAT_TITLE, "New Chat"]);
 export function useAppShell() {
   const [projectForm] = Form.useForm<{ name: string; location?: string }>();
   const directoryInputRef = useRef<HTMLInputElement | null>(null);
-  const [account, setAccount] = useState<AccountInfo | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
+  const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(
     () => localStorage.getItem(ACTIVE_WORKSPACE_KEY),
   );
@@ -63,12 +66,20 @@ export function useAppShell() {
   const [isCreatingChat, setIsCreatingChat] = useState(false);
   const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
-  const [configModalOpen, setConfigModalOpen] = useState(false);
-  const [configTab, setConfigTab] = useState<
-    "account" | "workspace" | "models"
-  >(
-    "account",
+  const [projectModalMode, setProjectModalMode] = useState<"create" | "path">(
+    "create",
   );
+  const [editingWorkspaceId, setEditingWorkspaceId] = useState<string | null>(
+    null,
+  );
+  const [renameTarget, setRenameTarget] = useState<{
+    kind: "workspace" | "thread";
+    id: string;
+  } | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [savingRename, setSavingRename] = useState(false);
+  const [configModalOpen, setConfigModalOpen] = useState(false);
+  const [configTab, setConfigTab] = useState<"workspace" | "models">("models");
   const [configWorkspaceVisible, setConfigWorkspaceVisible] = useState(false);
   const [projectLocationHint, setProjectLocationHint] = useState(false);
   const [workspaceDetailOpen, setWorkspaceDetailOpen] = useState(false);
@@ -121,16 +132,6 @@ export function useAppShell() {
   useEffect(() => {
     let cancelled = false;
 
-    fetchAccount()
-      .then((serverAccount) => {
-        if (cancelled) return;
-        setAccount(serverAccount);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        console.error("[account] Failed to load account:", error);
-      });
-
     fetchWorkspaces()
       .then((serverWorkspaces) => {
         if (cancelled) return;
@@ -140,12 +141,24 @@ export function useAppShell() {
         if (cancelled) return;
         console.error("[workspace] Failed to load workspaces:", error);
         setCreationError(mapErrorToChinese(error));
+      })
+      .finally(() => {
+        if (!cancelled) setWorkspacesLoaded(true);
       });
 
     return () => {
       cancelled = true;
     };
   }, [restoreWorkspaces]);
+
+  useEffect(() => {
+    if (!workspacesLoaded || route.name === "workspace") return;
+    if (workspaces.some((workspace) => workspace.id === route.workspaceId)) {
+      return;
+    }
+    replacePath("/workplace");
+    setRoute(parseAppRoute());
+  }, [route, workspaces, workspacesLoaded]);
 
   useEffect(() => {
     if (!activeWorkspaceId) {
@@ -164,7 +177,16 @@ export function useAppShell() {
           route.name === "chat" && route.workspaceId === activeWorkspaceId
             ? route.threadId
             : null;
-        setActiveThreadId(routeThreadId);
+        const routeThreadExists = serverThreads.some(
+          (thread) => thread.id === routeThreadId,
+        );
+        if (routeThreadId && !routeThreadExists) {
+          replacePath(buildChatPath(activeWorkspaceId));
+          setRoute(parseAppRoute());
+          setActiveThreadId(null);
+        } else {
+          setActiveThreadId(routeThreadId);
+        }
         setCreationError(null);
       })
       .catch((error) => {
@@ -262,7 +284,7 @@ export function useAppShell() {
   }, []);
 
   const openConfigModal = useCallback(
-    (tab: "account" | "workspace" | "models") => {
+    (tab: "workspace" | "models") => {
       setConfigWorkspaceVisible(tab === "workspace");
       setConfigTab(tab);
       setConfigModalOpen(true);
@@ -271,6 +293,8 @@ export function useAppShell() {
   );
 
   const openProjectModal = useCallback(() => {
+    setProjectModalMode("create");
+    setEditingWorkspaceId(null);
     setProjectLocationHint(false);
     projectForm.setFieldsValue({
       name: `${DEFAULT_WORKSPACE_NAME} ${workspaces.length + 1}`,
@@ -278,6 +302,23 @@ export function useAppShell() {
     });
     setProjectModalOpen(true);
   }, [projectForm, workspaces.length]);
+
+  /** 打开现有工作区的本地路径修改弹窗。 */
+  const handleWorkspaceMigrate = useCallback(
+    (id: string) => {
+      const workspace = workspaces.find((item) => item.id === id);
+      if (!workspace) return;
+      setProjectModalMode("path");
+      setEditingWorkspaceId(id);
+      setProjectLocationHint(false);
+      projectForm.setFieldsValue({
+        name: workspace.name,
+        location: workspace.localPath ?? "",
+      });
+      setProjectModalOpen(true);
+    },
+    [projectForm, workspaces],
+  );
 
   const handleBrowseDirectory = useCallback(async () => {
     type DirectoryPickerWindow = Window & {
@@ -338,6 +379,22 @@ export function useAppShell() {
     setIsCreatingWorkspace(true);
 
     try {
+      if (projectModalMode === "path" && editingWorkspaceId) {
+        const updatedWorkspace = await updateWorkspaceRecord(
+          editingWorkspaceId,
+          { localPath: values.location.trim() },
+        );
+        setWorkspaces((prev) =>
+          prev.map((workspace) =>
+            workspace.id === updatedWorkspace.id ? updatedWorkspace : workspace,
+          ),
+        );
+        setCreationError(null);
+        setProjectModalOpen(false);
+        projectForm.resetFields();
+        return;
+      }
+
       const newWorkspace = await createWorkspaceRecord(
         values.name.trim(),
         values.location.trim(),
@@ -352,12 +409,137 @@ export function useAppShell() {
       setProjectModalOpen(false);
       projectForm.resetFields();
     } catch (error) {
-      console.error("[workspace] Failed to create workspace:", error);
-      setCreationError(mapErrorToChinese(error));
+      console.error("[workspace] Failed to save workspace:", error);
+      const message = mapErrorToChinese(error);
+      setCreationError(message);
+      Modal.error({ title: "项目未保存", content: message });
     } finally {
       setIsCreatingWorkspace(false);
     }
-  }, [isCreatingWorkspace, projectForm]);
+  }, [editingWorkspaceId, isCreatingWorkspace, projectForm, projectModalMode]);
+
+  /** 打开工作区重命名弹窗。 */
+  const handleWorkspaceRename = useCallback(
+    (id: string) => {
+      const workspace = workspaces.find((item) => item.id === id);
+      if (!workspace) return;
+      setRenameTarget({ kind: "workspace", id });
+      setRenameValue(workspace.name);
+    },
+    [workspaces],
+  );
+
+  /** 打开会话重命名弹窗。 */
+  const handleThreadRename = useCallback(
+    (id: string) => {
+      const thread = threads.find((item) => item.id === id);
+      if (!thread) return;
+      setRenameTarget({ kind: "thread", id });
+      setRenameValue(thread.title);
+    },
+    [threads],
+  );
+
+  /** 保存当前重命名目标。 */
+  const handleSaveRename = useCallback(async () => {
+    const value = renameValue.trim();
+    if (!renameTarget || !value || savingRename) return;
+    setSavingRename(true);
+    try {
+      if (renameTarget.kind === "workspace") {
+        const workspace = await updateWorkspaceRecord(renameTarget.id, {
+          name: value,
+        });
+        setWorkspaces((prev) =>
+          prev.map((item) => (item.id === workspace.id ? workspace : item)),
+        );
+      } else {
+        const thread = await updateChatRecord(renameTarget.id, value);
+        setThreads((prev) =>
+          prev.map((item) => (item.id === thread.id ? thread : item)),
+        );
+      }
+      setRenameTarget(null);
+      setCreationError(null);
+    } catch (error) {
+      const message = mapErrorToChinese(error);
+      setCreationError(message);
+      Modal.error({ title: "名称未保存", content: message });
+    } finally {
+      setSavingRename(false);
+    }
+  }, [renameTarget, renameValue, savingRename]);
+
+  /** 确认后从项目列表软删除工作区。 */
+  const handleWorkspaceRemove = useCallback(
+    (id: string) => {
+      const workspace = workspaces.find((item) => item.id === id);
+      if (!workspace) return;
+      Modal.confirm({
+        title: `从列表移除“${workspace.name}”？`,
+        content: "只会隐藏项目记录，不会删除本地目录、文件、对话、图谱或文档。v0.1 暂无回收站入口。",
+        okText: "从列表移除",
+        okButtonProps: { danger: true },
+        cancelText: "取消",
+        onOk: async () => {
+          try {
+            await deleteWorkspaceRecord(id);
+            setWorkspaces((prev) => prev.filter((item) => item.id !== id));
+            if (activeWorkspaceId === id) {
+              localStorage.removeItem(ACTIVE_WORKSPACE_KEY);
+              setActiveWorkspaceId(null);
+              setActiveThreadId(null);
+              setThreads([]);
+              replacePath("/workplace");
+              setRoute(parseAppRoute());
+            }
+            setCreationError(null);
+          } catch (error) {
+            const message = mapErrorToChinese(error);
+            setCreationError(message);
+            Modal.error({ title: "项目未移除", content: message });
+          }
+        },
+      });
+    },
+    [activeWorkspaceId, workspaces],
+  );
+
+  /** 确认后软删除会话，并在删除当前会话时跳转到下一条或空白页。 */
+  const handleThreadDelete = useCallback(
+    (id: string) => {
+      const thread = threads.find((item) => item.id === id);
+      if (!thread) return;
+      Modal.confirm({
+        title: `删除对话“${thread.title}”？`,
+        content: "对话将从历史列表隐藏；v0.1 暂不提供恢复入口。",
+        okText: "删除",
+        okButtonProps: { danger: true },
+        cancelText: "取消",
+        onOk: async () => {
+          try {
+            await deleteChatRecord(id);
+            const remaining = threads.filter((item) => item.id !== id);
+            setThreads(remaining);
+            if (activeThreadId === id && activeWorkspaceId) {
+              const next = remaining[0];
+              const nextPath = next
+                ? buildChatPath(activeWorkspaceId, next.id)
+                : buildChatPath(activeWorkspaceId);
+              setActiveThreadId(next?.id ?? null);
+              pushPath(nextPath);
+            }
+            setCreationError(null);
+          } catch (error) {
+            const message = mapErrorToChinese(error);
+            setCreationError(message);
+            Modal.error({ title: "对话未删除", content: message });
+          }
+        },
+      });
+    },
+    [activeThreadId, activeWorkspaceId, threads],
+  );
 
   const handleNewChat = useCallback(async () => {
     if (isCreatingChat || !activeWorkspaceId) return;
@@ -402,7 +584,6 @@ export function useAppShell() {
     threads.find((thread) => thread.id === activeThreadId) ?? null;
 
   return {
-    account,
     activeThread,
     activeWorkspace,
     activeWorkspaceId,
@@ -424,6 +605,12 @@ export function useAppShell() {
     handleOpenDocumentEvidenceThread,
     handleOpenWorkspace,
     handleSelectThread,
+    handleSaveRename,
+    handleThreadDelete,
+    handleThreadRename,
+    handleWorkspaceMigrate,
+    handleWorkspaceRemove,
+    handleWorkspaceRename,
     isCreatingChat,
     isCreatingWorkspace,
     openConfigModal,
@@ -431,9 +618,15 @@ export function useAppShell() {
     projectForm,
     projectLocationHint,
     projectModalOpen,
+    projectModalMode,
+    renameTarget,
+    renameValue,
+    savingRename,
     setConfigModalOpen,
     setConfigTab,
     setProjectModalOpen,
+    setRenameTarget,
+    setRenameValue,
     setSidebarCollapsed,
     sidebarCollapsed,
     threads,

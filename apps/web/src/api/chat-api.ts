@@ -1,7 +1,7 @@
 /**
  * 聊天与工作区 API 客户端
  *
- * 封装浏览器侧访问账号、工作区、聊天历史、知识图谱和文档生成状态的 HTTP 请求，
+ * 封装浏览器侧访问本地工作区、聊天历史、知识图谱和文档生成状态的 HTTP 请求，
  * 并定义这些接口返回给 React 视图层的 DTO 类型。
  *
  * Responsibilities:
@@ -14,7 +14,6 @@
  */
 
 import type {
-  AccountInfo,
   Message,
   PersistedMessageInfo,
   ThreadInfo,
@@ -23,21 +22,21 @@ import type {
 } from "../types";
 import { mapPersistedMessageToMessage } from "../mappers/persisted-message";
 
-/** 获取账号可用模型列表，首项始终为内置默认列表。 */
+/** 获取本地可用模型列表，首项始终为内置默认列表。 */
 export async function fetchModelProfiles(): Promise<ModelUsageProfile[]> {
   const response = await fetch("/api/model-profiles");
   if (!response.ok) throw new Error(`Server error: ${response.status}`);
   return ((await response.json()) as { profiles: ModelUsageProfile[] }).profiles;
 }
 
-/** 新建账号模型使用列表。 */
+/** 新建本地模型使用列表。 */
 export async function createModelProfile(
   input: Pick<ModelUsageProfile, "name" | "config">,
 ): Promise<ModelUsageProfile> {
   return saveModelProfile("/api/model-profiles", "POST", input);
 }
 
-/** 更新账号模型使用列表。 */
+/** 更新本地模型使用列表。 */
 export async function updateModelProfile(
   id: string,
   input: Pick<ModelUsageProfile, "name" | "config">,
@@ -45,7 +44,7 @@ export async function updateModelProfile(
   return saveModelProfile(`/api/model-profiles/${id}`, "PUT", input);
 }
 
-/** 删除账号模型使用列表，关联会话由数据库级联自动回退默认。 */
+/** 删除本地模型使用列表，关联会话由数据库级联自动回退默认。 */
 export async function deleteModelProfile(id: string): Promise<void> {
   const response = await fetch(`/api/model-profiles/${id}`, { method: "DELETE" });
   if (!response.ok) throw new Error(`Server error: ${response.status}`);
@@ -90,31 +89,12 @@ async function saveModelProfile(
 }
 
 /**
- * 获取当前默认账号信息。
- */
-export async function fetchAccount(): Promise<AccountInfo> {
-  const response = await fetch("/api/account");
-
-  if (!response.ok) {
-    throw new Error(`Server error: ${response.status}`);
-  }
-
-  const data = (await response.json()) as {
-    account: AccountInfo;
-  };
-
-  return data.account;
-}
-
-/**
- * 获取账号下可用的工作区列表。
+ * 获取当前本地用户可用的工作区列表。
  */
 export async function fetchWorkspaces(): Promise<WorkspaceInfo[]> {
   const response = await fetch("/api/workspaces");
 
-  if (!response.ok) {
-    throw new Error(`Server error: ${response.status}`);
-  }
+  await assertApiResponse(response);
 
   const data = (await response.json()) as {
     workspaces: WorkspaceInfo[];
@@ -136,15 +116,33 @@ export async function createWorkspaceRecord(
     body: JSON.stringify({ name, localPath }),
   });
 
-  if (!response.ok) {
-    throw new Error(`Server error: ${response.status}`);
-  }
+  await assertApiResponse(response);
 
   const data = (await response.json()) as {
     workspace: WorkspaceInfo;
   };
 
   return data.workspace;
+}
+
+/** 更新本地工作区名称或路径。 */
+export async function updateWorkspaceRecord(
+  id: string,
+  input: { name?: string; localPath?: string },
+): Promise<WorkspaceInfo> {
+  const response = await fetch(`/api/workspaces/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  await assertApiResponse(response);
+  return ((await response.json()) as { workspace: WorkspaceInfo }).workspace;
+}
+
+/** 从列表软删除工作区，不触碰磁盘目录。 */
+export async function deleteWorkspaceRecord(id: string): Promise<void> {
+  const response = await fetch(`/api/workspaces/${id}`, { method: "DELETE" });
+  await assertApiResponse(response);
 }
 
 /**
@@ -160,9 +158,7 @@ export async function createChatRecord(
     body: JSON.stringify({ workspaceId, title }),
   });
 
-  if (!response.ok) {
-    throw new Error(`Server error: ${response.status}`);
-  }
+  await assertApiResponse(response);
 
   const data = (await response.json()) as {
     chat: ThreadInfo;
@@ -176,6 +172,26 @@ export async function createChatRecord(
     requestFormId: data.requestForm.id,
     messageCount: data.chat.messageCount ?? 0,
   };
+}
+
+/** 手动重命名会话。 */
+export async function updateChatRecord(
+  id: string,
+  title: string,
+): Promise<ThreadInfo> {
+  const response = await fetch(`/api/chats/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  await assertApiResponse(response);
+  return ((await response.json()) as { chat: ThreadInfo }).chat;
+}
+
+/** 软删除会话并保留历史数据。 */
+export async function deleteChatRecord(id: string): Promise<void> {
+  const response = await fetch(`/api/chats/${id}`, { method: "DELETE" });
+  await assertApiResponse(response);
 }
 
 /**
@@ -297,4 +313,14 @@ export async function fetchProductKnowledgeGraph(
 
   const data = (await response.json()) as WorkspaceKnowledgeGraphData;
   return data;
+}
+
+/** 将 API JSON 错误正文转为可直接展示的异常。 */
+async function assertApiResponse(response: Response): Promise<void> {
+  if (response.ok) return;
+  const body = (await response.json().catch(() => null)) as
+    | { error?: unknown }
+    | null;
+  if (typeof body?.error === "string") throw new Error(body.error);
+  throw new Error(`Server error: ${response.status}`);
 }

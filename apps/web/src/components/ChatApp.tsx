@@ -37,7 +37,6 @@ import {
   ArrowLeftOutlined,
   CaretRightOutlined,
   ClearOutlined,
-  PaperClipOutlined,
   PartitionOutlined,
   SearchOutlined,
   SendOutlined,
@@ -633,13 +632,6 @@ export function ChatApp({
                       />
 
                       <div className="chat-composer-bar">
-                        <Tooltip title="添加附件">
-                          <Button
-                            type="text"
-                            shape="circle"
-                            icon={<PaperClipOutlined />}
-                          />
-                        </Tooltip>
                         <Tooltip
                           title={
                             webSearchEnabled ? "联网搜索已开启" : "开启联网搜索"
@@ -920,13 +912,6 @@ export function ChatApp({
                   />
 
                   <div className="chat-composer-bar">
-                    <Tooltip title="添加附件">
-                      <Button
-                        type="text"
-                        shape="circle"
-                        icon={<PaperClipOutlined />}
-                      />
-                    </Tooltip>
                     <Tooltip
                       title={
                         webSearchEnabled ? "联网搜索已开启" : "开启联网搜索"

@@ -63,7 +63,7 @@ test("uses the selected model pricing and never includes an API key in summaries
     "planner",
   );
   const cost = calculateCost(1_000_000, 1_000_000, 1_000_000, toLlmPricing(selection));
-  assert.deepEqual(cost, { costInput: 3.025, costOutput: 6, costTotal: 9.025 });
+  assert.deepEqual(cost, { costInput: 2.04, costOutput: 8, costTotal: 10.04 });
 
   const summary = createModelSummarySnapshot(selection);
   assert.equal(summary?.thinking, true);
@@ -120,6 +120,19 @@ test("validates parameter boundaries and all tiered responsibilities", () => {
       ...base.models.reasoning,
       reasoningEffort: "low",
     }).success,
-    false,
+    true,
   );
+});
+
+test("normalizes legacy DeepSeek model ids to the current flash id", () => {
+  const base = SYSTEM_DEFAULT_MODEL_PROFILE.config;
+  if (base.mode !== "tiered") return;
+
+  for (const modelId of ["deepseek-v4-flash", "deepseek-v4-pro"]) {
+    const parsed = DeepSeekModelConfigSchema.parse({
+      ...base.models.standard,
+      modelId,
+    });
+    assert.equal(parsed.modelId, "deepseek-flash");
+  }
 });

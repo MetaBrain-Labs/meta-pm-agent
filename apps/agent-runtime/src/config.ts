@@ -39,7 +39,7 @@ export interface LlmConfig {
 export interface LlmPricing {
   /** 缓存未命中输入 */
   inputPricePerMillion: number;
-  /** 缓存命中输入（DeepSeek 默认 ¥0.1/M） */
+  /** 缓存命中输入 */
   cacheHitInputPricePerMillion: number;
   /** 输出 */
   outputPricePerMillion: number;
@@ -61,7 +61,7 @@ export function getLlmConfig(): LlmConfig {
     baseURL: process.env.LLM_BASE_URL ?? "https://api.deepseek.com",
     enableThinking: process.env.LLM_ENABLE_THINKING === "true",
     maxTokens: 4096,
-    model: process.env.LLM_MODEL ?? "deepseek-chat",
+    model: process.env.LLM_MODEL ?? "deepseek-flash",
     reasoningEffort: process.env.LLM_REASONING_EFFORT ?? "high",
     temperature: 0.3,
     timeout: 30_000,
@@ -69,18 +69,19 @@ export function getLlmConfig(): LlmConfig {
 }
 
 /**
- * 获取LLM定价配置（元/百万tokens），默认使用 DeepSeek 标准定价。
+ * 获取 LLM 定价配置（元/百万 tokens），默认使用 DeepSeek 当前高峰价估算快照。
+ * 实际账单始终以模型服务商为准。
  */
 export function getLlmPricing(): LlmPricing {
   return {
     inputPricePerMillion: parseFloat(
-      process.env.LLM_INPUT_PRICE_PER_MILLION ?? "1",
+      process.env.LLM_INPUT_PRICE_PER_MILLION ?? "2",
     ),
     cacheHitInputPricePerMillion: parseFloat(
-      process.env.LLM_CACHE_HIT_INPUT_PRICE_PER_MILLION ?? "0.1",
+      process.env.LLM_CACHE_HIT_INPUT_PRICE_PER_MILLION ?? "0.04",
     ),
     outputPricePerMillion: parseFloat(
-      process.env.LLM_OUTPUT_PRICE_PER_MILLION ?? "2",
+      process.env.LLM_OUTPUT_PRICE_PER_MILLION ?? "8",
     ),
   };
 }

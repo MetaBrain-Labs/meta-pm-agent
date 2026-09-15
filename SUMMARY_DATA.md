@@ -24,7 +24,7 @@
 
 | 通道 | 用途 | 前端接收方式 |
 | --- | --- | --- |
-| REST JSON | 账号、工作区、会话、历史消息、知识图谱 | 普通 `fetch()` |
+| REST JSON | 工作区、会话、历史消息、知识图谱 | 普通 `fetch()` |
 | Chat SSE | 聊天文本、推理、Agent 状态、工具、表单、Token 用量 | `fetch()` + `ReadableStream` |
 | 文档状态轮询 | PRD 后台任务状态、思考、评分和产物 | 定时调用 REST |
 
@@ -104,33 +104,7 @@
 }
 ```
 
-### 3.2 当前账号
-
-#### `GET /api/account`
-
-```json
-{
-  "account": {
-    "id": "local",
-    "email": null,
-    "username": "Local User",
-    "avatar": null,
-    "createdAt": "2026-07-23T08:00:00.000Z",
-    "updatedAt": "2026-07-23T08:00:00.000Z"
-  }
-}
-```
-
-| 字段 | 类型 | 约束 | 作用 |
-| --- | --- | --- | --- |
-| `account.id` | string | 必填 | 当前用户 ID |
-| `email` | string \| null | 可空 | 邮箱 |
-| `username` | string \| null | 可空 | 显示名称 |
-| `avatar` | string \| null | 可空 | 头像地址 |
-| `createdAt` | string \| null | 可空 | 创建时间 |
-| `updatedAt` | string \| null | 可空 | 更新时间 |
-
-### 3.3 工作区列表
+### 3.2 本地工作区
 
 #### `GET /api/workspaces`
 
@@ -139,12 +113,8 @@
   "workspaces": [
     {
       "id": "71fe4f6a-13b9-4bb0-a04c-0a88ab38c29a",
-      "userId": "local",
       "name": "智能客服项目",
-      "storageType": "local",
       "localPath": "E:\\projects\\support-bot",
-      "cloudPath": null,
-      "syncStatus": "idle",
       "createdAt": "2026-07-22T02:10:00.000Z",
       "updatedAt": "2026-07-23T08:30:00.000Z"
     }
@@ -163,18 +133,14 @@
 }
 ```
 
-`name` 和 `localPath` 都是可选字段。成功状态码为 `201`，响应为：
+`name` 和 `localPath` 都是必填字段；路径必须是 API 所在机器可读取的绝对目录。成功状态码为 `201`，响应为：
 
 ```json
 {
   "workspace": {
     "id": "71fe4f6a-13b9-4bb0-a04c-0a88ab38c29a",
-    "userId": "local",
     "name": "智能客服项目",
-    "storageType": "local",
     "localPath": "E:\\projects\\support-bot",
-    "cloudPath": null,
-    "syncStatus": "idle",
     "createdAt": "2026-07-23T08:30:00.000Z",
     "updatedAt": "2026-07-23T08:30:00.000Z"
   }
@@ -184,16 +150,20 @@
 | 工作区字段 | 类型 | 约束 | 作用 |
 | --- | --- | --- | --- |
 | `id` | string | 必填，UUID | 工作区主键 |
-| `userId` | string | 必填 | 所属用户 |
 | `name` | string | 必填 | 工作区名称 |
-| `storageType` | string \| null | 可空 | 当前通常为 `"local"` |
-| `localPath` | string \| null | 可空 | 用户选择的本地目录 |
-| `cloudPath` | string \| null | 可空 | 云端目录，当前可为空 |
-| `syncStatus` | string \| null | 可空 | 当前通常为 `"idle"` |
+| `localPath` | string | 必填 | 规范化后的本地绝对目录 |
 | `createdAt` | string | 必填 | 创建时间 |
 | `updatedAt` | string | 必填 | 更新时间 |
 
-> 浏览器环境不保证能取得目录的绝对路径，因此 `localPath` 必须允许用户编辑，也必须接受 `null`。
+> 浏览器环境不保证能取得目录的绝对路径，因此 UI 保留手工编辑。API 会拒绝相对路径、不存在/不可读目录和已经添加的 active 路径。
+
+#### `PATCH /api/workspaces/:id`
+
+请求体至少包含 `name` 或 `localPath`。修改路径时若项目仍有运行中的对话或 PRD，返回 `409`。
+
+#### `DELETE /api/workspaces/:id`
+
+将项目标记为已删除并从列表隐藏；不会删除本地目录、消息、图谱或文档。运行中的对话或 PRD 会返回 `409`，v0.1 不提供恢复入口。
 
 ---
 
@@ -288,7 +258,17 @@
 | `createdAt` | string | 必填 | 创建时间 |
 | `updatedAt` | string | 必填 | 最后消息时间，没有消息时等于创建时间 |
 
-### 4.3 停止聊天运行
+### 4.3 重命名与软删除会话
+
+#### `PATCH /api/chats/:id`
+
+请求体为 `{ "title": "新的对话标题" }`。仅允许修改固定本地用户拥有且仍为 active 的会话。
+
+#### `DELETE /api/chats/:id`
+
+将空闲会话标记为已删除并从列表隐藏，保留消息、图谱和文档数据；运行中的会话返回 `409`。v0.1 不提供恢复入口。
+
+### 4.4 停止聊天运行
 
 #### `POST /api/chat/stop`
 

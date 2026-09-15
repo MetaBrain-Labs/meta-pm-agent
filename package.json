@@ -6,7 +6,7 @@
   "private": true,
   "packageManager": "pnpm@11.3.0",
   "scripts": {
-    "dev": "turbo run dev",
+    "dev": "turbo run dev --filter=web --filter=@repo/api",
     "build": "turbo run build",
     "lint": "turbo run lint"
   },

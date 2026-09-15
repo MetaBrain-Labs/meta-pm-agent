@@ -1,7 +1,7 @@
 /**
  * 应用设置弹窗
  *
- * 组合账号信息、工作区信息与账号模型使用列表设置。
+ * 组合当前工作区信息与本地模型使用列表设置。
  *
  * Responsibilities:
  * - 维护设置侧栏导航
@@ -11,35 +11,27 @@
 import { Modal } from "antd";
 import { ModelProfilesPanel } from "../settings/ModelProfilesPanel";
 
-type ConfigTab = "account" | "workspace" | "models";
+type ConfigTab = "workspace" | "models";
 
 interface ConfigModalProps {
   open: boolean;
   activeTab: ConfigTab;
   showWorkspace: boolean;
-  accountRows: Array<[string, string]>;
   workspaceRows: Array<[string, string]>;
   onTabChange: (tab: ConfigTab) => void;
   onClose: () => void;
 }
 
-/** 展示账号、工作区和模型使用列表的通用设置弹窗。 */
+/** 展示当前工作区和模型使用列表的本地设置弹窗。 */
 export function ConfigModal({
   open,
   activeTab,
   showWorkspace,
-  accountRows,
   workspaceRows,
   onTabChange,
   onClose,
 }: ConfigModalProps) {
-  const title =
-    activeTab === "account"
-      ? "账号信息"
-      : activeTab === "workspace"
-        ? "工作区信息"
-        : "模型使用列表";
-  const rows = activeTab === "account" ? accountRows : workspaceRows;
+  const title = activeTab === "workspace" ? "当前工作区" : "模型使用列表";
 
   return (
     <Modal
@@ -63,13 +55,6 @@ export function ConfigModal({
         <aside className="settings-modal-nav">
           <button
             type="button"
-            className={activeTab === "account" ? "is-active" : ""}
-            onClick={() => onTabChange("account")}
-          >
-            账号信息
-          </button>
-          <button
-            type="button"
             className={activeTab === "workspace" ? "is-active" : ""}
             onClick={() => onTabChange("workspace")}
             hidden={!showWorkspace}
@@ -90,7 +75,7 @@ export function ConfigModal({
             <ModelProfilesPanel />
           ) : (
             <div className="info-modal-body">
-              {rows.map(([label, value]) => (
+              {workspaceRows.map(([label, value]) => (
                 <div key={label} className="info-row">
                   <span>{label}</span>
                   <strong>{value}</strong>

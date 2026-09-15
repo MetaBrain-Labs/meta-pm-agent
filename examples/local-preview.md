@@ -4,7 +4,7 @@ Audience: product managers and developers exploring a single-user AI product wor
 
 ## Input
 
-Create a workspace called **Synthetic Study Planner**, then create a conversation and select your configured model profile. Send:
+Add an existing local directory as **Synthetic Study Planner**, then create a conversation and select your configured model profile. Send:
 
 > Design an MVP study planner for adult learners. A learner can create a study goal, schedule weekly sessions, mark sessions complete and view weekly progress. This is a personal-use web app with no social features or payments. Use only these requirements as evidence. The MVP should support one learner. Ask me to confirm important assumptions before adding requirements. Produce a clear product execution plan and a grounded PRD.
 
@@ -16,7 +16,9 @@ Answer clarification forms using only fictional data. If asked for a metric or s
 2. Orchestrator/Planner shows a DAG; each Executor owns its reasoning/tools/result cards.
 3. After each completed Executor, the graph becomes available. Goal, session and progress concepts have traceable provenance; unsupported market claims are not presented as verified evidence.
 4. Critique completes or exposes an actionable confirmation. Answer requested forms without starting an unrelated request.
-5. On the Documents page, select PRD, start generation, observe drafting/scoring progress, open the artifact modal and download Markdown. MRD/BRD remain disabled.
+5. On the Documents page, start the only exposed document type (PRD), observe drafting/scoring/automatic quality-review progress, open the artifact modal and download Markdown.
+6. Rename the conversation and project, update the project to another readable absolute directory, and verify list labels/routes update. Delete the conversation, then remove the project and confirm the warning says local files are preserved.
+7. Confirm no cloud, attachment, pin/archive, account identity, MRD/BRD, duplicate sidebar graph, or human-approval controls are rendered.
 
 ## Illustrative artifact excerpt
 

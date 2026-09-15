@@ -4,7 +4,7 @@
 
 一个 AI 辅助产品管理工作区：把对话转化为结构化需求、可并行执行的任务计划、可持久化产品知识图谱和 PRD 产物。
 
-> 项目仍在积极开发中。运行完整聊天或文档工作流前，请先阅读下方“数据库结构说明”。
+> v0.1 是单用户、同机运行的本地预览版：仅关联本地目录、调用外部模型 API，并生成 PRD。不支持云端同步/部署、附件、团队协作、MRD/BRD 或人工审批。运行完整聊天或文档工作流前，请先阅读下方“数据库结构说明”。
 
 ## 核心能力
 
@@ -13,7 +13,8 @@
 - **十个产品管理领域 Executor**：产品策略、市场研究、GTM、产品发现、产品执行、营销增长、数据分析、AI Shipping、工具箱和界面设计。
 - **持久化产品上下文**：维护结构化节点、关系、决策、风险、开放问题、来源、生命周期和补充轮修正。
 - **可恢复执行**：PostgreSQL checkpoint、表单 HITL 恢复、已完成任务回放和服务端取消。
-- **文档生成**：独立 PRD 工作流，包含章节起草、一致性检查、三评分 Agent、重试、产物预览和 Markdown 下载。
+- **本地项目管理**：本地目录项目支持添加、重命名、修改路径和软移除；对话支持创建、恢复、重命名和软删除。
+- **文档生成**：独立 PRD 工作流，包含章节起草、一致性检查、自动质量审核、重试、产物预览和 Markdown 下载。
 - **实时前端**：展示 SSE reasoning/工具事件、并行 Agent 状态、token 用量、Planner DAG 进度和 G6 知识图谱。
 - **受控工具**：集中 allowlist、禁止任意 Agent 文件系统访问、可选 Tavily/公开索引搜索和 Evidence 来源校验。
 
@@ -59,7 +60,6 @@ Planner SubAgent 在 Orchestrator 内生成 DAG；图中的 `planner_agent` 节�
 | Web | React 19、Vite 6、Ant Design 6、Tailwind CSS 4、AntV G6 |
 | 数据库 | PostgreSQL、Prisma、LangGraph PostgresSaver |
 | 搜索 | 配置 Tavily 时使用 Tavily，否则降级到公开索引 |
-| Worker | BullMQ、Redis |
 | Monorepo | pnpm 11.3.0、Turborepo |
 
 ## 快速开始
@@ -69,8 +69,7 @@ Planner SubAgent 在 Orchestrator 内生成 DAG；图中的 `planner_agent` 节�
 - Node.js >=22.13
 - pnpm 11.3.0
 - PostgreSQL
-- 运行 Worker 或 `pnpm dev` 时需要 Redis
-- 支持模型使用列表中 DeepSeek 模型 ID 的服务商 API
+- DeepSeek 兼容的外部模型 API；v0.1 默认模型 ID 为 `deepseek-flash`
 
 如尚未启用 pnpm，可使用 Corepack：
 
@@ -108,12 +107,11 @@ Copy-Item .env.example .env
 | 变量 | 用途 |
 | --- | --- |
 | `POSTGRES_HOST`、`POSTGRES_PORT`、`POSTGRES_USER`、`POSTGRES_PASSWORD`、`POSTGRES_DB` | PostgreSQL 连接；也支持 `DATABASE_URL` |
-| `REDIS_HOST`、`REDIS_PORT` | BullMQ Worker 连接 |
 | `OPENAI_API_KEY` | 模型服务密钥 |
 | `TAVILY_API_KEY` | 可选 Tavily 搜索；缺省时使用公开索引 |
 | `LANGGRAPH_CHECKPOINT_DATABASE_URL` | 可选独立 checkpoint 数据库地址 |
 
-Chat 与 Document 的模型 ID、服务 Base URL、推理参数和计价统一在 Setting 的模型使用列表中配置。
+Chat 与 Document 的模型 ID、服务 Base URL、推理参数和计价统一在“本地设置”的模型使用列表中配置。内置费用使用 DeepSeek [当前高峰价估算快照](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)（缓存命中 ¥0.04/M、未命中 ¥2/M、输出 ¥8/M），实际账单以服务商为准。根据 [V4.1 Flash 迁移公告](https://api-docs.deepseek.com/zh-cn/news/news260910/)，旧 `deepseek-v4-flash`、`deepseek-v4-pro` 配置会在读取或升级时归一化为 `deepseek-flash`。
 
 不得提交 `.env` 或 `resources/product-contexts/` 下的运行时产物。
 
@@ -130,7 +128,7 @@ pnpm --filter @repo/database db:init
 
 #### 数据库结构说明
 
-已有数据库先备份，再执行 `pnpm --filter @repo/database db:upgrade`。该命令添加缺失运行时表、缓存 token 列，更新 PRD 等待状态约束和索引，将 `message.type` 扩展为 text 以保存完整 Agent 标识，并为历史图谱 `content` 列设置空字符串默认值；不删除业务数据。它不迁移已有库的 Prisma 核心表，核心结构变更需单独审核后执行。可重复执行升级；结构冲突会报错，不自动覆盖。
+已有数据库先备份，再执行 `pnpm --filter @repo/database db:upgrade`。该命令增量添加本地软删除字段和缺失运行时表、归一化旧 DeepSeek 模型 ID，并更新 token/PRD 约束、`message.type` 和历史图谱默认值。它不会删除本地文件或业务数据；可重复执行，结构冲突会报错而不会自动覆盖。
 
 SQL 位于 `packages/database/sql/20260914_runtime_tables.sql`。LangGraph checkpoint 表由 PostgresSaver 独立初始化。
 
@@ -144,7 +142,7 @@ pnpm build
 
 ### 5. 运行
 
-启动全部服务：
+启动 v0.1 所需的 Web 和 API：
 
 ```bash
 pnpm dev
@@ -156,7 +154,6 @@ pnpm dev
 | --- | --- | --- |
 | Web | <http://localhost:3000> | `pnpm --filter web dev` |
 | API | <http://localhost:3001> | `pnpm --filter @repo/api dev` |
-| Worker | 连接 Redis | `pnpm --filter @repo/worker dev` |
 
 Vite 会把 `/api` 代理到 `3001` 端口。
 
@@ -173,9 +170,10 @@ Vite 会把 `/api` 代理到 `3001` 端口。
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | `GET` | `/api/health` | 健康检查 |
-| `GET` | `/api/account` | 读取本地/默认账号 |
 | `GET/POST` | `/api/workspaces` | 查询或创建工作区 |
+| `PATCH/DELETE` | `/api/workspaces/:id` | 重命名/修改路径或软移除工作区 |
 | `GET/POST` | `/api/chats` | 查询或创建聊天 |
+| `PATCH/DELETE` | `/api/chats/:id` | 重命名或软删除聊天 |
 | `GET` | `/api/chats/:id/messages` | 恢复消息和工作流状态 |
 | `POST` | `/api/chat` | 通过 SSE 运行聊天/产品工作流 |
 | `POST` | `/api/chat/stop` | 中止服务端聊天 runtime |
@@ -194,7 +192,7 @@ apps/
   agent-runtime/  LangGraph/DeepAgents 运行时与测试
   api/            Hono API、SSE、持久化、文档任务
   web/            React/Vite 前端
-  worker/         BullMQ Worker 骨架
+  worker/         实验性 BullMQ 骨架；不属于 v0.1 运行链路
 packages/
   shared/         Zod schema、DTO、事件、运行时契约
   database/       Prisma schema 与 Client
@@ -211,7 +209,7 @@ resources/
 | 命令 | 用途 |
 | --- | --- |
 | `pnpm build` | 通过 Turbo 构建全部包和应用 |
-| `pnpm dev` | 启动全部开发服务 |
+| `pnpm dev` | 启动 v0.1 的 Web 和 API |
 | `pnpm --filter @repo/agent-runtime test` | 运行 Agent Runtime 测试 |
 | `pnpm --filter @repo/api test` | 运行 API 测试 |
 | `pnpm --filter web build` | 类型检查并构建前端 |
@@ -293,7 +291,7 @@ pnpm build --force
 
 ## 首次模型配置与本地运行边界
 
-这是单用户本地预览版，使用固定本地账号，尚无多人认证和数据隔离。API 默认仅监听 `127.0.0.1:3001`；`HOST` 只接受回环地址，`CORS_ORIGINS` 只接受明确的本地 HTTP/HTTPS origin。前端使用 `http://localhost:3000` 或 `http://127.0.0.1:3000`；Vite 切换端口时同步修改配置。跨域限制不替代认证。
+这是单用户本地预览版，不提供账号界面、认证和租户隔离；固定本地所有者 ID 仅用于内部持久化。API 默认仅监听 `127.0.0.1:3001`；`HOST` 只接受回环地址，`CORS_ORIGINS` 只接受明确的本地 HTTP/HTTPS origin。前端使用 `http://localhost:3000` 或 `http://127.0.0.1:3000`；Vite 切换端口时同步修改配置。跨域限制不替代认证。
 
 1. 在服务端 `.env` 中填写你自己的模型 API Key，重启 API；不要在浏览器输入或提交密钥。
 2. 打开 Setting 的模型使用列表。当前 UI 只支持代码中列出的 DeepSeek 模型 ID，并非任意 OpenAI-compatible 模型选择器。

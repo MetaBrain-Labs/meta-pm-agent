@@ -4,7 +4,7 @@
  * 使用 raw SQL 访问用户手动创建的模型列表与会话选择表，不依赖 Prisma Schema 或迁移。
  *
  * Responsibilities:
- * - 管理本地账号的自定义模型使用列表
+ * - 管理固定本地用户的自定义模型使用列表
  * - 读取和更新会话当前选择
  * - 将无选择或已删除选择回退到内置默认列表
  */
@@ -37,7 +37,7 @@ interface ConversationSelectionRow extends ModelProfileRow {
 export class ModelProfileConflictError extends Error {}
 export class ModelProfileNotFoundError extends Error {}
 
-/** 返回内置默认与本地账号拥有的全部自定义列表。 */
+/** 返回内置默认与固定本地用户拥有的全部自定义列表。 */
 export async function listLocalModelProfiles(): Promise<ModelUsageProfile[]> {
   const rows = await prisma.$queryRaw<ModelProfileRow[]>`
     SELECT "id", "name", "config", "created_at", "updated_at"
@@ -49,7 +49,7 @@ export async function listLocalModelProfiles(): Promise<ModelUsageProfile[]> {
   return [SYSTEM_DEFAULT_MODEL_PROFILE, ...rows.map(mapModelProfileRow)];
 }
 
-/** 按 ID 读取本地账号可使用的列表；内置默认列表不访问数据库。 */
+/** 按 ID 读取固定本地用户可使用的列表；内置默认列表不访问数据库。 */
 export async function getLocalModelProfile(
   id: string,
 ): Promise<ModelUsageProfile> {
@@ -58,7 +58,7 @@ export async function getLocalModelProfile(
     : getOwnedProfile(id);
 }
 
-/** 为本地账号创建自定义模型使用列表。 */
+/** 为固定本地用户创建自定义模型使用列表。 */
 export async function createLocalModelProfile(input: {
   name: string;
   config: ModelUsageProfileConfig;
@@ -82,7 +82,7 @@ export async function createLocalModelProfile(input: {
   return requireRow(rows[0]);
 }
 
-/** 更新本地账号拥有的自定义模型使用列表。 */
+/** 更新固定本地用户拥有的自定义模型使用列表。 */
 export async function updateLocalModelProfile(
   id: string,
   input: { name: string; config: ModelUsageProfileConfig },
@@ -136,6 +136,9 @@ export async function getConversationModelProfile(
       p."created_at",
       p."updated_at"
     FROM "conversation" c
+    JOIN "workspace" w
+      ON w."id" = c."workspace_id"
+      AND w."user_id" = c."user_id"
     LEFT JOIN "conversation_model_profile" selection
       ON selection."conversation_id" = c."id"
     LEFT JOIN "model_usage_profile" p
@@ -143,6 +146,8 @@ export async function getConversationModelProfile(
       AND p."user_id" = c."user_id"
     WHERE c."id" = ${conversationId}
       AND c."user_id" = ${LOCAL_USER_ID}
+      AND c."status" = 'active'
+      AND w."status" = 'active'
     LIMIT 1
   `;
 
@@ -194,10 +199,15 @@ async function getOwnedProfile(id: string): Promise<ModelUsageProfile> {
 
 async function assertConversationExists(conversationId: string): Promise<void> {
   const rows = await prisma.$queryRaw<Array<{ id: string }>>`
-    SELECT "id"
-    FROM "conversation"
-    WHERE "id" = ${conversationId}
-      AND "user_id" = ${LOCAL_USER_ID}
+    SELECT c."id"
+    FROM "conversation" c
+    JOIN "workspace" w
+      ON w."id" = c."workspace_id"
+      AND w."user_id" = c."user_id"
+    WHERE c."id" = ${conversationId}
+      AND c."user_id" = ${LOCAL_USER_ID}
+      AND c."status" = 'active'
+      AND w."status" = 'active'
     LIMIT 1
   `;
   if (!rows[0]) {

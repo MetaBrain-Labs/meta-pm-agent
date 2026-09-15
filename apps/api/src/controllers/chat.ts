@@ -1,7 +1,7 @@
 /**
  * API 路由组装
  *
- * 创建 `/api` 下的业务路由组，挂载账号、工作区、聊天流、知识图谱和文档生成
+ * 创建 `/api` 下的业务路由组，挂载本地工作区、聊天流、知识图谱和文档生成
  * 相关控制器。具体业务处理保持在各控制器文件内。
  *
  * Responsibilities:
@@ -12,15 +12,18 @@
 
 import { Hono } from "hono";
 import {
-  getAccountHandler,
-  listWorkspacesHandler,
+  chatStreamHandler,
+  createChatHandler,
   createWorkspaceHandler,
+  deleteChatHandler,
+  deleteWorkspaceHandler,
+  getWorkspaceKnowledgeGraphHandler,
   listChatsHandler,
   listMessagesHandler,
-  createChatHandler,
-  chatStreamHandler,
+  listWorkspacesHandler,
   stopChatHandler,
-  getWorkspaceKnowledgeGraphHandler,
+  updateChatHandler,
+  updateWorkspaceHandler,
 } from "./chat-controller";
 import {
   createDocumentEvidenceResolutionHandler,
@@ -45,12 +48,15 @@ import {
 export function createChatRoutes() {
   const routes = new Hono();
 
-  routes.get("/account", getAccountHandler);
   routes.get("/workspaces", listWorkspacesHandler);
   routes.post("/workspaces", createWorkspaceHandler);
+  routes.patch("/workspaces/:id", updateWorkspaceHandler);
+  routes.delete("/workspaces/:id", deleteWorkspaceHandler);
   routes.get("/chats", listChatsHandler);
   routes.get("/chats/:id/messages", listMessagesHandler);
   routes.post("/chats", createChatHandler);
+  routes.patch("/chats/:id", updateChatHandler);
+  routes.delete("/chats/:id", deleteChatHandler);
   routes.post("/chat", chatStreamHandler);
   routes.post("/chat/stop", stopChatHandler);
   routes.get("/model-profiles", listModelProfilesHandler);

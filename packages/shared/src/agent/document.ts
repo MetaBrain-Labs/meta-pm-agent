@@ -5,12 +5,12 @@
  * 这些类型用于描述后台生成任务的可观察状态，不绑定具体数据库实现。
  *
  * Responsibilities:
- * - 约束 PRD/MRD/BRD 等文档工作流类型
+ * - 约束文档工作流类型
  * - 描述 Document Agent 的 Task planning 展示结构
  * - 定义生成完成后可持久化的文档结果
  *
  * Notes:
- * - 当前仅 PRD 工作流可执行，MRD/BRD 先作为稳定枚举保留给前端禁用入口。
+ * - 当前仅 PRD 工作流可执行；其他值仅用于兼容既有内部数据。
  */
 
 import { z } from "zod";

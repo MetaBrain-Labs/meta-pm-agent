@@ -1,7 +1,7 @@
 /**
  * 模型使用列表 API 控制器
  *
- * 暴露账号模型列表 CRUD 与会话选择接口，并在会话运行期间拒绝切换。
+ * 暴露本地模型列表 CRUD 与会话选择接口，并在会话运行期间拒绝切换。
  *
  * Responsibilities:
  * - 校验模型列表请求体
@@ -10,10 +10,7 @@
  */
 
 import type { Context } from "hono";
-import {
-  DEFAULT_DEEPSEEK_PRICING,
-  DeepSeekModelIdSchema,
-} from "@repo/shared";
+import { DEFAULT_DEEPSEEK_PRICING } from "@repo/shared";
 import {
   createLocalModelProfile,
   deleteLocalModelProfile,
@@ -30,17 +27,16 @@ import {
 } from "../schemas/model-profile.schema";
 import { isChatRunActive } from "../services/chat-run-registry";
 
-const MODEL_CATALOG = DeepSeekModelIdSchema.options.map((modelId) => ({
-  modelId,
-  label:
-    modelId === "deepseek-v4-pro"
-      ? "DeepSeek V4 Pro"
-      : "DeepSeek V4 Flash",
-  baseUrl: "https://api.deepseek.com",
-  pricing: DEFAULT_DEEPSEEK_PRICING[modelId],
-}));
+const MODEL_CATALOG = [
+  {
+    modelId: "deepseek-flash" as const,
+    label: "DeepSeek Flash",
+    baseUrl: "https://api.deepseek.com",
+    pricing: DEFAULT_DEEPSEEK_PRICING["deepseek-flash"],
+  },
+];
 
-/** 返回账号列表和当前可配置模型目录。 */
+/** 返回本地模型列表和当前可配置模型目录。 */
 export async function listModelProfilesHandler(c: Context) {
   return c.json({
     profiles: await listLocalModelProfiles(),

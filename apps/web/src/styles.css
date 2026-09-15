@@ -256,17 +256,6 @@ body {
   background: #ffffff;
 }
 
-.window-controls {
-  position: absolute;
-  top: 9px;
-  right: 14px;
-  display: flex;
-  gap: 18px;
-  color: #11161d;
-  font-size: 24px;
-  line-height: 1;
-}
-
 .workspace-brand {
   display: flex;
   align-items: center;

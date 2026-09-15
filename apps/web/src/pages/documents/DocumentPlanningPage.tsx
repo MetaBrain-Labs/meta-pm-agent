@@ -10,7 +10,7 @@
  * - 展示 Document Agent 的 Task planning 和最新生成文档
  *
  * Notes:
- * - MRD/BRD 按钮先禁用，后续接入对应 Document Agent 工作流。
+ * - v0.1 仅展示已经接入的 PRD 工作流。
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -91,7 +91,7 @@ const STAGE_LABELS: Record<DocumentWorkflowStage, string> = {
   scoreDraft: "三方评分 Agent 打分",
   groupEvidenceBlockers: "合并三方证据阻断",
   aggregateScore: "分差合格后共识评分",
-  humanReview: "人工审核节点",
+  humanReview: "自动质量审核",
   exportPrd: "导出 PRD",
 };
 
@@ -634,12 +634,6 @@ export function DocumentPlanningPage({
               >
                 生成 PRD
               </Button>
-              <Tooltip title="MRD 工作流尚未接入">
-                <Button disabled>生成 MRD</Button>
-              </Tooltip>
-              <Tooltip title="BRD 工作流尚未接入">
-                <Button disabled>生成 BRD</Button>
-              </Tooltip>
             </Space>
           </div>
         </footer>

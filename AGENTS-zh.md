@@ -21,7 +21,7 @@
 - 保持 `packages/shared`、`packages/database`、`apps/agent-runtime` 的 project references 与 `composite: true`；保留 `packages/database/tsconfig.json` 的 `"types": ["node"]`。
 - `apps/web` 使用 React 19、Vite 6、Tailwind 4、Ant Design 6；保持 Ant Design 6 API 与导入方式。
 - Prisma 命令从 `packages/database` 执行：`pnpm db:generate`、`pnpm db:push`、`pnpm db:migrate`。
-- 从 `.env.example` 创建 `.env`。PostgreSQL 可用 `POSTGRES_*` 或 `DATABASE_URL`；配置 Redis、`OPENAI_API_KEY`、`LLM_MODEL`、`LLM_BASE_URL`。配置 `TAVILY_API_KEY` 时使用 Tavily，否则搜索降级到公开索引。
+- 从 `.env.example` 创建 `.env`。PostgreSQL 可用 `POSTGRES_*` 或 `DATABASE_URL`；配置 `OPENAI_API_KEY`、`LLM_MODEL`、`LLM_BASE_URL`。配置 `TAVILY_API_KEY` 时使用 Tavily，否则搜索降级到公开索引。只有显式开发实验性 Worker 时才需要 Redis。
 - 保持 `/workplace`、`/chat/:workspaceId`、`/chat/:workspaceId/:threadId`、`/documents/:workspaceId` 路由。
 - 浏览器目录选择不保证提供绝对路径；保留可编辑路径和宿主环境 `file.path` 处理。
 - 除任务必要外，不改依赖版本、生成文件、无关模块或仓库级配置。
@@ -123,7 +123,7 @@ resources/        运行时产品上下文快照；不得提交生成 JSON
     -> draftSection|humanReview -> exportPrd
   ```
 
-- 当前只启用 PRD；MRD/BRD 在拥有独立工作流前保持禁用。
+- 当前只启用 PRD；MRD/BRD 在拥有独立工作流前不渲染入口。
 - 每版草稿由三个独立评分 Agent 评分：分差大于 `8` 则拒绝，可靠草稿还需达到 `85/100`；最多三版。必须保留所有草稿与评分历史，重试耗尽后沿用现有“最小分差/加权”选择逻辑。
 - `humanReview` 当前自动通过；未真正接入 `interrupt()` 前不得宣称等待人工审核。
 - 文档任务在 API 后台运行，页面跳转不得取消；只有停止接口或服务端/运行时失败可中断。

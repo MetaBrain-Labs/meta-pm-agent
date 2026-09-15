@@ -2,6 +2,15 @@
 -- Public schema is the supported local deployment schema. No application data is deleted.
 BEGIN;
 
+-- Local preview soft deletion. These columns intentionally retain all related
+-- application data and never imply removal of the user's local directory.
+ALTER TABLE public.workspace
+  ADD COLUMN IF NOT EXISTS status character varying(20) NOT NULL DEFAULT 'active';
+ALTER TABLE public.workspace
+  ADD COLUMN IF NOT EXISTS deleted_at timestamp with time zone;
+ALTER TABLE public.conversation
+  ADD COLUMN IF NOT EXISTS deleted_at timestamp with time zone;
+
 -- Persist complete Agent/stage identifiers (e.g. conversation_confirmation).
 -- Widening varchar to text preserves existing values and is repeatable.
 ALTER TABLE public.message ALTER COLUMN type TYPE text;
@@ -16,6 +25,28 @@ CREATE TABLE IF NOT EXISTS public.model_usage_profile (
   foreign key (user_id) references public."user" (id)
   match simple on update no action on delete cascade
 );
+
+-- Canonicalize model IDs that DeepSeek now routes to deepseek-flash. The
+-- runtime parser also accepts these legacy values so partially upgraded local
+-- databases remain readable.
+UPDATE public.model_usage_profile
+SET
+  config = CASE
+    WHEN config->>'mode' = 'universal' THEN
+      jsonb_set(config, '{model,modelId}', '"deepseek-flash"'::jsonb, false)
+    WHEN config->>'mode' = 'tiered' THEN
+      jsonb_set(
+        jsonb_set(
+          jsonb_set(config, '{models,reasoning,modelId}', '"deepseek-flash"'::jsonb, false),
+          '{models,standard,modelId}', '"deepseek-flash"'::jsonb, false
+        ),
+        '{models,fast,modelId}', '"deepseek-flash"'::jsonb, false
+      )
+    ELSE config
+  END,
+  updated_at = CURRENT_TIMESTAMP
+WHERE config::text LIKE '%deepseek-v4-flash%'
+   OR config::text LIKE '%deepseek-v4-pro%';
 
 CREATE TABLE IF NOT EXISTS public.conversation_model_profile (
   conversation_id character varying(36) primary key not null,

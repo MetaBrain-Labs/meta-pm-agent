@@ -31,6 +31,15 @@ Publish only after every blocking item is resolved. This file does not authorize
 - [ ] Run the synthetic end-to-end scenario from a clean clone, including chat, graph, PRD download, stop and recovery; record actual outcomes.
 - [ ] Capture and review actual synthetic screenshots. Local browser access was denied during preparation.
 
+## v0.1 local product gates
+
+- [x] Expose workspace create/list/rename/path-update/soft-remove and conversation create/list/restore/rename/soft-delete routes; never delete local directories.
+- [x] Hide cloud sync/address/status, attachments, pin/archive, duplicate sidebar graph entry, account identity, MRD/BRD and human-approval claims.
+- [x] Use `deepseek-flash` for new/built-in profiles and keep legacy V4 ID normalization in both runtime parsing and repeatable database upgrade SQL.
+- [x] Remove Worker/Redis from root `pnpm dev`, prerequisites and normal v0.1 capability claims while retaining the experimental scaffold source.
+- [ ] Obtain green CI for CRUD ownership, path validation, active chat/PRD conflicts, deleted-resource access, repeated `db:upgrade`, model tiers and cost estimates.
+- [ ] Complete a clean-clone UI pass proving list/route synchronization and that every visible control responds; capture synthetic chat, graph, PRD, stop and resume evidence.
+
 ## Publication gates
 
 - [x] Add contributing/security documents, issue and PR templates, synthetic walkthrough and known limitations.
