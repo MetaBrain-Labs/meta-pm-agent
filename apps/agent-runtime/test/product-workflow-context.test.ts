@@ -23,6 +23,7 @@ import {
   createGraphContextSummary,
   createTaskRelevantGraphContext,
 } from "../src/agents/product-workflow/common/context";
+import { boundPlannerProductContext } from "../src/agents/product-workflow/orchestrator-agent/agent";
 import { createKnowledgeGraphTools } from "../src/agents/common/knowledge-graph-file-tool";
 
 const knowledgeGraph: ProductKnowledgeGraph = {
@@ -192,6 +193,21 @@ test("compacts request analysis to current task coverage", () => {
   assert.deepEqual(
     compacted.business_model.map((item) => item.index),
     [2],
+  );
+});
+
+test("bounds the planner product context while keeping both ends", () => {
+  const oversized = `${"A".repeat(20_000)}TAIL`;
+  const bounded = boundPlannerProductContext(oversized);
+
+  assert.ok(bounded.length < oversized.length);
+  assert.ok(bounded.startsWith("A"));
+  assert.ok(bounded.endsWith("TAIL"));
+  assert.match(bounded, /\[product context truncated: \d+ chars omitted\]/);
+  assert.equal(boundPlannerProductContext("short"), "short");
+  assert.equal(
+    boundPlannerProductContext(undefined),
+    "No product context provided.",
   );
 });
 

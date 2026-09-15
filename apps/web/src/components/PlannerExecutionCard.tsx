@@ -11,6 +11,7 @@
  */
 
 import { useMemo, type ReactNode } from "react";
+import { formatDisplayId } from "../utils/display-id";
 import { Collapse, Empty, List, Space, Tag } from "antd";
 import {
   CheckCircleOutlined,
@@ -70,7 +71,7 @@ export function PlannerExecutionCard({
 
   return (
     <Collapse
-      className="mb-2"
+      className="planner-execution-card mb-2 min-w-0 max-w-full [&_.ant-collapse-body]:min-w-0"
       defaultActiveKey={["1"]}
       expandIcon={({ isActive }) => <RightOutlined rotate={isActive ? 90 : 0} />}
       items={[
@@ -79,7 +80,7 @@ export function PlannerExecutionCard({
           label: (
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <PartitionOutlined style={{ color: "var(--primary)" }} />
-              <span className="text-[14px] font-extrabold text-[var(--ink)]">
+              <span className="text-[14px] font-bold text-[var(--ink)]">
                 Planner SubAgent DAG
               </span>
               <Tag color={plan.status === "supplement" ? "purple" : "blue"}>
@@ -157,7 +158,7 @@ export function PlannerExecutionLoadingCard() {
         }}
       />
       <div className="min-w-0">
-        <div className="flex items-center gap-2 text-[13px] font-extrabold text-[var(--ink)]">
+        <div className="flex items-center gap-2 text-[13px] font-bold text-[var(--ink)]">
           <PartitionOutlined style={{ color: "var(--primary)" }} />
           <span>Planner SubAgent DAG</span>
         </div>
@@ -222,7 +223,7 @@ export function CritiqueAgentReviewCard({
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2 text-[13px] font-extrabold text-[var(--ink)]">
+          <div className="flex flex-wrap items-center gap-2 text-[13px] font-bold text-[var(--ink)]">
             <PartitionOutlined
               style={{ color: statusColor }}
             />
@@ -271,11 +272,11 @@ export function CritiqueAgentReviewCard({
  */
 function PlanOverview({ plan }: { plan: TaskExecutionPlan }) {
   return (
-    <section className="rounded-lg bg-[var(--surface-muted)] px-4 py-3">
-      <div className="mb-1 text-[12px] font-extrabold uppercase tracking-normal text-[var(--ink-faint)]">
+    <section className="min-w-0 max-w-full rounded-lg bg-[var(--surface-muted)] px-4 py-3">
+      <div className="mb-1 text-[12px] font-bold uppercase tracking-normal text-[var(--ink-faint)]">
         请求摘要
       </div>
-      <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink-soft)]">
+      <div className="font-reading-compact whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink-soft)]">
         {plan.request_summary}
       </div>
       {plan.assumptions.length > 0 && (
@@ -283,13 +284,13 @@ function PlanOverview({ plan }: { plan: TaskExecutionPlan }) {
           <div className="mb-1 text-[12px] font-bold text-[var(--ink-faint)]">
             规划假设
           </div>
-          <Space size={6} wrap>
+          <div className="min-w-0 space-y-2">
             {plan.assumptions.map((assumption, index) => (
-              <Tag key={`${assumption}-${index}`} className="m-0!">
+              <div key={`${assumption}-${index}`} className="font-reading-compact max-w-full whitespace-pre-wrap rounded bg-white/70 px-2 py-1 text-[var(--ink-soft)]">
                 {assumption}
-              </Tag>
+              </div>
             ))}
-          </Space>
+          </div>
         </div>
       )}
     </section>
@@ -340,8 +341,8 @@ function TaskRow({
   const config = getStatusConfig(status);
 
   return (
-    <List.Item className="px-0!">
-      <article className="w-full rounded-lg border border-[var(--line-soft)] bg-white px-4 py-3">
+    <List.Item className="min-w-0 max-w-full px-0!">
+      <article className="min-w-0 max-w-full w-full rounded-lg border border-[var(--line-soft)] bg-white px-4 py-3">
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <Tag className="m-0!">{task.task_id}</Tag>
           <Tag color={config.tagColor} className="m-0!">
@@ -354,7 +355,7 @@ function TaskRow({
         </div>
 
         <div className="mb-3">
-          <div className="text-[14px] font-extrabold text-[var(--ink)]">
+          <div className="text-[14px] font-bold text-[var(--ink)]">
             {task.title}
           </div>
         </div>
@@ -387,7 +388,7 @@ function TaskTextPanel({ label, text }: { label: string; text: string }) {
       <div className="mb-1 text-[12px] font-bold text-[var(--ink-faint)]">
         {label}
       </div>
-      <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink-soft)]">
+      <div className="font-reading-compact whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink-soft)]">
         {text}
       </div>
     </section>
@@ -402,7 +403,7 @@ function ExecutorResultPanel({ result }: { result: ExecutorAgentResult }) {
     <section className="mt-3 rounded-md border border-[#bbf7d0] bg-[#f0fdf4] px-3 py-3">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <CheckCircleOutlined className="text-[var(--success)]" />
-        <span className="text-[13px] font-extrabold text-[#166534]">
+        <span className="text-[13px] font-bold text-[#166534]">
           已更新至知识图谱
         </span>
         <Tag color={result.quality_result.passed ? "green" : "red"} className="m-0!">
@@ -415,7 +416,7 @@ function ExecutorResultPanel({ result }: { result: ExecutorAgentResult }) {
         )}
       </div>
 
-      <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-[#166534]">
+      <div className="font-reading-compact whitespace-pre-wrap text-[13px] leading-relaxed text-[#166534]">
         {result.summary}
       </div>
 
@@ -448,7 +449,7 @@ function MetricPill({ label, value }: { label: string; value: number }) {
       <div className="text-[11px] font-bold text-[var(--ink-faint)]">
         {label}
       </div>
-      <div className="mt-0.5 text-[16px] font-extrabold text-[var(--ink)]">
+      <div className="mt-0.5 text-[16px] font-bold text-[var(--ink)]">
         {value}
       </div>
     </div>
@@ -464,7 +465,7 @@ function ResultTextBlock({ label, text }: { label: string; text: string }) {
       <div className="mb-1 text-[12px] font-bold text-[var(--ink-faint)]">
         {label}
       </div>
-      <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink-soft)]">
+      <div className="font-reading-compact whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink-soft)]">
         {text}
       </div>
     </div>
@@ -492,13 +493,13 @@ function RecordList({
         {items.map((item, index) => (
           <div
             key={`${title}-${readRecordString(item, "id") || index}`}
-            className="rounded-md bg-white/70 px-3 py-2 text-[12px] leading-relaxed text-[var(--ink-soft)]"
+            className="font-reading-compact min-w-0 max-w-full rounded-md bg-white/70 px-3 py-2 text-[12px] leading-relaxed text-[var(--ink-soft)]"
           >
-            <div className="font-bold text-[var(--ink)]">
+            <div className="font-reading-compact font-bold text-[var(--ink)]" title={formatRecordTitle(item, index, false)}>
               {formatRecordTitle(item, index)}
             </div>
             {formatRecordDescription(item) && (
-              <div className="mt-0.5 whitespace-pre-wrap">
+              <div className="font-reading-compact mt-0.5 whitespace-pre-wrap">
                 {formatRecordDescription(item)}
               </div>
             )}
@@ -550,7 +551,7 @@ function TextList({
         {items.map((item, index) => (
           <div
             key={`${title}-${index}`}
-            className={`rounded-md border px-3 py-2 text-[12px] leading-relaxed ${toneClass}`}
+            className={`font-reading-compact rounded-md border px-3 py-2 text-[12px] leading-relaxed ${toneClass}`}
           >
             {extractText(item)}
           </div>
@@ -611,14 +612,14 @@ function CritiqueReviewResult({ result }: { result: ProductWorkflowResult }) {
         <div className="mb-1 text-[12px] font-bold text-[var(--ink-faint)]">
           请求摘要
         </div>
-        <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink-soft)]">
+        <div className="font-reading-compact whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink-soft)]">
           {result.request_summary}
         </div>
       </section>
 
       <section className="rounded-md bg-[var(--surface-muted)] px-3 py-2">
         <div className="mb-2 flex flex-wrap items-center gap-2">
-          <span className="text-[13px] font-extrabold text-[var(--ink)]">
+          <span className="text-[13px] font-bold text-[var(--ink)]">
             任务审查
           </span>
           <Tag color="green" className="m-0!">
@@ -636,7 +637,7 @@ function CritiqueReviewResult({ result }: { result: ProductWorkflowResult }) {
         <ChipList label="待修正任务" items={result.review.retry_task_ids ?? []} />
         <ReviewIssueList title="审查问题" issues={reviewIssues} />
         {result.review.notes && (
-          <div className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink-soft)]">
+          <div className="font-reading-compact mt-2 whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink-soft)]">
             {result.review.notes}
           </div>
         )}
@@ -644,7 +645,7 @@ function CritiqueReviewResult({ result }: { result: ProductWorkflowResult }) {
 
       <section className="rounded-md bg-[var(--surface-muted)] px-3 py-2">
         <div className="mb-2 flex flex-wrap items-center gap-2">
-          <span className="text-[13px] font-extrabold text-[var(--ink)]">
+          <span className="text-[13px] font-bold text-[var(--ink)]">
             知识图谱更新
           </span>
           <Tag color="blue" className="m-0!">
@@ -704,7 +705,7 @@ function CritiqueReviewResult({ result }: { result: ProductWorkflowResult }) {
           <div className="mb-1 text-[12px] font-bold text-[var(--ink-faint)]">
             产品上下文更新
           </div>
-          <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink-soft)]">
+          <div className="font-reading-compact whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ink-soft)]">
             {result.product_context_update}
           </div>
         </section>
@@ -712,14 +713,14 @@ function CritiqueReviewResult({ result }: { result: ProductWorkflowResult }) {
 
       {proposalQuestions.length > 0 && (
         <section className="rounded-md bg-[#eff6ff] px-3 py-2">
-          <div className="mb-2 text-[13px] font-extrabold text-[#1d4ed8]">
+          <div className="mb-2 text-[13px] font-bold text-[#1d4ed8]">
             待用户确认的问题
           </div>
           <div className="space-y-1.5">
             {proposalQuestions.map((question) => (
               <div
                 key={question.id}
-                className="rounded-md bg-white/75 px-3 py-2 text-[12px] leading-relaxed text-[#1d4ed8]"
+                className="font-reading-compact rounded-md bg-white/75 px-3 py-2 text-[12px] leading-relaxed text-[#1d4ed8]"
               >
                 <div className="font-bold">{question.label}</div>
                 {question.help && <div className="mt-0.5">{question.help}</div>}
@@ -734,7 +735,7 @@ function CritiqueReviewResult({ result }: { result: ProductWorkflowResult }) {
           <div className="mb-1 text-[12px] font-bold text-[#166534]">
             确认提示
           </div>
-          <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-[#166534]">
+          <div className="font-reading-compact whitespace-pre-wrap text-[13px] leading-relaxed text-[#166534]">
             {result.confirmation_message}
           </div>
         </section>
@@ -795,7 +796,7 @@ function ReviewIssueList({
               <span>{issue.code}</span>
               {issue.task_id && <span>· {issue.task_id}</span>}
             </div>
-            <div className="whitespace-pre-wrap">{issue.message}</div>
+            <div className="font-reading-compact whitespace-pre-wrap">{issue.message}</div>
           </div>
         ))}
       </div>
@@ -935,14 +936,15 @@ function readRecordString(
 /**
  * 为实体或关系记录生成标题。
  */
-function formatRecordTitle(record: Record<string, unknown>, index: number): string {
+function formatRecordTitle(record: Record<string, unknown>, index: number, compact = true): string {
   const id = readRecordString(record, "id");
   const type = readRecordString(record, "type");
   const name = readRecordString(record, "name");
   const source = readRecordString(record, "source");
   const target = readRecordString(record, "target");
-  const label = name || (source && target ? `${source} → ${target}` : "");
-  return [id || `#${index + 1}`, type, label].filter(Boolean).join(" · ");
+  const display = compact ? formatDisplayId : (value: string) => value;
+  const label = name || (source && target ? `${display(source)} → ${display(target)}` : "");
+  return [display(id) || `#${index + 1}`, type, label].filter(Boolean).join(" · ");
 }
 
 /**

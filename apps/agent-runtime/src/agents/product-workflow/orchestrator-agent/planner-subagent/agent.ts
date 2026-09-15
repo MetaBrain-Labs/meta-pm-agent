@@ -41,13 +41,29 @@ const BROAD_PRODUCT_DESIGN_REQUIRED_AGENTS = [
   "executor-product-execution",
 ] as const;
 
+/** 结构化输出型子代理的推理强度上限，避免思考耗尽 completion 预算导致零正文。 */
+export const PLANNER_REASONING_EFFORT = "high" as const;
+/** 首次委派失败后的降级推理强度，让重试真正改变失败条件。 */
+export const PLANNER_RETRY_REASONING_EFFORT = "low" as const;
+
+export type PlannerReasoningEffort = "low" | "high" | "max";
+
+/** SubAgent 空输出诊断标记，由 common/run-agent 在无正文时写入。 */
+const SUBAGENT_EMPTY_OUTPUT_CODE = "subagent-empty-output";
+
 /**
  * 创建 Planner 子代理；该子代理接收完整产品上下文并通过 task 描述返回 DAG JSON。
  * 子代理无工具权限，仅从 task 描述中读取上下文并返回结构化 JSON。
+ *
+ * Notes:
+ * - 不使用 response_format: json_object：思考模式下该组合会在输出预算耗尽时
+ *   只返回推理内容而不返回正文，运行时已能从正文中解析 JSON。
+ * - 推理强度由调用方按 attempt 传入，默认限制在 high。
  */
 export function createPlannerSubagent(
   modelProfile?: ModelUsageProfile,
   plannerContext = "{}",
+  options: { reasoningEffort?: PlannerReasoningEffort } = {},
 ): SubAgent {
   const subagentToolAllowlistMiddleware =
     createDeepAgentToolAllowlistMiddleware({
@@ -63,10 +79,10 @@ export function createPlannerSubagent(
     model: createChatModel(
       {
         enableThinking: true,
-        responseFormat: "json_object",
         temperature: 0,
         maxTokens: 16_384,
         timeout: 120_000,
+        reasoningEffort: options.reasoningEffort ?? PLANNER_REASONING_EFFORT,
       },
       resolveAgentModelSelection(modelProfile, "planner"),
     ),
@@ -94,7 +110,8 @@ export function extractPlanFromSubagentResult(
   if (content === null) {
     return fallbackOrRejectPlan(
       input,
-      "Planner subagent returned no parseable output",
+      describeEmptyPlannerOutput(rawResult) ??
+        "Planner subagent returned no parseable output",
     );
   }
 
@@ -424,6 +441,33 @@ export function scopeSupplementPlan(
       ),
     },
   };
+}
+
+/**
+ * 将 SubAgent 空输出诊断转换为可操作的失败原因。
+ *
+ * 推理强度过高时，思考会耗尽与正文共享的 completion 预算，供应商只返回
+ * reasoning_content；此处必须给出"输出预算耗尽"而不是笼统的"无法解析"。
+ */
+export function describeEmptyPlannerOutput(rawResult: unknown): string | null {
+  if (!rawResult || typeof rawResult !== "object" || Array.isArray(rawResult)) {
+    return null;
+  }
+  const record = rawResult as Record<string, unknown>;
+  if (record.error !== SUBAGENT_EMPTY_OUTPUT_CODE) return null;
+
+  return `planner-output-starved(finish_reason=${readDiagnosticValue(
+    record.finishReason,
+  )}, completion_tokens=${readDiagnosticValue(
+    record.completionTokens,
+  )}, max_tokens=${readDiagnosticValue(record.maxTokens)})`;
+}
+
+/** 归一化诊断字段，缺失时显式标记为 unknown。 */
+function readDiagnosticValue(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "string" && value.trim()) return value.trim();
+  return "unknown";
 }
 
 /**

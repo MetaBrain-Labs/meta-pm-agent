@@ -20,7 +20,7 @@ import { createDeepAgent, type FileData, type SubAgent } from "deepagents";
 import { calculateCost } from "../../config";
 import { parseJsonObject } from "../../utils/json";
 import {
-  getReasoningContent,
+  getFinishReason,
   getTextContent,
   getTokenUsage,
 } from "../../utils/message-adapter";
@@ -154,6 +154,13 @@ export interface RunAgentOptions<T, AgentType extends string> {
   /** 覆盖单次运行的工具调用硬上限；未设置时沿用通用默认值。 */
   toolCallRunLimit?: number;
   signal?: AbortSignal;
+  /**
+   * 单次 attempt 的墙钟上限（毫秒）。
+   *
+   * 思考型模型的推理流会持续产出增量，HTTP 空闲超时无法约束总耗时；
+   * 到期后中止 provider 流并抛出可识别的超时错误，供调用方决定重试或失败。
+   */
+  deadlineMs?: number;
 }
 
 /** 结构化 JSON Agent 的默认模型参数。 */
@@ -629,9 +636,16 @@ async function consumeSubagentProjection<AgentType extends string>(
   }
 
   const output = outputResult.value;
+  const finalMessage = readFinalSubagentMessage(output);
   const result = extractSubagentOutput(
     output,
     messagesResult.value.streamedText,
+    {
+      finishReason: finalMessage ? getFinishReason(finalMessage) : null,
+      completionTokens: messagesResult.value.tokenUsage?.outputTokens ?? null,
+      maxTokens:
+        options.subagentSelections?.get(subagent.name)?.model.maxTokens ?? null,
+    },
   );
   options.summaryRecorder.recordSubagentResult({
     toolCallId,
@@ -731,19 +745,48 @@ function normalizeToolInput(
 }
 
 /** 从 SubAgent 最终状态提取与旧 task ToolMessage 等价的紧凑文本。 */
-function extractSubagentOutput(output: unknown, streamedText: string): unknown {
-  if (output && typeof output === "object" && !Array.isArray(output)) {
-    const messages = (output as { messages?: unknown }).messages;
-    if (Array.isArray(messages)) {
-      const lastMessage = messages[messages.length - 1];
-      if (lastMessage && typeof lastMessage === "object") {
-        const text = getTextContent(lastMessage as BaseMessage);
-        if (text) return text;
-      }
-    }
+function extractSubagentOutput(
+  output: unknown,
+  streamedText: string,
+  diagnostics: SubagentOutputDiagnostics,
+): unknown {
+  const finalMessage = readFinalSubagentMessage(output);
+  if (finalMessage) {
+    const text = getTextContent(finalMessage);
+    if (text) return text;
   }
+  if (streamedText) return streamedText;
+  if (typeof output === "string" && output.trim()) return output;
 
-  return streamedText || output;
+  // 空输出不得回退为原始 state：那会把整个 SubAgent 消息历史（含数万字思考）
+  // 送进 SSE、消息持久化和浏览器 DOM。这里只回报可诊断的紧凑结论。
+  return {
+    error: "subagent-empty-output",
+    finishReason: diagnostics.finishReason,
+    completionTokens: diagnostics.completionTokens,
+    maxTokens: diagnostics.maxTokens,
+  };
+}
+
+/** 空输出诊断信息，用于区分"顶到输出上限"和"供应商未返回正文"两类原因。 */
+export interface SubagentOutputDiagnostics {
+  finishReason: string | null;
+  completionTokens: number | null;
+  maxTokens: number | null;
+}
+
+/** 读取 SubAgent 最终状态里的最后一条消息，兼容非标准投影返回值。 */
+function readFinalSubagentMessage(output: unknown): BaseMessage | null {
+  if (!output || typeof output !== "object" || Array.isArray(output)) {
+    return null;
+  }
+  const messages = (output as { messages?: unknown }).messages;
+  if (!Array.isArray(messages)) return null;
+
+  const lastMessage = messages[messages.length - 1];
+  return lastMessage && typeof lastMessage === "object"
+    ? (lastMessage as BaseMessage)
+    : null;
 }
 
 /**
@@ -792,9 +835,15 @@ export async function* runAgent<T, AgentType extends string>(
   });
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
   const runAbortController = new AbortController();
-  const runSignal = options.signal
-    ? AbortSignal.any([options.signal, runAbortController.signal])
-    : runAbortController.signal;
+  const deadlineSignal =
+    options.deadlineMs && options.deadlineMs > 0
+      ? AbortSignal.timeout(options.deadlineMs)
+      : undefined;
+  const runSignal = AbortSignal.any([
+    ...(options.signal ? [options.signal] : []),
+    ...(deadlineSignal ? [deadlineSignal] : []),
+    runAbortController.signal,
+  ]);
 
   try {
     const agent = createDeepAgent({
@@ -937,6 +986,17 @@ export async function* runAgent<T, AgentType extends string>(
         status: "aborted",
       });
       throw error;
+    }
+    if (deadlineSignal?.aborted) {
+      // 墙钟超时不等于用户中止：用可识别错误交给调用方重试或失败处理。
+      const deadlineError = new Error(
+        `agent-deadline-exceeded: ${options.name} exceeded ${options.deadlineMs}ms`,
+      );
+      await summaryRecorder.finish({
+        error: deadlineError.message,
+        status: "failed",
+      });
+      throw deadlineError;
     }
     if (errorMessage.startsWith("required-subagent-not-invoked:")) {
       throw error;

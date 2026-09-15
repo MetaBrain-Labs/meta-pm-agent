@@ -11,9 +11,15 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import {
+  MAX_VISIBLE_REASONING_CHARS,
+  appendBoundedReasoning,
+} from "@repo/shared";
 import type { Message, ProductWorkflowResult } from "../../web/src/types";
 import {
+  applyBufferedReasoningEventsToMessages,
   applyChatStreamEventToMessages,
+  mergeBufferedReasoningEvent,
   serializeMessageContentForRequest,
   startWorkflowRound,
 } from "../../web/src/pages/chat/chat-run-store";
@@ -127,6 +133,44 @@ test("serializes Critique result and restores completion card", () => {
   assert.match(content, /<product-workflow>/);
   assert.equal(restored.content, "");
   assert.match(restored.workflowCompletion?.content ?? "", /正式结束/);
+});
+
+test("coalesces adjacent SubAgent reasoning before updating React state", () => {
+  const first = {
+    type: "subagent-thinking" as const,
+    agentType: "orchestrator" as const,
+    subagentType: "document-evidence-resolver",
+    toolCallId: "subagent-1",
+    content: "first ",
+  };
+  const merged = mergeBufferedReasoningEvent(
+    mergeBufferedReasoningEvent([], first),
+    { ...first, content: "second" },
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0]?.content, "first second");
+
+  const messages = applyBufferedReasoningEventsToMessages(
+    [{ id: "agent", role: "agent", content: "", timestamp: 1 }],
+    "agent",
+    merged,
+  );
+  assert.equal(
+    messages[0]?.subagentTraces?.[0]?.thinking,
+    "first second",
+  );
+});
+
+test("bounds retained reasoning while keeping the newest streamed content", () => {
+  const content = appendBoundedReasoning(
+    "a".repeat(MAX_VISIBLE_REASONING_CHARS),
+    "latest-result",
+  );
+
+  assert.equal(content.length, MAX_VISIBLE_REASONING_CHARS);
+  assert.match(content, /^\[较早的思考过程已截断以保护页面内存\]/);
+  assert.match(content, /latest-result$/);
 });
 
 /**

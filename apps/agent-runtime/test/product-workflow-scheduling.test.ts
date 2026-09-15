@@ -32,6 +32,7 @@ import {
   normalizeTaskExecutionPlan,
 } from "../src/agents/product-workflow/orchestrator-agent/planner-subagent/plan";
 import {
+  describeEmptyPlannerOutput,
   extractPlanFromSubagentResult,
   removeAnsweredOpenQuestions,
   scopeInitialDecisionPlan,
@@ -47,6 +48,11 @@ import {
   sanitizeOrchestratorModelOutput,
   shouldRetryPlannerDelegation,
 } from "../src/agents/product-workflow/orchestrator-agent/agent";
+import {
+  createPlannerSubagent,
+  PLANNER_REASONING_EFFORT,
+  PLANNER_RETRY_REASONING_EFFORT,
+} from "../src/agents/product-workflow/orchestrator-agent/planner-subagent";
 import {
   AgentSubagentExecutionError,
   getMissingRequiredSubagentError,
@@ -871,6 +877,51 @@ test("treats document evidence executor suggestions as advisory", () => {
     ),
     true,
   );
+});
+
+test("reports planner output starvation instead of a generic parse failure", () => {
+  const input = {
+    workflowPurpose: "document_evidence_resolution" as const,
+    productContext: "Workspace: local test",
+    knowledgeGraph: createEmptyKnowledgeGraph(),
+    requestAnalysis: createCollaborativeDocumentRequestAnalysis(),
+    userInput: [{ index: 1, content: "Resolve evidence blockers", type: "request" }],
+    supplementSourceTaskIds: ["document-evidence:run-1"],
+  };
+  const starvedOutput = {
+    error: "subagent-empty-output",
+    finishReason: "length",
+    completionTokens: 50_000,
+    maxTokens: 50_000,
+  };
+
+  assert.equal(
+    describeEmptyPlannerOutput(starvedOutput),
+    "planner-output-starved(finish_reason=length, completion_tokens=50000, max_tokens=50000)",
+  );
+  assert.equal(describeEmptyPlannerOutput("plain text"), null);
+  assert.equal(
+    describeEmptyPlannerOutput({ error: "subagent-empty-output" }),
+    "planner-output-starved(finish_reason=unknown, completion_tokens=unknown, max_tokens=unknown)",
+  );
+  assert.throws(
+    () => extractPlanFromSubagentResult(starvedOutput, input),
+    /document-evidence-planner-invalid:planner-output-starved\(finish_reason=length, completion_tokens=50000, max_tokens=50000\)/,
+  );
+});
+
+test("bounds planner reasoning effort per attempt and drops json response format", () => {
+  process.env.OPENAI_API_KEY ??= "test-key";
+  const first = createPlannerSubagent(undefined, "{}").model as {
+    modelKwargs?: Record<string, unknown>;
+  };
+  assert.equal(first.modelKwargs?.reasoning_effort, PLANNER_REASONING_EFFORT);
+  assert.equal("response_format" in (first.modelKwargs ?? {}), false);
+
+  const retry = createPlannerSubagent(undefined, "{}", {
+    reasoningEffort: PLANNER_RETRY_REASONING_EFFORT,
+  }).model as { modelKwargs?: Record<string, unknown> };
+  assert.equal(retry.modelKwargs?.reasoning_effort, PLANNER_RETRY_REASONING_EFFORT);
 });
 
 test("rejects document evidence plans with unauthorized relations and abbreviated node IDs", () => {

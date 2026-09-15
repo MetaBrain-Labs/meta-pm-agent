@@ -273,7 +273,7 @@ function buildGraphPlugins(
             datum.data.relType ??
             "关系";
           const description = datum.data.description
-            ? `<div style="margin-top:4px;color:#475569;line-height:1.5">${escapeHtml(datum.data.description)}</div>`
+            ? `<div class="font-reading-compact" style="margin-top:4px;color:#475569">${escapeHtml(datum.data.description)}</div>`
             : "";
           return `<div style="max-width:260px"><strong>${escapeHtml(label)}</strong>${description}</div>`;
         }
@@ -284,7 +284,7 @@ function buildGraphPlugins(
           datum.data.nodeType ??
           "节点";
         const description = datum.data.description
-          ? `<div style="margin-top:4px;color:#475569;line-height:1.5">${escapeHtml(datum.data.description)}</div>`
+          ? `<div class="font-reading-compact" style="margin-top:4px;color:#475569">${escapeHtml(datum.data.description)}</div>`
           : "";
         return `<div style="max-width:280px"><strong>${escapeHtml(name)}</strong><div style="color:#64748b;margin-top:2px">${escapeHtml(typeLabel)}</div>${description}</div>`;
       },
@@ -404,6 +404,14 @@ export const KnowledgeGraphView = forwardRef<
   const createGraph = useCallback((container: HTMLDivElement) => {
     const latestNodes = nodesRef.current;
     const latestRelations = relationsRef.current;
+    // Canvas 不解析 CSS 变量，读取界面字体栈后显式传给各类标签。
+    const fontFamily =
+      getComputedStyle(container).getPropertyValue("--sans").trim() || "sans-serif";
+    const fontRequest = `600 12px ${fontFamily}`;
+    const labelFontFamily =
+      document.fonts && !document.fonts.check(fontRequest)
+        ? fontFamily.split(",").slice(1).join(",").trim() || "sans-serif"
+        : fontFamily;
     const graph = new Graph({
       container,
       width: container.clientWidth,
@@ -437,6 +445,7 @@ export const KnowledgeGraphView = forwardRef<
           labelText: (datum: G6Datum) => datum.data?.label ?? "",
           labelFill: "#1f2937",
           labelFontSize: 11,
+          labelFontFamily,
           labelFontWeight: 600,
           labelLineHeight: 14,
           labelPlacement: "bottom",
@@ -474,6 +483,7 @@ export const KnowledgeGraphView = forwardRef<
           labelFill: (datum: G6Datum) =>
             getKnowledgeGraphNodeColor(datum.data?.nodeType),
           labelFontSize: 12,
+          labelFontFamily,
           labelFontWeight: 700,
           collapsedMarker: true,
         },
@@ -492,6 +502,7 @@ export const KnowledgeGraphView = forwardRef<
           labelFill: (datum: G6Datum) =>
             getKnowledgeGraphRelationColor(datum.data?.relType),
           labelFontSize: 10,
+          labelFontFamily,
           labelFontWeight: 600,
           labelBackground: true,
           labelBackgroundFill: "#ffffff",
@@ -542,9 +553,11 @@ export const KnowledgeGraphView = forwardRef<
     graph.on("canvas:click", () => onNodeSelectRef.current(null));
     graphRef.current = graph;
 
-    void graph
+    const rendered = graph
       .render()
-      .then(() => graph.fitView({ when: "always" }))
+      .then(() => {
+        if (graphRef.current === graph) return graph.fitView({ when: "always" });
+      })
       .catch((error: unknown) => {
         if (graphRef.current === graph) {
           console.error("[kg-graph] Failed to render G6 graph:", error);
@@ -554,6 +567,42 @@ export const KnowledgeGraphView = forwardRef<
         // 仅允许当前实例结束加载，避免旧实例销毁后的 Promise 覆盖新实例状态。
         if (graphRef.current === graph) setGraphReady(true);
       });
+
+    if (document.fonts) {
+      // 首次展示允许系统回退；字体就绪后仅重绘当前实例，保留用户的缩放和选中状态。
+      void Promise.all([
+        rendered,
+        document.fonts.load(fontRequest),
+      ])
+        .then(([, fonts]) => {
+          if (
+            fonts.length > 0 &&
+            graphRef.current === graph &&
+            labelFontFamily !== fontFamily
+          ) {
+            // 更新标签样式使 G6 重新计算文字尺寸，单独 draw 不会刷新未变化的元素。
+            const { node, combo, edge } = graph.getOptions();
+            graph.setOptions({
+              node: {
+                ...node,
+                style: { ...node?.style, labelFontFamily: fontFamily },
+              },
+              combo: {
+                ...combo,
+                style: { ...combo?.style, labelFontFamily: fontFamily },
+              },
+              edge: {
+                ...edge,
+                style: { ...edge?.style, labelFontFamily: fontFamily },
+              },
+            });
+            return graph.draw();
+          }
+        })
+        .catch(() => {
+          // 字体加载失败时保留回退字体，不中断图谱展示。
+        });
+    }
   }, []);
 
   useEffect(() => {

@@ -7,6 +7,7 @@
 - The worker is a scaffold and requires Redis when started. The web/API can be started separately without the worker.
 - Public-index search availability varies. Search failures are structured errors, not guaranteed evidence retrieval.
 - Standalone tokenizer license was not established, so the bundled tokenizer assets were removed. The local correction function retains its existing null behavior; provider token usage may underreport reasoning when the provider omits it.
+- Reasoning tokens share the model completion budget. Internal subagents that must return machine-parsed JSON (currently the Planner SubAgent) cap their own reasoning effort at `high` on the first attempt and `low` on the retry instead of using the profile setting verbatim; a run whose model exhausts the budget before emitting text reports `planner-output-starved` with the provider finish reason instead of a generic parse failure. Each full-mode orchestrator attempt also has a 5-minute wall-clock deadline.
 - Core tables use Prisma db:push for empty local setup; runtime tables use tracked additive SQL. This is not a complete versioned production migration system. Use the public schema. Back up existing databases before upgrades.
 - Root Turbo lint/typecheck coverage is limited. Frontend ESLint may be blocked by Next's compiled parser availability. Builds and focused tests are the meaningful validation gates.
 

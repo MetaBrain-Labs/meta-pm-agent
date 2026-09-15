@@ -10,6 +10,8 @@
  * - 将筛选后的图谱数据交给共享画布
  */
 
+import { formatDisplayId } from "../../utils/display-id";
+
 import {
   useCallback,
   useEffect,
@@ -360,8 +362,9 @@ function Detail({ label, value }: { label: string; value: string }) {
   return (
     <div className="mb-2 last:mb-0">
       <div className="text-[var(--ink-soft)]">{label}</div>
-      <div className="break-words font-medium text-[var(--ink-base)]">
-        {value}
+      <div title={label === "ID" ? value : undefined}
+        className={`wrap-anywhere font-medium text-[var(--ink-base)] ${label === "名称" || label === "描述" ? "font-reading-compact" : ""}`}>
+        {label === "ID" ? formatDisplayId(value) : value}
       </div>
     </div>
   );

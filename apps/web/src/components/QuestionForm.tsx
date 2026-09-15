@@ -109,18 +109,20 @@ export function QuestionFormView({
   return (
     <Card
       title={
-        <div className="flex items-center gap-2">
-          <QuestionCircleOutlined style={{ color: "var(--primary)" }} />
+        <div className="flex min-w-0 flex-wrap items-center gap-2 py-2">
+          <QuestionCircleOutlined className="shrink-0" style={{ color: "var(--primary)" }} />
           <span
+            className="min-w-0 whitespace-normal wrap-anywhere"
             style={{
               fontFamily: "var(--sans)",
               color: "var(--ink)",
-              fontWeight: 800,
+              fontWeight: 700,
             }}
           >
             {form.title}
           </span>
           <Tag
+            className="m-0! shrink-0"
             style={{
               fontFamily: "var(--sans)",
               fontSize: 11,
@@ -143,7 +145,7 @@ export function QuestionFormView({
         </div>
       }
       size="small"
-      className="mb-2"
+      className="question-form-card mb-2 min-w-0 max-w-full [&_.ant-card-head-title]:whitespace-normal [&_.ant-card-head-title]:overflow-visible"
       style={{
         background: "var(--surface)",
         borderColor: "var(--line-soft)",
@@ -154,138 +156,134 @@ export function QuestionFormView({
             : undefined,
         boxShadow: "var(--shadow-card)",
       }}
-      extra={
-        form.description && (
-          <Text
-            style={{
-              color: "var(--ink-faint)",
-              fontSize: 12,
-              fontFamily: "var(--body)",
-            }}
-          >
-            {form.description}
-          </Text>
-        )
-      }
     >
-      {form.questions.map((q) => {
-        const value = answers[q.id];
-        const questionContent = (
-          <div>
-            <Form.Item
-              layout="vertical"
-              label={
-                <span
-                  className="inline-flex items-baseline gap-2"
-                  style={{
-                    fontFamily: "var(--sans)",
-                    color: "var(--ink)",
-                    fontWeight: 500,
-                    fontSize: 13,
-                  }}
-                >
-                  <span>
-                    {q.label}
-                    {q.required && (
-                      <span style={{ color: "var(--danger)" }}> *</span>
+      {form.description && (
+        <div className="font-reading mb-4 whitespace-pre-wrap text-[var(--ink-mute)]">
+          {form.description}
+        </div>
+      )}
+      <div className="question-form-content min-w-0">
+        {form.questions.map((q) => {
+          const value = answers[q.id];
+          const questionContent = (
+            <div>
+              <Form.Item
+                layout="vertical"
+                label={
+                  <span
+                    className="font-reading-compact inline-flex min-w-0 flex-wrap items-baseline gap-2"
+                    style={{
+                      fontFamily: "var(--sans)",
+                      color: "var(--ink)",
+                      fontWeight: 500,
+                      fontSize: 13,
+                    }}
+                  >
+                    <span className="min-w-0 whitespace-normal wrap-anywhere">
+                      {q.label}
+                      {q.required && (
+                        <span style={{ color: "var(--danger)" }}> *</span>
+                      )}
+                    </span>
+                    {q.help && q.helpMode === "modal" && (
+                      <Button
+                        type="link"
+                        size="small"
+                        className="h-auto p-0 text-xs"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          setActiveHelp({ label: q.label, help: q.help! });
+                        }}
+                      >
+                        查看相关资料
+                      </Button>
                     )}
                   </span>
-                  {q.help && q.helpMode === "modal" && (
-                    <Button
-                      type="link"
-                      size="small"
-                      className="h-auto p-0 text-xs"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        setActiveHelp({ label: q.label, help: q.help! });
-                      }}
-                    >
-                      查看相关资料
-                    </Button>
-                  )}
-                </span>
-              }
-              help={
-                q.help && q.helpMode !== "modal"
-                  ? <div className="mb-4">{q.help}</div>
-                  : undefined
-              }
-            >
-              {q.type === "radio" && q.options && (
-                <Radio.Group
-                  value={typeof value === "string" ? value : undefined}
-                  disabled={locked}
-                  onChange={(e) => update(q.id, e.target.value)}
-                >
-                  {q.options.map((opt) => (
-                    <Radio.Button key={opt} value={opt}>
-                      {opt}
-                    </Radio.Button>
-                  ))}
-                </Radio.Group>
-              )}
+                }
+                help={
+                  q.help && q.helpMode !== "modal"
+                    ? <div className="font-reading-compact mb-4 whitespace-pre-wrap">{q.help}</div>
+                    : undefined
+                }
+              >
+                {q.type === "radio" && q.options && (
+                  <Radio.Group
+                    value={typeof value === "string" ? value : undefined}
+                    disabled={locked}
+                    onChange={(e) => update(q.id, e.target.value)}
+                  >
+                    {q.options.map((opt) => (
+                      <Radio.Button key={opt} value={opt}>
+                        {opt}
+                      </Radio.Button>
+                    ))}
+                  </Radio.Group>
+                )}
 
-              {q.type === "checkbox" && q.options && (
-                <Checkbox.Group
-                  value={Array.isArray(value) ? value : []}
-                  disabled={locked}
-                  onChange={(vals) => update(q.id, vals as string[])}
-                  options={q.options}
-                />
-              )}
+                {q.type === "checkbox" && q.options && (
+                  <Checkbox.Group
+                    value={Array.isArray(value) ? value : []}
+                    disabled={locked}
+                    onChange={(vals) => update(q.id, vals as string[])}
+                    options={q.options}
+                  />
+                )}
 
-              {q.type === "select" && q.options && (
-                <Select
-                  value={typeof value === "string" && value ? value : undefined}
-                  disabled={locked}
-                  onChange={(val) => update(q.id, val)}
-                  placeholder="请选择"
-                  className="w-full"
-                  options={q.options.map((opt) => ({ value: opt, label: opt }))}
-                />
-              )}
+                {q.type === "select" && q.options && (
+                  <Select
+                    virtual={false}
+                    classNames={{ popup: { root: "question-form-options" } }}
+                    value={typeof value === "string" && value ? value : undefined}
+                    disabled={locked}
+                    onChange={(val) => update(q.id, val)}
+                    placeholder="请选择"
+                    className="w-full"
+                    options={q.options.map((opt) => ({ value: opt, label: opt }))}
+                  />
+                )}
 
-              {q.type === "text" && (
-                <Input
-                  value={typeof value === "string" ? value : ""}
-                  placeholder={q.placeholder}
-                  disabled={locked}
-                  onChange={(e) => update(q.id, e.target.value)}
-                />
-              )}
+                {q.type === "text" && (
+                  <Input
+                    value={typeof value === "string" ? value : ""}
+                    placeholder={q.placeholder}
+                    disabled={locked}
+                    onChange={(e) => update(q.id, e.target.value)}
+                  />
+                )}
 
-              {q.type === "textarea" && (
-                <TextArea
-                  value={typeof value === "string" ? value : ""}
-                  placeholder={q.placeholder}
-                  disabled={locked}
-                  rows={3}
-                  onChange={(e) => update(q.id, e.target.value)}
-                />
-              )}
-            </Form.Item>
+                {q.type === "textarea" && (
+                  <TextArea
+                    value={typeof value === "string" ? value : ""}
+                    placeholder={q.placeholder}
+                    disabled={locked}
+                    rows={3}
+                    onChange={(e) => update(q.id, e.target.value)}
+                  />
+                )}
+              </Form.Item>
 
-            <Divider />
-          </div>
-        );
-        if (!q.collapsible) {
-          return <div key={q.id}>{questionContent}</div>;
-        }
-        return (
-          <Collapse
-            key={q.id}
-            className="mb-3"
-            defaultActiveKey={q.defaultCollapsed ? [] : [q.id]}
-            items={[
-              {
-                key: q.id,
-                label: `${q.required ? "必填" : "选填"} · ${q.label}`,
-                children: questionContent,
-              },
-            ]}
-          />
-        );
-      })}
+              <Divider />
+              </div>
+          );
+          if (!q.collapsible) {
+            return <div key={q.id}>{questionContent}</div>;
+          }
+          return (
+            <Collapse
+              key={q.id}
+              className="mb-3"
+              defaultActiveKey={q.defaultCollapsed ? [] : [q.id]}
+              items={[
+                {
+                  key: q.id,
+                  label: `${q.required ? "必填" : "选填"} · ${q.label}`,
+                  children: questionContent,
+                },
+              ]}
+            />
+          );
+        })}
+      </div>
 
       <Modal
         open={Boolean(activeHelp)}
@@ -293,7 +291,7 @@ export function QuestionFormView({
         footer={null}
         onCancel={() => setActiveHelp(null)}
       >
-        <div className="whitespace-pre-wrap text-sm leading-6 text-[var(--ink)]">
+        <div className="font-reading whitespace-pre-wrap text-[var(--ink)]">
           {activeHelp?.help}
         </div>
       </Modal>

@@ -55,6 +55,8 @@ import {
   type WorkspaceKnowledgeGraphData,
 } from "../api/chat-api";
 import { MessageBubble } from "./MessageBubble";
+import { ChatMessageNavigation } from "./ChatMessageNavigation";
+import { useMessageNavigation } from "../hooks/useMessageNavigation";
 import { ModelProfileSelector } from "./ModelProfileSelector";
 import { KnowledgeGraphModal } from "./modals/KnowledgeGraphModal";
 import {
@@ -294,6 +296,12 @@ export function ChatApp({
     }
   }, []);
 
+  /** 暂停自动贴底，让消息导航可以定位历史内容。 */
+  const pauseAutoScroll = useCallback(() => setUserScrolled(true), []);
+  const messageNavigation = useMessageNavigation(
+    containerRef, `${useSplitLayout}-${splitterOrientation}`, pauseAutoScroll,
+  );
+
   const isProcessAtBottom = useCallback(() => {
     const el = processContainerRef.current;
     if (!el) return true;
@@ -394,6 +402,36 @@ export function ChatApp({
     },
     [disabledReason, isLoading, messages, onSend, webSearchEnabled],
   );
+
+  // MessageBubble 使用 React.memo：传给它的回调必须在多次渲染间保持同一引用，
+  // 最新状态统一经 ref 读取，避免 memo 命中时使用过期的闭包值。
+  const onSendRef = useRef(onSend);
+  const webSearchEnabledRef = useRef(webSearchEnabled);
+  const retryAssistantMessageRef = useRef(retryAssistantMessage);
+
+  useEffect(() => {
+    onSendRef.current = onSend;
+  }, [onSend]);
+  useEffect(() => {
+    webSearchEnabledRef.current = webSearchEnabled;
+  }, [webSearchEnabled]);
+  useEffect(() => {
+    retryAssistantMessageRef.current = retryAssistantMessage;
+  }, [retryAssistantMessage]);
+
+  const handleSendFormAnswer = useCallback(
+    (text: string, hitlResume?: HumanInTheLoopResume) => {
+      onSendRef.current(text, {
+        webSearchEnabled: webSearchEnabledRef.current,
+        hitlResume,
+      });
+    },
+    [],
+  );
+
+  const handleRetryMessage = useCallback((messageId: string) => {
+    retryAssistantMessageRef.current(messageId);
+  }, []);
 
   const doSubmit = useCallback(() => {
     if (!input.trim() || isLoading || disabledReason) return;
@@ -520,45 +558,50 @@ export function ChatApp({
               className="chat-split-main-panel"
             >
               <div className="chat-main-column is-split">
-                <div
-                  ref={containerRef}
-                  onScroll={handleScroll}
-                  className="chat-scroll scrollbar-none items-center"
-                >
-                  {messages.map((message, index) => (
-                    <MessageBubble
-                      key={message.id}
-                      message={message}
-                      isLast={index === lastAgentIdx}
-                      streaming={
-                        isLoading &&
-                        index === messages.length - 1 &&
-                        message.role === "agent"
-                      }
-                      viewMode="main"
-                      nextUserContent={nextUserContentByAssistantId.get(
-                        message.id,
-                      )}
-                      onFormSubmit={(text, hitlResume) =>
-                        onSend(text, { webSearchEnabled, hitlResume })
-                      }
-                      onRetry={() => retryAssistantMessage(message.id)}
-                    />
-                  ))}
+                <div className="chat-message-area">
+                  <div
+                    ref={containerRef}
+                    onScroll={handleScroll}
+                    className="chat-scroll scrollbar-none items-center"
+                  >
+                    {messages.map((message, index) => (
+                      <MessageBubble
+                        key={message.id}
+                        message={message}
+                        isLast={index === lastAgentIdx}
+                        streaming={
+                          isLoading &&
+                          index === messages.length - 1 &&
+                          message.role === "agent"
+                        }
+                        viewMode="main"
+                        nextUserContent={nextUserContentByAssistantId.get(
+                          message.id,
+                        )}
+                        onFormSubmit={handleSendFormAnswer}
+                        onRetry={handleRetryMessage}
+                      />
+                    ))}
 
-                  {error && (
-                    <div className="chat-error">
-                      <span>{error}</span>
-                      <Button
-                        size="small"
-                        danger
-                        icon={<ClearOutlined />}
-                        onClick={onClear}
-                      >
-                        清除
-                      </Button>
-                    </div>
-                  )}
+                    {error && (
+                      <div className="chat-error">
+                        <span>{error}</span>
+                        <Button
+                          size="small"
+                          danger
+                          icon={<ClearOutlined />}
+                          onClick={onClear}
+                        >
+                          清除
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                  <ChatMessageNavigation
+                    entries={messageNavigation.entries}
+                    activeId={messageNavigation.activeId}
+                    onNavigate={messageNavigation.scrollToMessage}
+                  />
                 </div>
 
                 <FloatButton
@@ -699,7 +742,7 @@ export function ChatApp({
                             color: "var(--primary)",
                           }}
                         />
-                        <span className="text-[13px] font-extrabold text-[var(--ink)]">
+                        <span className="text-[13px] font-bold text-[var(--ink)]">
                           Token 用量
                         </span>
                         <span className="ml-auto text-[12px] text-[var(--ink-mute)]">
@@ -762,85 +805,90 @@ export function ChatApp({
 
         {!useSplitLayout && (
           <>
-            <div
-              ref={containerRef}
-              onScroll={handleScroll}
-              className="chat-scroll scrollbar-none items-center"
-            >
-              {messages.length === 0 && !isMessagesLoading && (
-                <div className="flex flex-col w-full items-center justify-center gap-8">
-                  <span className="font-bold text-2xl">今天想推进什么？</span>
-                  <span className="font-bold text-[#3e3e3e]">
-                    围绕需求、计划、文档和风险继续推进项目。
-                  </span>
-                  <div className="chat-suggestions">
-                    {EXAMPLE_QUERIES.map((query) => (
-                      <button
-                        key={query}
-                        type="button"
-                        disabled={isLoading || Boolean(disabledReason)}
-                        onClick={() => handleExampleClick(query)}
-                      >
-                        {query}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {isMessagesLoading && messages.length === 0 && (
-                <div className="flex flex-col w-full min-h-[70vh] items-center justify-center gap-8">
-                  <div className="flex w-full justify-end">
-                    <div className="w-[40%]">
-                      <Skeleton active />
+            <div className="chat-message-area">
+              <div
+                ref={containerRef}
+                onScroll={handleScroll}
+                className="chat-scroll scrollbar-none items-center"
+              >
+                {messages.length === 0 && !isMessagesLoading && (
+                  <div className="flex flex-col w-full items-center justify-center gap-8">
+                    <span className="font-bold text-2xl">今天想推进什么？</span>
+                    <span className="font-bold text-[#3e3e3e]">
+                      围绕需求、计划、文档和风险继续推进项目。
+                    </span>
+                    <div className="chat-suggestions">
+                      {EXAMPLE_QUERIES.map((query) => (
+                        <button
+                          key={query}
+                          type="button"
+                          disabled={isLoading || Boolean(disabledReason)}
+                          onClick={() => handleExampleClick(query)}
+                        >
+                          {query}
+                        </button>
+                      ))}
                     </div>
                   </div>
+                )}
 
-                  <div className="flex w-full justify-start">
-                    <div className="w-[60%]">
-                      <Skeleton active />
+                {isMessagesLoading && messages.length === 0 && (
+                  <div className="flex flex-col w-full min-h-[70vh] items-center justify-center gap-8">
+                    <div className="flex w-full justify-end">
+                      <div className="w-[40%]">
+                        <Skeleton active />
+                      </div>
+                    </div>
+
+                    <div className="flex w-full justify-start">
+                      <div className="w-[60%]">
+                        <Skeleton active />
+                      </div>
+                    </div>
+
+                    <div className="flex w-full justify-end">
+                      <div className="w-[40%]">
+                        <Skeleton active />
+                      </div>
                     </div>
                   </div>
+                )}
 
-                  <div className="flex w-full justify-end">
-                    <div className="w-[40%]">
-                      <Skeleton active />
-                    </div>
+                {messages.map((message, index) => (
+                  <MessageBubble
+                    key={message.id}
+                    message={message}
+                    isLast={index === lastAgentIdx}
+                    streaming={
+                      isLoading &&
+                      index === messages.length - 1 &&
+                      message.role === "agent"
+                    }
+                    nextUserContent={nextUserContentByAssistantId.get(message.id)}
+                    onFormSubmit={handleSendFormAnswer}
+                    onRetry={handleRetryMessage}
+                  />
+                ))}
+
+                {error && (
+                  <div className="chat-error">
+                    <span>{error}</span>
+                    <Button
+                      size="small"
+                      danger
+                      icon={<ClearOutlined />}
+                      onClick={onClear}
+                    >
+                      清除
+                    </Button>
                   </div>
-                </div>
-              )}
-
-              {messages.map((message, index) => (
-                <MessageBubble
-                  key={message.id}
-                  message={message}
-                  isLast={index === lastAgentIdx}
-                  streaming={
-                    isLoading &&
-                    index === messages.length - 1 &&
-                    message.role === "agent"
-                  }
-                  nextUserContent={nextUserContentByAssistantId.get(message.id)}
-                  onFormSubmit={(text, hitlResume) =>
-                    onSend(text, { webSearchEnabled, hitlResume })
-                  }
-                  onRetry={() => retryAssistantMessage(message.id)}
-                />
-              ))}
-
-              {error && (
-                <div className="chat-error">
-                  <span>{error}</span>
-                  <Button
-                    size="small"
-                    danger
-                    icon={<ClearOutlined />}
-                    onClick={onClear}
-                  >
-                    清除
-                  </Button>
-                </div>
-              )}
+                )}
+              </div>
+              <ChatMessageNavigation
+                entries={messageNavigation.entries}
+                activeId={messageNavigation.activeId}
+                onNavigate={messageNavigation.scrollToMessage}
+              />
             </div>
 
             <FloatButton

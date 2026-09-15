@@ -122,7 +122,7 @@ export function ToolCallsCard({ toolCalls }: Props) {
               ) : (
                 <ToolOutlined style={{ color: "var(--primary)" }} />
               )}
-              <span className="text-[14px] font-extrabold text-[var(--ink)]">
+              <span className="text-[14px] font-bold text-[var(--ink)]">
                 {allSearch ? "联网搜索" : "工具调用"}
               </span>
               <Tag

@@ -13,7 +13,7 @@
  * - 本组件只负责展示和本地交互，不直接请求 API。
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Collapse, Modal, Spin, Tag, Tooltip } from "antd";
 import {
   CaretRightOutlined,
@@ -50,13 +50,23 @@ interface Props {
   viewMode?: MessageBubbleViewMode;
   nextUserContent?: string;
   onFormSubmit?: (text: string, hitlResume?: HumanInTheLoopResume) => void;
-  onRetry?: () => void;
+  /**
+   * 重试回调。
+   *
+   * 由消息 ID 触发而不是每条消息各生成一个闭包，调用方因此可以提供稳定引用，
+   * 让尚未变化的历史消息在流式期间跳过整棵子树的重渲染与 Markdown 重新解析。
+   */
+  onRetry?: (messageId: string) => void;
 }
 
 /**
  * 渲染单条聊天消息，并按 Agent 阶段放置推理、整理和分析卡片。
+ *
+ * Notes:
+ * - 使用 React.memo：流式期间消息数组每 50ms 更新一次，历史消息的内容没有变化，
+ *   不应重复解析 Markdown 或重建 DOM 子树。
  */
-export function MessageBubble({
+export const MessageBubble = memo(function MessageBubble({
   message,
   isLast,
   streaming,
@@ -77,12 +87,13 @@ export function MessageBubble({
     const formAnswers = parseFormAnswersMessage(message.content);
 
     return (
-      <div className="flex max-w-[min(760px,88%)] flex-col self-end">
+      <div className="flex min-w-0 max-w-[min(760px,88%)] flex-col self-end"
+        data-chat-message-id={message.id} data-chat-message-role={message.role}>
         {formAnswers ? (
           <FormAnswersCard answers={formAnswers} />
         ) : (
           <div
-            className="whitespace-pre-wrap wrap-break-word rounded-[18px] rounded-br-md px-4 py-3 text-white"
+            className="font-reading whitespace-pre-wrap wrap-break-word rounded-[18px] rounded-br-md px-4 py-3 text-white"
             style={{
               background: "var(--primary)",
               fontFamily: "var(--body)",
@@ -185,6 +196,10 @@ export function MessageBubble({
     },
     [onFormSubmit],
   );
+  /** 把稳定的回调引用收敛为本条消息的重试动作。 */
+  const handleRetry = useCallback(() => {
+    onRetry?.(message.id);
+  }, [message.id, onRetry]);
 
   if (viewMode === "process" && !hasVisibleProcessContent && !streamActive) {
     return null;
@@ -205,7 +220,8 @@ export function MessageBubble({
   }
 
   return (
-    <div className="flex w-full flex-col self-stretch">
+    <div className="flex min-w-0 w-full flex-col self-stretch"
+      data-chat-message-id={showMainContent ? message.id : undefined} data-chat-message-role={message.role}>
       {showProcessContent && (
         <AgentProcessGroup
           agentType="conversation"
@@ -384,7 +400,7 @@ export function MessageBubble({
         <AgentErrorCard
           agentType="request"
           message={requestError.message}
-          onRetry={onRetry}
+          onRetry={handleRetry}
         />
       )}
 
@@ -444,12 +460,12 @@ export function MessageBubble({
         <AgentErrorCard
           agentType={otherError.agentType}
           message={otherError.message}
-          onRetry={onRetry}
+          onRetry={handleRetry}
         />
       )}
 
       {showMainContent && message.interrupted && !message.agentError && (
-        <AgentInterruptedCard onContinue={onRetry} />
+        <AgentInterruptedCard onContinue={handleRetry} />
       )}
 
       {showMainContent &&
@@ -485,7 +501,7 @@ export function MessageBubble({
         )}
     </div>
   );
-}
+});
 
 /**
  * 展示当前助手消息内各 Agent 的 token 和费用用量，可折叠以减少聊天区干扰。
@@ -526,9 +542,9 @@ function parseFormAnswersMessage(content: string): FormAnswersViewModel | null {
  */
 function FormAnswersCard({ answers }: { answers: FormAnswersViewModel }) {
   return (
-    <div className="w-full max-w-[min(720px,88vw)] rounded-lg border border-[var(--primary-soft)] bg-white px-4 py-3 shadow-[var(--shadow-card)]">
+    <div className="min-w-0 w-full max-w-full rounded-lg border border-[var(--primary-soft)] bg-white px-4 py-3 shadow-[var(--shadow-card)]">
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <span className="text-[13px] font-extrabold text-[var(--ink)]">
+        <span className="text-[13px] font-bold text-[var(--ink)]">
           Question Form 回复
         </span>
         <Tag color="blue" className="m-0! max-w-full truncate">
@@ -541,10 +557,10 @@ function FormAnswersCard({ answers }: { answers: FormAnswersViewModel }) {
             key={`${row.question}-${index}`}
             className="rounded-md bg-[var(--surface-muted)] px-3 py-2"
           >
-            <div className="text-[12px] font-semibold leading-relaxed text-[var(--ink-mute)]">
+            <div className="font-reading-compact font-semibold text-[var(--ink-mute)]">
               {row.question}
             </div>
-            <div className="mt-1 whitespace-pre-wrap wrap-break-word text-[13px] leading-relaxed text-[var(--ink)]">
+            <div className="font-reading-compact mt-1 whitespace-pre-wrap wrap-break-word text-[13px] leading-relaxed text-[var(--ink)]">
               {row.answer}
             </div>
           </div>
@@ -786,7 +802,7 @@ function AgentInterruptedCard({
   return (
     <div className="mb-2 rounded-lg border border-[#fbbf24] bg-[#fffbeb] px-4 py-3 text-[#92400e]">
       <div className="mb-1 flex items-center justify-between gap-3">
-        <span className="text-[13px] font-extrabold">
+        <span className="text-[13px] font-bold">
           连接中断，工作流已停止
         </span>
         {onContinue && (
@@ -828,7 +844,7 @@ function AgentErrorCard({
     <>
       <div className="mb-2 rounded-lg border border-[#fca5a5] bg-[#fef2f2] px-4 py-3 text-[#991b1b]">
         <div className="mb-1 flex items-center justify-between gap-3">
-          <span className="text-[13px] font-extrabold">
+          <span className="text-[13px] font-bold">
             {getAgentLabel(agentType ?? "agent")} 执行失败
           </span>
           {onRetry && (
@@ -890,7 +906,7 @@ function AgentErrorCard({
 function WorkflowCompletionCard({ content }: { content: string }) {
   return (
     <div className="mb-2 rounded-lg border border-[#bbf7d0] bg-[#f0fdf4] px-4 py-3 text-[#166534]">
-      <div className="mb-1 flex items-center gap-2 text-[13px] font-extrabold">
+      <div className="mb-1 flex items-center gap-2 text-[13px] font-bold">
         <CheckCircleOutlined />
         <span>本轮流程已结束</span>
       </div>
@@ -996,7 +1012,7 @@ function AgentProcessGroup({
           className="h-1.5 w-1.5 shrink-0 rounded-full"
           style={{ background: color }}
         />
-        <span className="text-[14px] font-extrabold text-[var(--ink)]">
+        <span className="text-[14px] font-bold text-[var(--ink)]">
           {label}
         </span>
         {active && (
@@ -1081,7 +1097,7 @@ function SubagentTraceSection({
               className="h-1.5 w-1.5 shrink-0 rounded-full"
               style={{ background: parentColor }}
             />
-            <span className="text-[13px] font-extrabold text-[var(--ink)]">
+            <span className="text-[13px] font-bold text-[var(--ink)]">
               {getSubagentLabel(subagent.subagentType)}
             </span>
             {subagent.status === "running" && (
@@ -1140,20 +1156,9 @@ function NestedCollapseBlock({
   content: string;
   active: boolean;
 }) {
-  const [open, setOpen] = useState(active);
-  const [userToggled, setUserToggled] = useState(false);
+  // SubAgent 可能输出很长的推理；运行态默认折叠，只有用户主动查看时才挂载正文。
+  const [open, setOpen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (active) {
-      setOpen(true);
-      setUserToggled(false);
-      return;
-    }
-    if (!userToggled) {
-      setOpen(false);
-    }
-  }, [active, userToggled]);
 
   useEffect(() => {
     if (contentRef.current && open) {
@@ -1166,7 +1171,6 @@ function NestedCollapseBlock({
       <Collapse
         activeKey={open ? ["content"] : []}
         onChange={(keys) => {
-          setUserToggled(true);
           setOpen(
             Array.isArray(keys) ? keys.includes("content") : keys === "content",
           );
@@ -1271,7 +1275,7 @@ function ThinkingSection({
             key: "thinking",
             label: (
               <div className="flex items-center gap-2">
-                <span className="text-[14px] font-extrabold text-[var(--ink)]">
+                <span className="text-[14px] font-bold text-[var(--ink)]">
                   思考过程
                 </span>
                 {active && <span className="loading-dots" />}
@@ -1281,9 +1285,9 @@ function ThinkingSection({
               <div
                 ref={contentRef}
                 onScroll={handleScroll}
-                className="max-h-[220px] overflow-y-auto whitespace-pre-wrap themed-scrollbar text-[13px] leading-relaxed text-[var(--ink-mute)]"
+                className="font-reading-compact max-h-[220px] overflow-y-auto whitespace-pre-wrap themed-scrollbar text-[13px] leading-relaxed text-[var(--ink-mute)]"
               >
-                {content}
+                {windowStreamingReasoning(content, active)}
               </div>
             ),
           },
@@ -1291,6 +1295,25 @@ function ThinkingSection({
       />
     </div>
   );
+}
+
+/** 流式期间在 DOM 中保留的推理尾部字符数；完整内容仍保留在消息状态中。 */
+const MAX_STREAMING_REASONING_DOM_CHARS = 8_000;
+
+/**
+ * 流式期间只渲染推理尾部窗口，避免滚动区承载整段思考文本。
+ *
+ * 运行结束后 active 为 false，此时渲染已由 stream-limits 限制过的完整内容。
+ */
+function windowStreamingReasoning(content: string, active: boolean): string {
+  if (!active || content.length <= MAX_STREAMING_REASONING_DOM_CHARS) {
+    return content;
+  }
+
+  const omitted = content.length - MAX_STREAMING_REASONING_DOM_CHARS;
+  return `[较早的思考过程已折叠以保护页面内存，省略 ${omitted} 字符]\n${content.slice(
+    -MAX_STREAMING_REASONING_DOM_CHARS,
+  )}`;
 }
 
 /**
@@ -1386,7 +1409,7 @@ function ThinkingBox({
         <div
           ref={contentRef}
           onScroll={handleScroll}
-          className="themed-scrollbar max-h-[300px] overflow-y-auto whitespace-pre-wrap border-t border-[var(--line-soft)] px-4 pb-3 text-[13px] leading-relaxed text-[var(--ink-mute)]"
+          className="font-reading-compact themed-scrollbar max-h-[300px] overflow-y-auto whitespace-pre-wrap border-t border-[var(--line-soft)] px-4 pb-3 text-[13px] leading-relaxed text-[var(--ink-mute)]"
         >
           {content}
         </div>
@@ -1492,10 +1515,30 @@ function getSubagentTracesForParent(
   });
 }
 
+/** SubAgent 返回体在折叠区中的最大渲染字符数。 */
+const MAX_SUBAGENT_RESULT_CHARS = 20_000;
+
 /**
  * 将 SubAgent 返回结果格式化为可折叠文本。
+ *
+ * 超长返回体只保留前缀并显式标注截断：即使运行时误传大体量结果，
+ * 也不会把整块 JSON 塞进 DOM 触发页面内存压力。
  */
 function formatSubagentResult(result: unknown): string {
+  return boundRenderedText(formatSubagentResultBody(result));
+}
+
+/** 按渲染预算截断文本，保留截断说明。 */
+function boundRenderedText(text: string, maxChars = MAX_SUBAGENT_RESULT_CHARS): string {
+  if (text.length <= maxChars) return text;
+
+  return `${text.slice(0, maxChars)}\n\n[内容过长已截断，省略 ${
+    text.length - maxChars
+  } 字符]`;
+}
+
+/** 将 SubAgent 返回体序列化为可读文本，不做长度约束。 */
+function formatSubagentResultBody(result: unknown): string {
   if (typeof result === "string") {
     const trimmed = result.trim();
     const parsed = tryParseJson(trimmed);

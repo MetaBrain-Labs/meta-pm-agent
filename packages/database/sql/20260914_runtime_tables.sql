@@ -2,6 +2,10 @@
 -- Public schema is the supported local deployment schema. No application data is deleted.
 BEGIN;
 
+-- Persist complete Agent/stage identifiers (e.g. conversation_confirmation).
+-- Widening varchar to text preserves existing values and is repeatable.
+ALTER TABLE public.message ALTER COLUMN type TYPE text;
+
 CREATE TABLE IF NOT EXISTS public.model_usage_profile (
   id character varying(36) primary key not null,
   user_id character varying(36) not null,

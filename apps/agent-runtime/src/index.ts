@@ -124,3 +124,4 @@ export {
   isProductWorkflowStopWithIssuesAnswer,
 } from "./utils/form-parser";
 export { parseGraphConflictAction, isPreOrchGraphConflictFormId } from "./agents/product-workflow/orchestrator-agent/pre-orchestrator-subagent";
+export { toUserVisibleAgentError } from "./agents/common/agent-error-message";

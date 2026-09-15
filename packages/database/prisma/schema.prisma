@@ -77,7 +77,7 @@ model Message {
   meta           Json?        @db.JsonB
   createdAt      DateTime?    @default(now()) @map("created_at") @db.Timestamptz(6)
   userInput      Json?        @map("user_input") @db.JsonB
-  type           String?      @db.VarChar(20)
+  type           String?
   conversation   Conversation @relation(fields: [conversationId], references: [id])
 
   @@map("message")

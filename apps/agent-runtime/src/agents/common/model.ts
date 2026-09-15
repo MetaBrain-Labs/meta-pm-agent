@@ -39,6 +39,13 @@ export interface ChatModelOptions {
   temperature?: number;
   /** 单次 LLM HTTP 请求超时（毫秒），覆盖全局默认 30s。 */
   timeout?: number;
+  /**
+   * 覆盖模型档位的推理强度。
+   *
+   * 思考与正文共享 completion 预算，结构化输出型 Agent 需要把推理强度限制在
+   * 可控范围，避免思考耗尽预算后只返回推理内容而没有正文。
+   */
+  reasoningEffort?: "low" | "high" | "max";
 }
 
 /**
@@ -306,7 +313,9 @@ export function createChatModel(
   if (enableThinking) {
     modelKwargs.thinking = { type: "enabled" };
     modelKwargs.reasoning_effort =
-      selection?.model.reasoningEffort ?? config.reasoningEffort;
+      options.reasoningEffort ??
+      selection?.model.reasoningEffort ??
+      config.reasoningEffort;
   }
   if (options.responseFormat) {
     modelKwargs.response_format = { type: options.responseFormat };

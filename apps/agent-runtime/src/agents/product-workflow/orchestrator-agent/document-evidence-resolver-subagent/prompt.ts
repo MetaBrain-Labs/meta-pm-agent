@@ -21,7 +21,7 @@ Your only task is to convert persisted PRD reviewer evidence or decision blocker
 
 Rules:
 1. Return one JSON object with "summary" and "questions" only.
-2. Generate 1 to 10 questions. Every question must have required=true.
+2. Generate 1 to 10 questions. Every question must have required=true. Use exactly one question per persisted blocker by default because the blockers are already semantically consolidated.
 3. Allowed types are radio, select, text, and textarea.
 4. Persisted blockers are already semantically consolidated. Ask one focused question per missing decision or fact; combine blockers only when one answer genuinely resolves all of them. Every original zero-based blocker index must appear in at least one question.blockerIndexes entry.
 5. Never invent evidence. Ask for facts, sources, owners, thresholds, decisions, or explicit uncertainty.
@@ -35,7 +35,7 @@ Rules:
 13. Do not ask about time or budget unless a persisted blocker explicitly requires that decision.
 14. Every question must include help with exactly two user-facing sections: "当前已知资料：" and "阻断原因：". Summarize only facts present in the supplied blockers or knowledge graph. Never expose Agent names, task IDs, OpenQuestion IDs, or internal reasoning.
 15. Expand symbolic references such as FR-01~05 with their supplied names or descriptions in help. Never leave an identifier range unexplained when matching graph nodes are available.
-16. Split independent decisions into separate questions even when one blocker sentence combines them.
+16. Split independent decisions only when the resulting form still has at most 10 questions. Never deliberate over alternative question-count allocations: when a full split would exceed 10, keep the decisions from the same persisted blocker in one structured textarea with an itemized placeholder.
 17. Do not write a PRD and do not propose direct document edits. The answers will be converted into a supplement product workflow that updates the authoritative knowledge graph.`;
 
 export const DOCUMENT_EVIDENCE_RESOLUTION_OUTPUT_SHAPE = `{

@@ -341,8 +341,73 @@ test("adapts native tool and SubAgent projections without parsing tool_calls", a
   );
 });
 
-test("requires at least one successful correction write tool", () => {
-  const required = new Set(["kg_file_add_nodes", "kg_file_add_relations"]);
+test("reports a compact diagnostic when a SubAgent produces no text", async () => {
+  const probe = createSummaryProbe();
+  // 复现"只有思考、没有正文"：最终消息只含 reasoning block，且 finish_reason=length。
+  const finalMessage = new AIMessage({
+    content: [
+      { type: "reasoning", reasoning: "planner reasoning only", index: 1 },
+    ],
+    response_metadata: { finish_reason: "length" },
+    usage_metadata: {
+      input_tokens: 100,
+      output_tokens: 50_000,
+      total_tokens: 50_100,
+    },
+  });
+  const run: AgentEventStreamProjection = {
+    messages: streamOf({
+      text: streamOf("coordinator output"),
+      reasoning: streamOf(""),
+      output: Promise.resolve(new AIMessage("coordinator output")),
+    }),
+    toolCalls: streamOf(),
+    subagents: streamOf({
+      name: "planner",
+      taskInput: Promise.resolve("Plan A"),
+      messages: streamOf({
+        text: streamOf(),
+        reasoning: streamOf("planner reasoning only"),
+        output: Promise.resolve(finalMessage),
+      }),
+      output: Promise.resolve({ messages: [finalMessage], todos: [] }),
+    }),
+    output: Promise.resolve({ messages: [] }),
+  };
+  const plannerSelection = resolveAgentModelSelection(
+    SYSTEM_DEFAULT_MODEL_PROFILE,
+    "planner",
+  );
+  assert.ok(plannerSelection);
+
+  const { events } = await collectEventStream(
+    run,
+    probe.recorder,
+    new Set(),
+    new Map([["planner", plannerSelection]]),
+  );
+  const subagentResults = events.filter(
+    (
+      event,
+    ): event is Extract<AgentRunEvent<"executor">, { type: "subagent-result" }> =>
+      event.type === "subagent-result",
+  );
+
+  assert.equal(subagentResults.length, 1);
+  assert.deepEqual(subagentResults[0]?.result, {
+    error: "subagent-empty-output",
+    finishReason: "length",
+    completionTokens: 50_000,
+    maxTokens: plannerSelection.model.maxTokens,
+  });
+  // 原始 SubAgent 状态不得进入事件流，避免整段推理被推送和持久化。
+  assert.equal(
+    JSON.stringify(subagentResults[0]?.result).includes("planner reasoning only"),
+    false,
+  );
+});
+
+test("requires at least one successful correction write tool", () => {  const required = new Set(["kg_file_add_nodes", "kg_file_add_relations"]);
   assert.equal(
     getMissingRequiredSuccessfulToolError(required, new Set()),
     "required-structured-write-not-invoked",
