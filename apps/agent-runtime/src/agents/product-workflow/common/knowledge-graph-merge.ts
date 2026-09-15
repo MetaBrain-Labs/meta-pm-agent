@@ -240,10 +240,10 @@ export function generateNextGraphItemId(
 ): string {
   const parsed = parseTrailingNumber(preferredId);
   if (!parsed) {
-    let suffix = 2;
+    let suffix = 2n;
     let candidate = `${preferredId}-${suffix}`;
     while (usedIds.has(candidate)) {
-      suffix += 1;
+      suffix += 1n;
       candidate = `${preferredId}-${suffix}`;
     }
     return candidate;
@@ -253,14 +253,14 @@ export function generateNextGraphItemId(
   for (const usedId of usedIds) {
     const used = parseTrailingNumber(usedId);
     if (used?.prefix === parsed.prefix) {
-      maxNumber = Math.max(maxNumber, used.value);
+      maxNumber = maxNumber > used.value ? maxNumber : used.value;
     }
   }
 
-  let nextNumber = maxNumber + 1;
+  let nextNumber = maxNumber + 1n;
   let candidate = formatNumberedId(parsed.prefix, nextNumber, parsed.width);
   while (usedIds.has(candidate)) {
-    nextNumber += 1;
+    nextNumber += 1n;
     candidate = formatNumberedId(parsed.prefix, nextNumber, parsed.width);
   }
   return candidate;
@@ -348,13 +348,13 @@ function createSimilarityTokens(text: string): Set<string> {
  */
 function parseTrailingNumber(
   value: string,
-): { prefix: string; value: number; width: number } | null {
+): { prefix: string; value: bigint; width: number } | null {
   const match = value.match(/^(.*?)(\d+)$/);
   if (!match) return null;
 
   return {
     prefix: match[1],
-    value: Number(match[2]),
+    value: BigInt(match[2]),
     width: match[2].length,
   };
 }
@@ -364,7 +364,7 @@ function parseTrailingNumber(
  */
 function formatNumberedId(
   prefix: string,
-  value: number,
+  value: bigint,
   width: number,
 ): string {
   return `${prefix}${String(value).padStart(width, "0")}`;

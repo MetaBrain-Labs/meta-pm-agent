@@ -1,6 +1,6 @@
 {
   "name": "meta-pm-agent",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "AI-assisted product management with recoverable agent workflows, a product knowledge graph, and PRD generation.",
   "main": "index.js",
   "private": true,

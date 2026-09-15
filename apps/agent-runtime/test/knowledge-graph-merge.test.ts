@@ -32,6 +32,20 @@ import {
 } from "../src/agents/product-workflow/executor-agent/agent";
 import { appendKnowledgeGraphPatch } from "../src/agents/product-workflow/common/knowledge-graph";
 import { mergeKnowledgeGraphSnapshots } from "../src/graph/state";
+import { generateNextGraphItemId } from "../src/agents/product-workflow/common/knowledge-graph-merge";
+
+test("increments 96-bit decimal graph IDs without precision loss", () => {
+  const preferredId = "COMP-79228162514264337593543950335";
+  const usedIds = new Set([
+    preferredId,
+    "COMP-79228162514264337593543950336",
+  ]);
+
+  assert.equal(
+    generateNextGraphItemId(preferredId, usedIds),
+    "COMP-79228162514264337593543950337",
+  );
+});
 
 test("retries only when an executor wrote no structured graph items", () => {
   const emptyGraph = createGraph({});

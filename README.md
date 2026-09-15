@@ -1,37 +1,90 @@
-# meta-pm-agent
+<div align="center">
+
+<img src="assets/logo.png" alt="Meta PM Agent" width="88">
+
+# Meta PM Agent
 
 [English](README.md) | [简体中文](README-zh.md)
 
-An AI-assisted product-management workspace that turns conversations into structured requirements, parallel execution plans, a persistent product knowledge graph, and PRD artifacts.
+**From product ideas to structured requirements, parallel agent execution, a persistent knowledge graph, and PRDs.**
 
-> v0.1 is a single-user, same-machine local preview: local-directory workspaces, external model APIs, and PRD generation only. It has no cloud sync/deployment, attachments, team collaboration, MRD/BRD generation, or human approval workflow. Review the [database schema note](#database-schema-note) before running the complete workflow.
+`meta-pm-agent` is the repository name; the workspace UI is branded 问渠 in Chinese.
 
-## Highlights
+[![Release](https://img.shields.io/github/v/release/MetaBrain-Labs/meta-pm-agent?include_prereleases&label=release)](https://github.com/MetaBrain-Labs/meta-pm-agent/releases)
+[![License](https://img.shields.io/github/license/MetaBrain-Labs/meta-pm-agent)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/MetaBrain-Labs/meta-pm-agent/ci.yml?branch=main&label=ci)](https://github.com/MetaBrain-Labs/meta-pm-agent/actions/workflows/ci.yml)
+[![Node](https://img.shields.io/badge/node-%3E%3D22.13-informational)](https://nodejs.org)
 
-- **Intent-aware conversation flow** — Pre-Orchestrator distinguishes casual chat, new products, project evolution, clarification, and interrupted-workflow continuation.
-- **LangGraph product workflow** — Request analysis feeds an Orchestrator, Planner SubAgent, dependency-aware parallel Executors, and Critique quality gate.
-- **Ten PM Executor domains** — Product strategy, market research, GTM, discovery, execution, marketing growth, analytics, AI shipping, toolkit, and interface craft.
-- **Persistent product context** — Structured nodes, relations, decisions, risks, open questions, provenance, lifecycle state, and supplement-round correction.
-- **Recoverable execution** — PostgreSQL checkpoints, form-based HITL resume, completed-task replay, and server-side cancellation.
-- **Local project management** — Add, rename, relink, and soft-remove local-directory workspaces; create, restore, rename, and soft-delete conversations.
-- **Document generation** — A separate PRD workflow with section drafting, consistency checks, automatic quality review, retries, artifact preview, and Markdown download.
-- **Realtime frontend** — SSE reasoning and tool events, parallel-Agent status, token usage, Planner DAG progress, and a shared G6 knowledge-graph viewer.
-- **Controlled tools** — Central allowlists, no arbitrary Agent filesystem access, optional Tavily/public-index search, and verifiable Evidence provenance.
+**[Quick start](#quick-start)** · **[Screenshots](#screenshots)** · **[How it works](#how-it-works)** · **[Synthetic walkthrough](examples/local-preview.md)**
 
-## Architecture
+</div>
+
+<img src="assets/brand-hero.png" alt="Meta PM Agent — brand illustration" width="100%">
+
+<sub>Brand illustration. The diagrams and the document outline shown above are illustrative; see [Screenshots](#screenshots) for the actual product UI and [How it works](#how-it-works) for the real agent topology.</sub>
+
+> **v0.1 local preview:** single-user, same-machine, loopback-only, PRD only. No cloud sync or deployment, no attachments, no team collaboration, no MRD/BRD, no human approval workflow. See [v0.1 boundaries](#v01-boundaries) and [Known limitations](KNOWN_LIMITATIONS.md).
+
+## Screenshots
+
+Real captures of a running local preview, taken with synthetic requirements ("企业 Markdown 文档协同工具"). Masked regions were redacted by the maintainer; see [Screenshot notes](assets/screenshots/README.md) for scope and open items.
+
+### Planner DAG and parallel Executors
+
+<img src="assets/screenshots/chat-dag-executors.png" alt="Chat workspace showing the Planner DAG, parallel Executor cards, and the Critique Agent" width="100%">
+
+<sub>The product graph turns one request into a DAG: Orchestrator → Planner SubAgent → dependency-aware parallel Executors → Critique. Executor results, tool calls, token usage, and cost stay attached to the owning Agent. <em>Illustrative workflow capture; masked and not production data.</em></sub>
+
+### Product knowledge graph
+
+<img src="assets/screenshots/knowledge-graph.png" alt="Knowledge graph modal with node details, relation types, and risk counts" width="100%">
+
+<sub>134 nodes and 161 relations persisted for one workspace, with node details, relation types, provenance, and lifecycle status. Rendered by the shared AntV G6 viewer.</sub>
+
+### PRD generation with evidence review
+
+<img src="assets/screenshots/prd-generation.png" alt="PRD artifact modal with per-round scores, reviewer findings, and Markdown export" width="100%">
+
+<sub>Each PRD round is drafted, cross-checked, and scored by three independent reviewers; a score spread over 8 rejects the attempt, and a reliable draft needs 85/100. Unresolved evidence surfaces as blockers instead of being invented.</sub>
+
+<details>
+<summary><strong>Full knowledge graph export</strong> (750 × 5592)</summary>
+
+<br>
+
+<img src="assets/screenshots/knowledge-graph-full.webp" alt="Complete product knowledge graph export" width="100%">
+
+</details>
+
+## What it does
+
+- **Conversation → structured requirements → parallel execution → PRD.** Intent-aware routing, a Request analysis step that fills gaps before planning, a dependency-aware DAG, and a Critique pass after every Executor finishes.
+- **A persistent product knowledge graph.** Structured nodes, relations, decisions, risks, open questions, task/source provenance, and supplement-round corrections — not free-form chat memory.
+- **PRDs you can audit.** Section drafting, cross-section consistency checks, three independent reviewers, bounded retries, retained draft history, artifact preview, and Markdown download.
+- **Recoverable by design.** PostgreSQL checkpoints, form-based human-in-the-loop resume, completed-task replay, and server-side cancellation.
+
+The rest of this document is the engineering detail: architecture, setup, database, API, and troubleshooting.
+
+## How it works
 
 ```mermaid
-flowchart LR
-    U["User"] --> PO["Pre-Orchestrator"]
+flowchart TD
+    U["User request"] --> PO["Pre-Orchestrator"]
     PO --> C["Conversation Agent"]
-    C --> R["Request Agent"]
-    R --> O["Orchestrator"]
-    O --> P["Planner SubAgent"]
-    P --> E["Parallel Executors"]
-    E --> K["Product Knowledge Graph"]
+    C --> UI["Structured user input"]
+    UI --> R["Request analysis"]
+    R --> O["Orchestrator Agent"]
+    O --> P["Planner SubAgent<br/>creates the DAG"]
+    P --> E1["Executor A"]
+    P --> E2["Executor B"]
+    P --> E3["Executor C"]
+    E1 --> K["Product Knowledge Graph"]
+    E2 --> K
+    E3 --> K
     K --> Q["Critique Agent"]
-    K --> D["PRD Document Workflow"]
     Q --> C
+    K --> D["PRD document workflow"]
+    D --> PRD["PRD artifact"]
 ```
 
 The product graph uses this fixed skeleton:
@@ -48,6 +101,13 @@ parse_user_input
 ```
 
 Planner SubAgent generates the DAG inside Orchestrator. The `planner_agent` graph node displays or restores that plan. Critique runs from Orchestrator after all Executor tasks complete. PRD generation and Question Form HITL are separate LangGraphs.
+
+| Stage | What runs |
+| --- | --- |
+| Intent and requirements | Pre-Orchestrator, Conversation Agent, Request analysis |
+| Planning and execution | Orchestrator, Planner SubAgent, 10 Executor domains, Critique |
+| Durable state | PostgreSQL checkpoints and one structured graph row per workspace |
+| Deliverable | PRD document workflow (draft → cross-check → score → export) |
 
 See [STRUCTURE.md](STRUCTURE.md) for module ownership, runtime state, persistence flow, and detailed diagrams.
 
@@ -289,9 +349,11 @@ Before opening a pull request:
 4. Run the narrowest relevant tests, then `pnpm build` for cross-package changes.
 5. Do not commit generated `dist/`, `.env`, runtime snapshots, or Agent summaries.
 
-## First model setup and local deployment boundary
+## v0.1 boundaries
 
 This is a single-user local preview with no account UI, authentication, or tenant isolation; a fixed local owner ID exists only inside persistence. The API binds to `127.0.0.1:3001` by default. `HOST` accepts loopback addresses only; `CORS_ORIGINS` accepts exact local HTTP/HTTPS origins only. Open the web app at `http://localhost:3000` or `http://127.0.0.1:3000`; update the origins if Vite changes ports. CORS does not replace authentication.
+
+### First model setup and local deployment boundary
 
 1. Set your own provider API key in server-side `.env` and restart the API. Never put credentials into browser forms or commits.
 2. Open Model Usage Profiles in Settings. The current UI supports the DeepSeek IDs enumerated in the code; it is not a general-purpose OpenAI-compatible model selector.
@@ -306,4 +368,4 @@ Project-authored material is licensed under the [Apache License 2.0](LICENSE). T
 
 - [Contributing](CONTRIBUTING.md) and [Security reporting](SECURITY.md)
 - [Complete synthetic example](examples/local-preview.md) and [Screenshot notes](assets/screenshots/README.md)
-- [Known limitations](KNOWN_LIMITATIONS.md), [Preview release notes](RELEASE_NOTES.md) and [Release checklist](RELEASE_CHECKLIST.md)
+- [Known limitations](KNOWN_LIMITATIONS.md), [Release notes v0.1.0](RELEASE_NOTES.md) and [Release checklist](RELEASE_CHECKLIST.md)
