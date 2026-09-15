@@ -76,7 +76,7 @@ export function UserInputCard({ raw }: Props) {
                   style={{
                     fontFamily: "var(--sans)",
                     color: "var(--ink)",
-                    fontWeight: 800,
+                    fontWeight: 700,
                     fontSize: 14,
                   }}
                 >
@@ -119,7 +119,7 @@ export function UserInputCard({ raw }: Props) {
                           background: "var(--surface-muted)",
                           color: "var(--ink-faint)",
                           fontFamily: "var(--sans)",
-                          fontWeight: 800,
+                          fontWeight: 700,
                         }}
                       >
                         {item.index}
@@ -143,7 +143,7 @@ export function UserInputCard({ raw }: Props) {
                           </Tag>
                         </div>
                         <div
-                          className="wrap-break-word"
+                          className="font-reading-compact wrap-break-word"
                           style={{
                             color: "var(--ink-soft)",
                             fontFamily: "var(--body)",

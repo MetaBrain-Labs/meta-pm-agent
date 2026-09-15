@@ -33,3 +33,9 @@ Environment: Windows, Node.js 24.15.0, pnpm 11.3.0. Starting revision: b3df643 o
 ## Remaining release gates
 
 Complete RELEASE_CHECKLIST.md: provenance/history disposition, green real CI/database tests, clean-clone manual model workflow, actual synthetic screenshots and verified private security reporting. See KNOWN_LIMITATIONS.md for product boundaries.
+
+## Follow-up validation (2026-09-15)
+
+A real first-install test exposed `message.type varchar(20)` rejecting the unchanged `conversation_confirmation` and Executor identifiers (PostgreSQL 22001). The core Prisma schema now uses text for this field; the tracked upgrade SQL widens existing columns without truncating data. No public DTO or Agent identifiers were changed.
+
+The repository-backed PostgreSQL regression test reproduced 22001 before upgrading the isolated test database. After applying the tracked SQL with the existing pg client (Prisma CLI execution was blocked by sandbox spawn EPERM), both database tests passed: runtime table/artifact writes and complete confirmation/all-ten-Executor message-type round trips. Test fixtures were rolled back. Previously failed stream output is not automatically backfilled; repeat the manual chat scenario.

@@ -66,12 +66,14 @@ function MarkdownContent({
   const components = createMarkdownComponents(options);
 
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={components}
-    >
-      {replaceSourceMarkers(input)}
-    </ReactMarkdown>
+    <div className="markdown-content min-w-0 max-w-full wrap-break-word">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={components}
+      >
+        {replaceSourceMarkers(input)}
+      </ReactMarkdown>
+    </div>
   );
 }
 
@@ -155,11 +157,13 @@ function createMarkdownComponents(
             isDocumentVisualLanguage(language)
           ) {
             return (
-              <DocumentVisualBlock
-                language={language}
-                body={body}
-                fallback={<CodeBlock lang={language} body={body} />}
-              />
+              <div className="font-sans text-sm leading-normal">
+                <DocumentVisualBlock
+                  language={language}
+                  body={body}
+                  fallback={<CodeBlock lang={language} body={body} />}
+                />
+              </div>
             );
           }
 

@@ -67,6 +67,7 @@ import {
   NODE_TYPE_LABELS,
   getKnowledgeGraphNodeColor,
 } from "../../components/KnowledgeGraphView";
+import { formatDisplayId } from "../../utils/display-id";
 import { renderMarkdown } from "../../utils/markdown";
 import { mapErrorToChinese } from "../../utils/errors";
 import type { ModelUsageProfile, ThreadInfo } from "../../types";
@@ -667,10 +668,10 @@ export function DocumentPlanningPage({
                   className="rounded border border-red-100 bg-red-50 px-3 py-2"
                 >
                   <Text strong>{group.title}</Text>
-                  <Text className="mt-1 block">{group.description}</Text>
+                  <Text className="font-reading-compact mt-1 block">{group.description}</Text>
                   {group.relatedNodeIds.length > 0 ? (
-                    <Text type="secondary" className="mt-1 block text-xs">
-                      关联节点：{group.relatedNodeIds.join("、")}
+                    <Text type="secondary" className="mt-1 block text-xs wrap-anywhere" title={group.relatedNodeIds.join("、")}>
+                      关联节点：{group.relatedNodeIds.map(formatDisplayId).join("、")}
                     </Text>
                   ) : null}
                   <div className="mt-2 flex flex-col gap-1.5 border-t border-red-100 pt-2">
@@ -822,8 +823,8 @@ function NodeDetailPanel({
           <Text strong className="block truncate">
             节点详情
           </Text>
-          <Text type="secondary" className="block text-xs mt-1 truncate">
-            {node.id}
+          <Text type="secondary" className="block text-xs mt-1 wrap-anywhere" title={node.id}>
+            {formatDisplayId(node.id)}
           </Text>
         </div>
         <Button
@@ -839,7 +840,7 @@ function NodeDetailPanel({
           <Text type="secondary" className="block text-xs mb-1">
             名称
           </Text>
-          <Text className="break-words">{node.name}</Text>
+          <Text className="font-reading-compact break-words">{node.name}</Text>
         </div>
         <div>
           <Text type="secondary" className="block text-xs mb-1">
@@ -854,7 +855,7 @@ function NodeDetailPanel({
             <Text type="secondary" className="block text-xs mb-1">
               描述
             </Text>
-            <Text className="break-words leading-6">{node.description}</Text>
+            <Text className="font-reading-compact break-words leading-6">{node.description}</Text>
           </div>
         )}
         {node.status && (
@@ -911,7 +912,7 @@ function ReasoningLogPanel({
                   {formatDate(entry.createdAt)}
                 </Text>
               </div>
-              <Text className="text-xs whitespace-pre-wrap break-words">
+              <Text className="font-reading-compact whitespace-pre-wrap break-words">
                 {entry.content}
               </Text>
             </div>
@@ -1145,7 +1146,7 @@ function ScoringResultPanel({
                     ),
                   }))}
                 />
-                <Text type="secondary" className="text-xs whitespace-pre-wrap">
+                <Text type="secondary" className="font-reading-compact whitespace-pre-wrap">
                   {attempt.aggregate.rationale}
                 </Text>
                 {/* {(attempt.evidenceBlockers?.length ?? 0) > 0 && (

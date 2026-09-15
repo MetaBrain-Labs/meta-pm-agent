@@ -1,17 +1,29 @@
+/**
+ * 任务进度卡片。
+ *
+ * Responsibilities:
+ * - 展示任务清单、状态与完成数量。
+ *
+ * Notes:
+ * - 只负责读取传入任务并渲染，不发起请求或修改任务状态。
+ */
 import { Card, Tag, List } from "antd";
 import { CheckCircleOutlined, ClockCircleOutlined, MinusCircleOutlined } from "@ant-design/icons";
 import type { TodoItem } from "../types";
 
+/** 任务进度卡片的展示数据。 */
 interface Props {
   todos: TodoItem[];
 }
 
+/** 将任务状态映射为统一的界面提示。 */
 const STATUS_CONFIG: Record<TodoItem["status"], { icon: React.ReactNode; color: string; label: string }> = {
   pending: { icon: <MinusCircleOutlined />, color: "var(--ink-faint)", label: "待开始" },
   in_progress: { icon: <ClockCircleOutlined />, color: "var(--primary)", label: "进行中" },
   completed: { icon: <CheckCircleOutlined />, color: "var(--success)", label: "完成" },
 };
 
+/** 展示任务完成进度与每项任务的当前状态。 */
 export function TodoCard({ todos }: Props) {
   const completedCount = todos.filter((t) => t.status === "completed").length;
 
@@ -26,7 +38,7 @@ export function TodoCard({ todos }: Props) {
         boxShadow: "var(--shadow-card)",
       }}
       title={
-        <span style={{ fontFamily: "var(--sans)", color: "var(--ink)", fontWeight: 800, fontSize: 14 }}>
+        <span style={{ fontFamily: "var(--sans)", color: "var(--ink)", fontWeight: 700, fontSize: 14 }}>
           任务列表
           <Tag
             className="ml-2"

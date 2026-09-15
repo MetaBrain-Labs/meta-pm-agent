@@ -53,7 +53,7 @@ export function RequestAnalysisCard({ raw, analysis }: Props) {
                 style={{
                   fontFamily: "var(--sans)",
                   color: "var(--ink)",
-                  fontWeight: 800,
+                  fontWeight: 700,
                   fontSize: 14,
                 }}
               >
@@ -137,7 +137,7 @@ export function RequestAnalysisCard({ raw, analysis }: Props) {
                             <Space size={6} wrap>
                               {item.goal_constraints.map(
                                 (constraint, index) => (
-                                  <Tag key={index}>{constraint}</Tag>
+                                  <Tag key={index} className="font-reading-compact">{constraint}</Tag>
                                 ),
                               )}
                             </Space>
@@ -236,12 +236,12 @@ export function RequestAnalysisCard({ raw, analysis }: Props) {
               {(data.questions.length > 0 || data.chitchat.length > 0) && (
                 <Space size={6} wrap className="mt-2">
                   {data.questions.length > 0 && (
-                    <Tag icon={<QuestionCircleOutlined />} color="gold">
+                    <Tag className="font-reading-compact max-w-full! whitespace-normal!" icon={<QuestionCircleOutlined />} color="gold">
                       问答：{data.questions.join(", ")}
                     </Tag>
                   )}
                   {data.chitchat.length > 0 && (
-                    <Tag icon={<MessageOutlined />}>
+                    <Tag className="font-reading-compact max-w-full! whitespace-normal!" icon={<MessageOutlined />}>
                       闲聊：{data.chitchat.join(", ")}
                     </Tag>
                   )}
@@ -278,7 +278,7 @@ function FieldBlock({
       >
         {label}
       </Typography.Text>
-      {children}
+      <div className="font-reading-compact min-w-0">{children}</div>
     </div>
   );
 }

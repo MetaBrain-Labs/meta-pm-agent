@@ -682,7 +682,7 @@ export const LangGraphModal: FC<Props> = ({ open, onClose, runtimeState }) => {
           <div className="absolute right-4 top-4 z-10 w-[320px] rounded-md border border-[var(--line-soft)] bg-white p-4 shadow-[var(--shadow-card)]">
             <div className="mb-3 flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <Typography.Text className="block text-sm font-extrabold">
+                <Typography.Text className="block text-sm font-bold">
                   {selectedNode.label}
                 </Typography.Text>
                 <Tag

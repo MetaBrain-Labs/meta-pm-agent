@@ -130,7 +130,7 @@ pnpm --filter @repo/database db:init
 
 #### 数据库结构说明
 
-已有数据库先备份，再执行 `pnpm --filter @repo/database db:upgrade`。该命令添加缺失运行时表、缓存 token 列，更新 PRD 等待状态约束和索引，并为历史图谱 `content` 列设置空字符串默认值；不删除业务数据。它不迁移已有库的 Prisma 核心表，核心结构变更需单独审核后执行。可重复执行升级；结构冲突会报错，不自动覆盖。
+已有数据库先备份，再执行 `pnpm --filter @repo/database db:upgrade`。该命令添加缺失运行时表、缓存 token 列，更新 PRD 等待状态约束和索引，将 `message.type` 扩展为 text 以保存完整 Agent 标识，并为历史图谱 `content` 列设置空字符串默认值；不删除业务数据。它不迁移已有库的 Prisma 核心表，核心结构变更需单独审核后执行。可重复执行升级；结构冲突会报错，不自动覆盖。
 
 SQL 位于 `packages/database/sql/20260914_runtime_tables.sql`。LangGraph checkpoint 表由 PostgresSaver 独立初始化。
 

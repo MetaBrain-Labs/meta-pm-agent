@@ -26,7 +26,8 @@ Publish only after every blocking item is resolved. This file does not authorize
 - [x] Track runtime SQL, correct document FK creation order, provide db:init and repeatable db:upgrade.
 - [x] Restrict local API binding and browser origins; document model/search/tracing data flow and costs.
 - [x] Add CI with an isolated PostgreSQL 16 service, dummy model key, build/tests and redacted secret audit.
-- [ ] Obtain green normal CI, including empty-database initialization, repeated upgrade and PostgreSQL integration tests. CI has not run remotely.
+- [x] Verify focused runtime-table and message-type PostgreSQL integration tests against the isolated first-install test database; reproduce and fix varchar(20) failures without shortening identifiers.
+- [ ] Obtain green normal CI, including fresh empty-database initialization and repeated upgrade. CI has not run remotely.
 - [ ] Run the synthetic end-to-end scenario from a clean clone, including chat, graph, PRD download, stop and recovery; record actual outcomes.
 - [ ] Capture and review actual synthetic screenshots. Local browser access was denied during preparation.
 

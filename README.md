@@ -130,7 +130,7 @@ pnpm --filter @repo/database db:init
 
 #### Database schema note
 
-For an existing database, back it up first and run `pnpm --filter @repo/database db:upgrade`. This adds missing runtime tables and cached-token columns, updates PRD waiting-status constraints/indexes and defaults the legacy graph `content` column to an empty string. It does not delete business data or migrate existing Prisma core tables; review core schema changes separately. Upgrades are repeatable and conflicting schemas fail rather than being overwritten.
+For an existing database, back it up first and run `pnpm --filter @repo/database db:upgrade`. This adds missing runtime tables and cached-token columns, updates PRD waiting-status constraints/indexes, widens `message.type` to text to preserve full Agent identifiers, and defaults the legacy graph `content` column to an empty string. It does not delete business data or migrate existing Prisma core tables; review core schema changes separately. Upgrades are repeatable and conflicting schemas fail rather than being overwritten.
 
 The SQL is tracked at `packages/database/sql/20260914_runtime_tables.sql`. PostgresSaver initializes its own checkpoint tables independently.
 

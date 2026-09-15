@@ -2,6 +2,30 @@
 
 @source "./**/*.{ts,tsx}";
 
+@font-face {
+  font-family: "Source Han Sans CN";
+  src: url("/fonts/SourceHanSansCN-Regular.otf") format("opentype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Source Han Sans CN";
+  src: url("/fonts/SourceHanSansCN-Bold.otf") format("opentype");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "LXGW WenKai Lite";
+  src: url("/fonts/LXGWWenKaiLite-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
 :root {
   --surface: #ffffff;
   --surface-muted: #f7f8fa;
@@ -27,13 +51,17 @@
   --shadow-soft: 0 18px 42px -32px rgba(15, 23, 42, 0.26);
   --shadow-card: 0 10px 24px -22px rgba(15, 23, 42, 0.28);
   --sans:
-    "Inter Tight", "Inter", -apple-system, BlinkMacSystemFont, system-ui,
-    sans-serif;
-  --body: "Inter", -apple-system, system-ui, sans-serif;
-  --mono: "JetBrains Mono", "SF Mono", Menlo, monospace;
+    "Source Han Sans CN", "PingFang SC", "Microsoft YaHei", -apple-system,
+    BlinkMacSystemFont, system-ui, sans-serif;
+  --body: var(--sans);
+  --reading: "LXGW WenKai Lite", "KaiTi", "STKaiti", var(--sans);
+  --mono: "SF Mono", Consolas, Menlo, monospace;
 }
 
 @theme {
+  --font-sans: var(--sans);
+  --font-serif: var(--reading);
+  --font-mono: var(--mono);
   --color-surface: #ffffff;
   --color-surface-muted: #f7f8fa;
   --color-canvas: #ffffff;
@@ -250,7 +278,7 @@ body {
   margin: 18px 0 0;
   color: #11161d;
   font-size: 32px;
-  font-weight: 900;
+  font-weight: 700;
   line-height: 1.15;
 }
 
@@ -286,7 +314,7 @@ body {
   margin: 0;
   color: var(--ink);
   font-size: 18px;
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .workspace-action-row p {
@@ -322,7 +350,7 @@ body {
   margin: 0;
   color: var(--ink);
   font-size: 20px;
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .project-modal-head p {
@@ -444,7 +472,7 @@ body {
   margin: 0 0 12px;
   color: var(--ink);
   font-size: 16px;
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .info-modal-body {
@@ -507,7 +535,7 @@ body {
 .chat-brand-mark strong {
   color: #11161d;
   font-size: 24px;
-  font-weight: 900;
+  font-weight: 700;
   line-height: 1;
 }
 
@@ -565,7 +593,7 @@ body {
   margin: 0;
   color: #202631;
   font-size: 16px;
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .chat-history-head p {
@@ -587,7 +615,7 @@ body {
   margin: 6px 8px 9px;
   color: #536171;
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .chat-thread {
@@ -658,6 +686,9 @@ body {
 }
 
 .chat-canvas {
+  /* 消息、建议卡片和输入框共用宽度，左右留白同时容纳导航刻度。 */
+  --chat-content-max-width: 1018px;
+  --chat-content-gutter: 32px;
   position: relative;
   display: flex;
   min-height: 0;
@@ -706,6 +737,10 @@ body {
   justify-content: space-evenly;
 }
 
+.chat-main-column.is-split {
+  --chat-content-max-width: 760px;
+}
+
 .chat-process-column {
   border-left: 1px solid var(--line-soft);
   background: #ffffff;
@@ -735,28 +770,23 @@ body {
   font-weight: 700;
 }
 
-.chat-main-column.is-split .chat-scroll {
-  width: 100%;
-  padding-inline: max(20px, calc((100% - 760px) / 2));
-}
-
-.chat-main-column.is-split .chat-composer-border-beam {
-  width: min(760px, calc(100% - 40px));
-}
-
 .chat-main-column.is-split .assistant-bubble {
   max-width: 100%;
 }
 
 .chat-scroll {
   display: flex;
-  width: 90%;
+  width: 100%;
   min-height: 0;
   flex: 1;
   flex-direction: column;
   gap: 18px;
   overflow-y: auto;
-  padding: 32px max(24px, calc((100% - 1180px) / 2)) 24px;
+  padding-block: 32px 24px;
+  padding-inline: max(
+    var(--chat-content-gutter),
+    calc((100% - var(--chat-content-max-width)) / 2)
+  );
 }
 
 .chat-suggestions {
@@ -764,7 +794,7 @@ body {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin: 240px auto 0;
-  width: min(1180px, 100%);
+  width: 100%;
 }
 
 .chat-suggestions button {
@@ -784,7 +814,10 @@ body {
 
 .chat-composer-border-beam {
   position: relative;
-  width: min(1018px, calc(100% - 48px));
+  width: min(
+    var(--chat-content-max-width),
+    calc(100% - var(--chat-content-gutter) - var(--chat-content-gutter))
+  );
   margin-bottom: 24px;
 }
 
@@ -946,10 +979,6 @@ body {
   .chat-process-scroll {
     padding: 18px;
   }
-
-  .chat-main-column.is-split .chat-scroll {
-    padding-inline: 18px;
-  }
 }
 
 @media (max-width: 720px) {
@@ -974,10 +1003,6 @@ body {
   .chat-suggestions {
     grid-template-columns: 1fr;
     margin-top: 64px;
-  }
-
-  .chat-composer {
-    width: calc(100% - 24px);
   }
 
   .settings-modal-body {
@@ -1133,6 +1158,40 @@ body {
   }
 }
 
+.markdown-content {
+  font-family: var(--reading);
+  font-size: 16px;
+  line-height: 1.8;
+}
+
+.chat-message-area {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  justify-content: center;
+}
+
+.chat-message-navigation {
+  position: absolute;
+  top: 50%;
+  right: 2px;
+  z-index: 10;
+  display: flex;
+  width: 28px;
+  max-height: calc(100% - 24px);
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 4px;
+  transform: translateY(-50%);
+}
+
+.markdown-content :is(h1, h2, h3, h4, h5, h6, table) {
+  font-family: var(--sans);
+}
+
 .md-code-block {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1160,6 +1219,7 @@ body {
 }
 
 .md-code {
+  font-family: var(--mono);
   background: #0f172a;
   padding: 13px 14px;
   overflow-x: auto;
@@ -1375,4 +1435,74 @@ body {
   color: var(--ink) !important;
   font-family: var(--sans) !important;
   font-weight: 700 !important;
+}
+
+/* 内容字体只覆盖内容区域，按钮、状态和导航继续使用界面字体。 */
+.font-reading,
+.font-reading .ant-typography {
+  font-family: var(--reading) !important;
+  font-size: 16px !important;
+  line-height: 1.8 !important;
+  overflow-wrap: anywhere;
+}
+
+.font-reading-compact,
+.font-reading-compact .ant-typography {
+  font-family: var(--reading) !important;
+  font-size: 14px !important;
+  line-height: 1.6 !important;
+  overflow-wrap: anywhere;
+}
+
+:where(.font-reading, .font-reading-compact) :is(pre, code) {
+  font-family: var(--mono) !important;
+}
+
+.font-reading-compact .ant-tag,
+.planner-execution-card .ant-tag {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.question-form-content .ant-form-item-label > label {
+  height: auto;
+  max-width: 100%;
+  white-space: normal;
+}
+
+.question-form-content :is(.ant-radio-button-wrapper, .ant-checkbox-wrapper, .ant-input, .ant-select-selector, .ant-select-selection-item),
+.question-form-options .ant-select-item-option-content {
+  font-family: var(--reading) !important;
+  font-size: 14px !important;
+  line-height: 1.6 !important;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.question-form-content :is(.ant-radio-group, .ant-checkbox-group) {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.question-form-content .ant-radio-button-wrapper {
+  height: auto;
+  min-height: 36px;
+  max-width: 100%;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.question-form-content .ant-radio-button-wrapper::before {
+  display: none;
+}
+
+.question-form-content .ant-checkbox-wrapper {
+  min-width: 0;
+  max-width: 100%;
+  align-items: baseline;
 }

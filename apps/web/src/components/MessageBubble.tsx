@@ -77,12 +77,13 @@ export function MessageBubble({
     const formAnswers = parseFormAnswersMessage(message.content);
 
     return (
-      <div className="flex max-w-[min(760px,88%)] flex-col self-end">
+      <div className="flex min-w-0 max-w-[min(760px,88%)] flex-col self-end"
+        data-chat-message-id={message.id} data-chat-message-role={message.role}>
         {formAnswers ? (
           <FormAnswersCard answers={formAnswers} />
         ) : (
           <div
-            className="whitespace-pre-wrap wrap-break-word rounded-[18px] rounded-br-md px-4 py-3 text-white"
+            className="font-reading whitespace-pre-wrap wrap-break-word rounded-[18px] rounded-br-md px-4 py-3 text-white"
             style={{
               background: "var(--primary)",
               fontFamily: "var(--body)",
@@ -205,7 +206,8 @@ export function MessageBubble({
   }
 
   return (
-    <div className="flex w-full flex-col self-stretch">
+    <div className="flex min-w-0 w-full flex-col self-stretch"
+      data-chat-message-id={showMainContent ? message.id : undefined} data-chat-message-role={message.role}>
       {showProcessContent && (
         <AgentProcessGroup
           agentType="conversation"
@@ -526,9 +528,9 @@ function parseFormAnswersMessage(content: string): FormAnswersViewModel | null {
  */
 function FormAnswersCard({ answers }: { answers: FormAnswersViewModel }) {
   return (
-    <div className="w-full max-w-[min(720px,88vw)] rounded-lg border border-[var(--primary-soft)] bg-white px-4 py-3 shadow-[var(--shadow-card)]">
+    <div className="min-w-0 w-full max-w-full rounded-lg border border-[var(--primary-soft)] bg-white px-4 py-3 shadow-[var(--shadow-card)]">
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <span className="text-[13px] font-extrabold text-[var(--ink)]">
+        <span className="text-[13px] font-bold text-[var(--ink)]">
           Question Form 回复
         </span>
         <Tag color="blue" className="m-0! max-w-full truncate">
@@ -541,10 +543,10 @@ function FormAnswersCard({ answers }: { answers: FormAnswersViewModel }) {
             key={`${row.question}-${index}`}
             className="rounded-md bg-[var(--surface-muted)] px-3 py-2"
           >
-            <div className="text-[12px] font-semibold leading-relaxed text-[var(--ink-mute)]">
+            <div className="font-reading-compact font-semibold text-[var(--ink-mute)]">
               {row.question}
             </div>
-            <div className="mt-1 whitespace-pre-wrap wrap-break-word text-[13px] leading-relaxed text-[var(--ink)]">
+            <div className="font-reading-compact mt-1 whitespace-pre-wrap wrap-break-word text-[13px] leading-relaxed text-[var(--ink)]">
               {row.answer}
             </div>
           </div>
@@ -786,7 +788,7 @@ function AgentInterruptedCard({
   return (
     <div className="mb-2 rounded-lg border border-[#fbbf24] bg-[#fffbeb] px-4 py-3 text-[#92400e]">
       <div className="mb-1 flex items-center justify-between gap-3">
-        <span className="text-[13px] font-extrabold">
+        <span className="text-[13px] font-bold">
           连接中断，工作流已停止
         </span>
         {onContinue && (
@@ -828,7 +830,7 @@ function AgentErrorCard({
     <>
       <div className="mb-2 rounded-lg border border-[#fca5a5] bg-[#fef2f2] px-4 py-3 text-[#991b1b]">
         <div className="mb-1 flex items-center justify-between gap-3">
-          <span className="text-[13px] font-extrabold">
+          <span className="text-[13px] font-bold">
             {getAgentLabel(agentType ?? "agent")} 执行失败
           </span>
           {onRetry && (
@@ -890,7 +892,7 @@ function AgentErrorCard({
 function WorkflowCompletionCard({ content }: { content: string }) {
   return (
     <div className="mb-2 rounded-lg border border-[#bbf7d0] bg-[#f0fdf4] px-4 py-3 text-[#166534]">
-      <div className="mb-1 flex items-center gap-2 text-[13px] font-extrabold">
+      <div className="mb-1 flex items-center gap-2 text-[13px] font-bold">
         <CheckCircleOutlined />
         <span>本轮流程已结束</span>
       </div>
@@ -996,7 +998,7 @@ function AgentProcessGroup({
           className="h-1.5 w-1.5 shrink-0 rounded-full"
           style={{ background: color }}
         />
-        <span className="text-[14px] font-extrabold text-[var(--ink)]">
+        <span className="text-[14px] font-bold text-[var(--ink)]">
           {label}
         </span>
         {active && (
@@ -1081,7 +1083,7 @@ function SubagentTraceSection({
               className="h-1.5 w-1.5 shrink-0 rounded-full"
               style={{ background: parentColor }}
             />
-            <span className="text-[13px] font-extrabold text-[var(--ink)]">
+            <span className="text-[13px] font-bold text-[var(--ink)]">
               {getSubagentLabel(subagent.subagentType)}
             </span>
             {subagent.status === "running" && (
@@ -1271,7 +1273,7 @@ function ThinkingSection({
             key: "thinking",
             label: (
               <div className="flex items-center gap-2">
-                <span className="text-[14px] font-extrabold text-[var(--ink)]">
+                <span className="text-[14px] font-bold text-[var(--ink)]">
                   思考过程
                 </span>
                 {active && <span className="loading-dots" />}
@@ -1281,7 +1283,7 @@ function ThinkingSection({
               <div
                 ref={contentRef}
                 onScroll={handleScroll}
-                className="max-h-[220px] overflow-y-auto whitespace-pre-wrap themed-scrollbar text-[13px] leading-relaxed text-[var(--ink-mute)]"
+                className="font-reading-compact max-h-[220px] overflow-y-auto whitespace-pre-wrap themed-scrollbar text-[13px] leading-relaxed text-[var(--ink-mute)]"
               >
                 {content}
               </div>
@@ -1386,7 +1388,7 @@ function ThinkingBox({
         <div
           ref={contentRef}
           onScroll={handleScroll}
-          className="themed-scrollbar max-h-[300px] overflow-y-auto whitespace-pre-wrap border-t border-[var(--line-soft)] px-4 pb-3 text-[13px] leading-relaxed text-[var(--ink-mute)]"
+          className="font-reading-compact themed-scrollbar max-h-[300px] overflow-y-auto whitespace-pre-wrap border-t border-[var(--line-soft)] px-4 pb-3 text-[13px] leading-relaxed text-[var(--ink-mute)]"
         >
           {content}
         </div>
