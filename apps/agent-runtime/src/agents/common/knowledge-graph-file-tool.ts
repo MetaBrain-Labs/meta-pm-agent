@@ -18,7 +18,7 @@
  */
 
 import type { ProductKnowledgeGraph } from "@repo/shared";
-import { randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { tool } from "langchain/tools";
 import { z } from "zod";
 import {
@@ -402,6 +402,7 @@ export function createKnowledgeGraphTools(
         const validated = allocatePersistedIds(
           parsedNodes,
           (node) => ENTITY_ID_PREFIXES[node.type],
+          state.entities.map((item) => item.id),
         );
         const authorized = filterAuthorizedItems(
           validated,
@@ -614,6 +615,7 @@ export function createKnowledgeGraphTools(
         const validated = allocatePersistedIds(
           relations.map((r) => relationInputSchema.parse(r)),
           () => "REL",
+          state.relations.map((item) => item.id),
         );
         const appendResult = filterAppendOnlyRelations(
           validated,
@@ -707,6 +709,7 @@ export function createKnowledgeGraphTools(
         const validated = allocatePersistedIds(
           risks.map((r) => riskInputSchema.parse(r)),
           () => "RISK",
+          state.risks.map((item) => item.id),
         );
         const appendResult = filterAppendOnlyItems(
           validated,
@@ -742,6 +745,7 @@ export function createKnowledgeGraphTools(
         const validated = allocatePersistedIds(
           questions.map((q) => openQuestionInputSchema.parse(q)),
           () => "OQ",
+          state.open_questions.map((item) => item.id),
         );
         const appendResult = filterAppendOnlyItems(
           validated,
@@ -981,11 +985,27 @@ const ENTITY_ID_PREFIXES: Record<(typeof ENTITY_TYPE_VALUES)[number], string> = 
 function allocatePersistedIds<T extends { id?: string }>(
   items: T[],
   getPrefix: (item: T) => string,
+  occupiedIds: readonly string[] = [],
 ): Array<Omit<T, "id"> & { id: string }> {
-  return items.map(({ id: _legacyId, ...item }) => ({
-    ...item,
-    id: `${getPrefix(item as T)}-${randomUUID()}`,
-  }));
+  const usedIds = new Set(occupiedIds);
+  return items.map(({ id: _legacyId, ...item }) => {
+    let id = createPersistedGraphId(getPrefix(item as T));
+    while (usedIds.has(id)) {
+      id = createPersistedGraphId(getPrefix(item as T));
+    }
+    usedIds.add(id);
+    return { ...item, id };
+  });
+}
+
+/**
+ * 生成面向模型上下文优化的图谱 ID。
+ *
+ * 使用 96 位随机空间并固定为 29 位十进制，兼顾极低碰撞概率与数字 token 的高压缩率。
+ */
+function createPersistedGraphId(prefix: string): string {
+  const value = BigInt(`0x${randomBytes(12).toString("hex")}`);
+  return `${prefix}-${value.toString(10).padStart(29, "0")}`;
 }
 
 /**

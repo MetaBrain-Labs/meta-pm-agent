@@ -37,7 +37,7 @@ test("atomically allocates graph IDs and skips missing relation endpoints", asyn
 
   assert.equal(nodeResult.count, 3);
   assert.equal(new Set(state.entities.map((item) => item.id)).size, 4);
-  assert.equal(nodeResult.items.every((item) => /^G-[0-9a-f-]{36}$/.test(item.id)), true);
+  assert.equal(nodeResult.items.every((item) => /^G-[0-9]{29}$/.test(item.id)), true);
   const [firstNode, secondNode] = nodeResult.items;
   assert.ok(firstNode && secondNode);
 
@@ -60,7 +60,7 @@ test("atomically allocates graph IDs and skips missing relation endpoints", asyn
     new Set(["missing_relation_endpoint:target=MISSING"]),
   );
   assert.equal(
-    relationResult.items.every((item) => /^REL-[0-9a-f-]{36}$/.test(item.id)),
+    relationResult.items.every((item) => /^REL-[0-9]{29}$/.test(item.id)),
     true,
   );
 });
@@ -140,7 +140,7 @@ test("skips invalid relation directions and allows corrected resubmission", asyn
 
   assert.equal(result.count, 1);
   assert.equal(result.items.length, 1);
-  assert.match(result.items[0]!.id, /^REL-[0-9a-f-]{36}$/);
+  assert.match(result.items[0]!.id, /^REL-[0-9]{29}$/);
   assert.deepEqual(
     result.skipped?.map((item) => item.reason),
     [
@@ -165,7 +165,7 @@ test("skips invalid relation directions and allows corrected resubmission", asyn
     ),
   ) as ToolResult;
   assert.equal(corrected.items.length, 1);
-  assert.match(corrected.items[0]!.id, /^REL-[0-9a-f-]{36}$/);
+  assert.match(corrected.items[0]!.id, /^REL-[0-9]{29}$/);
 });
 
 test("skips entity and relation types outside the executor profile", async () => {
@@ -190,7 +190,7 @@ test("skips entity and relation types outside the executor profile", async () =>
   ) as ToolResult;
   assert.equal(nodeResult.items.length, 1);
   const metricId = nodeResult.items[0]!.id;
-  assert.match(metricId, /^M-[0-9a-f-]{36}$/);
+  assert.match(metricId, /^M-[0-9]{29}$/);
   assert.equal(nodeResult.skipped?.[0]?.reason, "unauthorized_entity_type:Requirement");
 
   const relationResult = JSON.parse(
@@ -204,7 +204,7 @@ test("skips entity and relation types outside the executor profile", async () =>
     ),
   ) as ToolResult;
   assert.equal(relationResult.items.length, 1);
-  assert.match(relationResult.items[0]!.id, /^REL-[0-9a-f-]{36}$/);
+  assert.match(relationResult.items[0]!.id, /^REL-[0-9]{29}$/);
   assert.equal(relationResult.skipped?.[0]?.reason, "unauthorized_relation_type:References");
 
   const decisionResult = JSON.parse(
@@ -242,8 +242,9 @@ test("atomically allocates risk and OpenQuestion IDs despite duplicate hints", a
   assert.equal(riskResult.count, 2);
   assert.equal(questionResult.count, 2);
   assert.equal(new Set(riskResult.items.map((item) => item.id)).size, 2);
+  assert.equal(riskResult.items.every((item) => /^RISK-[0-9]{29}$/.test(item.id)), true);
   assert.equal(new Set(questionResult.items.map((item) => item.id)).size, 2);
-  assert.equal(questionResult.items.every((item) => /^OQ-[0-9a-f-]{36}$/.test(item.id)), true);
+  assert.equal(questionResult.items.every((item) => /^OQ-[0-9]{29}$/.test(item.id)), true);
 });
 
 test("requires the configured number of blocking OpenQuestions", async () => {
