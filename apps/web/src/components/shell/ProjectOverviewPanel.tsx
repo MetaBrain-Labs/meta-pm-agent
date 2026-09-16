@@ -15,14 +15,20 @@
  * - 交付物数量按真实数据口径展示：一个工作区只有一版最新 PRD 交付物。
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button, Tooltip, message } from "antd";
 import {
   CheckCircleFilled,
   ClockCircleOutlined,
+  CommentOutlined,
+  DatabaseOutlined,
+  FileAddOutlined,
   FileTextOutlined,
+  ForkOutlined,
   LoadingOutlined,
+  PlusOutlined,
   ReloadOutlined,
+  RightOutlined,
   WarningFilled,
 } from "@ant-design/icons";
 import {
@@ -234,22 +240,26 @@ export function ProjectOverviewPanel({
       {/* 第二层：核心指标 */}
       <section className="overview-metrics" aria-label="核心指标">
         <Metric
+          icon={<DatabaseOutlined />}
           label="实体数量"
           value={graph ? graph.nodes.length : null}
           loading={loading}
         />
         <Metric
+          icon={<ForkOutlined />}
           label="关系数量"
           value={graph ? graph.relations.length : null}
           loading={loading}
         />
         <Metric
+          icon={<FileTextOutlined />}
           label="交付物数量"
           value={artifact ? 1 : 0}
           hint={artifact ? "当前工作区保留一版最新 PRD 交付物" : "尚未生成 PRD 交付物"}
           loading={loading}
         />
         <Metric
+          icon={<CommentOutlined />}
           label="对话数量"
           value={threadCount}
           loading={false}
@@ -288,23 +298,30 @@ export function ProjectOverviewPanel({
         <h3>快捷操作</h3>
         <div className="overview-actions">
           <Button
-            type="primary"
-            icon={<FileTextOutlined />}
+            icon={<PlusOutlined />}
+            disabled={!onNewConversation}
+            onClick={onNewConversation}
+          >
+            新建对话
+          </Button>
+          <Button
+            icon={<FileAddOutlined />}
             loading={starting}
             disabled={runActive}
             onClick={() => void handleGeneratePrd()}
           >
-            {runActive ? "PRD 生成中" : "生成 PRD"}
-          </Button>
-          <Button disabled={!onNewConversation} onClick={onNewConversation}>
-            新建对话
+            {runActive ? "PRD 生成中" : "生成 PRD 文档"}
           </Button>
           {/* 后端当前只接受 kind=prd，其余文档类型在这里保持禁用而不是假装可用。 */}
           <Tooltip title="后端暂只支持生成 PRD">
-            <Button disabled>生成 MRD</Button>
+            <Button icon={<PlusOutlined />} disabled>
+              生成 MRD 文档
+            </Button>
           </Tooltip>
           <Tooltip title="后端暂只支持生成 PRD">
-            <Button disabled>生成 BRD</Button>
+            <Button icon={<PlusOutlined />} disabled>
+              生成 BRD 文档
+            </Button>
           </Tooltip>
         </div>
       </section>
@@ -351,7 +368,11 @@ export function ProjectOverviewPanel({
                 </span>
                 <span className="overview-timeline-body">
                   <strong>{event.label}</strong>
-                  <em>{event.detail}</em>
+                  {/* 说明单独成行、置于浅底容器内，与标题形成两级层级。 */}
+                  <span className="overview-timeline-detail">
+                    <em>{event.detail}</em>
+                    <RightOutlined aria-hidden="true" />
+                  </span>
                 </span>
               </li>
             ))}
@@ -368,11 +389,14 @@ export function ProjectOverviewPanel({
 
 /** 核心指标单元；数值是这一层唯一需要被看见的东西。 */
 function Metric({
+  icon,
   label,
   value,
   hint,
   loading,
 }: {
+  /** 指标类型图标；仅作视觉区分，不承载语义。 */
+  icon: ReactNode;
   label: string;
   value: number | null;
   hint?: string;
@@ -388,7 +412,12 @@ function Metric({
 
   return (
     <div className="overview-metric" title={hint}>
-      <span className="overview-metric-label">{label}</span>
+      <span className="overview-metric-head">
+        <span className="overview-metric-label">{label}</span>
+        <span className="overview-metric-icon" aria-hidden="true">
+          {icon}
+        </span>
+      </span>
       <span className="overview-metric-value">
         {content}
         {loading && <LoadingOutlined aria-label="加载中" />}

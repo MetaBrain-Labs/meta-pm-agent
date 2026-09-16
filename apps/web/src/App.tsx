@@ -20,6 +20,7 @@ import { AppShell } from "./components/shell/AppShell";
 import { AppSidebar, SidebarUserArea } from "./components/shell/AppSidebar";
 import { WorkspacePanelContent } from "./components/shell/WorkspacePanelContent";
 import { WorkspaceShell } from "./components/shell/WorkspaceShell";
+import { WorkspaceSyncStatus } from "./components/shell/WorkspaceSyncStatus";
 import { ProjectOverviewPanel } from "./components/shell/ProjectOverviewPanel";
 import { ConfigModal } from "./components/modals/ConfigModal";
 import { ProjectCreateModal } from "./components/modals/ProjectCreateModal";
@@ -82,6 +83,19 @@ export default function App() {
               activePanel={app.workspacePanel}
               onPanelChange={app.handleWorkspacePanelChange}
               /*
+               * 项目本地同步是工作区级状态，统一放在 Header 右侧：
+               * 平时只是一个轻量内联状态，点击后才展开详情浮层。
+               */
+              actions={
+                app.activeWorkspaceId ? (
+                  <WorkspaceSyncStatus
+                    workspaceId={app.activeWorkspaceId}
+                    workspaceName={app.activeWorkspaceName}
+                    workspacePath={app.activeWorkspace?.localPath}
+                  />
+                ) : null
+              }
+              /*
                * 交付文档是当前唯一已接入的面板；其余面板保留空态。
                * 无对话栏时不挂载聊天，交付文档面板直接占满剩余空间。
                */
@@ -119,6 +133,10 @@ export default function App() {
                   )}
                   tasks={tasksPanel ?? undefined}
                   graph={graphPanel ?? undefined}
+                  graphWorkspaceId={app.activeWorkspaceId ?? undefined}
+                  onOpenConversation={() =>
+                    app.handleOpenWorkspace(app.activeWorkspaceId ?? "")
+                  }
                   documents={() => (
                     <DocumentPlanningPage
                       embedded

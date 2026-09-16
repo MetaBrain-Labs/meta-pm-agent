@@ -197,7 +197,7 @@ export function CritiqueAgentReviewCard({
     result?.status === "requires_executor_retry" ||
     (result?.review.retry_task_ids?.length ?? 0) > 0;
   const statusColor = requiresCorrection
-    ? "#d97706"
+    ? "var(--ds-color-warning)"
     : complete
       ? "var(--success)"
       : "var(--primary)";
@@ -400,10 +400,10 @@ function TaskTextPanel({ label, text }: { label: string; text: string }) {
  */
 function ExecutorResultPanel({ result }: { result: ExecutorAgentResult }) {
   return (
-    <section className="mt-3 rounded-md border border-[#bbf7d0] bg-[#f0fdf4] px-3 py-3">
+    <section className="mt-3 rounded-md border border-[var(--ds-color-success)] bg-[var(--ds-color-success-soft)] px-3 py-3">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <CheckCircleOutlined className="text-[var(--success)]" />
-        <span className="text-[13px] font-bold text-[#166534]">
+        <span className="text-[13px] font-bold text-[var(--ds-color-success)]">
           已更新至知识图谱
         </span>
         <Tag color={result.quality_result.passed ? "green" : "red"} className="m-0!">
@@ -416,7 +416,7 @@ function ExecutorResultPanel({ result }: { result: ExecutorAgentResult }) {
         )}
       </div>
 
-      <div className="font-reading-compact whitespace-pre-wrap text-[13px] leading-relaxed text-[#166534]">
+      <div className="font-reading-compact whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ds-color-success)]">
         {result.summary}
       </div>
 
@@ -537,9 +537,9 @@ function TextList({
   if (items.length === 0) return null;
   const toneClass =
     tone === "risk"
-      ? "border-[#fed7aa] bg-[#fff7ed] text-[#9a3412]"
+      ? "border-[var(--ds-color-warning)] bg-[var(--ds-color-warning-soft)] text-[var(--ds-color-warning)]"
       : tone === "question"
-        ? "border-[#bfdbfe] bg-[#eff6ff] text-[#1d4ed8]"
+        ? "border-[var(--line)] bg-[var(--surface-muted)] text-[var(--ink-soft)]"
         : "border-[var(--line-soft)] bg-white/70 text-[var(--ink-soft)]";
 
   return (
@@ -712,15 +712,15 @@ function CritiqueReviewResult({ result }: { result: ProductWorkflowResult }) {
       )}
 
       {proposalQuestions.length > 0 && (
-        <section className="rounded-md bg-[#eff6ff] px-3 py-2">
-          <div className="mb-2 text-[13px] font-bold text-[#1d4ed8]">
+        <section className="rounded-md bg-[var(--surface-muted)] px-3 py-2">
+          <div className="mb-2 text-[13px] font-bold text-[var(--ink-soft)]">
             待用户确认的问题
           </div>
           <div className="space-y-1.5">
             {proposalQuestions.map((question) => (
               <div
                 key={question.id}
-                className="font-reading-compact rounded-md bg-white/75 px-3 py-2 text-[12px] leading-relaxed text-[#1d4ed8]"
+                className="font-reading-compact rounded-md bg-white/75 px-3 py-2 text-[12px] leading-relaxed text-[var(--ink-soft)]"
               >
                 <div className="font-bold">{question.label}</div>
                 {question.help && <div className="mt-0.5">{question.help}</div>}
@@ -731,11 +731,11 @@ function CritiqueReviewResult({ result }: { result: ProductWorkflowResult }) {
       )}
 
       {result.confirmation_message && (
-        <section className="rounded-md bg-[#f0fdf4] px-3 py-2">
-          <div className="mb-1 text-[12px] font-bold text-[#166534]">
+        <section className="rounded-md bg-[var(--ds-color-success-soft)] px-3 py-2">
+          <div className="mb-1 text-[12px] font-bold text-[var(--ds-color-success)]">
             确认提示
           </div>
-          <div className="font-reading-compact whitespace-pre-wrap text-[13px] leading-relaxed text-[#166534]">
+          <div className="font-reading-compact whitespace-pre-wrap text-[13px] leading-relaxed text-[var(--ds-color-success)]">
             {result.confirmation_message}
           </div>
         </section>
@@ -787,7 +787,7 @@ function ReviewIssueList({
         {issues.map((issue, index) => (
           <div
             key={`${issue.code}-${issue.task_id ?? "global"}-${index}`}
-            className="rounded-md border border-[#fed7aa] bg-[#fff7ed] px-3 py-2 text-[12px] leading-relaxed text-[#9a3412]"
+            className="rounded-md border border-[var(--ds-color-warning)] bg-[var(--ds-color-warning-soft)] px-3 py-2 text-[12px] leading-relaxed text-[var(--ds-color-warning)]"
           >
             <div className="mb-0.5 flex flex-wrap items-center gap-1.5 font-bold">
               <Tag color={issue.severity === "error" ? "red" : "orange"} className="m-0!">

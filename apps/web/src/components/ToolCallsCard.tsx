@@ -145,7 +145,7 @@ export function ToolCallsCard({ toolCalls }: Props) {
                     marginInlineEnd: 0,
                     border: "none",
                     borderRadius: 6,
-                    background: "#fff1f2",
+                    background: "var(--ds-color-error-soft)",
                     color: "var(--danger)",
                     fontFamily: "var(--sans)",
                     fontSize: 11,
@@ -211,7 +211,7 @@ function ToolCallItem({ toolCall }: { toolCall: ToolCall }) {
               border: "none",
               borderRadius: 6,
               background: searchPayload?.error
-                ? "#fff1f2"
+                ? "var(--ds-color-error-soft)"
                 : completed
                   ? "var(--success-soft)"
                   : "var(--primary-soft)",
@@ -283,7 +283,7 @@ function WebSearchResultView({
       {completed && !payload && <GenericToolResult toolCall={toolCall} />}
 
       {payload?.error && (
-        <div className="rounded-md border border-[#fecaca] bg-[#fff1f2] px-3 py-2 text-[13px] text-[var(--danger)]">
+        <div className="rounded-md border border-[var(--ds-color-error)] bg-[var(--ds-color-error-soft)] px-3 py-2 text-[13px] text-[var(--danger)]">
           {payload.error}
         </div>
       )}
@@ -369,7 +369,7 @@ function KnowledgeGraphToolResultView({
       )}
 
       {payload?.error && (
-        <div className="rounded-md border border-[#fecaca] bg-[#fff1f2] px-3 py-2 text-[13px] text-[var(--danger)]">
+        <div className="rounded-md border border-[var(--ds-color-error)] bg-[var(--ds-color-error-soft)] px-3 py-2 text-[13px] text-[var(--danger)]">
           {payload.error}
         </div>
       )}

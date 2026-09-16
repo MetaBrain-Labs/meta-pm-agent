@@ -6,13 +6,14 @@
  *
  * Responsibilities:
  * - 展示项目封面网格与项目搜索
- * - 提供新建项目入口与项目行操作菜单
- * - 展示当前项目本地保存状态与最近对话入口
+ * - 提供新建项目入口、主快捷动作与页面更多操作菜单
+ * - 展示当前项目两个产物的本地保存状态
  *
  * Notes:
  * - 从列表移除项目不会删除磁盘目录或关联业务数据。
  * - 全局侧边栏由应用外壳提供，本页不再自带导航栏。
  * - 封面配色只用于识别，使用低饱和 tint，不引入高饱和色块。
+ * - 项目路径等本地细节不在此页展示：统一由 Workspace Header 的同步状态承载。
  */
 
 import { useMemo, useState, type CSSProperties } from "react";
@@ -27,9 +28,9 @@ import {
   PlusOutlined,
   RightOutlined,
   SearchOutlined,
+  SettingOutlined,
 } from "@ant-design/icons";
 import type { ThreadInfo, WorkspaceInfo } from "../../types";
-import { DEFAULT_CHAT_TITLE } from "../../constants/app";
 import { WorkspaceLocalStoragePanel } from "../../components/WorkspaceLocalStoragePanel";
 import { getProjectCoverStyle } from "../../utils/project-cover";
 import { canRevealLocalPath, revealLocalPath } from "../../utils/reveal-path";
@@ -93,6 +94,28 @@ export function WorkspacePage({
   const activeThread = threads[0] ?? null;
   const revealSupported = canRevealLocalPath();
 
+  /**
+   * 页面级更多操作。
+   *
+   * 只收纳已有真实能力：本地模型列表设置与当前项目的资源管理器入口。
+   * 没有宿主能力时保留入口并说明原因，不伪装成可用功能。
+   */
+  const pageMenuItems: MenuItem[] = [
+    {
+      key: "local-settings",
+      icon: <SettingOutlined />,
+      label: TEXT.localSettings,
+      onClick: onLocalSettings,
+    },
+    {
+      key: "reveal",
+      icon: <FolderOpenOutlined />,
+      label: "在资源管理器中打开项目",
+      disabled: !revealSupported || !activeWorkspace?.localPath,
+      onClick: () => void revealLocalPath(activeWorkspace?.localPath),
+    },
+  ];
+
   return (
     <div className="workspace-page">
       <div className="workspace-page-content">
@@ -108,6 +131,19 @@ export function WorkspacePage({
               className="workspace-page-search"
               onChange={(event) => setKeyword(event.target.value)}
             />
+            {/*
+              标题区只保留一个主快捷动作；其余项目管理操作进入 More 菜单，
+              避免「最近对话 / 本地设置」与页面标题同级。
+            */}
+            {activeWorkspace && activeThread && (
+              <Button
+                type="text"
+                icon={<RightOutlined />}
+                onClick={() => onOpenWorkspace(activeWorkspace.id)}
+              >
+                {TEXT.recentThread}
+              </Button>
+            )}
             <Button
               type="primary"
               icon={<PlusOutlined />}
@@ -116,6 +152,18 @@ export function WorkspacePage({
             >
               {TEXT.addProject}
             </Button>
+            <Dropdown
+              trigger={["click"]}
+              menu={{ items: pageMenuItems }}
+              placement="bottomRight"
+            >
+              <Button
+                type="text"
+                shape="circle"
+                aria-label="更多操作"
+                icon={<EllipsisOutlined />}
+              />
+            </Dropdown>
           </div>
         </header>
 
@@ -155,29 +203,20 @@ export function WorkspacePage({
           </div>
         )}
 
+        {/*
+          当前项目只保留轻量本地状态：项目名 + 每个产物的同步状态。
+          项目路径、上下文路径、PRD 路径与拷贝说明属于技术细节，
+          统一收进 Workspace Header 的同步状态详情层。
+        */}
         <section className="workspace-page-foot">
           <div className="ds-section-header">
             <div className="ds-section-header-copy">
-              <h2 className="ds-section-title">当前项目</h2>
+              <h2 className="ds-section-title">本地保存状态</h2>
               <p className="ds-section-description">
                 {activeWorkspace
-                  ? "产品上下文与 PRD 的本地保存状态。"
+                  ? `${activeWorkspace.name} 的产品上下文与 PRD 副本。`
                   : "还没有关联本地项目。"}
               </p>
-            </div>
-            <div className="ds-section-actions">
-              {activeThread && activeWorkspace && (
-                <Button
-                  type="text"
-                  icon={<RightOutlined />}
-                  onClick={() => onOpenWorkspace(activeWorkspace.id)}
-                >
-                  {TEXT.recentThread}：{activeThread.title || DEFAULT_CHAT_TITLE}
-                </Button>
-              )}
-              <Button type="text" onClick={onLocalSettings}>
-                {TEXT.localSettings}
-              </Button>
             </div>
           </div>
 
@@ -185,8 +224,6 @@ export function WorkspacePage({
             <WorkspaceLocalStoragePanel
               workspaceId={activeWorkspace.id}
               refreshKey={activeWorkspace.localPath ?? ""}
-              projectName={activeWorkspace.name}
-              projectPath={activeWorkspace.localPath}
             />
           )}
         </section>

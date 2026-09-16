@@ -72,7 +72,25 @@ export const DESIGN_TOKENS = {
     sans: '"Source Han Sans CN", "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, system-ui, sans-serif',
     mono: '"SF Mono", Consolas, Menlo, monospace',
     readingDisplay: '"LXGW WenKai Lite", "KaiTi", "STKaiti", sans-serif',
-    size: { small: 12, base: 14, body: 16, title: 20, heading: 24, display: 32 },
+    /**
+     * 字号刻度。
+     *
+     * micro / caption 用于标签与元信息，small / control 用于次要正文与控件，
+     * base 起为正文与标题。新增字号前先确认现有档位够用，避免出现语义重叠的散值。
+     */
+    size: {
+      micro: 10,
+      caption: 11,
+      small: 12,
+      control: 13,
+      base: 14,
+      body: 16,
+      title: 20,
+      heading: 24,
+      /** 概览指标数值；比标题更大，是唯一使用该档位的地方。 */
+      metric: 26,
+      display: 32,
+    },
     lineHeight: 1.6, headingLineHeight: 1.4,
     weight: { regular: 400, medium: 500, strong: 600 },
   },

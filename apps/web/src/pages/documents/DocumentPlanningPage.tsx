@@ -18,8 +18,10 @@ import {
   Alert,
   Button,
   Empty,
+  Input,
   Layout,
   Modal,
+  Select,
   Space,
   Spin,
   Tabs,
@@ -32,12 +34,13 @@ import {
   ArrowLeftOutlined,
   CloseOutlined,
   DownloadOutlined,
+  PlusOutlined,
   EyeOutlined,
   ExclamationCircleOutlined,
-  FileDoneOutlined,
   FileTextOutlined,
   PauseCircleOutlined,
   ReloadOutlined,
+  SearchOutlined,
 } from "@ant-design/icons";
 import {
   fetchProductKnowledgeGraph,
@@ -52,6 +55,7 @@ import {
   resumeDocumentGeneration,
   startDocumentGeneration,
   stopDocumentGeneration,
+  type DocumentKind,
   type DocumentQualityScore,
   type DocumentEvidenceBlockerGroup,
   type DocumentGenerationRun,
@@ -61,7 +65,6 @@ import {
   type DocumentWorkflowStage,
 } from "../../api/document-api";
 import { ModelProfileSelector } from "../../components/ModelProfileSelector";
-import { WorkspaceLocalStoragePanel } from "../../components/WorkspaceLocalStoragePanel";
 import { TodoCard } from "../../components/TodoCard";
 import {
   KnowledgeGraphView,
@@ -69,6 +72,10 @@ import {
   getKnowledgeGraphNodeColor,
 } from "../../components/KnowledgeGraphView";
 import { formatDisplayId } from "../../utils/display-id";
+import {
+  buildContentSummary,
+  extractMarkdownOutline,
+} from "../../utils/markdown-outline";
 import { renderMarkdown } from "../../utils/markdown";
 import { mapErrorToChinese } from "../../utils/errors";
 import type { ModelUsageProfile, ThreadInfo } from "../../types";
@@ -107,6 +114,20 @@ const STAGE_LABELS: Record<DocumentWorkflowStage, string> = {
   exportPrd: "导出 PRD",
 };
 
+/** 文档表格中的一行；当前只有 PRD 一个真实产物来源。 */
+interface DocumentRow {
+  id: string;
+  title: string;
+  kind: DocumentKind;
+  kindLabel: string;
+  updatedAt: string;
+  statusLabel: string;
+  /** 状态色调，与 .doc-status[data-tone] 对应。 */
+  tone: "done" | "running" | "idle";
+  /** 可预览/下载的正文；进行中的行为 null。 */
+  markdown: string | null;
+}
+
 /**
  * 策划产出文档页面。
  */
@@ -139,6 +160,11 @@ export function DocumentPlanningPage({
     title: string;
     markdown: string;
   } | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [kindFilter, setKindFilter] = useState<DocumentKind | "all">("all");
+  const [statusFilter, setStatusFilter] = useState<
+    "all" | "done" | "running" | "idle"
+  >("all");
   const [messageApi, contextHolder] = message.useMessage();
 
   const run = documentState.run;
@@ -356,6 +382,89 @@ export function DocumentPlanningPage({
 
   const statusTag = useMemo(() => renderRunStatus(run), [run]);
 
+  /**
+   * 文档表格行。
+   *
+   * 当前只有「最新一版 PRD」这一个真实产物来源，因此最多一行；生成中且尚无
+   * 产物时用 run 生成一行进行中状态，保证运行态在列表里可见。列表接口提供后
+   * 只需在此处追加数据源。
+   */
+  const rows = useMemo<DocumentRow[]>(() => {
+    if (artifact) {
+      return [
+        {
+          id: artifact.id,
+          title: artifact.title,
+          kind: "prd",
+          kindLabel: `PRD · v${artifact.version}`,
+          updatedAt: artifact.updatedAt,
+          statusLabel: "已生成",
+          tone: "done",
+          markdown: artifact.markdown,
+        },
+      ];
+    }
+    if (run) {
+      return [
+        {
+          id: run.id,
+          title: `PRD（${
+            runActive
+              ? "生成中"
+              : run.status === "failed"
+                ? "生成失败"
+                : "未完成"
+          }）`,
+          kind: "prd",
+          kindLabel: "PRD",
+          updatedAt: run.updatedAt,
+          statusLabel: runActive
+            ? "生成中"
+            : run.status === "failed"
+              ? "失败"
+              : "未完成",
+          tone: runActive ? "running" : "idle",
+          markdown: null,
+        },
+      ];
+    }
+    return [];
+  }, [artifact, run, runActive]);
+
+  const kindCounts = useMemo(
+    () => ({
+      all: rows.length,
+      prd: rows.filter((row) => row.kind === "prd").length,
+      mrd: 0,
+      brd: 0,
+    }),
+    [rows],
+  );
+  const statusCounts = useMemo(
+    () => ({
+      all: rows.length,
+      done: rows.filter((row) => row.tone === "done").length,
+      running: rows.filter((row) => row.tone === "running").length,
+      idle: rows.filter((row) => row.tone === "idle").length,
+    }),
+    [rows],
+  );
+  const visibleRows = useMemo(
+    () =>
+      rows.filter(
+        (row) =>
+          (kindFilter === "all" || row.kind === kindFilter) &&
+          (statusFilter === "all" || row.tone === statusFilter),
+      ),
+    [kindFilter, rows, statusFilter],
+  );
+
+  /** 当前产物的章节结构；来自产物 Markdown 的真实标题层级。 */
+  const outline = useMemo(
+    () => (artifact ? extractMarkdownOutline(artifact.markdown) : []),
+    [artifact],
+  );
+
   return (
     <Content
       className={
@@ -407,43 +516,11 @@ export function DocumentPlanningPage({
             <div
               className={
                 hideGraph
-                  ? "grid grid-cols-1 gap-4"
-                  : "grid grid-cols-1 2xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.55fr)] gap-4"
+                  ? "grid grid-cols-1 gap-5"
+                  : "grid grid-cols-1 gap-5 desktop:grid-cols-[minmax(0,1.6fr)_minmax(340px,0.7fr)]"
               }
             >
-              {/* 图谱画布；在交付文档面板内隐藏，避免与「知识图谱」入口重复。 */}
-              {!hideGraph && (
-                <section className="min-h-[620px] rounded border border-gray-200 bg-white overflow-hidden 2xl:sticky 2xl:top-0 2xl:self-start">
-                  <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-                    <div>
-                      <Text strong>当前知识图谱</Text>
-                      <Text type="secondary" className="ml-2 text-xs">
-                        {kgData
-                          ? `${kgData.nodes.length} 节点 / ${kgData.relations.length} 关系`
-                          : "未加载"}
-                      </Text>
-                    </div>
-                    {kgData?.updatedAt && (
-                      <Text type="secondary" className="text-xs">
-                        v{kgData.version}
-                      </Text>
-                    )}
-                  </div>
-                  {graphReady ? (
-                    <KnowledgeGraphView
-                      nodes={kgData?.nodes ?? []}
-                      relations={kgData?.relations ?? []}
-                      onNodeSelect={setSelectedNode}
-                    />
-                  ) : (
-                    <div className="h-[620px] flex items-center justify-center">
-                      <Empty description="当前工作区还没有可用于生成文档的知识图谱" />
-                    </div>
-                  )}
-                </section>
-              )}
-
-              <aside className="flex flex-col gap-4">
+              <div className="flex min-w-0 flex-col gap-5">
                 {error && (
                   <Alert
                     type="error"
@@ -503,57 +580,212 @@ export function DocumentPlanningPage({
                   />
                 )}
 
-                {/* 节点详情依赖图谱选择；隐藏图谱时一并隐藏，避免出现空面板。 */}
-                {!hideGraph && (
-                  <NodeDetailPanel
-                    node={selectedNode}
-                    totalNodes={kgData?.nodes.length ?? 0}
-                    onClose={() => setSelectedNode(null)}
-                  />
-                )}
-
-                <section className="rounded border border-gray-200 bg-white p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <Text strong>Document Agent</Text>
-                      <Text type="secondary" className="block text-xs mt-1">
-                        PRD 工作流独立运行，页面切换不会中断后台任务。
+                {/* 交付文档：以文档库为主体，作用域内的工具与列表在同一表面内。 */}
+                <section className="doc-surface">
+                  <header className="doc-surface-head">
+                    <div className="min-w-0">
+                      <Text strong className="block truncate">
+                        交付文档管理
                       </Text>
                     </div>
-                    {runActive && <Spin size="small" />}
+                    <Text type="secondary" className="doc-surface-count">
+                      已生成：{artifact ? 1 : 0} · 生成中：{runActive ? 1 : 0}
+                    </Text>
+                  </header>
+
+                  <div className="doc-surface-tools">
+                    <span className="doc-tools-label">快捷生成文档</span>
+                    <Space size="small" wrap>
+                      <Button
+                        size="small"
+                        icon={<FileTextOutlined />}
+                        loading={starting}
+                        disabled={
+                          !graphReady ||
+                          runActive ||
+                          awaitingInput ||
+                          modelProfiles.length === 0
+                        }
+                        onClick={handleGeneratePrd}
+                      >
+                        生成 PRD 文档
+                      </Button>
+                      {/*
+                        后端目前只实现 PRD（document-generation-service 对其它 kind
+                        直接返回 400），因此这里如实禁用而不是提供假入口。
+                      */}
+                      <Tooltip title="后端暂只支持生成 PRD">
+                        <Button size="small" icon={<PlusOutlined />} disabled>
+                          生成 MRD 文档
+                        </Button>
+                      </Tooltip>
+                      <Tooltip title="后端暂只支持生成 PRD">
+                        <Button size="small" icon={<PlusOutlined />} disabled>
+                          生成 BRD 文档
+                        </Button>
+                      </Tooltip>
+                    </Space>
                   </div>
 
-                  <div className="mt-4 flex flex-col gap-2 text-sm">
-                    <InfoRow label="任务 ID" value={run?.id ?? "-"} />
-                    <InfoRow
-                      label="当前阶段"
-                      value={
-                        run?.currentStage
-                          ? STAGE_LABELS[run.currentStage]
-                          : runActive
-                            ? "等待调度"
-                            : "-"
-                      }
+                  {/*
+                    搜索与过滤。
+                    项目当前没有「文档列表」接口，一次只能取到最新一版 PRD，因此这里
+                    只在真实数据量下提供可生效的过滤，并如实显示当前范围，不做无效控件。
+                  */}
+                  <div className="doc-surface-filters">
+                    <Tooltip title="当前工作区只有一版 PRD，列表接口提供后启用搜索">
+                      <span className="doc-filter-search">
+                        <Input
+                          size="small"
+                          prefix={<SearchOutlined />}
+                          placeholder="搜索文档..."
+                          value={searchQuery}
+                          onChange={(event) => setSearchQuery(event.target.value)}
+                          disabled
+                          aria-label="搜索文档"
+                        />
+                      </span>
+                    </Tooltip>
+                    <Select
+                      size="small"
+                      value={kindFilter}
+                      onChange={setKindFilter}
+                      aria-label="文档类型"
+                      options={[
+                        { value: "all", label: `文档类型：全部（${kindCounts.all}）` },
+                        ...(["prd", "mrd", "brd"] as const).map((kind) => ({
+                          value: kind,
+                          label: `${kind.toUpperCase()}（${kindCounts[kind]}）`,
+                          disabled: kindCounts[kind] === 0,
+                        })),
+                      ]}
                     />
-                    <InfoRow
-                      label="完成时间"
-                      value={run?.finishedAt ? formatDate(run.finishedAt) : "-"}
+                    <Select
+                      size="small"
+                      value={statusFilter}
+                      onChange={setStatusFilter}
+                      aria-label="生成状态"
+                      options={[
+                        {
+                          value: "all",
+                          label: `生成状态：全部（${statusCounts.all}）`,
+                        },
+                        {
+                          value: "done",
+                          label: `已生成（${statusCounts.done}）`,
+                          disabled: statusCounts.done === 0,
+                        },
+                        {
+                          value: "running",
+                          label: `生成中（${statusCounts.running}）`,
+                          disabled: statusCounts.running === 0,
+                        },
+                        {
+                          value: "idle",
+                          label: `未完成（${statusCounts.idle}）`,
+                          disabled: statusCounts.idle === 0,
+                        },
+                      ]}
                     />
-                    {run?.errorMessage && (
-                      <Alert
-                        type="warning"
-                        showIcon
-                        message={run.errorMessage}
-                      />
+                  </div>
+
+                  {/* 文档列表：只有 PRD 一种真实产物，暂不提供无效的搜索与筛选。 */}
+                  <div className="doc-table" role="table" aria-label="交付文档列表">
+                    <div className="doc-table-head" role="row">
+                      <span role="columnheader">文档名称</span>
+                      <span role="columnheader">文档类型</span>
+                      <span role="columnheader">更新时间</span>
+                      <span role="columnheader">状态</span>
+                      <span role="columnheader">操作</span>
+                    </div>
+                    {visibleRows.length > 0 ? (
+                      visibleRows.map((row) => (
+                        <div className="doc-table-row" role="row" key={row.id}>
+                          <span className="doc-cell-name" role="cell">
+                            <FileTextOutlined aria-hidden="true" />
+                            {row.markdown ? (
+                              <button
+                                type="button"
+                                title={row.title}
+                                onClick={() =>
+                                  setPreviewDocument({
+                                    title: row.title,
+                                    markdown: row.markdown ?? "",
+                                  })
+                                }
+                              >
+                                {row.title}
+                              </button>
+                            ) : (
+                              <span className="doc-cell-muted" title={row.title}>
+                                {row.title}
+                              </span>
+                            )}
+                          </span>
+                          <span role="cell" className="doc-cell-muted">
+                            {row.kindLabel}
+                          </span>
+                          <span role="cell" className="doc-cell-muted">
+                            {formatDate(row.updatedAt)}
+                          </span>
+                          <span role="cell">
+                            <span className="doc-status" data-tone={row.tone}>
+                              <i aria-hidden="true" />
+                              {row.statusLabel}
+                            </span>
+                          </span>
+                          <span role="cell" className="doc-cell-actions">
+                            {row.markdown && (
+                              <>
+                                <Tooltip title="查看完整 Markdown">
+                                  <Button
+                                    type="text"
+                                    size="small"
+                                    aria-label="查看完整 Markdown"
+                                    icon={<EyeOutlined />}
+                                    onClick={() =>
+                                      setPreviewDocument({
+                                        title: row.title,
+                                        markdown: row.markdown ?? "",
+                                      })
+                                    }
+                                  />
+                                </Tooltip>
+                                <Tooltip title="下载 Markdown">
+                                  <Button
+                                    type="text"
+                                    size="small"
+                                    aria-label="下载 Markdown"
+                                    icon={<DownloadOutlined />}
+                                    onClick={() =>
+                                      handleDownloadMarkdown(
+                                        row.markdown ?? "",
+                                        row.title,
+                                      )
+                                    }
+                                  />
+                                </Tooltip>
+                              </>
+                            )}
+                          </span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="doc-table-empty">
+                        <Empty
+                          image={Empty.PRESENTED_IMAGE_SIMPLE}
+                          description={
+                            rows.length > 0
+                              ? "当前筛选条件下没有文档，请调整筛选。"
+                              : graphReady
+                                ? "还没有 PRD 交付物，点击「生成 PRD 文档」开始。"
+                                : "当前工作区还没有可用于生成文档的知识图谱。"
+                          }
+                        />
+                      </div>
                     )}
                   </div>
                 </section>
-
-                {run?.todos && run.todos.length > 0 && (
-                  <TodoCard todos={run.todos} />
-                )}
-
-                <ReasoningLogPanel entries={run?.reasoningLog ?? []} />
 
                 <ScoringResultPanel
                   attempts={scoringAttempts}
@@ -573,29 +805,185 @@ export function DocumentPlanningPage({
                   }
                 />
 
-                <WorkspaceLocalStoragePanel workspaceId={workspaceId} refreshKey={`${artifact?.id ?? ""}:${artifact?.updatedAt ?? ""}`} disabled={runActive} />
-                {artifact && (
-                  <section className="rounded border border-gray-200 bg-white p-4">
-                    <div className="flex items-center justify-between gap-3 mb-3">
-                      <div className="min-w-0">
-                        <Text strong className="block truncate">
-                          {artifact.title}
-                        </Text>
-                        <Text type="secondary" className="text-xs">
-                          PRD v{artifact.version}
+                {/*
+                  工作流明细：任务列表与执行日志原来铺在页面右侧，视觉权重高于
+                  文档本身；改为折叠区保留在同一列，默认收起、需要时展开。
+                */}
+                <details className="doc-surface doc-workflow">
+                  <summary>
+                    <span className="doc-workflow-title">工作流明细</span>
+                    <span className="doc-workflow-meta">
+                      {run?.todos && run.todos.length > 0
+                        ? `任务列表 ${run.todos.filter((todo) => todo.status === "completed").length}/${run.todos.length}`
+                        : "暂无任务记录"}
+                      {run?.reasoningLog && run.reasoningLog.length > 0
+                        ? ` · 执行日志 ${run.reasoningLog.length}`
+                        : ""}
+                    </span>
+                  </summary>
+
+                  <div className="doc-workflow-body">
+                    <div className="doc-workflow-agent">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <Text strong>Document Agent</Text>
+                          <Text type="secondary" className="block text-xs mt-1">
+                            PRD 工作流独立运行，页面切换不会中断后台任务。
+                          </Text>
+                        </div>
+                        {runActive && <Spin size="small" />}
+                      </div>
+                      <div className="mt-3 flex flex-col gap-2 text-sm">
+                        <InfoRow label="任务 ID" value={run?.id ?? "-"} />
+                        <InfoRow
+                          label="当前阶段"
+                          value={
+                            run?.currentStage
+                              ? STAGE_LABELS[run.currentStage]
+                              : runActive
+                                ? "等待调度"
+                                : "-"
+                          }
+                        />
+                        <InfoRow
+                          label="完成时间"
+                          value={
+                            run?.finishedAt ? formatDate(run.finishedAt) : "-"
+                          }
+                        />
+                        {run?.errorMessage && (
+                          <Alert
+                            type="warning"
+                            showIcon
+                            message={run.errorMessage}
+                          />
+                        )}
+                      </div>
+                    </div>
+
+                    {run?.todos && run.todos.length > 0 && (
+                      <TodoCard todos={run.todos} />
+                    )}
+
+                    <ReasoningLogPanel entries={run?.reasoningLog ?? []} />
+                  </div>
+                </details>
+              </div>
+
+              <aside className="flex min-w-0 flex-col gap-4">
+                {/* 图谱画布；在交付文档面板内隐藏，避免与「知识图谱」入口重复。 */}
+                {!hideGraph && (
+                  <section className="min-h-[480px] rounded border border-gray-200 bg-white overflow-hidden">
+                    <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+                      <div>
+                        <Text strong>当前知识图谱</Text>
+                        <Text type="secondary" className="ml-2 text-xs">
+                          {kgData
+                            ? `${kgData.nodes.length} 节点 / ${kgData.relations.length} 关系`
+                            : "未加载"}
                         </Text>
                       </div>
-                      <Space size="small" wrap>
-                        <Tag color="processing" icon={<FileDoneOutlined />}>
-                          推荐版本
-                          {qualityScore
-                            ? ` · 第 ${qualityScore.selectedAttempt} 轮`
-                            : ""}
-                        </Tag>
+                      {kgData?.updatedAt && (
+                        <Text type="secondary" className="text-xs">
+                          v{kgData.version}
+                        </Text>
+                      )}
+                    </div>
+                    {graphReady ? (
+                      <KnowledgeGraphView
+                        className="h-[480px]"
+                        nodes={kgData?.nodes ?? []}
+                        relations={kgData?.relations ?? []}
+                        onNodeSelect={setSelectedNode}
+                      />
+                    ) : (
+                      <div className="h-[480px] flex items-center justify-center">
+                        <Empty description="当前工作区还没有可用于生成文档的知识图谱" />
+                      </div>
+                    )}
+                  </section>
+                )}
+
+                {/* 节点详情依赖图谱选择；隐藏图谱时一并隐藏，避免出现空面板。 */}
+                {!hideGraph && (
+                  <NodeDetailPanel
+                    node={selectedNode}
+                    totalNodes={kgData?.nodes.length ?? 0}
+                    onClose={() => setSelectedNode(null)}
+                  />
+                )}
+
+                {/* 文档预览：默认展示当前产出，与左侧文档列表联动。 */}
+                <section className="rounded border border-gray-200 bg-white p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <Text strong>文档预览</Text>
+                    {statusTag}
+                  </div>
+
+                  {artifact || run ? (
+                    <>
+                      <div className="doc-preview-meta">
+                        更新时间：{formatDate(artifact?.updatedAt ?? run?.updatedAt ?? "")}
+                      </div>
+
+                      <div className="doc-preview-title">
+                        <span className="doc-preview-label">文档名称</span>
+                        <Text strong className="block truncate">
+                          {artifact?.title ?? "PRD（生成中）"}
+                        </Text>
+                      </div>
+
+                      {/* 章节结构：来自产物 Markdown 的真实标题层级。 */}
+                      <div className="doc-preview-section">
+                        <span className="doc-preview-label">章节结构</span>
+                        {outline.length > 0 ? (
+                          <ol className="doc-outline scrollbar-none-thin">
+                            {outline.map((item) => (
+                              <li
+                                key={item.id}
+                                data-level={item.level}
+                                title={item.text}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    artifact &&
+                                    setPreviewDocument({
+                                      title: artifact.title,
+                                      markdown: artifact.markdown,
+                                    })
+                                  }
+                                >
+                                  {item.text}
+                                </button>
+                              </li>
+                            ))}
+                          </ol>
+                        ) : (
+                          <Text type="secondary" className="text-xs">
+                            {artifact
+                              ? "该文档没有可解析的标题层级。"
+                              : "生成完成后显示章节结构。"}
+                          </Text>
+                        )}
+                      </div>
+
+                      <div className="doc-preview-body">
+                        <span className="doc-preview-label">内容预览</span>
+                        <Text type="secondary" className="text-xs">
+                          {artifact
+                            ? `${buildContentSummary(outline, artifact.markdown)}正文、图表和原型图在完整 Markdown 弹窗中展示。`
+                            : "生成完成后可在此查看与下载。"}
+                        </Text>
+                      </div>
+
+                      <Space size="small" wrap className="mt-3">
                         <Button
-                          size="small"
+                          type="primary"
                           icon={<EyeOutlined />}
+                          disabled={!artifact}
                           onClick={() =>
+                            artifact &&
                             setPreviewDocument({
                               title: artifact.title,
                               markdown: artifact.markdown,
@@ -605,24 +993,33 @@ export function DocumentPlanningPage({
                           查看完整 MD
                         </Button>
                         <Button
-                          size="small"
                           icon={<DownloadOutlined />}
+                          disabled={!artifact}
                           onClick={() =>
+                            artifact &&
                             handleDownloadMarkdown(
                               artifact.markdown,
                               artifact.title,
                             )
                           }
                         >
-                          下载 MD
+                          下载 Markdown
                         </Button>
                       </Space>
-                    </div>
-                    <Text type="secondary" className="text-xs">
-                      正文、图表和原型图仅在完整 Markdown 弹窗中展示。
-                    </Text>
-                  </section>
-                )}
+                    </>
+                  ) : (
+                    <Empty
+                      className="mt-4"
+                      image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      description="暂无交付文档"
+                    />
+                  )}
+                </section>
+                {/*
+                  本地同步诊断不属于文档工作区：项目本地状态统一由 Workspace
+                  Header 的同步状态承载，这里不再重复展示路径与副本说明。
+                  同步能力本身未改动，仍由该状态入口驱动。
+                */}
               </aside>
             </div>
           )}

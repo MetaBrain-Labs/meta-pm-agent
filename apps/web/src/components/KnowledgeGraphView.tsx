@@ -22,7 +22,7 @@ import {
   useState,
 } from "react";
 import { Graph } from "@antv/g6";
-import { Spin, Typography } from "antd";
+import { Button, Spin, Typography } from "antd";
 import type {
   KnowledgeGraphNodeData,
   KnowledgeGraphRelationData,
@@ -194,6 +194,36 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
+/**
+ * 记录画布到根元素之间各级的实测尺寸与关键计算样式。
+ *
+ * 容器拿不到高度可能断在任意一层；只列高度不足以判断，因此同时记录 position /
+ * inset / display —— 例如绝对定位失效时高度就是 0，但原因在样式而不是布局。
+ */
+function buildSizeProbe(container: HTMLElement): string {
+  const parts: string[] = [];
+  let element: HTMLElement | null = container;
+  let depth = 0;
+
+  while (element && depth < 10) {
+    const name =
+      element.id ||
+      element.className?.toString().split(/\s+/).slice(0, 2).join(".") ||
+      element.tagName.toLowerCase();
+    const style = getComputedStyle(element);
+    parts.push(
+      `${depth}:${name || element.tagName.toLowerCase()} h=${element.clientHeight} w=${element.clientWidth} [${style.position} ${style.display} ${style.inset}]`,
+    );
+    element = element.parentElement;
+    depth += 1;
+  }
+
+  const spacing = getComputedStyle(document.documentElement).getPropertyValue(
+    "--ds-spacing-xs",
+  );
+  return `--ds-spacing-xs="${spacing.trim()}" | ${parts.join(" → ")}`;
+}
+
 /** 将业务知识图谱转换为 G6 图数据。 */
 function buildGraphData(
   nodes: KnowledgeGraphNodeData[],
@@ -359,8 +389,7 @@ export const KnowledgeGraphView = forwardRef<
     onNodeSelect,
     onRelationSelect,
     className = "h-[620px]",
-  },
-  ref,
+  },  ref,
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
   const graphRef = useRef<Graph | null>(null);
@@ -373,6 +402,22 @@ export const KnowledgeGraphView = forwardRef<
   const rebuildTokenRef = useRef(0);
   const [graphReady, setGraphReady] = useState(false);
   const [renderError, setRenderError] = useState<string | null>(null);
+  /**
+   * 实例是否真的建立过。
+   *
+   * 与 graphReady 区分开：容器始终没有尺寸时重试会耗尽，此时 graphReady 为 true
+   * 但实例从未创建——只看 graphReady 会渲染出一块没有任何解释的空白。
+   */
+  const [graphCreated, setGraphCreated] = useState(false);
+  /** 手动重试计数；变化时重新执行初始化。 */
+  const [retryToken, setRetryToken] = useState(0);
+  /**
+   * 容器始终没有尺寸时的各级实测值。
+   *
+   * 画布需要容器先有尺寸；这条链路跨越外壳、面板、面板内容好几层，仅凭样式推断
+   * 容易误判，因此直接把每级 clientHeight 记下来呈现给使用者与排查者。
+   */
+  const [sizeProbe, setSizeProbe] = useState<string | null>(null);
 
   nodesRef.current = nodes;
   relationsRef.current = relations;
@@ -673,6 +718,7 @@ export const KnowledgeGraphView = forwardRef<
     // 插件成员依赖当前节点集合，数据变化时重建实例以避免保留旧 BubbleSets。
     cleanup();
     setGraphReady(false);
+    setGraphCreated(false);
     setRenderError(null);
     /** 本次重建的世代号；只有最新世代可以改状态、画图谱。 */
     const token = ++rebuildTokenRef.current;
@@ -688,12 +734,17 @@ export const KnowledgeGraphView = forwardRef<
             RETRY_INTERVAL,
           );
         } else {
+          // 重试耗尽：如实结束加载态，并记录各级实测高度供定位。
+          const probe = buildSizeProbe(container);
+          console.error("[kg-graph] Container never received a size:", probe);
+          setSizeProbe(probe);
           setGraphReady(true);
         }
         return;
       }
       try {
         createGraph(container);
+        if (isCurrent()) setGraphCreated(true);
       } catch (error) {
         /*
          * 构造 G6 实例本身抛错时（例如某些筛选组合下的数据形态），原先既不画
@@ -719,7 +770,12 @@ export const KnowledgeGraphView = forwardRef<
         timerRef.current = null;
       }
     };
-  }, [active, cleanup, createGraph, nodes, relations]);
+  }, [active, cleanup, createGraph, nodes, relations, retryToken]);
+
+  /** 手动重试：重新走一次初始化，不改变任何数据。 */
+  const handleRetry = useCallback(() => {
+    setRetryToken((value) => value + 1);
+  }, []);
 
   /**
    * 容器尺寸变化（侧栏收放、分栏拖动、Inspector 开合、全屏、窗口缩放）后同步画布。
@@ -812,12 +868,21 @@ export const KnowledgeGraphView = forwardRef<
   useEffect(() => cleanup, [cleanup]);
 
   return (
-    // overflow-hidden 是必需的：G6 画布尺寸由容器在创建时决定，容器变窄后
-    // 在重算完成前画布会大于容器，缺少裁剪就会溢出到相邻栏和下方卡片上。
-    <div className={`relative w-full overflow-hidden bg-white ${className}`}>
-      <div ref={containerRef} className="absolute inset-0" />
+    /*
+     * overflow-hidden 是必需的：G6 画布尺寸由容器在创建时决定，容器变窄后
+     * 在重算完成前画布会大于容器，缺少裁剪就会溢出到相邻栏和下方卡片上。
+     *
+     * 外层用 flex 纵向排布，画布容器作为 flex 项拿到确定高度：
+     * - 传入固定高度（`h-[480px]` 等）时，容器高度 = 该高度；
+     * - 传入 `h-full` 或放在已分配高度的父级里时，高度由 flex 分配。
+     * 不再使用 `absolute inset-0`——那条路径依赖绝对定位与百分比解析，
+     * 实测在部分父容器下会算成 0 高度，画布因此拿不到尺寸。
+     */
+    <div className={`kg-canvas-frame ${className}`}>
+      <div ref={containerRef} className="kg-canvas-host" />
+
       {renderError ? (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-white px-6 text-center">
+        <div className="kg-canvas-notice">
           <Text strong>图谱渲染失败</Text>
           <Text type="secondary" className="max-w-[420px] text-xs">
             {renderError}
@@ -826,9 +891,32 @@ export const KnowledgeGraphView = forwardRef<
             可先调整筛选条件或收起部分类型后重试。
           </Text>
         </div>
+      ) : graphReady && !graphCreated ? (
+        /*
+         * 结束加载但实例从未建立：说明容器在重试窗口内始终没有尺寸。
+         * 这种情况此前会留下"既不转圈也没有图谱"的空白画布，现在如实说明。
+         */
+        <div className="kg-canvas-notice">
+          <Text strong>画布尺寸未就绪</Text>
+          <Text type="secondary" className="max-w-[420px] text-xs">
+            容器在可等待的时间内没有获得高度，图谱无法创建。
+          </Text>
+          {sizeProbe && (
+            <Text
+              type="secondary"
+              className="kg-size-probe scrollbar-none-thin"
+              title={sizeProbe}
+            >
+              {sizeProbe}
+            </Text>
+          )}
+          <Button size="small" onClick={handleRetry}>
+            重试
+          </Button>
+        </div>
       ) : (
         !graphReady && (
-          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-white">
+          <div className="kg-canvas-notice">
             <Spin size="large" />
             <Text type="secondary">
               正在渲染知识图谱，节点较多请耐心等待...

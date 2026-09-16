@@ -769,7 +769,7 @@ function AgentInterruptedCard({
   onContinue?: () => void;
 }) {
   return (
-    <div className="mb-2 rounded-lg border border-[#fbbf24] bg-[#fffbeb] px-4 py-3 text-[#92400e]">
+    <div className="mb-2 rounded-lg border border-[var(--ds-color-warning)] bg-[var(--ds-color-warning-soft)] px-4 py-3 text-[var(--ds-color-warning)]">
       <div className="mb-1 flex items-center justify-between gap-3">
         <span className="text-[13px] font-bold">
           连接中断，工作流已停止
@@ -777,7 +777,7 @@ function AgentInterruptedCard({
         {onContinue && (
           <button
             type="button"
-            className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-[#fbbf24] bg-white px-2 py-1 text-[12px] font-bold text-[#92400e]"
+            className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-[var(--ds-color-warning)] bg-[var(--surface)] px-2 py-1 text-[var(--ds-font-size-small)] font-bold text-[var(--ds-color-warning)]"
             onClick={(event) => {
               event.stopPropagation();
               onContinue();
@@ -811,7 +811,7 @@ function AgentErrorCard({
 
   return (
     <>
-      <div className="mb-2 rounded-lg border border-[#fca5a5] bg-[#fef2f2] px-4 py-3 text-[#991b1b]">
+      <div className="mb-2 rounded-lg border border-[var(--ds-color-error)] bg-[var(--ds-color-error-soft)] px-4 py-3 text-[var(--ds-color-error)]">
         <div className="mb-1 flex items-center justify-between gap-3">
           <span className="text-[13px] font-bold">
             {getAgentLabel(agentType ?? "agent")} 执行失败
@@ -819,7 +819,7 @@ function AgentErrorCard({
           {onRetry && (
             <button
               type="button"
-              className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-[#fca5a5] bg-white px-2 py-1 text-[12px] font-bold text-[#991b1b]"
+              className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-[var(--ds-color-error)] bg-[var(--surface)] px-2 py-1 text-[var(--ds-font-size-small)] font-bold text-[var(--ds-color-error)]"
               onClick={(event) => {
                 event.stopPropagation();
                 onRetry();
@@ -832,7 +832,7 @@ function AgentErrorCard({
         </div>
         <button
           type="button"
-          className="block w-full cursor-pointer border-0 bg-transparent p-0 text-left text-[#991b1b]"
+          className="block w-full cursor-pointer border-0 bg-transparent p-0 text-left text-[var(--ds-color-error)]"
           onClick={() => setDetailOpen(true)}
         >
           <span
@@ -846,7 +846,7 @@ function AgentErrorCard({
           >
             {message}
           </span>
-          <span className="mt-2 block text-[12px] font-bold text-[#b91c1c]">
+          <span className="mt-2 block text-[12px] font-bold text-[var(--ds-color-error)]">
             点击查看完整错误
           </span>
         </button>
@@ -874,7 +874,7 @@ function AgentErrorCard({
  */
 function WorkflowCompletionCard({ content }: { content: string }) {
   return (
-    <div className="mb-2 rounded-lg border border-[#bbf7d0] bg-[#f0fdf4] px-4 py-3 text-[#166534]">
+    <div className="mb-2 rounded-lg border border-[var(--ds-color-success)] bg-[var(--ds-color-success-soft)] px-4 py-3 text-[var(--ds-color-success)]">
       <div className="mb-1 flex items-center gap-2 text-[13px] font-bold">
         <CheckCircleOutlined />
         <span>本轮流程已结束</span>
