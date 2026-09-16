@@ -96,9 +96,7 @@ export default function App() {
         form={app.projectForm}
         locationHint={app.projectLocationHint}
         creating={app.isCreatingWorkspace}
-        directoryInputRef={app.directoryInputRef}
-        onBrowseDirectory={app.handleBrowseDirectory}
-        onDirectoryInputChange={app.handleDirectoryInputChange}
+        onDirectorySelect={app.handleDirectorySelect}
         onCreate={app.handleNewWorkspace}
         onCancel={() => app.setProjectModalOpen(false)}
       />

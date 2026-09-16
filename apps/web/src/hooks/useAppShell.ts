@@ -13,13 +13,7 @@
  * - 不直接消费聊天 SSE，也不管理文档生成后台轮询。
  */
 
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ChangeEvent,
-} from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Form, Modal } from "antd";
 import type { ThreadInfo, WorkspaceInfo } from "../types";
 import {
@@ -54,7 +48,6 @@ const DEFAULT_DRAFT_CHAT_TITLES = new Set([DEFAULT_CHAT_TITLE, "New Chat"]);
  */
 export function useAppShell() {
   const [projectForm] = Form.useForm<{ name: string; location?: string }>();
-  const directoryInputRef = useRef<HTMLInputElement | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(
@@ -320,43 +313,11 @@ export function useAppShell() {
     [projectForm, workspaces],
   );
 
-  const handleBrowseDirectory = useCallback(async () => {
-    type DirectoryPickerWindow = Window & {
-      showDirectoryPicker?: () => Promise<{ name: string }>;
-    };
-    const picker = (window as DirectoryPickerWindow).showDirectoryPicker;
-
-    if (picker) {
-      try {
-        const handle = await picker.call(window);
-        const maybePath = (handle as { path?: string }).path;
-        projectForm.setFieldValue("location", maybePath || handle.name);
-        setProjectLocationHint(false);
-        return;
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") {
-          return;
-        }
-      }
-    }
-
-    directoryInputRef.current?.click();
-  }, [projectForm]);
-
-  const handleDirectoryInputChange = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const file = event.currentTarget.files?.[0];
-      const relativePath = file?.webkitRelativePath;
-      const nativePath = (file as (File & { path?: string }) | undefined)?.path;
-      const directoryName = relativePath?.split("/")[0] || file?.name || "";
-      const selectedPath = nativePath || directoryName;
-
-      if (selectedPath) {
-        projectForm.setFieldValue("location", selectedPath);
-        setProjectLocationHint(false);
-      }
-
-      event.currentTarget.value = "";
+  /** 将用户确认的 API 主机绝对目录同步到项目表单。 */
+  const handleDirectorySelect = useCallback(
+    (directoryPath: string) => {
+      projectForm.setFieldValue("location", directoryPath);
+      setProjectLocationHint(false);
     },
     [projectForm],
   );
@@ -592,10 +553,8 @@ export function useAppShell() {
     configTab,
     configWorkspaceVisible,
     creationError,
-    directoryInputRef,
     handleBackToWorkspaceList,
-    handleBrowseDirectory,
-    handleDirectoryInputChange,
+    handleDirectorySelect,
     handleNewChat,
     handleNewThread,
     handleThreadMessageStarted,

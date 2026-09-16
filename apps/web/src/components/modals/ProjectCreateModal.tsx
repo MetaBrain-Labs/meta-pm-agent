@@ -5,24 +5,24 @@
  *
  * Responsibilities:
  * - 保留可手工编辑的绝对路径输入
- * - 在浏览器可用时调用目录选择能力
+ * - 通过本地服务目录选择器回填绝对路径
  *
  * Notes:
  * - 目录存在性、可读性与规范化由 API 校验。
  */
 
-import type { ChangeEvent, RefObject } from "react";
+import { useEffect, useState } from "react";
 import { Button, Form, Input, Modal, Space, type FormInstance } from "antd";
+import { LocalDirectoryBrowserModal } from "./LocalDirectoryBrowserModal";
 
+/** 项目创建和路径修改表单的交互参数。 */
 interface ProjectCreateModalProps {
   mode: "create" | "path";
   open: boolean;
   form: FormInstance<{ name: string; location?: string }>;
   locationHint: boolean;
   creating: boolean;
-  directoryInputRef: RefObject<HTMLInputElement | null>;
-  onBrowseDirectory: () => void | Promise<void>;
-  onDirectoryInputChange: (event: ChangeEvent<HTMLInputElement>) => void;
+  onDirectorySelect: (directoryPath: string) => void;
   onCreate: () => void | Promise<void>;
   onCancel: () => void;
 }
@@ -36,12 +36,14 @@ export function ProjectCreateModal({
   form,
   locationHint,
   creating,
-  directoryInputRef,
-  onBrowseDirectory,
-  onDirectoryInputChange,
+  onDirectorySelect,
   onCreate,
   onCancel,
 }: ProjectCreateModalProps) {
+  const [directoryBrowserOpen, setDirectoryBrowserOpen] = useState(false);
+  useEffect(() => {
+    if (!open) setDirectoryBrowserOpen(false);
+  }, [open]);
   return (
     <Modal
       mask={{ enabled: true, blur: true, closable: true }}
@@ -79,13 +81,19 @@ export function ProjectCreateModal({
           </Form.Item>
           <div className="project-form-divider" />
 
-          <Form.Item label="项目地址" name="location" className="mb-0">
+          <Form.Item label="项目地址" htmlFor="project-location" className="mb-0">
             <Space.Compact style={{ width: "100%" }}>
-              <Input placeholder="请输入 API 机器可访问的绝对目录路径" />
+              {/* 字段直接绑定输入框，使目录回填和手工编辑同步到表单。 */}
+              <Form.Item name="location" noStyle>
+                <Input
+                  id="project-location"
+                  placeholder="请输入 API 机器可访问的绝对目录路径"
+                />
+              </Form.Item>
               <Button
                 className="w-[30%]"
                 type="primary"
-                onClick={onBrowseDirectory}
+                onClick={() => setDirectoryBrowserOpen(true)}
               >
                 浏览
               </Button>
@@ -93,10 +101,7 @@ export function ProjectCreateModal({
           </Form.Item>
 
           <div className="project-location-note">
-            浏览器可能只返回目录名称，请确认并手工填写 API 机器上的绝对路径。
-            <button type="button" onClick={() => void onBrowseDirectory()}>
-              重新选择
-            </button>
+            点击“浏览”选择文件夹后将自动填写完整路径，也可以直接输入路径。
           </div>
         </div>
         {locationHint && (
@@ -113,12 +118,14 @@ export function ProjectCreateModal({
           </Button>
         </div>
       </Form>
-      <input
-        ref={directoryInputRef}
-        type="file"
-        className="hidden-file-input"
-        onChange={onDirectoryInputChange}
-        {...{ webkitdirectory: "", directory: "" }}
+      <LocalDirectoryBrowserModal
+        open={open && directoryBrowserOpen}
+        initialPath={form.getFieldValue("location")}
+        onSelect={(directoryPath) => {
+          onDirectorySelect(directoryPath);
+          setDirectoryBrowserOpen(false);
+        }}
+        onCancel={() => setDirectoryBrowserOpen(false)}
       />
     </Modal>
   );

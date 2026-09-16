@@ -41,6 +41,27 @@ test("allows local chat preflight", async () => {
   assert.equal(response.headers.get("access-control-allow-origin"), "http://localhost:3000");
 });
 
+/** 验证目录浏览接口也受本地来源限制，拒绝后不返回目录列表。 */
+test("protects local directory browsing from external origins", async () => {
+  const response = await createApp().request("/api/local-directories", {
+    headers: { Origin: "https://example.com" },
+  });
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), { error: "Browser origin is not allowed." });
+});
+
+/** 验证实际应用为允许的本地前端挂载目录浏览接口。 */
+test("serves local directory browsing for allowed origins", async () => {
+  const response = await createApp().request("/api/local-directories", {
+    headers: { Origin: "http://localhost:3000" },
+  });
+  assert.equal(response.status, 200);
+  const listing = await response.json();
+  assert.equal(typeof listing.currentPath, "string");
+  assert.ok(Array.isArray(listing.directories));
+  assert.ok(Array.isArray(listing.roots));
+});
+
 test("serves the health endpoint", async () => {
   const response = await createApp().request("/api/health");
 
