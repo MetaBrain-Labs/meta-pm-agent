@@ -1,16 +1,19 @@
 /**
  * 聊天工作区主视图
  *
- * 负责渲染单个工作区内的聊天消息、输入框、工具入口和工作流辅助弹窗。
- * 页面级数据读写由 ThreadChatPage 和 API 模块提供，本组件只管理浏览器侧交互状态。
+ * 负责渲染单个工作区内的聊天消息、输入框和工作流辅助弹窗，并把对话栏与工作区
+ * 面板组合到统一外壳中。页面级数据读写由 ThreadChatPage 和 API 模块提供，
+ * 本组件只管理浏览器侧交互状态。
  *
  * Responsibilities:
- * - 展示聊天消息流、输入框、停止生成和重试入口
+ * - 展示聊天消息流、欢迎态、输入框、停止生成和重试入口
  * - 管理知识图谱与 LangGraph 可视化弹窗
  * - 维护自动滚动、联网搜索开关和当前 Agent 定位行为
+ * - 组合 ConversationPane 与 WorkspaceShell，并把当前面板透传给顶层
  *
  * Notes:
  * - 不直接持久化聊天历史；权威数据通过 API 恢复。
+ * - 不消费 SSE，运行快照由 chat-run-store 提供。
  */
 
 import {
@@ -19,70 +22,38 @@ import {
   useMemo,
   useRef,
   useState,
-  type FormEvent,
+  type ReactNode,
 } from "react";
-import {
-  Button,
-  FloatButton,
-  Input,
-  Skeleton,
-  Splitter,
-  Tooltip,
-  message,
-} from "antd";
-import BorderBeam from "antd/es/border-beam";
-import {
-  ApartmentOutlined,
-  ArrowDownOutlined,
-  ArrowLeftOutlined,
-  CaretRightOutlined,
-  ClearOutlined,
-  PartitionOutlined,
-  SearchOutlined,
-  SendOutlined,
-  StopOutlined,
-} from "@ant-design/icons";
+import { Button, Skeleton, message } from "antd";
+import { ClearOutlined } from "@ant-design/icons";
 import type {
   HumanInTheLoopResume,
   Message,
-  TokenUsageInfo,
   WorkflowRetryRequest,
   ModelUsageProfile,
 } from "../types";
-import {
-  fetchProductKnowledgeGraph,
-  type WorkspaceKnowledgeGraphData,
-} from "../api/chat-api";
+import { type KnowledgeGraphState } from "../hooks/useKnowledgeGraph";
 import { MessageBubble } from "./MessageBubble";
-import { ChatMessageNavigation } from "./ChatMessageNavigation";
+import { QuestionFormView } from "./QuestionForm";
+import { ConversationPane } from "./shell/ConversationPane";
+import { ConversationComposer } from "./shell/ConversationComposer";
 import { useMessageNavigation } from "../hooks/useMessageNavigation";
-import { ModelProfileSelector } from "./ModelProfileSelector";
+import {
+  formatHumanInTheLoopResume,
+  type QuestionForm,
+} from "../utils/question-form";
+import { findPendingQuestionForm } from "../utils/pending-question-form";
 import { KnowledgeGraphModal } from "./modals/KnowledgeGraphModal";
 import {
   LangGraphModal,
   type LangGraphRuntimeState,
   type LangGraphRuntimeStatus,
 } from "./modals/LangGraphModal";
-import { SPLIT_COLLAPSED_KEY, SPLIT_SIZES_KEY } from "../constants/app";
-import {
-  aggregateTokenUsages,
-  formatCost,
-  formatTokens,
-  formatDuration,
-} from "../utils/token-usage";
-
-const { TextArea } = Input;
-
-const EXAMPLE_QUERIES = [
-  "帮我梳理这个产品的核心需求",
-  "为当前项目拆一版 MVP 计划",
-  "生成一份迭代风险清单",
-  "把今天的讨论整理成待办事项",
-];
 
 interface Props {
   workspaceId: string | null;
   workspaceName: string;
+  threadTitle: string | null;
   messages: Message[];
   isLoading: boolean;
   isMessagesLoading: boolean;
@@ -102,11 +73,41 @@ interface Props {
   onStop: () => void;
   onClear: () => void;
   onBack: () => void;
+  /**
+   * 任务历史 / 知识图谱面板内容。
+   *
+   * 两份数据都只存在于聊天页面（当前会话消息、工作区图谱），因此由页面注入渲染
+   * 函数，最终由应用外壳的面板容器渲染，避免把消息与图谱状态提升到外壳。
+   */
+  tasksPanel?: () => ReactNode;
+  /** 把当前任务历史渲染函数登记到外壳；外壳用它渲染任务历史面板。 */
+  onTasksPanelChange?: (renderer: (() => ReactNode) | null) => void;
+  graphPanel?: () => ReactNode;
+  /** 把当前知识图谱渲染函数登记到外壳。 */
+  onGraphPanelChange?: (renderer: (() => ReactNode) | null) => void;
+  /** 工作区图谱数据与加载态；由页面持有，弹窗与面板共用。 */
+  kgState?: KnowledgeGraphState;
+  /** 手动刷新图谱；弹窗在无数据时调用。 */
+  kgRefresh?: () => Promise<void>;
 }
+
+/**
+ * 空会话的快捷任务。
+ *
+ * 文案与行为沿用原有推荐问题：点击即以该问题发起对话，走同一条发送路径。
+ * 这里只补充一行说明，让卡片不再像表单选项。
+ */
+const EXAMPLE_QUERIES: Array<{ label: string; hint: string }> = [
+  { label: "帮我梳理这个产品的核心需求", hint: "明确目标、用户与范围" },
+  { label: "为当前项目拆一版 MVP 计划", hint: "形成阶段性执行方案" },
+  { label: "生成一份迭代风险清单", hint: "识别关键风险与依赖" },
+  { label: "把今天的讨论整理成待办事项", hint: "提炼讨论后的行动事项" },
+];
 
 export function ChatApp({
   workspaceId,
   workspaceName,
+  threadTitle,
   messages,
   isLoading,
   isMessagesLoading,
@@ -119,169 +120,73 @@ export function ChatApp({
   onStop,
   onClear,
   onBack,
+  tasksPanel,
+  onTasksPanelChange,
+  graphPanel,
+  onGraphPanelChange,
+  kgState,
+  kgRefresh,
 }: Props) {
   const [input, setInput] = useState("");
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [userScrolled, setUserScrolled] = useState(false);
-  const [processUserScrolled, setProcessUserScrolled] = useState(false);
-  const [isNarrowLayout, setIsNarrowLayout] = useState(false);
-  const [splitSizes, setSplitSizes] = useState<string[]>(() => {
-    try {
-      const raw = localStorage.getItem(SPLIT_SIZES_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as string[];
-        if (
-          Array.isArray(parsed) &&
-          parsed.length === 2 &&
-          parsed.every((v) => typeof v === "string" && v.endsWith("%"))
-        ) {
-          return parsed;
-        }
-      }
-    } catch {
-      // 缓存数据异常时使用默认比例。
-    }
-    return ["50%", "50%"];
-  });
   const [langGraphModalOpen, setLangGraphModalOpen] = useState(false);
-  const [tokenDetailOpen, setTokenDetailOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const processContainerRef = useRef<HTMLDivElement>(null);
 
-  // 知识图谱下载状态
-  const [kgData, setKgData] = useState<WorkspaceKnowledgeGraphData | null>(
-    null,
-  );
-  const [kgLoading, setKgLoading] = useState(false);
-  const [kgModalOpen, setKgModalOpen] = useState(false);
-  const executorResultRefreshKey = useMemo(
-    () =>
-      messages
-        .flatMap((message) => message.executorResults ?? [])
-        .map((result) => result.task_id)
-        .sort()
-        .join("|"),
-    [messages],
-  );
-
-  // 从历史消息中归档过的 token 用量，供右侧过程栏顶部汇总。
-  const tokenUsages = useMemo(
-    () => aggregateTokenUsages(messages),
-    [messages],
-  );
-
-  // 右侧过程栏顶部 Token 用量汇总行。
-  const tokenTotalTokens = tokenUsages.reduce(
-    (sum, u) => sum + u.totalTokens,
-    0,
-  );
-  const tokenTotalCost = tokenUsages.reduce(
-    (sum, u) => sum + u.costTotal,
-    0,
-  );
-
-  // 持久化分栏比例，保证切换对话后左右栏宽度与上次一致。
-  const handleSplitResize = useCallback((sizes: number[]) => {
-    const percentSizes = sizes.map((v) => `${v}%`);
-    setSplitSizes(percentSizes);
-    try {
-      localStorage.setItem(SPLIT_SIZES_KEY, JSON.stringify(percentSizes));
-    } catch {
-      // 忽略存储异常。
-    }
-  }, []);
-
-  // 持久化右侧过程栏展开/折叠状态（当前 antd Panel 不支持 controlled collapsed，
-  // 仅保存供将来恢复或状态追踪使用）。
-  const handleSplitCollapse = useCallback(
-    (collapsed: boolean[]) => {
-      const processCollapsed = collapsed.length > 1 ? collapsed[1] : false;
-      try {
-        localStorage.setItem(SPLIT_COLLAPSED_KEY, String(processCollapsed));
-      } catch {
-        // 忽略存储异常。
-      }
-    },
-    [],
-  );
-
-  // 工作区切换时仅清理本地缓存，避免进入工作区就触发知识图谱加载。
+  /**
+   * 把两个面板渲染函数登记到外壳；卸载时清空，避免外壳引用失效闭包。
+   *
+   * 注意：调用方必须把传入的函数原样保存，不能用 setState 直接接收——
+   * setState 会把函数当 updater 执行，存下来就不是函数了。
+   */
   useEffect(() => {
-    setKgData(null);
+    onTasksPanelChange?.(tasksPanel ?? null);
+    return () => onTasksPanelChange?.(null);
+  }, [onTasksPanelChange, tasksPanel]);
+
+  useEffect(() => {
+    onGraphPanelChange?.(graphPanel ?? null);
+    return () => onGraphPanelChange?.(null);
+  }, [graphPanel, onGraphPanelChange]);
+
+  // MessageBubble 使用 React.memo：传给它的回调必须在多次渲染间保持同一引用，
+  // 最新状态统一经 ref 读取，避免 memo 命中时使用过期的闭包值。
+  const onSendRef = useRef(onSend);
+  const webSearchEnabledRef = useRef(webSearchEnabled);
+
+  useEffect(() => {
+    onSendRef.current = onSend;
+  }, [onSend]);
+  useEffect(() => {
+    webSearchEnabledRef.current = webSearchEnabled;
+  }, [webSearchEnabled]);
+
+  // 图谱数据由页面持有：对话弹窗与「知识图谱」Tab 共用同一份，避免各自请求。
+  const kgData = kgState?.data ?? null;
+  const kgLoading = kgState?.loading ?? false;
+  const kgDataRef = useRef(kgData);
+  kgDataRef.current = kgData;
+  const kgRefreshRef = useRef(kgRefresh);
+  kgRefreshRef.current = kgRefresh;
+  const [kgModalOpen, setKgModalOpen] = useState(false);
+
+  // 工作区切换时关闭弹窗，避免保留上一个项目的图谱视图。
+  useEffect(() => {
     setKgModalOpen(false);
   }, [workspaceId]);
 
-  const loadKnowledgeGraph = useCallback(async () => {
-    if (!workspaceId) return null;
-
-    setKgLoading(true);
-    try {
-      const data = await fetchProductKnowledgeGraph(workspaceId);
-      setKgData(data);
-      return data;
-    } catch (error) {
-      console.error("[kg] Failed to load knowledge graph:", error);
-      setKgData(null);
-      return null;
-    } finally {
-      setKgLoading(false);
-    }
-  }, [workspaceId]);
-
-  // 每个 Executor 结果流入前端时，API 已完成对应知识图谱归档，此时刷新按钮可用状态。
-  useEffect(() => {
-    if (!workspaceId || !executorResultRefreshKey) return;
-
-    let cancelled = false;
-    setKgLoading(true);
-
-    fetchProductKnowledgeGraph(workspaceId)
-      .then((data) => {
-        if (cancelled) return;
-        setKgData(data);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        console.error("[kg] Failed to refresh knowledge graph:", error);
-      })
-      .finally(() => {
-        if (!cancelled) setKgLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [executorResultRefreshKey, workspaceId]);
-
-  // 打开知识图谱可视化弹窗
+  /** 打开知识图谱可视化弹窗，无数据时给出明确提示。 */
   const handleOpenKgModal = useCallback(async () => {
     if (!workspaceId || kgLoading) return;
 
-    const data = kgData ?? (await loadKnowledgeGraph());
-    if (data?.hasData) {
+    if (!kgDataRef.current) await kgRefreshRef.current?.();
+    if (kgDataRef.current?.hasData) {
       setKgModalOpen(true);
       return;
     }
 
     void message.info("当前工作区暂无可查看的知识图谱数据");
-  }, [kgData, kgLoading, loadKnowledgeGraph, workspaceId]);
-
-  // 按钮是否可用
-  const kgEnabled = Boolean(workspaceId);
-  const useSplitLayout = messages.length > 0;
-  const splitterOrientation = isNarrowLayout ? "vertical" : "horizontal";
-  const hasProcessContent =
-    messages.some(hasAgentProcessContent) || tokenUsages.length > 0;
-
-  useEffect(() => {
-    const media = window.matchMedia("(max-width: 900px)");
-    const syncLayout = () => setIsNarrowLayout(media.matches);
-
-    // 根据视口宽度切换分栏方向，避免窄屏左右栏互相挤压。
-    syncLayout();
-    media.addEventListener("change", syncLayout);
-    return () => media.removeEventListener("change", syncLayout);
-  }, []);
+  }, [kgLoading, workspaceId]);
 
   const isAtBottom = useCallback(() => {
     const el = containerRef.current;
@@ -298,53 +203,84 @@ export function ChatApp({
   /** 暂停自动贴底，让消息导航可以定位历史内容。 */
   const pauseAutoScroll = useCallback(() => setUserScrolled(true), []);
   const messageNavigation = useMessageNavigation(
-    containerRef, `${useSplitLayout}-${splitterOrientation}`, pauseAutoScroll,
+    containerRef,
+    workspaceId ?? "empty",
+    pauseAutoScroll,
   );
 
-  const isProcessAtBottom = useCallback(() => {
-    const el = processContainerRef.current;
-    if (!el) return true;
-    return el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-  }, []);
-
-  const scrollProcessToBottom = useCallback(() => {
-    if (processContainerRef.current) {
-      processContainerRef.current.scrollTop =
-        processContainerRef.current.scrollHeight;
-    }
-  }, []);
-
+  /*
+   * 流式期间只在用户位于底部附近时跟随滚动。
+   *
+   * userScrolled 由滚动事件维护：离开底部即暂停跟随，滚回底部自动恢复，
+   * 因此用户主动上滚查看历史时不会被强行拉回。
+   */
   useEffect(() => {
-    if (!userScrolled) {
-      scrollToBottom();
-    }
+    if (!userScrolled) scrollToBottom();
   }, [messages, userScrolled, scrollToBottom]);
 
+  // 新一轮发送时重新跟随：否则"上滚看历史 → 再发送"会永久停止自动滚动。
   useEffect(() => {
-    if (useSplitLayout && !processUserScrolled) {
-      scrollProcessToBottom();
-    }
-  }, [messages, processUserScrolled, scrollProcessToBottom, useSplitLayout]);
-
-  useEffect(() => {
-    if (!useSplitLayout) return;
-
-    // 分栏刚出现时把两侧都贴到底部，保证过渡后看到最新上下文。
-    setUserScrolled(false);
-    setProcessUserScrolled(false);
-    requestAnimationFrame(() => {
-      scrollToBottom();
-      scrollProcessToBottom();
-    });
-  }, [scrollProcessToBottom, scrollToBottom, useSplitLayout]);
+    if (isLoading) setUserScrolled(false);
+  }, [isLoading]);
 
   const handleScroll = useCallback(() => {
     setUserScrolled(!isAtBottom());
   }, [isAtBottom]);
 
-  const handleProcessScroll = useCallback(() => {
-    setProcessUserScrolled(!isProcessAtBottom());
-  }, [isProcessAtBottom]);
+  /**
+   * 已本地提交的表单 ID。
+   *
+   * 提交后立即登记，避免等待历史恢复期间重复提交；同时让输入区判定"没有待回答
+   * 的问题"，从而把输入框还给用户。
+   */
+  const [submittedFormIds, setSubmittedFormIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const markFormSubmitted = useCallback((formId: string) => {
+    setSubmittedFormIds((prev) => {
+      if (prev.has(formId)) return prev;
+      const next = new Set(prev);
+      next.add(formId);
+      return next;
+    });
+  }, []);
+  const handleFormSubmitted = useCallback(
+    (
+      formId: string,
+      text: string,
+      hitlResume?: HumanInTheLoopResume,
+    ) => {
+      markFormSubmitted(formId);
+      onSendRef.current(text, {
+        webSearchEnabled: webSearchEnabledRef.current,
+        hitlResume,
+      });
+      setUserScrolled(false);
+    },
+    [markFormSubmitted],
+  );
+
+  /**
+   * 待回答的 HITL 表单。
+   *
+   * 运行时暂停等待补充信息时，表单替换输入框占据底部；用户答完提交后输入框
+   * 自动恢复，这样不会出现"既要回答又要打字"的双重入口。
+   */
+  const pendingForm = useMemo(
+    () =>
+      findPendingQuestionForm(messages, submittedFormIds, {
+        streaming: isLoading,
+      }),
+    [isLoading, messages, submittedFormIds],
+  );
+  /**
+   * 消息流是否渲染交互态表单。
+   *
+   * 表单的宿主只有一个：存在待回答表单时由输入区承担，消息流不再重复渲染；
+   * 只有在"正文里有表单但输入区判定它已失效"这种极端情况下才回落到消息流，
+   * 保证任何情况下用户都能看到并回答问题。
+   */
+  const renderInteractiveHitl = !pendingForm;
 
   const lastAgentIdx = (() => {
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -385,7 +321,6 @@ export function ChatApp({
           },
         });
         setUserScrolled(false);
-        setProcessUserScrolled(false);
         return;
       }
 
@@ -394,7 +329,6 @@ export function ChatApp({
         if (previous?.role === "user" && previous.content.trim()) {
           onSend(previous.content.trim(), { webSearchEnabled });
           setUserScrolled(false);
-          setProcessUserScrolled(false);
           return;
         }
       }
@@ -402,31 +336,12 @@ export function ChatApp({
     [disabledReason, isLoading, messages, onSend, webSearchEnabled],
   );
 
-  // MessageBubble 使用 React.memo：传给它的回调必须在多次渲染间保持同一引用，
-  // 最新状态统一经 ref 读取，避免 memo 命中时使用过期的闭包值。
-  const onSendRef = useRef(onSend);
-  const webSearchEnabledRef = useRef(webSearchEnabled);
+  // retryAssistantMessage 的重试回调同样需要稳定引用（见文件顶部的 ref 说明）。
   const retryAssistantMessageRef = useRef(retryAssistantMessage);
 
   useEffect(() => {
-    onSendRef.current = onSend;
-  }, [onSend]);
-  useEffect(() => {
-    webSearchEnabledRef.current = webSearchEnabled;
-  }, [webSearchEnabled]);
-  useEffect(() => {
     retryAssistantMessageRef.current = retryAssistantMessage;
   }, [retryAssistantMessage]);
-
-  const handleSendFormAnswer = useCallback(
-    (text: string, hitlResume?: HumanInTheLoopResume) => {
-      onSendRef.current(text, {
-        webSearchEnabled: webSearchEnabledRef.current,
-        hitlResume,
-      });
-    },
-    [],
-  );
 
   const handleRetryMessage = useCallback((messageId: string) => {
     retryAssistantMessageRef.current(messageId);
@@ -437,552 +352,239 @@ export function ChatApp({
     onSend(input.trim(), { webSearchEnabled });
     setInput("");
     setUserScrolled(false);
-    setProcessUserScrolled(false);
   }, [disabledReason, input, isLoading, onSend, webSearchEnabled]);
 
-  const handleSubmit = (event: FormEvent) => {
-    event.preventDefault();
-    doSubmit();
-  };
-
-  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      doSubmit();
-    }
-  };
-
+  /** 推荐任务直接以该问题发起对话，保持原有发送路径。 */
   const handleExampleClick = (query: string) => {
     if (disabledReason || isLoading) return;
     onSend(query, { webSearchEnabled });
     setUserScrolled(false);
-    setProcessUserScrolled(false);
   };
 
-  const scrollToActiveThinking = useCallback(
-    (agentType: string) => {
-      const container =
-        (useSplitLayout ? processContainerRef.current : containerRef.current) ??
-        containerRef.current;
-      if (!container) return;
+  const showWelcome = messages.length === 0 && !isMessagesLoading;
+  const showMessagesLoading = isMessagesLoading && messages.length === 0;
+  /**
+   * 空会话（New Conversation）与 Active Conversation 的布局在这里分流。
+   *
+   * 只有真正没有消息且不在恢复中时才算空会话；一旦发出第一条消息，
+   * showWelcome 立即为 false，布局自动切回「消息区 + 贴底输入框」。
+   */
+  const isEmptyConversation = showWelcome && !pendingForm;
 
-      // 先退出自动贴底模式，再在下一帧计算目标位置，避免底部自动滚动抢回视口。
-      if (useSplitLayout) {
-        setProcessUserScrolled(true);
-      } else {
-        setUserScrolled(true);
+  const scrollToActiveThinking = useCallback((agentType: string) => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    // 先退出自动贴底模式，再在下一帧计算目标位置，避免底部自动滚动抢回视口。
+    setUserScrolled(true);
+
+    const targetAgent = getThinkingTargetAgentType(agentType);
+    const target = container.querySelector<HTMLElement>(
+      `[data-agent-thinking="${escapeDataAttributeValue(targetAgent)}"]`,
+    );
+    if (!target) return;
+
+    requestAnimationFrame(() => {
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const nextTop =
+        container.scrollTop +
+        targetRect.top -
+        containerRect.top -
+        container.clientHeight / 2 +
+        targetRect.height / 2;
+
+      container.scrollTo({ top: Math.max(0, nextTop), behavior: "smooth" });
+    });
+  }, []);
+
+  /** 运行中的 Agent 指示行，点击后定位到对应过程卡片。 */
+  const activityBar =
+    activeAgents.length > 0 ? (
+      <div className="conversation-activity">
+        <span className="conversation-activity-dot" aria-hidden="true" />
+        <span>{activeAgents.length > 1 ? "并行思考：" : "正在思考："}</span>
+        {activeAgents.map((agentType) => (
+          <Button
+            key={agentType}
+            size="small"
+            type="link"
+            className="h-auto! px-0!"
+            onClick={() => scrollToActiveThinking(agentType)}
+          >
+            {getAgentLabel(agentType)}
+          </Button>
+        ))}
+      </div>
+    ) : null;
+
+  const messageList = (
+    <>
+      {activityBar}
+
+      {showMessagesLoading && (
+        <div className="chat-welcome chat-welcome-skeleton">
+          <div className="flex w-full justify-end">
+            <div className="w-[46%]">
+              <Skeleton active />
+            </div>
+          </div>
+          <div className="flex w-full justify-start">
+            <div className="w-[78%]">
+              <Skeleton active />
+            </div>
+          </div>
+          <div className="flex w-full justify-end">
+            <div className="w-[46%]">
+              <Skeleton active />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {messages.map((message, index) => (
+        <MessageBubble
+          key={message.id}
+          message={message}
+          isLast={index === lastAgentIdx}
+          streaming={
+            isLoading &&
+            index === messages.length - 1 &&
+            message.role === "agent"
+          }
+          nextUserContent={nextUserContentByAssistantId.get(message.id)}
+          submittedFormIds={submittedFormIds}
+          onFormSubmitted={handleFormSubmitted}
+          renderInteractiveHitl={renderInteractiveHitl}
+          onRetry={handleRetryMessage}
+        />
+      ))}
+
+      {error && (
+        <div className="chat-error">
+          <span>{error}</span>
+          <Button
+            size="small"
+            danger
+            icon={<ClearOutlined />}
+            onClick={onClear}
+          >
+            清除
+          </Button>
+        </div>
+      )}
+    </>
+  );
+
+  /**
+   * 待回答的 HITL 表单。
+   *
+   * 运行时暂停等待补充信息时，表单替换输入框占据底部；用户答完提交后输入框
+   * 自动恢复，这样不会出现"既要回答又要打字"的双重入口。
+   */
+  const composer = pendingForm ? (
+    <QuestionFormView
+      form={pendingForm.form}
+      interactive
+      onSubmit={(text, answers) => {
+        handleFormSubmitted(
+          pendingForm.form.id,
+          text,
+          pendingForm.threadId
+            ? formatHumanInTheLoopResume(
+                pendingForm.threadId,
+                pendingForm.form,
+                answers,
+                text,
+              )
+            : undefined,
+        );
+      }}
+    />
+  ) : (
+    <ConversationComposer
+      value={input}
+      onChange={setInput}
+      onSubmit={doSubmit}
+      isLoading={isLoading}
+      disabledReason={disabledReason}
+      placeholder={
+        isEmptyConversation ? "输入需求，让问渠帮你推进项目..." : undefined
       }
+      webSearchEnabled={webSearchEnabled}
+      onToggleWebSearch={() => setWebSearchEnabled((enabled) => !enabled)}
+      knowledgeGraphEnabled={Boolean(workspaceId)}
+      knowledgeGraphLoading={kgLoading}
+      knowledgeGraphHint={
+        kgLoading
+          ? "正在加载知识图谱"
+          : kgData?.hasData === false
+            ? "暂无知识图谱数据"
+            : "查看知识图谱"
+      }
+      onOpenKnowledgeGraph={handleOpenKgModal}
+      onOpenLangGraph={() => setLangGraphModalOpen(true)}
+      modelProfiles={modelProfiles}
+      selectedModelProfileId={selectedModelProfileId}
+      onModelProfileChange={onModelProfileChange}
+      onStop={onStop}
+    />
+  );
 
-      const targetAgent = getThinkingTargetAgentType(agentType);
-      const target = container.querySelector<HTMLElement>(
-        `[data-agent-thinking="${escapeDataAttributeValue(targetAgent)}"]`,
-      );
-      if (!target) return;
+  /** 空会话的欢迎区：只保留标题与一行说明。 */
+  const welcome = (
+    <header className="conversation-welcome">
+      <h1>今天想推进什么？</h1>
+      <p>从需求、规划、文档或风险开始。</p>
+    </header>
+  );
 
-      requestAnimationFrame(() => {
-        const containerRect = container.getBoundingClientRect();
-        const targetRect = target.getBoundingClientRect();
-        const nextTop =
-          container.scrollTop +
-          targetRect.top -
-          containerRect.top -
-          container.clientHeight / 2 +
-          targetRect.height / 2;
+  /** 空会话的快捷任务：2 × 2 网格，点击沿用原有发送路径。 */
+  const quickActions = (
+    <section className="quick-actions" aria-label="常用任务">
+      <h2>常用任务</h2>
+      <div className="quick-actions-grid">
+        {EXAMPLE_QUERIES.map((action) => (
+          <button
+            key={action.label}
+            type="button"
+            className="quick-action"
+            disabled={isLoading || Boolean(disabledReason)}
+            onClick={() => handleExampleClick(action.label)}
+          >
+            <span className="quick-action-label">{action.label}</span>
+            <span className="quick-action-hint">{action.hint}</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
 
-        container.scrollTo({ top: Math.max(0, nextTop), behavior: "smooth" });
-      });
-    },
-    [useSplitLayout],
+  const conversation = (
+    <ConversationPane
+      workspaceName={workspaceName}
+      threadTitle={threadTitle}
+      scrollRef={containerRef}
+      onScroll={handleScroll}
+      messageNavigation={messageNavigation}
+      onBack={onBack}
+      showScrollToBottom={userScrolled}
+      onScrollToBottom={() => {
+        scrollToBottom();
+        setUserScrolled(false);
+      }}
+      empty={isEmptyConversation}
+      welcome={welcome}
+      quickActions={quickActions}
+      composer={composer}
+    >
+      {messageList}
+    </ConversationPane>
   );
 
   return (
-    <div className="chat-workspace">
-      <div className="chat-topbar">
-        <div className="chat-topbar-title">
-          <Tooltip title="返回工作区">
-            <Button
-              type="text"
-              shape="circle"
-              icon={<ArrowLeftOutlined />}
-              onClick={onBack}
-            />
-          </Tooltip>
-          <span>{workspaceName}</span>
-        </div>
-        <div className="ml-auto flex min-w-0 items-center gap-2">
-          <Tooltip title="查看 LangGraph">
-            <Button
-              type="text"
-              shape="circle"
-              icon={<PartitionOutlined />}
-              onClick={() => setLangGraphModalOpen(true)}
-            />
-          </Tooltip>
-          {activeAgents.length > 0 && (
-            <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-md border border-[var(--line-soft)] bg-white px-2.5 py-1 text-[12px] text-[var(--ink-soft)]">
-              <span className="h-1.5 w-1.5 rounded-full bg-[var(--primary)]" />
-              <span>
-                {activeAgents.length > 1 ? "并行思考：" : "正在思考："}
-              </span>
-              {activeAgents.map((agentType) => (
-                <Button
-                  key={agentType}
-                  size="small"
-                  type="link"
-                  className="h-auto! px-0!"
-                  onClick={() => scrollToActiveThinking(agentType)}
-                >
-                  {getAgentLabel(agentType)}
-                </Button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div
-        className={`chat-canvas ${useSplitLayout ? "is-split" : "is-single"}`}
-      >
-        {useSplitLayout && (
-          <Splitter
-            key={splitterOrientation}
-            className="chat-splitter"
-            orientation={splitterOrientation}
-            onResize={handleSplitResize}
-            onCollapse={handleSplitCollapse}
-          >
-            <Splitter.Panel
-              defaultSize={splitSizes[0]}
-              min={isNarrowLayout ? 260 : 320}
-              className="chat-split-main-panel"
-            >
-              <div className="chat-main-column is-split">
-                <div className="chat-message-area">
-                  <div
-                    ref={containerRef}
-                    onScroll={handleScroll}
-                    className="chat-scroll scrollbar-none items-center"
-                  >
-                    {messages.map((message, index) => (
-                      <MessageBubble
-                        key={message.id}
-                        message={message}
-                        isLast={index === lastAgentIdx}
-                        streaming={
-                          isLoading &&
-                          index === messages.length - 1 &&
-                          message.role === "agent"
-                        }
-                        viewMode="main"
-                        nextUserContent={nextUserContentByAssistantId.get(
-                          message.id,
-                        )}
-                        onFormSubmit={handleSendFormAnswer}
-                        onRetry={handleRetryMessage}
-                      />
-                    ))}
-
-                    {error && (
-                      <div className="chat-error">
-                        <span>{error}</span>
-                        <Button
-                          size="small"
-                          danger
-                          icon={<ClearOutlined />}
-                          onClick={onClear}
-                        >
-                          清除
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                  <ChatMessageNavigation
-                    entries={messageNavigation.entries}
-                    activeId={messageNavigation.activeId}
-                    onNavigate={messageNavigation.scrollToMessage}
-                  />
-                </div>
-
-                <FloatButton
-                  icon={<ArrowDownOutlined style={{ color: "#ffffff" }} />}
-                  className={`scroll-to-bottom w-8! h-8! bg-[#3078b8]! ${userScrolled ? "is-visible" : ""}`}
-                  onClick={() => {
-                    scrollToBottom();
-                    setUserScrolled(false);
-                  }}
-                />
-                <BorderBeam
-                  color={[
-                    { color: "#1677ff", percent: 0 },
-                    { color: "#36cfc9", percent: 54 },
-                    { color: "#95de64", percent: 100 },
-                  ]}
-                  outset={0}
-                >
-                  <div className="chat-composer-border-beam">
-                    <form onSubmit={handleSubmit} className="chat-composer">
-                      <TextArea
-                        value={input}
-                        onChange={(event) => setInput(event.target.value)}
-                        onKeyDown={handleKeyDown}
-                        rows={1}
-                        placeholder={disabledReason || "输入消息"}
-                        disabled={isLoading || Boolean(disabledReason)}
-                        autoSize={{ minRows: 3, maxRows: 7 }}
-                      />
-
-                      <div className="chat-composer-bar">
-                        <Tooltip
-                          title={
-                            webSearchEnabled ? "联网搜索已开启" : "开启联网搜索"
-                          }
-                        >
-                          <Button
-                            type={webSearchEnabled ? "primary" : "text"}
-                            shape="circle"
-                            icon={<SearchOutlined />}
-                            aria-label="联网搜索"
-                            aria-pressed={webSearchEnabled}
-                            disabled={isLoading || Boolean(disabledReason)}
-                            onClick={() =>
-                              setWebSearchEnabled((enabled) => !enabled)
-                            }
-                          />
-                        </Tooltip>
-                        <Tooltip
-                          title={
-                            kgLoading
-                              ? "正在加载知识图谱"
-                              : kgData?.hasData === false
-                                ? "暂无知识图谱数据"
-                                : "查看知识图谱"
-                          }
-                        >
-                          <Button
-                            type="text"
-                            shape="circle"
-                            icon={<ApartmentOutlined />}
-                            disabled={!kgEnabled}
-                            loading={kgLoading}
-                            onClick={handleOpenKgModal}
-                          />
-                        </Tooltip>
-                        <ModelProfileSelector
-                          profiles={modelProfiles}
-                          selectedProfileId={selectedModelProfileId}
-                          disabled={isLoading}
-                          onChange={onModelProfileChange}
-                        />
-                        <div className="chat-composer-actions">
-                          {isLoading ? (
-                            <Tooltip title="停止生成">
-                              <Button
-                                type="primary"
-                                shape="circle"
-                                danger
-                                icon={<StopOutlined />}
-                                onClick={onStop}
-                              />
-                            </Tooltip>
-                          ) : (
-                            <Tooltip title="发送">
-                              <Button
-                                type="primary"
-                                shape="circle"
-                                htmlType="submit"
-                                icon={<SendOutlined />}
-                                disabled={
-                                  !input.trim() || Boolean(disabledReason)
-                                }
-                              />
-                            </Tooltip>
-                          )}
-                        </div>
-                      </div>
-                    </form>
-                  </div>
-                </BorderBeam>
-              </div>
-            </Splitter.Panel>
-
-            <Splitter.Panel
-              collapsible
-              defaultSize={splitSizes[1]}
-              min={isNarrowLayout ? 240 : 300}
-              className="chat-split-process-panel"
-            >
-              <div className="chat-process-column">
-                <div
-                  ref={processContainerRef}
-                  onScroll={handleProcessScroll}
-                  className="chat-process-scroll themed-scrollbar"
-                >
-                  {tokenUsages.length > 0 && (
-                    <div className="mb-3 rounded-lg border border-[var(--line-soft)] bg-white">
-                      <button
-                        type="button"
-                        className="flex w-full cursor-pointer items-center gap-2 border-0 bg-transparent px-3 py-2.5 text-left"
-                        onClick={() => setTokenDetailOpen(!tokenDetailOpen)}
-                      >
-                        <CaretRightOutlined
-                          style={{
-                            fontSize: 10,
-                            transition: "transform 0.2s",
-                            transform: tokenDetailOpen
-                              ? "rotate(90deg)"
-                              : "rotate(0deg)",
-                            color: "var(--primary)",
-                          }}
-                        />
-                        <span className="text-[13px] font-bold text-[var(--ink)]">
-                          Token 用量
-                        </span>
-                        <span className="ml-auto text-[12px] text-[var(--ink-mute)]">
-                          {formatCost(tokenTotalCost)} yuan
-                        </span>
-                        <span className="text-[12px] text-[var(--ink-faint)]">
-                          {formatTokens(tokenTotalTokens)}
-                        </span>
-                      </button>
-                      {tokenDetailOpen && tokenUsages.length > 1 && (
-                        <div className="border-t border-[var(--line-soft)] px-3 pb-2.5 pt-2">
-                          <div className="grid grid-cols-[minmax(100px,1fr)_auto_auto_auto] gap-x-2 gap-y-0.5 text-[10px] leading-5 text-[var(--ink-faint)]">
-                            <span className="font-semibold">Agent</span>
-                            <span className="text-right font-semibold">
-                              输入
-                            </span>
-                            <span className="text-right font-semibold">
-                              输出
-                            </span>
-                            <span className="text-right font-semibold">
-                              费用
-                            </span>
-                            {tokenUsages.map((usage, idx) => (
-                              <TokenUsageMiniRow
-                                key={
-                                  usage.id ??
-                                  `${usage.agentType}-${idx}`
-                                }
-                                usage={usage}
-                              />
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {!hasProcessContent && (
-                    <div className="chat-process-empty">等待 Agent 过程</div>
-                  )}
-
-                  {messages.map((message, index) => (
-                    <MessageBubble
-                      key={`${message.id}-process`}
-                      message={message}
-                      isLast={index === lastAgentIdx}
-                      streaming={
-                        isLoading &&
-                        index === messages.length - 1 &&
-                        message.role === "agent"
-                      }
-                      viewMode="process"
-                    />
-                  ))}
-                </div>
-              </div>
-            </Splitter.Panel>
-          </Splitter>
-        )}
-
-        {!useSplitLayout && (
-          <>
-            <div className="chat-message-area">
-              <div
-                ref={containerRef}
-                onScroll={handleScroll}
-                className="chat-scroll scrollbar-none items-center"
-              >
-                {messages.length === 0 && !isMessagesLoading && (
-                  <div className="flex flex-col w-full items-center justify-center gap-8">
-                    <span className="font-bold text-2xl">今天想推进什么？</span>
-                    <span className="font-bold text-[#3e3e3e]">
-                      围绕需求、计划、文档和风险继续推进项目。
-                    </span>
-                    <div className="chat-suggestions">
-                      {EXAMPLE_QUERIES.map((query) => (
-                        <button
-                          key={query}
-                          type="button"
-                          disabled={isLoading || Boolean(disabledReason)}
-                          onClick={() => handleExampleClick(query)}
-                        >
-                          {query}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {isMessagesLoading && messages.length === 0 && (
-                  <div className="flex flex-col w-full min-h-[70vh] items-center justify-center gap-8">
-                    <div className="flex w-full justify-end">
-                      <div className="w-[40%]">
-                        <Skeleton active />
-                      </div>
-                    </div>
-
-                    <div className="flex w-full justify-start">
-                      <div className="w-[60%]">
-                        <Skeleton active />
-                      </div>
-                    </div>
-
-                    <div className="flex w-full justify-end">
-                      <div className="w-[40%]">
-                        <Skeleton active />
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {messages.map((message, index) => (
-                  <MessageBubble
-                    key={message.id}
-                    message={message}
-                    isLast={index === lastAgentIdx}
-                    streaming={
-                      isLoading &&
-                      index === messages.length - 1 &&
-                      message.role === "agent"
-                    }
-                    nextUserContent={nextUserContentByAssistantId.get(message.id)}
-                    onFormSubmit={handleSendFormAnswer}
-                    onRetry={handleRetryMessage}
-                  />
-                ))}
-
-                {error && (
-                  <div className="chat-error">
-                    <span>{error}</span>
-                    <Button
-                      size="small"
-                      danger
-                      icon={<ClearOutlined />}
-                      onClick={onClear}
-                    >
-                      清除
-                    </Button>
-                  </div>
-                )}
-              </div>
-              <ChatMessageNavigation
-                entries={messageNavigation.entries}
-                activeId={messageNavigation.activeId}
-                onNavigate={messageNavigation.scrollToMessage}
-              />
-            </div>
-
-            <FloatButton
-              icon={<ArrowDownOutlined style={{ color: "#ffffff" }} />}
-              className={`scroll-to-bottom w-8! h-8! bg-[#3078b8]! ${userScrolled ? "is-visible" : ""}`}
-              onClick={() => {
-                scrollToBottom();
-                setUserScrolled(false);
-              }}
-            />
-            <BorderBeam
-              color={[
-                { color: "#1677ff", percent: 0 },
-                { color: "#36cfc9", percent: 54 },
-                { color: "#95de64", percent: 100 },
-              ]}
-              outset={0}
-            >
-              <div className="chat-composer-border-beam">
-                <form onSubmit={handleSubmit} className="chat-composer">
-                  <TextArea
-                    value={input}
-                    onChange={(event) => setInput(event.target.value)}
-                    onKeyDown={handleKeyDown}
-                    rows={1}
-                    placeholder={disabledReason || "输入消息"}
-                    disabled={isLoading || Boolean(disabledReason)}
-                    autoSize={{ minRows: 3, maxRows: 7 }}
-                  />
-
-                  <div className="chat-composer-bar">
-                    <Tooltip
-                      title={
-                        webSearchEnabled ? "联网搜索已开启" : "开启联网搜索"
-                      }
-                    >
-                      <Button
-                        type={webSearchEnabled ? "primary" : "text"}
-                        shape="circle"
-                        icon={<SearchOutlined />}
-                        aria-label="联网搜索"
-                        aria-pressed={webSearchEnabled}
-                        disabled={isLoading || Boolean(disabledReason)}
-                        onClick={() =>
-                          setWebSearchEnabled((enabled) => !enabled)
-                        }
-                      />
-                    </Tooltip>
-                    <Tooltip
-                      title={
-                        kgLoading
-                          ? "正在加载知识图谱"
-                          : kgData?.hasData === false
-                            ? "暂无知识图谱数据"
-                            : "查看知识图谱"
-                      }
-                    >
-                      <Button
-                        type="text"
-                        shape="circle"
-                        icon={<ApartmentOutlined />}
-                        disabled={!kgEnabled}
-                        loading={kgLoading}
-                        onClick={handleOpenKgModal}
-                      />
-                    </Tooltip>
-                    <ModelProfileSelector
-                      profiles={modelProfiles}
-                      selectedProfileId={selectedModelProfileId}
-                      disabled={isLoading}
-                      onChange={onModelProfileChange}
-                    />
-                    <div className="chat-composer-actions">
-                      {isLoading ? (
-                        <Tooltip title="停止生成">
-                          <Button
-                            type="primary"
-                            shape="circle"
-                            danger
-                            icon={<StopOutlined />}
-                            onClick={onStop}
-                          />
-                        </Tooltip>
-                      ) : (
-                        <Tooltip title="发送">
-                          <Button
-                            type="primary"
-                            shape="circle"
-                            htmlType="submit"
-                            icon={<SendOutlined />}
-                            disabled={!input.trim() || Boolean(disabledReason)}
-                          />
-                        </Tooltip>
-                      )}
-                    </div>
-                  </div>
-                </form>
-              </div>
-            </BorderBeam>
-          </>
-        )}
-      </div>
+    <>
+      {conversation}
 
       <KnowledgeGraphModal
         open={kgModalOpen}
@@ -997,46 +599,6 @@ export function ChatApp({
         runtimeState={langGraphRuntimeState}
         onClose={() => setLangGraphModalOpen(false)}
       />
-    </div>
-  );
-}
-
-/**
- * 右侧过程栏顶部 Token 用量明细行（紧凑版）。
- */
-function TokenUsageMiniRow({ usage }: { usage: TokenUsageInfo }) {
-  const parallelOthers = (usage.parallelAgents ?? []).filter(
-    (a) => a !== usage.agentType,
-  );
-
-  return (
-    <>
-      <span className="flex min-w-0 items-center gap-1 truncate text-[var(--ink-mute)]">
-        {parallelOthers.length > 0 && (
-          <Tooltip
-            title={`与 ${parallelOthers
-              .map(getAgentLabel)
-              .join("、")} 并行执行`}
-          >
-            <PartitionOutlined className="shrink-0 cursor-help text-[var(--primary)]" />
-          </Tooltip>
-        )}
-        <span className="truncate">{getAgentLabel(usage.agentType)}</span>
-        {usage.durationMs > 0 && (
-          <span className="shrink-0 text-[var(--ink-faint)]">
-            {formatDuration(usage.durationMs)}
-          </span>
-        )}
-      </span>
-      <span className="text-right text-[var(--ink-mute)]">
-        {formatTokens(usage.inputTokens)}
-      </span>
-      <span className="text-right text-[var(--ink-mute)]">
-        {formatTokens(usage.outputTokens)}
-      </span>
-      <span className="text-right font-semibold text-[var(--ink)]">
-        {formatCost(usage.costTotal)}
-      </span>
     </>
   );
 }
@@ -1101,20 +663,6 @@ function findActiveAgents(messages: Message[]): string[] {
     }
   }
   return [];
-}
-
-/**
- * 判断消息是否包含需要放入过程栏展示的 Agent 推理或工具调用。
- */
-function hasAgentProcessContent(message: Message): boolean {
-  return (
-    message.role === "agent" &&
-    Boolean(
-      message.thinking ||
-      message.reasoningBlocks?.length ||
-      message.toolCalls?.length,
-    )
-  );
 }
 
 const LANGGRAPH_NODE_IDS = [

@@ -41,7 +41,7 @@ export function ModelProfileSelector({
     profiles.find((profile) => profile.id === selectedProfileId) ?? profiles[0];
   const button = (
     <Button size="small" type="text" disabled={disabled}>
-      <span className="max-w-40 truncate">{selected?.name ?? "模型列表加载中"}</span>
+      <span className="max-w-40 truncate">{getProfileLabel(selected)}</span>
       <DownOutlined />
     </Button>
   );
@@ -66,6 +66,25 @@ export function ModelProfileSelector({
       </span>
     </Tooltip>
   );
+}
+
+/**
+ * 触发器上显示的名称。
+ *
+ * 优先展示当前实际使用的模型名（例如「Flash」）；配置里没有具体模型时才回退到
+ * 列表名称。列表名可能带有「内置默认模型列表」这类实现导向的描述，不适合作为
+ * 输入区的主要文案。
+ */
+function getProfileLabel(profile?: ModelUsageProfile): string {
+  if (!profile) return "模型列表加载中";
+  if (profile.config.mode === "universal") {
+    return profile.config.model.customName || profile.name;
+  }
+  // 分类配置下各档位可能是同一模型，此时模型名比列表名更有信息量。
+  const names = new Set(
+    Object.values(profile.config.models).map((model) => model.customName),
+  );
+  return names.size === 1 ? [...names][0]! : profile.name;
 }
 
 /** 下拉列表中的模式、组成和参数详情。 */

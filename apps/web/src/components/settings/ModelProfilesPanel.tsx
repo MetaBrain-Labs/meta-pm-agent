@@ -14,9 +14,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  Alert,
   Button,
-  Card,
   Collapse,
   Empty,
   Input,
@@ -27,10 +25,10 @@ import {
   Space,
   Switch,
   Tabs,
-  Tag,
   Typography,
   message,
 } from "antd";
+import { InfoCircleOutlined, LockOutlined } from "@ant-design/icons";
 import {
   createModelProfile,
   deleteModelProfile,
@@ -162,60 +160,72 @@ export function ModelProfilesPanel() {
   };
 
   return (
-    <div className="flex flex-col gap-4">
-      <Alert
-        showIcon
-        type="info"
-        message="API Key 始终从服务端 OPENAI_API_KEY 读取，不会保存或展示在这里。"
-      />
-      <div className="flex items-center justify-between gap-3">
-        <Typography.Text type="secondary">
+    <div className="profile-list">
+      {/*
+        API Key 说明是信息性提示，用中性信息条而不是高对比长条。
+      */}
+      <p className="profile-notice">
+        <InfoCircleOutlined aria-hidden="true" />
+        API Key 始终从服务端 OPENAI_API_KEY 读取，不会保存或展示在这里。
+      </p>
+
+      <div className="profile-list-head">
+        <p className="profile-list-desc">
           Chat 产品工作流按会话选择列表；Document 工作流在每次生成前选择列表。
-        </Typography.Text>
+        </p>
         <Button type="primary" onClick={() => setDraft(createDraftProfile())}>
           新建列表
         </Button>
       </div>
+
       {!loading && profiles.length === 0 ? <Empty /> : null}
-      {profiles.map((profile) => (
-        <Card
-          key={profile.id}
-          size="small"
-          title={
-            <Space wrap>
-              <span>{profile.name}</span>
-              <Tag color={profile.isSystem ? "blue" : "default"}>
-                {profile.isSystem ? "内置不可删除" : "自定义"}
-              </Tag>
-              <Tag>
-                {profile.config.mode === "tiered" ? "分类配置" : "通用模型"}
-              </Tag>
-            </Space>
-          }
-          extra={
-            !profile.isSystem ? (
-              <Space>
-                <Button
-                  size="small"
-                  onClick={() => setDraft(structuredClone(profile))}
-                >
-                  编辑
-                </Button>
-                <Popconfirm
-                  title="删除后相关会话将回退内置默认，确认删除？"
-                  onConfirm={() => void remove(profile.id)}
-                >
-                  <Button size="small" danger>
-                    删除
-                  </Button>
-                </Popconfirm>
-              </Space>
-            ) : null
-          }
-        >
-          <ProfileSummary profile={profile} />
-        </Card>
-      ))}
+
+      {/*
+        列表项用细边框表面承载，标题行为「名称 + 类型标记」，操作在右侧；
+        不再使用 Card 套 Tag 套内容的三层结构。
+      */}
+      {profiles.length > 0 && (
+        <ul className="profile-items">
+          {profiles.map((profile) => (
+            <li key={profile.id} className="profile-item">
+              <div className="profile-item-head">
+                <span className="profile-item-name">{profile.name}</span>
+                <span className="profile-badge" data-tone="muted">
+                  {profile.config.mode === "tiered" ? "分类配置" : "通用模型"}
+                </span>
+                {profile.isSystem && (
+                  <span className="profile-badge" data-tone="locked">
+                    <LockOutlined aria-hidden="true" />
+                    内置
+                  </span>
+                )}
+                {!profile.isSystem && (
+                  <div className="profile-item-actions">
+                    <Button
+                      size="small"
+                      type="text"
+                      onClick={() => setDraft(structuredClone(profile))}
+                    >
+                      编辑
+                    </Button>
+                    <Popconfirm
+                      title="删除后相关会话将回退内置默认，确认删除？"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => void remove(profile.id)}
+                    >
+                      {/* 浏览态用轻量危险文字按钮，确认步骤再强化危险感知。 */}
+                      <Button size="small" type="text" danger>
+                        删除
+                      </Button>
+                    </Popconfirm>
+                  </div>
+                )}
+              </div>
+              <ProfileSummary profile={profile} />
+            </li>
+          ))}
+        </ul>
+      )}
       <Modal
         open={Boolean(draft)}
         title={draft?.id === "draft" ? "新建模型使用列表" : "编辑模型使用列表"}
@@ -248,15 +258,24 @@ function ProfileSummary({ profile }: { profile: ModelUsageProfile }) {
             [ModelTier, DeepSeekModelConfig]
           >
         ).map(([tier, model]) => [TIER_LABELS[tier], model] as const);
+  /*
+   * 摘要用「次级文字 + 元信息」两级排版，不用一排 Tag：
+   * 模型名是这一行里最需要被读到的信息，effort 与上限属于元信息。
+   */
   return (
-    <Space wrap size={[8, 8]}>
+    <dl className="profile-summary">
       {entries.map(([label, model]) => (
-        <Tag key={label}>
-          {label}：{model.customName} · {model.reasoningEffort} ·{" "}
-          {model.maxTokens.toLocaleString()}
-        </Tag>
+        <div key={label}>
+          <dt>{label}</dt>
+          <dd>
+            <span className="profile-summary-model">{model.customName}</span>
+            <span className="profile-summary-meta">
+              {model.reasoningEffort} · {model.maxTokens.toLocaleString()} tokens
+            </span>
+          </dd>
+        </div>
       ))}
-    </Space>
+    </dl>
   );
 }
 
@@ -345,9 +364,11 @@ function TieredEditor({
   onChange: (config: ModelUsageProfile["config"]) => void;
 }) {
   return (
-    <div className="flex flex-col gap-4">
+    <div className="profile-tier-list">
+      {/* 档位用「标题 + 细分隔线」分区，不再一层 Card 套一层表单。 */}
       {(Object.keys(TIER_LABELS) as ModelTier[]).map((tier) => (
-        <Card key={tier} size="small" title={TIER_LABELS[tier]}>
+        <section key={tier} className="profile-tier">
+          <h4>{TIER_LABELS[tier]}</h4>
           <ModelEditor
             model={config.models[tier]}
             onChange={(model) =>
@@ -357,7 +378,7 @@ function TieredEditor({
               })
             }
           />
-        </Card>
+        </section>
       ))}
       <Collapse
         items={[
@@ -455,11 +476,12 @@ function ModelEditor({
             label: "高级设置",
             children: (
               <div className="flex flex-col gap-3">
-                <Alert
-                  type="warning"
-                  showIcon
-                  message="思考模式固定开启；DeepSeek 思考模式会忽略 temperature 和 topP，因此两项当前仅保存和展示。"
-                />
+                {/* 这是说明而非告警：用中性信息条，不用整块 warning 底色。 */}
+                <p className="profile-notice">
+                  <InfoCircleOutlined aria-hidden="true" />
+                  思考模式固定开启；DeepSeek 思考模式会忽略 temperature 和
+                  topP，因此两项当前仅保存和展示。
+                </p>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   <label className="flex min-h-14 items-center justify-between gap-4 rounded-md border border-black/10 px-3">
                     thinking

@@ -4,14 +4,10 @@
 export const ACTIVE_WORKSPACE_KEY = "pm-agent-active-workspace";
 
 /**
- * 分栏布局比例缓存，保证切换对话后左右栏宽度沿用上次的手动调整结果。
+ * 侧栏与对话栏宽度偏好缓存；只保存 UI 尺寸，不保存聊天内容。
+ * v2 使用像素宽度对象，读取端会校验并回退到默认布局。
  */
-export const SPLIT_SIZES_KEY = "pm-agent-split-sizes";
-
-/**
- * 右侧过程栏展开/折叠缓存。
- */
-export const SPLIT_COLLAPSED_KEY = "pm-agent-split-collapsed";
+export const SPLIT_LAYOUT_STORAGE_KEY = "pm-agent-workspace-split-v2";
 
 /**
  * 新建会话在后端落库前使用的默认标题。

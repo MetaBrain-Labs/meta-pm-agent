@@ -1,45 +1,101 @@
 /**
- * 工作区本地保存状态面板
+ * 工作区本地保存状态（项目列表页的轻量区块）
+ *
+ * 项目列表页只保留两个产物行的状态，不展示项目路径、Product Context 路径、
+ * PRD 路径或数据库拷贝说明——这些属于技术细节，进入 Header 状态浮层的详情层。
  *
  * Responsibilities:
- * - 展示上下文与 PRD 的保存位置、同步状态和重新同步入口
+ * - 展示项目上下文与 PRD 的保存状态，并给出重新同步入口
  *
  * Notes:
  * - 本地失败仅展示提示，不影响现有工作流与文档下载。
+ * - 状态来自现有契约，不新增产物状态模型。
  */
-import { Alert, Button, Spin, Tag } from "antd";
+import { Button, Tooltip } from "antd";
+import { ReloadOutlined } from "@ant-design/icons";
 import type { LocalStorageEntry } from "@repo/shared";
 import { useWorkspaceLocalStorage } from "../hooks/useWorkspaceLocalStorage";
+import { describeEntryStatus } from "../utils/workspace-sync-status";
 
-/** 面板消费工作区身份以及页面拥有的运行和刷新状态。 */
+/** 面板消费工作区身份与页面拥有的运行状态。 */
 interface WorkspaceLocalStoragePanelProps {
   workspaceId: string;
   refreshKey?: string;
   disabled?: boolean;
 }
 
-const STATUS_LABELS: Record<LocalStorageEntry["status"], string> = {
-  empty: "暂无产物", synced: "已同步", missing: "未保存", conflict: "内容冲突", unavailable: "不可用",
-};
+/** 两类产物的展示标题。 */
+const ARTIFACTS = [
+  { key: "context", label: "项目上下文" },
+  { key: "prd", label: "PRD 文档" },
+] as const;
+
+/**
+ * 单行产物的状态点。
+ *
+ * 用「圆点 + 文字」表达，不使用彩色 Tag，避免每项都成为强视觉元素。
+ */
+function StatusDot({ status }: { status: LocalStorageEntry["status"] | null }) {
+  const tone =
+    status === "synced"
+      ? "done"
+      : status === "conflict" || status === "unavailable"
+        ? "failed"
+        : "idle";
+  return (
+    <span className="storage-status" data-tone={tone}>
+      <i aria-hidden="true" />
+      {describeEntryStatus(status)}
+    </span>
+  );
+}
 
 /** 展示项目生成文件的当前真实磁盘状态。 */
-export function WorkspaceLocalStoragePanel({ workspaceId, refreshKey = "", disabled = false }: WorkspaceLocalStoragePanelProps) {
-  const { status, error, syncing, synchronize } = useWorkspaceLocalStorage(workspaceId, refreshKey, disabled);
-  const warnings = [...new Set([...(status?.warnings ?? []), status?.context.message, status?.prd.message, error].filter((value): value is string => Boolean(value)))];
+export function WorkspaceLocalStoragePanel({
+  workspaceId,
+  refreshKey = "",
+  disabled = false,
+}: WorkspaceLocalStoragePanelProps) {
+  const { status, error, syncing, synchronize } = useWorkspaceLocalStorage(
+    workspaceId,
+    refreshKey,
+    disabled,
+  );
+
+  const loading = !status && !error;
+
   return (
-    <section className="my-3 rounded border border-gray-200 bg-white p-3" aria-label="本地保存状态">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="text-sm font-medium">本地保存</span>
-        <Button size="small" loading={syncing} disabled={disabled} onClick={() => void synchronize()}>重新同步</Button>
+    <section className="storage-panel" aria-label="本地保存状态">
+      <ul className="storage-list">
+        {loading ? (
+          <li className="storage-item is-muted">正在读取项目目录…</li>
+        ) : error ? (
+          <li className="storage-item is-error">{error}</li>
+        ) : (
+          ARTIFACTS.map((artifact) => (
+            <li key={artifact.key} className="storage-item">
+              <span className="storage-item-label">{artifact.label}</span>
+              <StatusDot status={status?.[artifact.key]?.status ?? null} />
+            </li>
+          ))
+        )}
+      </ul>
+
+      <div className="storage-panel-foot">
+        <Tooltip title={disabled ? "当前任务结束后可以重新同步" : "重新同步只补齐缺失文件"}>
+          <span>
+            <Button
+              size="small"
+              icon={<ReloadOutlined />}
+              loading={syncing}
+              disabled={disabled}
+              onClick={() => void synchronize()}
+            >
+              重新同步
+            </Button>
+          </span>
+        </Tooltip>
       </div>
-      {!status && !error && <Spin size="small" />}
-      {status && ([ ["上下文", status.context], ["PRD", status.prd] ] as const).map(([label, entry]) => (
-        <div key={label} className="mb-2 text-xs">
-          <span>{label} </span><Tag color={entry.status === "synced" ? "success" : "default"}>{STATUS_LABELS[entry.status]}</Tag>
-          <div className="mt-1 break-all text-gray-500">{entry.path ?? "未设置本地路径"}</div>
-        </div>
-      ))}
-      {warnings.length > 0 && <Alert type="warning" showIcon title={warnings.join(" ")} />}
     </section>
   );
 }

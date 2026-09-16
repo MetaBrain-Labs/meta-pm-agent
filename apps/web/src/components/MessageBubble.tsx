@@ -13,9 +13,17 @@
  * - 本组件只负责展示和本地交互，不直接请求 API。
  */
 
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Collapse, Modal, Spin, Tag, Tooltip } from "antd";
 import {
+  ApartmentOutlined,
   CaretRightOutlined,
   CheckCircleOutlined,
   ReloadOutlined,
@@ -29,7 +37,7 @@ import type {
   SubagentTrace,
   TokenUsageInfo,
 } from "../types";
-import { buildDocumentsPath } from "../router/app-route";
+import { buildChatPath } from "../router/app-route";
 import { ProseBlock } from "./ProseBlock";
 import {
   CritiqueAgentReviewCard,
@@ -40,6 +48,13 @@ import { RequestAnalysisCard } from "./RequestAnalysisCard";
 import { TodoCard } from "./TodoCard";
 import { ToolCallsCard } from "./ToolCallsCard";
 import { UserInputCard } from "./UserInputCard";
+import {
+  buildExecutionSteps,
+  buildRunHint,
+  ExecutionRunGroup,
+  type ExecutionStep,
+} from "./ConversationExecution";
+import { buildTaskStatus } from "../utils/workflow-tasks";
 
 type MessageBubbleViewMode = "combined" | "main" | "process";
 
@@ -49,7 +64,25 @@ interface Props {
   streaming: boolean;
   viewMode?: MessageBubbleViewMode;
   nextUserContent?: string;
-  onFormSubmit?: (text: string, hitlResume?: HumanInTheLoopResume) => void;
+  /**
+   * 已本地提交过的表单 ID。
+   *
+   * 提交后的只读态由上层持有，因为交互中的 Question Form 已经移到输入框位置，
+   * 上层需要用它判断"还有没有待回答的问题"。
+   */
+  submittedFormIds: Set<string>;
+  /** 表单提交回调；由上层登记 submittedFormIds 后转发。 */
+  onFormSubmitted?: (
+    formId: string,
+    text: string,
+    hitlResume?: HumanInTheLoopResume,
+  ) => void;
+  /**
+   * 是否把交互中的 HITL 表单渲染在消息流里。
+   *
+   * 默认 false：交互中的表单由输入框位置承担，消息流只保留正文与只读结果。
+   */
+  renderInteractiveHitl?: boolean;
   /**
    * 重试回调。
    *
@@ -72,12 +105,11 @@ export const MessageBubble = memo(function MessageBubble({
   streaming,
   viewMode = "combined",
   nextUserContent,
-  onFormSubmit,
+  submittedFormIds,
+  onFormSubmitted,
+  renderInteractiveHitl = false,
   onRetry,
 }: Props) {
-  const [locallySubmitted, setLocallySubmitted] = useState<Set<string>>(
-    () => new Set(),
-  );
   const showMainContent = viewMode !== "process";
   const showProcessContent = viewMode !== "main";
 
@@ -109,51 +141,12 @@ export const MessageBubble = memo(function MessageBubble({
   }
 
   const streamActive = isLast && streaming;
-  const requestReasoningBlocks = message.reasoningBlocks?.filter(
-    (block) => block.agentType === "request",
-  );
-  const conversationToolCalls = getToolCallsForAgent(message, "conversation");
-  const requestToolCalls = getToolCallsForAgent(message, "request");
-  const orchestratorToolCalls = getToolCallsForAgent(message, "orchestrator");
-  const critiqueToolCalls = getToolCallsForAgent(message, "critique");
-  const productDirectorToolCalls = getToolCallsForAgent(
-    message,
-    "product_director",
-  );
-  const orchestratorReasoningBlocks = message.reasoningBlocks?.filter(
-    (block) => block.agentType === "orchestrator",
-  );
-  const orchestratorReasoningBlock = orchestratorReasoningBlocks?.[0];
-  const orchestratorSubagentTraces = getSubagentTracesForParent(
-    message,
-    "orchestrator",
-  );
-  const critiqueReasoningBlocks = message.reasoningBlocks?.filter(
-    (block) => block.agentType === "critique",
-  );
-  const executorReasoningBlocks = message.reasoningBlocks?.filter((block) =>
-    isExecutorAgent(block.agentType),
-  );
-  const productDirectorReasoningBlocks = message.reasoningBlocks?.filter(
-    (block) => block.agentType === "product_director",
-  );
   const requestError =
     message.agentError?.agentType === "request" ? message.agentError : null;
   const otherError =
     message.agentError && message.agentError.agentType !== "request"
       ? message.agentError
       : null;
-  const otherReasoningBlocks = message.reasoningBlocks?.filter(
-    (block) =>
-      ![
-        "request",
-        "orchestrator",
-        "planner",
-        "critique",
-        "product_director",
-        ...EXECUTOR_AGENT_TYPES,
-      ].includes(block.agentType),
-  );
   const plannerDagGenerating =
     streamActive &&
     isAgentActive(message, "planner") &&
@@ -184,22 +177,92 @@ export const MessageBubble = memo(function MessageBubble({
     !message.interrupted;
   const handleFormSubmit = useCallback(
     (formId: string, text: string, hitlResume?: HumanInTheLoopResume) => {
-      if (!onFormSubmit) return;
-
-      // 表单提交后立即进入本地只读态，避免等待历史消息恢复期间重复提交。
-      setLocallySubmitted((prev) => {
-        const next = new Set(prev);
-        next.add(formId);
-        return next;
-      });
-      onFormSubmit(text, hitlResume);
+      // 提交后由上层登记只读态，避免等待历史恢复期间重复提交。
+      onFormSubmitted?.(formId, text, hitlResume);
     },
-    [onFormSubmit],
+    [onFormSubmitted],
   );
   /** 把稳定的回调引用收敛为本条消息的重试动作。 */
   const handleRetry = useCallback(() => {
     onRetry?.(message.id);
   }, [message.id, onRetry]);
+
+  /**
+   * 执行时间线步骤。
+   *
+   * 有 Planner 计划时以任务为步骤（状态与「任务历史」面板同一份推导）；没有计划
+   * 的轮次退化为「按 Agent」的步骤，保证纯对话轮次也能看到执行过程。
+   * 只做展示映射，不改变任何字段。
+   */
+  const executionSteps = (() => {
+    const resolveAgent = (agentType: string) => ({
+      toolCalls: getToolCallsForAgent(message, agentType),
+      tokenUsage: findTokenUsageForAgent(message, agentType),
+      thinking: message.reasoningBlocks?.find(
+        (block) => block.agentType === agentType,
+      )?.content,
+      subagents: getSubagentTracesForParent(message, agentType),
+    });
+
+    const taskStatus = message.plannerExecution
+      ? buildTaskStatus(
+          message.plannerExecution.plan.tasks,
+          message.executorResults ?? [],
+          message.activeAgent,
+          message.activeAgents,
+        )
+      : new Map();
+
+    const planSteps = buildExecutionSteps({
+      plan: message.plannerExecution?.plan ?? null,
+      results: message.executorResults ?? [],
+      statusByTaskId: taskStatus,
+      resolveAgent,
+    });
+
+    // 计划之外的 Agent（理解需求、请求分析、规划、审查）也进入同一条时间线。
+    const planAgents = new Set(
+      message.plannerExecution?.plan.tasks.map((task) => task.assigned_agent) ?? [],
+    );
+    const extraAgents = AGENT_TIMELINE_ORDER.filter(
+      (agentType) => !planAgents.has(agentType) && hasAgentActivity(message, agentType),
+    );
+    // 兜底：以固定顺序覆盖不到、但确实留下了过程的 Agent 类型也不能丢。
+    const knownAgents = new Set([...AGENT_TIMELINE_ORDER, ...planAgents]);
+    const unknownAgents = [
+      ...new Set([
+        ...(message.reasoningBlocks?.map((block) => block.agentType) ?? []),
+        ...(message.toolCalls?.map((toolCall) => toolCall.agentType ?? "") ?? []),
+      ]),
+    ].filter(
+      (agentType) => agentType && !knownAgents.has(agentType),
+    );
+
+    const extraSteps: ExecutionStep[] = [...extraAgents, ...unknownAgents].map(
+      (agentType) => {
+        const agent = resolveAgent(agentType);
+        const running = streamActive && isAgentActive(message, agentType);
+        return {
+          id: `agent-${agentType}`,
+          title: getAgentStepTitle(agentType),
+          agentLabel: getAgentLabel(agentType),
+          agentType,
+          status: running ? "running" : "completed",
+          durationMs: agent.tokenUsage?.durationMs,
+          toolCalls: agent.toolCalls,
+          tokenUsage: agent.tokenUsage,
+          thinking: agent.thinking,
+          subagents: agent.subagents,
+          content: buildStepContent(message, agentType),
+        };
+      },
+    );
+
+    return [...extraSteps, ...planSteps];
+  })();
+  const hasExecution = executionSteps.length > 0;
+  const executionActive =
+    streamActive && executionSteps.some((step) => step.status === "running");
 
   if (viewMode === "process" && !hasVisibleProcessContent && !streamActive) {
     return null;
@@ -222,142 +285,18 @@ export const MessageBubble = memo(function MessageBubble({
   return (
     <div className="flex min-w-0 w-full flex-col self-stretch"
       data-chat-message-id={showMainContent ? message.id : undefined} data-chat-message-role={message.role}>
-      {showProcessContent && (
-        <AgentProcessGroup
-          agentType="conversation"
-          thinkingContent={message.thinking || undefined}
-          thinkingActive={
-            streamActive &&
-            !message.content &&
-            !message.questionForm &&
-            !message.userInput &&
-            !message.requestAnalysis
-          }
-          toolCalls={conversationToolCalls}
-          active={streamActive && isAgentActive(message, "conversation")}
-          hideWhenEmpty
-          tokenUsage={findTokenUsageForAgent(message, "conversation")}
+      {/*
+       * 执行时间线：一次请求的所有 Agent 收在同一个分组里，一级只显示状态、
+       * 执行描述与 Agent 名；Token / Cost / 工具参数等进入展开后的运行详情。
+       * 正文（最终回答）排在其后，成为视觉主体。
+       */}
+      {showProcessContent && hasExecution && (
+        <ExecutionRunGroup
+          steps={executionSteps}
+          active={executionActive}
+          hint={buildRunHint(executionSteps)}
         />
       )}
-
-      {showMainContent && message.todos && message.todos.length > 0 && (
-        <TodoCard todos={message.todos} />
-      )}
-
-      {showMainContent && message.documentEvidenceResolutionComplete && (
-        <div className="mb-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3">
-          <div className="text-sm font-semibold text-green-800">
-            证据阻断补充已完成，产品知识图谱已更新。
-          </div>
-          <a
-            className="mt-2 inline-flex rounded-md bg-green-600 px-3 py-1.5 text-sm font-medium text-white"
-            href={buildDocumentsPath(
-              message.documentEvidenceResolutionComplete.workspaceId,
-            )}
-          >
-            返回文档产出页面
-          </a>
-        </div>
-      )}
-
-      {showProcessContent &&
-        requestReasoningBlocks?.map((block) => (
-          <AgentProcessGroup
-            key={block.agentType}
-            agentType={block.agentType}
-            thinkingContent={block.content}
-            thinkingActive={
-              streamActive && message.requestAnalysis?.state !== "complete"
-            }
-            toolCalls={requestToolCalls}
-            active={streamActive && isAgentActive(message, block.agentType)}
-            tokenUsage={findTokenUsageForAgent(message, block.agentType)}
-          />
-        ))}
-
-      {showProcessContent &&
-        (orchestratorReasoningBlock ||
-          orchestratorToolCalls.length > 0 ||
-          orchestratorSubagentTraces.length > 0) && (
-          <AgentProcessGroup
-            key="orchestrator"
-            agentType="orchestrator"
-            thinkingContent={orchestratorReasoningBlock?.content}
-            thinkingActive={
-              streamActive && isAgentActive(message, "orchestrator")
-            }
-            toolCalls={orchestratorToolCalls}
-            subagents={orchestratorSubagentTraces}
-            active={streamActive && isAgentActive(message, "orchestrator")}
-            tokenUsage={findTokenUsageForAgent(message, "orchestrator")}
-          />
-        )}
-
-      {showProcessContent &&
-        EXECUTOR_AGENT_TYPES.map((agentType) => {
-          const block = executorReasoningBlocks?.find(
-            (item) => item.agentType === agentType,
-          );
-          const toolCalls = getToolCallsForAgent(message, agentType);
-          if (!block && toolCalls.length === 0) return null;
-
-          return (
-            <AgentProcessGroup
-              key={agentType}
-              agentType={agentType}
-              thinkingContent={block?.content}
-              thinkingActive={streamActive && isAgentActive(message, agentType)}
-              toolCalls={toolCalls}
-              active={streamActive && isAgentActive(message, agentType)}
-              tokenUsage={findTokenUsageForAgent(message, agentType)}
-            />
-          );
-        })}
-
-      {showProcessContent &&
-        critiqueReasoningBlocks?.map((block) => (
-          <AgentProcessGroup
-            key={block.agentType}
-            agentType={block.agentType}
-            thinkingContent={block.content}
-            thinkingActive={
-              streamActive && isAgentActive(message, block.agentType)
-            }
-            toolCalls={critiqueToolCalls}
-            active={streamActive && isAgentActive(message, block.agentType)}
-            tokenUsage={findTokenUsageForAgent(message, block.agentType)}
-          />
-        ))}
-
-      {showProcessContent &&
-        productDirectorReasoningBlocks?.map((block) => (
-          <AgentProcessGroup
-            key={block.agentType}
-            agentType={block.agentType}
-            thinkingContent={block.content}
-            thinkingActive={
-              streamActive && isAgentActive(message, block.agentType)
-            }
-            toolCalls={productDirectorToolCalls}
-            active={streamActive && isAgentActive(message, block.agentType)}
-            tokenUsage={findTokenUsageForAgent(message, block.agentType)}
-          />
-        ))}
-
-      {showProcessContent &&
-        otherReasoningBlocks?.map((block) => (
-          <AgentProcessGroup
-            key={block.agentType}
-            agentType={block.agentType}
-            thinkingContent={block.content}
-            thinkingActive={
-              streamActive && isAgentActive(message, block.agentType)
-            }
-            toolCalls={getToolCallsForAgent(message, block.agentType)}
-            active={streamActive && isAgentActive(message, block.agentType)}
-            tokenUsage={findTokenUsageForAgent(message, block.agentType)}
-          />
-        ))}
 
       {showMainContent && message.content && (
         <div className="assistant-bubble">
@@ -367,32 +306,9 @@ export const MessageBubble = memo(function MessageBubble({
             isLastAssistant={isLast}
             streaming={streaming}
             nextUserContent={nextUserContent}
-            locallySubmitted={locallySubmitted}
+            submittedFormIds={submittedFormIds}
             onSubmitForm={handleFormSubmit}
           />
-        </div>
-      )}
-
-      {showMainContent && message.userInput && (
-        <div>
-          {message.userInput.state === "generating" ? (
-            <QFGenerating label="正在整理用户输入" />
-          ) : (
-            <UserInputCard raw={message.userInput.content || ""} />
-          )}
-        </div>
-      )}
-
-      {showMainContent && message.requestAnalysis && (
-        <div>
-          {message.requestAnalysis.state === "generating" ? (
-            <QFGenerating label="Request Agent 正在分析请求" />
-          ) : (
-            <RequestAnalysisCard
-              raw={message.requestAnalysis.content}
-              analysis={message.requestAnalysis.analysis}
-            />
-          )}
         </div>
       )}
 
@@ -404,23 +320,63 @@ export const MessageBubble = memo(function MessageBubble({
         />
       )}
 
-      {showMainContent && plannerDagGenerating && (
-        <PlannerExecutionLoadingCard />
+      {/*
+       * 规划与审查的详细结构收进「运行详情」：一级只保留时间线，
+       * DAG 与任务明细默认折叠，需要时展开（能力不删）。
+       */}
+      {showProcessContent && (plannerDagGenerating || message.plannerExecution) && (
+        <details className="exec-extra">
+          <summary>
+            {plannerDagGenerating
+              ? "正在生成执行 DAG"
+              : `查看 Planner DAG（${message.plannerExecution?.plan.tasks.length ?? 0} 个任务）`}
+          </summary>
+          <div className="exec-extra-body">
+            {plannerDagGenerating ? (
+              <PlannerExecutionLoadingCard />
+            ) : (
+              message.plannerExecution && (
+                <PlannerExecutionCard
+                  plan={message.plannerExecution.plan}
+                  executorResults={message.executorResults}
+                  activeAgent={message.activeAgent}
+                  activeAgents={message.activeAgents}
+                />
+              )
+            )}
+          </div>
+        </details>
       )}
 
-      {showMainContent && message.plannerExecution && (
-        <PlannerExecutionCard
-          plan={message.plannerExecution.plan}
-          executorResults={message.executorResults}
-          activeAgent={message.activeAgent}
-          activeAgents={message.activeAgents}
-        />
+      {showProcessContent && message.plannerReview && (
+        <details className="exec-extra">
+          <summary>
+            {message.plannerReview.state === "generating"
+              ? "Critique Agent 正在审查"
+              : "查看 Critique 审查结果"}
+          </summary>
+          <div className="exec-extra-body">
+            <CritiqueAgentReviewCard
+              state={message.plannerReview.state}
+              result={message.plannerReview.result}
+            />
+          </div>
+        </details>
       )}
 
-      {showMainContent && message.plannerReview && (
-        <CritiqueAgentReviewCard
-          state={message.plannerReview.state}
-          result={message.plannerReview.result}
+      {/*
+       * 「用户输入整理」「Request Agent 分析」已并入执行时间线对应步骤的运行详情，
+       * 这里不再单独渲染，避免同一份内容在对话里出现两次。
+       */}
+
+      {showMainContent && message.todos && message.todos.length > 0 && (
+        <TodoCard todos={message.todos} />
+      )}
+
+      {/* 知识图谱更新：保留为独立事件行，不夹在折叠详情里。 */}
+      {showMainContent && message.documentEvidenceResolutionComplete && (
+        <KnowledgeGraphUpdatedEvent
+          workspaceId={message.documentEvidenceResolutionComplete.workspaceId}
         />
       )}
 
@@ -428,29 +384,40 @@ export const MessageBubble = memo(function MessageBubble({
         <WorkflowCompletionCard content={message.workflowCompletion.content} />
       )}
 
-      {showMainContent && message.humanInterrupt && (
+      {/*
+       * 交互中的 HITL 表单移到输入框位置（由上层渲染），这里只在历史回放或
+       * 明确要求时渲染，避免同一个表单在消息流和输入区出现两次。
+       */}
+      {showMainContent && message.humanInterrupt && renderInteractiveHitl && (
         <HumanInterruptBlock
           interrupt={message.humanInterrupt.interrupt}
           isLastAssistant={isLast}
           streaming={streaming}
           nextUserContent={nextUserContent}
-          locallySubmitted={locallySubmitted}
+          submittedFormIds={submittedFormIds}
           onSubmitForm={handleFormSubmit}
         />
       )}
 
+      {/*
+       * 交互中的表单统一由输入区渲染；这里只在历史回放或输入区判定失效时渲染，
+       * 避免同一个表单在消息流和输入区出现两次。
+       */}
       {showMainContent && message.questionForm && !message.humanInterrupt && (
         <div>
           {message.questionForm.state === "generating" ? (
-            <QFGenerating label="正在生成问题表单" />
+            renderInteractiveHitl ? (
+              <QFGenerating label="正在生成问题表单" />
+            ) : null
           ) : (
             <ProseBlock
               text={message.questionForm.content || ""}
               isLastAssistant={isLast}
               streaming={streaming}
               nextUserContent={nextUserContent}
-              locallySubmitted={locallySubmitted}
+              submittedFormIds={submittedFormIds}
               onSubmitForm={handleFormSubmit}
+              renderInteractiveForm={renderInteractiveHitl}
             />
           )}
         </div>
@@ -747,14 +714,14 @@ function HumanInterruptBlock({
   isLastAssistant,
   streaming,
   nextUserContent,
-  locallySubmitted,
+  submittedFormIds,
   onSubmitForm,
 }: {
   interrupt: HumanInTheLoopInterrupt;
   isLastAssistant: boolean;
   streaming: boolean;
   nextUserContent?: string;
-  locallySubmitted: Set<string>;
+  submittedFormIds: Set<string>;
   onSubmitForm: (
     formId: string,
     text: string,
@@ -770,7 +737,7 @@ function HumanInterruptBlock({
       isLastAssistant={isLastAssistant}
       streaming={streaming}
       nextUserContent={nextUserContent}
-      locallySubmitted={locallySubmitted}
+      submittedFormIds={submittedFormIds}
       onSubmitForm={onSubmitForm}
       hitlThreadId={interrupt.threadId}
     />
@@ -779,8 +746,10 @@ function HumanInterruptBlock({
 
 /**
  * 从 HITLRequest 风格 payload 中读取 Question Form 原文。
+ *
+ * 导出供上层在输入区渲染同一个表单，避免两处各写一份解析。
  */
-function getQuestionFormFromInterrupt(
+export function getQuestionFormFromInterrupt(
   interrupt: HumanInTheLoopInterrupt,
 ): string | null {
   const action = interrupt.value.actionRequests.find(
@@ -800,7 +769,7 @@ function AgentInterruptedCard({
   onContinue?: () => void;
 }) {
   return (
-    <div className="mb-2 rounded-lg border border-[#fbbf24] bg-[#fffbeb] px-4 py-3 text-[#92400e]">
+    <div className="mb-2 rounded-lg border border-[var(--ds-color-warning)] bg-[var(--ds-color-warning-soft)] px-4 py-3 text-[var(--ds-color-warning)]">
       <div className="mb-1 flex items-center justify-between gap-3">
         <span className="text-[13px] font-bold">
           连接中断，工作流已停止
@@ -808,7 +777,7 @@ function AgentInterruptedCard({
         {onContinue && (
           <button
             type="button"
-            className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-[#fbbf24] bg-white px-2 py-1 text-[12px] font-bold text-[#92400e]"
+            className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-[var(--ds-color-warning)] bg-[var(--surface)] px-2 py-1 text-[var(--ds-font-size-small)] font-bold text-[var(--ds-color-warning)]"
             onClick={(event) => {
               event.stopPropagation();
               onContinue();
@@ -842,7 +811,7 @@ function AgentErrorCard({
 
   return (
     <>
-      <div className="mb-2 rounded-lg border border-[#fca5a5] bg-[#fef2f2] px-4 py-3 text-[#991b1b]">
+      <div className="mb-2 rounded-lg border border-[var(--ds-color-error)] bg-[var(--ds-color-error-soft)] px-4 py-3 text-[var(--ds-color-error)]">
         <div className="mb-1 flex items-center justify-between gap-3">
           <span className="text-[13px] font-bold">
             {getAgentLabel(agentType ?? "agent")} 执行失败
@@ -850,7 +819,7 @@ function AgentErrorCard({
           {onRetry && (
             <button
               type="button"
-              className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-[#fca5a5] bg-white px-2 py-1 text-[12px] font-bold text-[#991b1b]"
+              className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-[var(--ds-color-error)] bg-[var(--surface)] px-2 py-1 text-[var(--ds-font-size-small)] font-bold text-[var(--ds-color-error)]"
               onClick={(event) => {
                 event.stopPropagation();
                 onRetry();
@@ -863,7 +832,7 @@ function AgentErrorCard({
         </div>
         <button
           type="button"
-          className="block w-full cursor-pointer border-0 bg-transparent p-0 text-left text-[#991b1b]"
+          className="block w-full cursor-pointer border-0 bg-transparent p-0 text-left text-[var(--ds-color-error)]"
           onClick={() => setDetailOpen(true)}
         >
           <span
@@ -877,7 +846,7 @@ function AgentErrorCard({
           >
             {message}
           </span>
-          <span className="mt-2 block text-[12px] font-bold text-[#b91c1c]">
+          <span className="mt-2 block text-[12px] font-bold text-[var(--ds-color-error)]">
             点击查看完整错误
           </span>
         </button>
@@ -905,7 +874,7 @@ function AgentErrorCard({
  */
 function WorkflowCompletionCard({ content }: { content: string }) {
   return (
-    <div className="mb-2 rounded-lg border border-[#bbf7d0] bg-[#f0fdf4] px-4 py-3 text-[#166534]">
+    <div className="mb-2 rounded-lg border border-[var(--ds-color-success)] bg-[var(--ds-color-success-soft)] px-4 py-3 text-[var(--ds-color-success)]">
       <div className="mb-1 flex items-center gap-2 text-[13px] font-bold">
         <CheckCircleOutlined />
         <span>本轮流程已结束</span>
@@ -967,473 +936,26 @@ function getAgentColor(agentType: string): string {
 }
 
 /**
- * Agent 过程分组卡片
+ * 知识图谱更新事件
  *
- * 将同一 Agent 的思考过程和工具调用放入统一分组，使用彩色左边框和 Agent
- * 标题区分不同 Agent，让右侧过程栏各 Agent 一览可见。
+ * 图谱更新是一次独立事件，保留在对话一级；只呈现结论与入口，不铺开原始
+ * change 数据。入口复用已有路由与面板状态，不新增导航逻辑。
  */
-function AgentProcessGroup({
-  agentType,
-  thinkingContent,
-  thinkingActive,
-  toolCalls,
-  subagents,
-  active,
-  hideWhenEmpty,
-  tokenUsage,
-}: {
-  agentType: string;
-  thinkingContent?: string;
-  thinkingActive: boolean;
-  toolCalls: NonNullable<Message["toolCalls"]>;
-  subagents?: SubagentTrace[];
-  active: boolean;
-  hideWhenEmpty?: boolean;
-  tokenUsage?: TokenUsageInfo;
-}) {
-  const color = getAgentColor(agentType);
-  const label = getAgentLabel(agentType);
-  const hasThinking = Boolean(thinkingContent);
-  const hasTools = toolCalls.length > 0;
-  const hasSubagents = Boolean(subagents?.length);
-
-  if (hideWhenEmpty && !hasThinking && !hasTools && !hasSubagents) return null;
-  if (!hasThinking && !hasTools && !hasSubagents) return null;
-
+function KnowledgeGraphUpdatedEvent({ workspaceId }: { workspaceId: string }) {
   return (
-    <div
-      className="mb-3 overflow-hidden rounded-lg border border-[var(--line-soft)] bg-white"
-      data-agent-thinking={agentType}
-      style={{ borderLeft: `3px solid ${color}` }}
-    >
-      {/* Agent 标题行 */}
-      <div className="flex items-center gap-2 border-b border-[var(--line-soft)] px-4 py-2.5">
-        <span
-          className="h-1.5 w-1.5 shrink-0 rounded-full"
-          style={{ background: color }}
-        />
-        <span className="text-[14px] font-bold text-[var(--ink)]">
-          {label}
-        </span>
-        {active && (
-          <Spin
-            indicator={<LoadingOutlined style={{ fontSize: 12, color }} />}
-            size="small"
-            className="ml-auto"
-          />
-        )}
+    <div className="kg-updated">
+      <span className="kg-updated-icon" aria-hidden="true">
+        <ApartmentOutlined />
+      </span>
+      <div className="kg-updated-copy">
+        <strong>知识图谱已更新</strong>
+        <span>本次执行写入的实体与关系已在知识图谱工作区可见</span>
       </div>
-
-      {/* Token 用量摘要行 */}
-      {tokenUsage && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 border-b border-[var(--line-soft)] px-4 py-1.5 text-[11px] leading-relaxed text-[var(--ink-faint)]">
-          {tokenUsage.durationMs > 0 && (
-            <span className="shrink-0">
-              {formatDuration(tokenUsage.durationMs)}
-            </span>
-          )}
-          <span className="shrink-0">
-            输入 {formatTokens(tokenUsage.inputTokens)}
-          </span>
-          <span className="shrink-0">
-            输出 {formatTokens(tokenUsage.outputTokens)}
-          </span>
-          <span className="shrink-0 font-semibold text-[var(--ink)]">
-            {formatCost(tokenUsage.costTotal)} yuan
-          </span>
-          {(tokenUsage.parallelAgents?.length ?? 0) > 1 && (
-            <Tooltip
-              title={`与 ${(tokenUsage.parallelAgents ?? [])
-                .filter((a) => a !== agentType)
-                .map(getAgentLabel)
-                .join("、")} 并行执行`}
-            >
-              <PartitionOutlined className="shrink-0 cursor-help text-[var(--primary)]" />
-            </Tooltip>
-          )}
-        </div>
-      )}
-
-      {/* 思考过程折叠区 */}
-      {hasThinking && (
-        <ThinkingSection
-          color={color}
-          content={thinkingContent!}
-          active={thinkingActive}
-        />
-      )}
-
-      {/* 工具调用折叠区 */}
-      {hasSubagents && (
-        <SubagentTraceSection parentColor={color} subagents={subagents ?? []} />
-      )}
-
-      {hasTools && <ToolCallsSection toolCalls={toolCalls} />}
+      <a className="kg-updated-link" href={buildChatPath(workspaceId)}>
+        打开工作区
+      </a>
     </div>
   );
-}
-
-/**
- * 渲染 Orchestrator 内部调用的 SubAgent 轨迹列表。
- */
-function SubagentTraceSection({
-  parentColor,
-  subagents,
-}: {
-  parentColor: string;
-  subagents: SubagentTrace[];
-}) {
-  if (subagents.length === 0) return null;
-
-  return (
-    <div className="space-y-2 border-t border-[var(--line-soft)] bg-[var(--surface-muted)] px-3 py-3">
-      {subagents.map((subagent, index) => (
-        <div
-          key={subagent.id ?? `${subagent.subagentType}-${index}`}
-          className="overflow-hidden rounded-md border border-[var(--line-soft)] bg-white"
-        >
-          <div className="flex items-center gap-2 border-b border-[var(--line-soft)] px-3 py-2">
-            <span
-              className="h-1.5 w-1.5 shrink-0 rounded-full"
-              style={{ background: parentColor }}
-            />
-            <span className="text-[13px] font-bold text-[var(--ink)]">
-              {getSubagentLabel(subagent.subagentType)}
-            </span>
-            {subagent.status === "running" && (
-              <Spin
-                indicator={
-                  <LoadingOutlined
-                    style={{ fontSize: 11, color: parentColor }}
-                  />
-                }
-                size="small"
-                className="ml-auto"
-              />
-            )}
-          </div>
-
-          {subagent.description && (
-            <div className="border-b border-[var(--line-soft)] px-3 py-2 text-[12px] leading-relaxed text-[var(--ink-faint)]">
-              {subagent.description}
-            </div>
-          )}
-
-          {subagent.thinking && (
-            <NestedCollapseBlock
-              color={parentColor}
-              label="SubAgent 思考过程"
-              content={subagent.thinking}
-              active={subagent.status === "running"}
-            />
-          )}
-
-          {Object.prototype.hasOwnProperty.call(subagent, "result") && (
-            <NestedCollapseBlock
-              color={parentColor}
-              label="返回给 Orchestrator 的结果"
-              content={formatSubagentResult(subagent.result)}
-              active={false}
-            />
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/**
- * 内嵌卡片中的折叠文本块，避免 SubAgent 长输出撑开右侧过程栏。
- */
-function NestedCollapseBlock({
-  color,
-  label,
-  content,
-  active,
-}: {
-  color: string;
-  label: string;
-  content: string;
-  active: boolean;
-}) {
-  // SubAgent 可能输出很长的推理；运行态默认折叠，只有用户主动查看时才挂载正文。
-  const [open, setOpen] = useState(false);
-  const contentRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (contentRef.current && open) {
-      contentRef.current.scrollTop = contentRef.current.scrollHeight;
-    }
-  }, [content, open]);
-
-  return (
-    <div className="[&>.ant-collapse]:mb-0 [&>.ant-collapse]:rounded-none [&>.ant-collapse]:border-0">
-      <Collapse
-        activeKey={open ? ["content"] : []}
-        onChange={(keys) => {
-          setOpen(
-            Array.isArray(keys) ? keys.includes("content") : keys === "content",
-          );
-        }}
-        expandIcon={({ isActive: isOpen }) => (
-          <CaretRightOutlined
-            rotate={isOpen ? 90 : 0}
-            style={{ fontSize: 11, color }}
-          />
-        )}
-        items={[
-          {
-            key: "content",
-            label: (
-              <div className="flex items-center gap-2">
-                <span className="text-[13px] font-bold text-[var(--ink)]">
-                  {label}
-                </span>
-                {active && <span className="loading-dots" />}
-              </div>
-            ),
-            children: (
-              <div
-                ref={contentRef}
-                className="max-h-[180px] overflow-y-auto whitespace-pre-wrap themed-scrollbar text-[12px] leading-relaxed text-[var(--ink-mute)]"
-              >
-                {content}
-              </div>
-            ),
-          },
-        ]}
-      />
-    </div>
-  );
-}
-
-/**
- * 思考过程折叠区 —— 使用 antd Collapse 与工具调用区保持一致的视觉风格。
- */
-function ThinkingSection({
-  color,
-  content,
-  active,
-}: {
-  color: string;
-  content: string;
-  active: boolean;
-}) {
-  const [open, setOpen] = useState(active);
-  const [userToggled, setUserToggled] = useState(false);
-  const [userScrolled, setUserScrolled] = useState(false);
-  const contentRef = useRef<HTMLDivElement>(null);
-
-  const isAtBottom = useCallback(() => {
-    const el = contentRef.current;
-    if (!el) return true;
-    return el.scrollHeight - el.scrollTop - el.clientHeight < 30;
-  }, []);
-
-  useEffect(() => {
-    if (active) {
-      setOpen(true);
-      setUserToggled(false);
-      return;
-    }
-    if (!userToggled) {
-      setOpen(false);
-    }
-  }, [active, userToggled]);
-
-  // 流式输出时自动追随底部，除非用户手动向上滚动。
-  useEffect(() => {
-    if (!userScrolled && contentRef.current && open) {
-      contentRef.current.scrollTop = contentRef.current.scrollHeight;
-    }
-  }, [content, open, userScrolled]);
-
-  const handleScroll = useCallback(() => {
-    setUserScrolled(!isAtBottom());
-  }, [isAtBottom]);
-
-  const handleChange = (keys: string | string[]) => {
-    setUserToggled(true);
-    setOpen(
-      Array.isArray(keys) ? keys.includes("thinking") : keys === "thinking",
-    );
-  };
-
-  return (
-    <div className="[&>.ant-collapse]:mb-0 [&>.ant-collapse]:rounded-none [&>.ant-collapse]:border-0">
-      <Collapse
-        activeKey={open ? ["thinking"] : []}
-        onChange={handleChange}
-        expandIcon={({ isActive: isOpen }) => (
-          <CaretRightOutlined
-            rotate={isOpen ? 90 : 0}
-            style={{ fontSize: 12, color }}
-          />
-        )}
-        items={[
-          {
-            key: "thinking",
-            label: (
-              <div className="flex items-center gap-2">
-                <span className="text-[14px] font-bold text-[var(--ink)]">
-                  思考过程
-                </span>
-                {active && <span className="loading-dots" />}
-              </div>
-            ),
-            children: (
-              <div
-                ref={contentRef}
-                onScroll={handleScroll}
-                className="font-reading-compact max-h-[220px] overflow-y-auto whitespace-pre-wrap themed-scrollbar text-[13px] leading-relaxed text-[var(--ink-mute)]"
-              >
-                {windowStreamingReasoning(content, active)}
-              </div>
-            ),
-          },
-        ]}
-      />
-    </div>
-  );
-}
-
-/** 流式期间在 DOM 中保留的推理尾部字符数；完整内容仍保留在消息状态中。 */
-const MAX_STREAMING_REASONING_DOM_CHARS = 8_000;
-
-/**
- * 流式期间只渲染推理尾部窗口，避免滚动区承载整段思考文本。
- *
- * 运行结束后 active 为 false，此时渲染已由 stream-limits 限制过的完整内容。
- */
-function windowStreamingReasoning(content: string, active: boolean): string {
-  if (!active || content.length <= MAX_STREAMING_REASONING_DOM_CHARS) {
-    return content;
-  }
-
-  const omitted = content.length - MAX_STREAMING_REASONING_DOM_CHARS;
-  return `[较早的思考过程已折叠以保护页面内存，省略 ${omitted} 字符]\n${content.slice(
-    -MAX_STREAMING_REASONING_DOM_CHARS,
-  )}`;
-}
-
-/**
- * 工具调用折叠区 —— 内嵌于 AgentProcessGroup，复用 ToolCallsCard 但去掉外部间距。
- */
-function ToolCallsSection({
-  toolCalls,
-}: {
-  toolCalls: NonNullable<Message["toolCalls"]>;
-}) {
-  return (
-    <div className="[&>.ant-collapse]:mb-0 [&>.ant-collapse]:rounded-none [&>.ant-collapse]:border-0">
-      <ToolCallsCard toolCalls={toolCalls} />
-    </div>
-  );
-}
-
-/**
- * 展示 Agent 推理过程，流式阶段保持自动滚动。
- */
-function ThinkingBox({
-  agentType,
-  label,
-  content,
-  active,
-}: {
-  agentType: string;
-  label: string;
-  content: string;
-  active: boolean;
-}) {
-  const [open, setOpen] = useState(active);
-  const [userToggled, setUserToggled] = useState(false);
-  const [userScrolled, setUserScrolled] = useState(false);
-  const contentRef = useRef<HTMLDivElement>(null);
-
-  const isAtBottom = useCallback(() => {
-    const el = contentRef.current;
-    if (!el) return true;
-    return el.scrollHeight - el.scrollTop - el.clientHeight < 30;
-  }, []);
-
-  useEffect(() => {
-    if (!userScrolled && contentRef.current && open) {
-      contentRef.current.scrollTop = contentRef.current.scrollHeight;
-    }
-  }, [content, open, userScrolled]);
-
-  useEffect(() => {
-    if (active) {
-      setOpen(true);
-      setUserToggled(false);
-      return;
-    }
-
-    // 未被用户手动展开的完成态思考默认收起，降低右侧过程栏噪音。
-    if (!userToggled) {
-      setOpen(false);
-    }
-  }, [active, userToggled]);
-
-  const handleScroll = useCallback(() => {
-    setUserScrolled(!isAtBottom());
-  }, [isAtBottom]);
-
-  return (
-    <div
-      className="mb-2 overflow-hidden rounded-lg border border-[var(--line-soft)] bg-white"
-      data-agent-thinking={agentType}
-    >
-      <button
-        type="button"
-        className="flex w-full cursor-pointer select-none items-center gap-1.5 border-none bg-white px-4 py-2 text-left text-[13px] font-bold text-[var(--ink-faint)]"
-        onClick={() => {
-          setUserToggled(true);
-          setOpen(!open);
-        }}
-      >
-        <CaretRightOutlined
-          style={{
-            fontSize: 10,
-            transition: "transform 0.2s",
-            transform: open ? "rotate(90deg)" : "rotate(0deg)",
-            color: "var(--primary)",
-          }}
-        />
-        <span className="thinking-label">
-          {label}
-          {active && <span className="loading-dots" />}
-        </span>
-      </button>
-      {open && (
-        <div
-          ref={contentRef}
-          onScroll={handleScroll}
-          className="font-reading-compact themed-scrollbar max-h-[300px] overflow-y-auto whitespace-pre-wrap border-t border-[var(--line-soft)] px-4 pb-3 text-[13px] leading-relaxed text-[var(--ink-mute)]"
-        >
-          {content}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
- * 将 Agent 类型转换为前端推理过程标题。
- */
-function getReasoningLabel(agentType: string): string {
-  if (agentType === "request") return "思考过程（Request Agent）";
-  if (agentType === "conversation") return "思考过程（Conversation Agent）";
-  if (agentType === "conversation_confirmation") {
-    return "思考过程（Conversation Agent）";
-  }
-  if (agentType === "orchestrator") return "思考过程（Orchestrator Agent）";
-  if (agentType === "planner") return "思考过程（Planner SubAgent）";
-  if (agentType === "critique") return "思考过程（Critique Agent）";
-  if (agentType === "product_director") {
-    return "思考过程（Critique Agent）";
-  }
-  return `思考过程（${getAgentLabel(agentType)}）`;
 }
 
 const EXECUTOR_AGENT_TYPES = [
@@ -1471,6 +993,90 @@ const SUBAGENT_LABELS: Record<string, string> = {
   "pre-orchestrator": "Pre-Orchestrator SubAgent",
   planner: "Planner SubAgent",
 };
+
+/**
+ * 执行时间线中「计划之外」的 Agent 顺序。
+ *
+ * 这些 Agent 不产出 DAG 任务，但属于同一轮执行，因此按真实发生顺序排进同一条
+ * 时间线，避免它们再次变成独立大卡片。
+ */
+const AGENT_TIMELINE_ORDER = [
+  "conversation",
+  "request",
+  "orchestrator",
+  "planner",
+  "critique",
+  "product_director",
+];
+
+/** 各阶段的人类可读执行描述。 */
+const AGENT_STEP_TITLES: Record<string, string> = {
+  conversation: "理解需求",
+  request: "分析请求",
+  orchestrator: "规划执行方案",
+  planner: "生成执行 DAG",
+  critique: "审查输出质量",
+  product_director: "审查输出质量",
+};
+
+/**
+ * 该 Agent 在这一轮里是否留下了可展示的活动。
+ *
+ * 只依据已有字段判断，避免时间线里出现空步骤。
+ */
+function hasAgentActivity(message: Message, agentType: string): boolean {
+  if (isAgentActive(message, agentType)) return true;
+  if (message.reasoningBlocks?.some((block) => block.agentType === agentType)) {
+    return true;
+  }
+  if (getToolCallsForAgent(message, agentType).length > 0) return true;
+  if (findTokenUsageForAgent(message, agentType)) return true;
+  if (agentType === "request" && message.requestAnalysis) return true;
+  if (agentType === "planner" && message.plannerExecution) return true;
+  // 用户输入整理属于 Conversation 阶段的产出，不能因为没有 reasoning 就丢掉。
+  if (agentType === "conversation" && message.userInput) return true;
+  if (
+    (agentType === "critique" || agentType === "product_director") &&
+    message.plannerReview
+  ) {
+    return true;
+  }
+  if (agentType === "conversation" && message.thinking) return true;
+  return false;
+}
+
+/** 步骤描述：优先使用产品化文案，缺失时回退到 Agent 名。 */
+function getAgentStepTitle(agentType: string): string {
+  return AGENT_STEP_TITLES[agentType] ?? getAgentLabel(agentType);
+}
+
+/**
+ * 步骤的结构化内容。
+ *
+ * 复用已有卡片的内联形态，把数据放进对应步骤的运行详情，避免同一份内容在
+ * 时间线之外再渲染一次（此前「用户输入整理」「Request Agent 分析」会出现两遍）。
+ */
+function buildStepContent(message: Message, agentType: string): ReactNode {
+  if (agentType === "conversation" && message.userInput) {
+    return message.userInput.state === "generating" ? (
+      <QFGenerating label="正在整理用户输入" />
+    ) : (
+      <UserInputCard raw={message.userInput.content || ""} inline />
+    );
+  }
+  if (agentType === "request" && message.requestAnalysis) {
+    return message.requestAnalysis.state === "generating" ? (
+      <QFGenerating label="Request Agent 正在分析请求" />
+    ) : (
+      <RequestAnalysisCard
+        raw={message.requestAnalysis.content}
+        analysis={message.requestAnalysis.analysis}
+        inline
+      />
+    );
+  }
+  return undefined;
+}
 
 /**
  * 判断是否属于 Executor Agent。

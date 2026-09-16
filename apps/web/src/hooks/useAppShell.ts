@@ -13,9 +13,10 @@
  * - 不直接消费聊天 SSE，也不管理文档生成后台轮询。
  */
 
-import { useCallback, useEffect, useState } from "react";
-import { Form, Modal } from "antd";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { App, Form } from "antd";
 import type { ThreadInfo, WorkspaceInfo } from "../types";
+import type { WorkspacePanelId } from "../components/shell/workspace-panels";
 import {
   createChatRecord,
   createWorkspaceRecord,
@@ -47,6 +48,7 @@ const DEFAULT_DRAFT_CHAT_TITLES = new Set([DEFAULT_CHAT_TITLE, "New Chat"]);
  * 管理应用外壳的顶层状态、路由同步和跨页面动作。
  */
 export function useAppShell() {
+  const { modal } = App.useApp();
   const [projectForm] = Form.useForm<{ name: string; location?: string }>();
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
@@ -77,7 +79,11 @@ export function useAppShell() {
   const [projectLocationHint, setProjectLocationHint] = useState(false);
   const [workspaceDetailOpen, setWorkspaceDetailOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [workspacePanel, setWorkspacePanel] = useState<WorkspacePanelId>(() =>
+    parseAppRoute().name === "documents" ? "documents" : "overview",
+  );
   const [route, setRoute] = useState<AppRoute>(() => parseAppRoute());
+  const previousWorkspaceIdRef = useRef<string | null>(activeWorkspaceId);
 
   const restoreWorkspaces = useCallback((serverWorkspaces: WorkspaceInfo[]) => {
     setWorkspaces(serverWorkspaces);
@@ -121,6 +127,18 @@ export function useAppShell() {
     setActiveThreadId(route.name === "chat" ? route.threadId : null);
     localStorage.setItem(ACTIVE_WORKSPACE_KEY, route.workspaceId);
   }, [route]);
+
+  useEffect(() => {
+    // 切换工作区时回到项目概览；首屏与同一工作区内的会话、路由切换都保留当前面板。
+    if (previousWorkspaceIdRef.current === activeWorkspaceId) return;
+    previousWorkspaceIdRef.current = activeWorkspaceId;
+    setWorkspacePanel("overview");
+  }, [activeWorkspaceId]);
+
+  useEffect(() => {
+    // 直接访问 /documents/:workspaceId 时对齐交付文档面板。
+    if (route.name === "documents") setWorkspacePanel("documents");
+  }, [route.name]);
 
   useEffect(() => {
     let cancelled = false;
@@ -268,12 +286,23 @@ export function useAppShell() {
     pushPath(buildDocumentsPath(activeWorkspaceId));
     setWorkspaceDetailOpen(true);
     setActiveThreadId(null);
+    setWorkspacePanel("documents");
   }, [activeWorkspaceId]);
 
   const handleBackToWorkspaceList = useCallback(() => {
     pushPath("/workplace");
     setWorkspaceDetailOpen(false);
     setActiveThreadId(null);
+  }, []);
+
+  /** 侧边栏收起状态回调；保持引用稳定，避免外壳媒体查询反复重订阅。 */
+  const handleSidebarCollapsedChange = useCallback((collapsed: boolean) => {
+    setSidebarCollapsed(collapsed);
+  }, []);
+
+  /** 切换工作区面板；只影响展示状态，不改变路由或挂载结构。 */
+  const handleWorkspacePanelChange = useCallback((panelId: WorkspacePanelId) => {
+    setWorkspacePanel(panelId);
   }, []);
 
   const openConfigModal = useCallback(
@@ -354,7 +383,7 @@ export function useAppShell() {
         setProjectModalOpen(false);
         projectForm.resetFields();
         if (updatedWorkspace.localStorageWarnings?.length) {
-          Modal.warning({ title: "路径已更新，部分本地文件未同步", content: updatedWorkspace.localStorageWarnings.join(" ") });
+          modal.warning({ title: "路径已更新，部分本地文件未同步", content: updatedWorkspace.localStorageWarnings.join(" ") });
         }
         return;
       }
@@ -376,7 +405,7 @@ export function useAppShell() {
       console.error("[workspace] Failed to save workspace:", error);
       const message = mapErrorToChinese(error);
       setCreationError(message);
-      Modal.error({ title: "项目未保存", content: message });
+      modal.error({ title: "项目未保存", content: message });
     } finally {
       setIsCreatingWorkspace(false);
     }
@@ -428,7 +457,7 @@ export function useAppShell() {
     } catch (error) {
       const message = mapErrorToChinese(error);
       setCreationError(message);
-      Modal.error({ title: "名称未保存", content: message });
+      modal.error({ title: "名称未保存", content: message });
     } finally {
       setSavingRename(false);
     }
@@ -439,7 +468,7 @@ export function useAppShell() {
     (id: string) => {
       const workspace = workspaces.find((item) => item.id === id);
       if (!workspace) return;
-      Modal.confirm({
+      modal.confirm({
         title: `从列表移除“${workspace.name}”？`,
         content: "只会隐藏项目记录，不会删除本地目录、文件、对话、图谱或文档。v0.1 暂无回收站入口。",
         okText: "从列表移除",
@@ -461,7 +490,7 @@ export function useAppShell() {
           } catch (error) {
             const message = mapErrorToChinese(error);
             setCreationError(message);
-            Modal.error({ title: "项目未移除", content: message });
+            modal.error({ title: "项目未移除", content: message });
           }
         },
       });
@@ -474,7 +503,7 @@ export function useAppShell() {
     (id: string) => {
       const thread = threads.find((item) => item.id === id);
       if (!thread) return;
-      Modal.confirm({
+      modal.confirm({
         title: `删除对话“${thread.title}”？`,
         content: "对话将从历史列表隐藏；v0.1 暂不提供恢复入口。",
         okText: "删除",
@@ -497,7 +526,7 @@ export function useAppShell() {
           } catch (error) {
             const message = mapErrorToChinese(error);
             setCreationError(message);
-            Modal.error({ title: "对话未删除", content: message });
+            modal.error({ title: "对话未删除", content: message });
           }
         },
       });
@@ -568,9 +597,11 @@ export function useAppShell() {
     handleOpenWorkspace,
     handleSelectThread,
     handleSaveRename,
+    handleSidebarCollapsedChange,
     handleThreadDelete,
     handleThreadRename,
     handleWorkspaceMigrate,
+    handleWorkspacePanelChange,
     handleWorkspaceRemove,
     handleWorkspaceRename,
     isCreatingChat,
@@ -592,6 +623,7 @@ export function useAppShell() {
     setSidebarCollapsed,
     sidebarCollapsed,
     threads,
+    workspacePanel,
     route,
     workspaceDetailOpen,
     workspaces,

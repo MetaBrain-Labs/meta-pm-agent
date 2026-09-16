@@ -32,22 +32,25 @@ export function ProseBlock({
   isLastAssistant,
   streaming,
   nextUserContent,
-  locallySubmitted,
+  submittedFormIds,
   onSubmitForm,
   hitlThreadId,
+  renderInteractiveForm = true,
 }: {
   text: string;
   toolCalls?: ToolCallInfo[];
   isLastAssistant: boolean;
   streaming: boolean;
   nextUserContent?: string;
-  locallySubmitted: Set<string>;
+  submittedFormIds: Set<string>;
   onSubmitForm: (
     formId: string,
     text: string,
     hitlResume?: HumanInTheLoopResume,
   ) => void;
   hitlThreadId?: string;
+  /** 交互中的表单是否渲染在消息流里；默认渲染，输入区接管时置 false。 */
+  renderInteractiveForm?: boolean;
 }) {
   const cleaned = useMemo(() => stripArtifact(text), [text]);
   const segments = useMemo(() => splitOnQuestionForms(cleaned), [cleaned]);
@@ -111,9 +114,10 @@ export function ProseBlock({
             isLastAssistant={isLastAssistant}
             streaming={streaming}
             nextUserContent={nextUserContent}
-            locallySubmitted={locallySubmitted}
+            submittedFormIds={submittedFormIds}
             onSubmitForm={onSubmitForm}
             hitlThreadId={hitlThreadId}
+            renderInteractiveForm={renderInteractiveForm}
           />
         );
       })}
@@ -194,27 +198,31 @@ function FormBlock({
   isLastAssistant,
   streaming,
   nextUserContent,
-  locallySubmitted,
+  submittedFormIds,
   onSubmitForm,
   hitlThreadId,
+  renderInteractiveForm = true,
 }: {
   form: QuestionForm;
   isLastAssistant: boolean;
   streaming: boolean;
   nextUserContent?: string;
-  locallySubmitted: Set<string>;
+  submittedFormIds: Set<string>;
   onSubmitForm: (
     formId: string,
     text: string,
     hitlResume?: HumanInTheLoopResume,
   ) => void;
   hitlThreadId?: string;
+  renderInteractiveForm: boolean;
 }) {
   const submittedFromHistory = useMemo(() => {
     if (!nextUserContent) return null;
     return parseSubmittedAnswers(form, nextUserContent);
   }, [form, nextUserContent]);
-  const wasSubmittedLocally = locallySubmitted.has(form.id);
+  const wasSubmittedLocally = submittedFormIds.has(form.id);
+  // 交互态交给输入区渲染；消息流只在有历史答案回放时输出只读摘要。
+  if (!submittedFromHistory && !renderInteractiveForm) return null;
 
   const interactive =
     isLastAssistant &&

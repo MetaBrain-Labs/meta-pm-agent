@@ -14,8 +14,11 @@
  * - 本组件不直接持有 SSE reader 或 AbortController，避免页面切换影响运行中任务。
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ChatApp } from "../../components/ChatApp";
+import { TaskHistoryPanel } from "../../components/shell/TaskHistoryPanel";
+import { KnowledgeGraphPanel } from "../../components/shell/KnowledgeGraphPanel";
+import { useKnowledgeGraph } from "../../hooks/useKnowledgeGraph";
 import {
   createChatRecord,
   fetchChatMessages,
@@ -51,6 +54,10 @@ interface ThreadChatPageProps {
   onThreadMessageStarted: (threadId: string) => void;
   onThreadTitleChange: (threadId: string, title: string) => void;
   onBack: () => void;
+  /** 把任务历史渲染函数登记到应用外壳的面板容器。 */
+  onTasksPanelChange?: (renderer: (() => ReactNode) | null) => void;
+  /** 把知识图谱渲染函数登记到应用外壳的面板容器。 */
+  onGraphPanelChange?: (renderer: (() => ReactNode) | null) => void;
 }
 
 /**
@@ -65,6 +72,8 @@ export function ThreadChatPage({
   onThreadMessageStarted,
   onThreadTitleChange,
   onBack,
+  onTasksPanelChange,
+  onGraphPanelChange,
 }: ThreadChatPageProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -73,6 +82,19 @@ export function ThreadChatPage({
   const [modelProfiles, setModelProfiles] = useState<ModelUsageProfile[]>([]);
   const [selectedModelProfileId, setSelectedModelProfileId] =
     useState("system-default");
+  /**
+   * 图谱属于工作区：对话弹窗与「知识图谱」Tab 共用同一份数据。
+   *
+   * loadOnMount 打开「进入工作区即读取」：图谱面板是图谱的主入口，打开它就应该
+   * 看到数据，而不是显示空态让用户自己点刷新。
+   */
+  const {
+    data: kgData,
+    loading: kgLoading,
+    error: kgError,
+    refresh: refreshKnowledgeGraph,
+    attempted: kgAttempted,
+  } = useKnowledgeGraph(workspaceId, messages, { loadOnMount: true });
   const selectedModelProfileIdRef = useRef("system-default");
   const workspaceIdRef = useRef<string | null>(workspaceId);
   const threadIdRef = useRef<string | null>(thread?.id ?? null);
@@ -336,10 +358,66 @@ export function ThreadChatPage({
     setError(null);
   }, []);
 
+  /**
+   * 面板渲染函数需要同时满足两件事：
+   * 1. 函数引用稳定 —— 否则外壳每次 setState 都会让面板重新挂载，丢掉筛选与选中；
+   * 2. 每次执行都读到最新数据 —— 否则面板永远停在首次渲染时的空数据上。
+   *
+   * useCallback 直接闭包捕获做不到第 2 点（依赖数组必须留空才有第 1 点）。
+   * 因此用 ref 保存最新值，渲染函数只读 ref。
+   */
+  const tasksPanelRef = useRef({ messages, isLoading, hasThread: Boolean(threadId) });
+  tasksPanelRef.current = { messages, isLoading, hasThread: Boolean(threadId) };
+
+  const graphPanelRef = useRef({
+    workspaceId,
+    data: kgData,
+    loading: kgLoading,
+    attempted: kgAttempted,
+    error: kgError,
+    refresh: refreshKnowledgeGraph,
+  });
+  graphPanelRef.current = {
+    workspaceId,
+    data: kgData,
+    loading: kgLoading,
+    attempted: kgAttempted,
+    error: kgError,
+    refresh: refreshKnowledgeGraph,
+  };
+
+  /** 任务历史面板内容；引用稳定，数据实时。 */
+  const renderTasksPanel = useCallback(() => {
+    const current = tasksPanelRef.current;
+    return (
+      <TaskHistoryPanel
+        messages={current.messages}
+        streaming={current.isLoading}
+        hasThread={current.hasThread}
+      />
+    );
+  }, []);
+
+  /** 知识图谱面板内容；引用稳定，数据实时。 */
+  const renderGraphPanel = useCallback(() => {
+    const current = graphPanelRef.current;
+    return (
+      <KnowledgeGraphPanel
+        workspaceId={current.workspaceId ?? ""}
+        data={current.data}
+        loading={current.loading}
+        attempted={current.attempted}
+        error={current.error}
+        onRefresh={() => void current.refresh()}
+      />
+    );
+  }, []);
+
   return (
     <ChatApp
       workspaceId={workspaceId}
       workspaceName={workspaceName}
+      threadTitle={thread?.title ?? null}
       messages={messages}
       isLoading={isLoading}
       isMessagesLoading={isMessagesLoading}
@@ -352,6 +430,18 @@ export function ThreadChatPage({
       onStop={stopGeneration}
       onClear={clearMessages}
       onBack={onBack}
+      tasksPanel={renderTasksPanel}
+      onTasksPanelChange={onTasksPanelChange}
+      graphPanel={renderGraphPanel}
+      onGraphPanelChange={onGraphPanelChange}
+      kgState={{
+        data: kgData,
+        loading: kgLoading,
+        error: kgError,
+        refresh: refreshKnowledgeGraph,
+        attempted: kgAttempted,
+      }}
+      kgRefresh={refreshKnowledgeGraph}
     />
   );
 }
