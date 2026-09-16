@@ -25,6 +25,8 @@ export function useWorkspaceLocalStorage(workspaceId: string, refreshKey: string
     setStatus(null);
     setError(null);
     setSyncing(false);
+    // 未选中工作区时保持空状态，避免向后端请求无效路径。
+    if (!workspaceId) return;
     const load = async () => {
       let next = await fetchWorkspaceLocalStorage(workspaceId);
       if (cancelled) return;
