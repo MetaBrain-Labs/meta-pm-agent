@@ -18,3 +18,4 @@ export * from "./agent/document";
 export * from "./question-form";
 export * from "./model-usage-profile";
 export * from "./stream-limits";
+export * from "./local-directory";

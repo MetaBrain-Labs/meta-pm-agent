@@ -230,6 +230,7 @@ The Vite server proxies `/api` to port `3001`.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/health` | Health check |
+| `GET` | `/api/local-directories?path=<absolute-directory>` | Browse API-host folders; omit path to start at home |
 | `GET/POST` | `/api/workspaces` | List or create workspaces |
 | `PATCH/DELETE` | `/api/workspaces/:id` | Rename/relink or soft-remove a workspace |
 | `GET/POST` | `/api/chats` | List or create chats |
