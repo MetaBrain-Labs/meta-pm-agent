@@ -32,10 +32,7 @@ import type {
   WorkflowRetryRequest,
   ModelUsageProfile,
 } from "../types";
-import {
-  fetchProductKnowledgeGraph,
-  type WorkspaceKnowledgeGraphData,
-} from "../api/chat-api";
+import { type KnowledgeGraphState } from "../hooks/useKnowledgeGraph";
 import { MessageBubble } from "./MessageBubble";
 import { QuestionFormView } from "./QuestionForm";
 import { ConversationPane } from "./shell/ConversationPane";
@@ -76,6 +73,22 @@ interface Props {
   onStop: () => void;
   onClear: () => void;
   onBack: () => void;
+  /**
+   * 任务历史 / 知识图谱面板内容。
+   *
+   * 两份数据都只存在于聊天页面（当前会话消息、工作区图谱），因此由页面注入渲染
+   * 函数，最终由应用外壳的面板容器渲染，避免把消息与图谱状态提升到外壳。
+   */
+  tasksPanel?: () => ReactNode;
+  /** 把当前任务历史渲染函数登记到外壳；外壳用它渲染任务历史面板。 */
+  onTasksPanelChange?: (renderer: (() => ReactNode) | null) => void;
+  graphPanel?: () => ReactNode;
+  /** 把当前知识图谱渲染函数登记到外壳。 */
+  onGraphPanelChange?: (renderer: (() => ReactNode) | null) => void;
+  /** 工作区图谱数据与加载态；由页面持有，弹窗与面板共用。 */
+  kgState?: KnowledgeGraphState;
+  /** 手动刷新图谱；弹窗在无数据时调用。 */
+  kgRefresh?: () => Promise<void>;
 }
 
 const EXAMPLE_QUERIES = [
@@ -101,12 +114,34 @@ export function ChatApp({
   onStop,
   onClear,
   onBack,
+  tasksPanel,
+  onTasksPanelChange,
+  graphPanel,
+  onGraphPanelChange,
+  kgState,
+  kgRefresh,
 }: Props) {
   const [input, setInput] = useState("");
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [userScrolled, setUserScrolled] = useState(false);
   const [langGraphModalOpen, setLangGraphModalOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * 把两个面板渲染函数登记到外壳；卸载时清空，避免外壳引用失效闭包。
+   *
+   * 注意：调用方必须把传入的函数原样保存，不能用 setState 直接接收——
+   * setState 会把函数当 updater 执行，存下来就不是函数了。
+   */
+  useEffect(() => {
+    onTasksPanelChange?.(tasksPanel ?? null);
+    return () => onTasksPanelChange?.(null);
+  }, [onTasksPanelChange, tasksPanel]);
+
+  useEffect(() => {
+    onGraphPanelChange?.(graphPanel ?? null);
+    return () => onGraphPanelChange?.(null);
+  }, [graphPanel, onGraphPanelChange]);
 
   // MessageBubble 使用 React.memo：传给它的回调必须在多次渲染间保持同一引用，
   // 最新状态统一经 ref 读取，避免 memo 命中时使用过期的闭包值。
@@ -120,82 +155,32 @@ export function ChatApp({
     webSearchEnabledRef.current = webSearchEnabled;
   }, [webSearchEnabled]);
 
-  // 知识图谱弹窗数据；进入工作区不主动加载，仅在需要时读取。
-  const [kgData, setKgData] = useState<WorkspaceKnowledgeGraphData | null>(
-    null,
-  );
-  const [kgLoading, setKgLoading] = useState(false);
+  // 图谱数据由页面持有：对话弹窗与「知识图谱」Tab 共用同一份，避免各自请求。
+  const kgData = kgState?.data ?? null;
+  const kgLoading = kgState?.loading ?? false;
+  const kgDataRef = useRef(kgData);
+  kgDataRef.current = kgData;
+  const kgRefreshRef = useRef(kgRefresh);
+  kgRefreshRef.current = kgRefresh;
   const [kgModalOpen, setKgModalOpen] = useState(false);
-  const executorResultRefreshKey = useMemo(
-    () =>
-      messages
-        .flatMap((message) => message.executorResults ?? [])
-        .map((result) => result.task_id)
-        .sort()
-        .join("|"),
-    [messages],
-  );
 
-  // 工作区切换时仅清理本地缓存，避免进入工作区就触发知识图谱加载。
+  // 工作区切换时关闭弹窗，避免保留上一个项目的图谱视图。
   useEffect(() => {
-    setKgData(null);
     setKgModalOpen(false);
   }, [workspaceId]);
-
-  const loadKnowledgeGraph = useCallback(async () => {
-    if (!workspaceId) return null;
-
-    setKgLoading(true);
-    try {
-      const data = await fetchProductKnowledgeGraph(workspaceId);
-      setKgData(data);
-      return data;
-    } catch (error) {
-      console.error("[kg] Failed to load knowledge graph:", error);
-      setKgData(null);
-      return null;
-    } finally {
-      setKgLoading(false);
-    }
-  }, [workspaceId]);
-
-  // 每个 Executor 结果流入前端时，API 已完成对应知识图谱归档，此时刷新缓存。
-  useEffect(() => {
-    if (!workspaceId || !executorResultRefreshKey) return;
-
-    let cancelled = false;
-    setKgLoading(true);
-
-    fetchProductKnowledgeGraph(workspaceId)
-      .then((data) => {
-        if (cancelled) return;
-        setKgData(data);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        console.error("[kg] Failed to refresh knowledge graph:", error);
-      })
-      .finally(() => {
-        if (!cancelled) setKgLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [executorResultRefreshKey, workspaceId]);
 
   /** 打开知识图谱可视化弹窗，无数据时给出明确提示。 */
   const handleOpenKgModal = useCallback(async () => {
     if (!workspaceId || kgLoading) return;
 
-    const data = kgData ?? (await loadKnowledgeGraph());
-    if (data?.hasData) {
+    if (!kgDataRef.current) await kgRefreshRef.current?.();
+    if (kgDataRef.current?.hasData) {
       setKgModalOpen(true);
       return;
     }
 
     void message.info("当前工作区暂无可查看的知识图谱数据");
-  }, [kgData, kgLoading, loadKnowledgeGraph, workspaceId]);
+  }, [kgLoading, workspaceId]);
 
   const isAtBottom = useCallback(() => {
     const el = containerRef.current;

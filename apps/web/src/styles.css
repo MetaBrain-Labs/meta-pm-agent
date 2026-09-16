@@ -1269,20 +1269,43 @@ h3.ds-section-title { font-size: var(--ds-font-size-body); }
   color: var(--ink);
 }
 
-/* 底部：上一个 / 下一个 / 发送；发送出现在最后一题。 */
+/* 底部：左侧上一个 / 下一个 / 发送，右侧可选的「忽略所有选填」。 */
 .hitl-form-foot {
   display: flex;
   min-width: 0;
   flex: 0 0 auto;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
   border-top: 1px solid var(--line-soft);
   padding: 10px 14px;
 }
 
-.hitl-form-secondary {
-  margin-left: auto;
+.hitl-form-foot-nav {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.hitl-form-skip {
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+  color: var(--ink-mute);
+  font-size: 12px;
+}
+
+.hitl-form-skip .ant-checkbox + span {
+  padding-inline-start: 6px;
+  padding-inline-end: 0;
+}
+
+/* 进度行上的补充说明，权重低于题号。 */
+.hitl-form-progress-note {
+  background: var(--ds-color-secondary);
+  color: var(--ink-faint);
 }
 
 /* 已提交 / 只读回放：只列有答案的题目。 */
@@ -1320,6 +1343,789 @@ h3.ds-section-title { font-size: var(--ds-font-size-body); }
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
+/* ==========================================================================
+   任务历史面板
+   左侧轮次列表 + 右侧当前轮次详情；状态只用语义色小标记，不做彩色流程图。
+   ========================================================================== */
+
+.task-history {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.task-history-empty {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+}
+
+/* 左侧列表：固定窄栏，自身滚动。 */
+.task-history-list {
+  display: flex;
+  width: 248px;
+  min-width: 248px;
+  flex: 0 0 248px;
+  flex-direction: column;
+  border-right: 1px solid var(--line-soft);
+}
+
+.task-history-list-head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 14px 10px;
+}
+
+.task-history-list-head span {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.task-history-list-head em {
+  color: var(--ink-faint);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.task-history-list-body {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 8px 12px;
+}
+
+.task-history-item {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid transparent;
+  border-radius: var(--ds-radius-base);
+  background: transparent;
+  padding: 10px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--ds-motion-fast) ease, border-color var(--ds-motion-fast) ease;
+}
+
+.task-history-item:hover {
+  background: var(--ds-color-hover);
+}
+
+.task-history-item[data-active="true"] {
+  border-color: var(--ds-color-border-hover);
+  background: var(--ds-color-secondary);
+}
+
+.task-history-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.task-history-item-index {
+  color: var(--ink-mute);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.task-history-item-title {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.task-history-item-meta {
+  color: var(--ink-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 右侧详情：整块滚动。 */
+.task-history-detail {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.task-round {
+  display: flex;
+  width: 100%;
+  max-width: 880px;
+  flex-direction: column;
+  gap: 20px;
+  padding: 24px 28px 40px;
+}
+
+.task-round-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.task-round-head-main {
+  min-width: 0;
+}
+
+.task-round-head h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.task-round-head-meta {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.task-round-head-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-round-alert {
+  margin: 0;
+  border: 1px solid var(--ds-color-error);
+  border-radius: var(--ds-radius-small);
+  background: var(--ds-color-error-soft);
+  padding: 8px 10px;
+  color: var(--ds-color-error);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+/* 区块：标题 + 内容，用分隔线划分，不套卡片。 */
+.task-block {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 16px;
+}
+
+.task-block-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.task-block-head h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.task-block-head span {
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
+.task-block-text {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
+.task-block-text.is-muted {
+  color: var(--ink-mute);
+}
+
+.task-block-fold {
+  color: var(--ink-mute);
+  font-size: 12px;
+}
+
+.task-block-fold summary {
+  cursor: pointer;
+}
+
+.task-block-pre {
+  max-height: 200px;
+  overflow-y: auto;
+  margin: 8px 0 0;
+  border-radius: var(--ds-radius-small);
+  background: var(--ds-color-secondary);
+  padding: 10px;
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.task-assumptions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.task-assumptions li {
+  overflow-wrap: anywhere;
+}
+
+/* DAG：按依赖分层，同层横向排列；层间用箭头表达方向。 */
+.task-dag {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.task-dag-layer {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.task-dag-layer + .task-dag-layer::before {
+  content: "↓";
+  align-self: center;
+  margin-right: 4px;
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+.task-dag-node {
+  display: flex;
+  width: 168px;
+  min-width: 168px;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--line);
+  border-radius: var(--ds-radius-base);
+  background: var(--surface);
+  padding: 9px 10px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--ds-motion-fast) ease, background-color var(--ds-motion-fast) ease;
+}
+
+.task-dag-node:hover {
+  background: var(--ds-color-hover);
+}
+
+.task-dag-node[data-active="true"] {
+  border-color: var(--ds-color-border-hover);
+  background: var(--ds-color-secondary);
+}
+
+/* 状态只用左侧一条色条表达，卡片本身保持中性。 */
+.task-dag-node[data-status="completed"] {
+  border-left-color: var(--ds-color-success);
+}
+
+.task-dag-node[data-status="running"] {
+  border-left-color: var(--ds-color-primary);
+}
+
+.task-dag-node[data-status="failed"] {
+  border-left-color: var(--ds-color-error);
+}
+
+.task-dag-node[data-status="waiting"] {
+  border-left-color: var(--line);
+}
+
+.task-dag-node-id {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.task-dag-node-agent {
+  overflow: hidden;
+  color: var(--ink-mute);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-dag-node-title {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* 任务详情：标签列固定，值列可换行。 */
+.task-detail {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+
+.task-detail-row {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  gap: 12px;
+  border-top: 1px solid var(--line-soft);
+  padding: 8px 0;
+}
+
+.task-detail-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.task-detail-row dt {
+  color: var(--ink-faint);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.task-detail-row dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.task-detail-row[data-block="true"] dd {
+  color: var(--ink-soft);
+  text-wrap: pretty;
+}
+
+/* 图谱更新：先说数量，再列出每条变更。 */
+.task-graph-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-graph-metric {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--ds-radius-small);
+  background: var(--ds-color-secondary);
+  padding: 4px 8px;
+  color: var(--ink-mute);
+  font-size: 12px;
+}
+
+.task-graph-metric em {
+  color: var(--ink);
+  font-style: normal;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.task-graph-table {
+  display: flex;
+  max-height: 320px;
+  flex-direction: column;
+  overflow-y: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--ds-radius-base);
+}
+
+.task-graph-head,
+.task-graph-row {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  padding: 8px 10px;
+}
+
+.task-graph-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--ds-color-secondary);
+  color: var(--ink-mute);
+  font-size: 11px;
+}
+
+.task-graph-row {
+  border-top: 1px solid var(--line-soft);
+  font-size: 12px;
+}
+
+.task-graph-row:first-of-type {
+  border-top: 0;
+}
+
+.task-graph-kind {
+  border-radius: var(--ds-radius-small);
+  padding: 1px 6px;
+  text-align: center;
+  font-size: 11px;
+}
+
+.task-graph-kind[data-tone="new"] {
+  background: var(--ds-color-success-soft);
+  color: var(--ds-color-success);
+}
+
+.task-graph-kind[data-tone="update"] {
+  background: var(--ds-color-secondary);
+  color: var(--ink-mute);
+}
+
+.task-graph-title {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.task-graph-detail {
+  color: var(--ink-mute);
+  overflow-wrap: anywhere;
+}
+
+/* 状态标记：图标 + 文案，颜色克制。 */
+.task-status-tag {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  border-radius: var(--ds-radius-small);
+  padding: 1px 6px;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.task-status-tag[data-tone="success"] {
+  background: var(--ds-color-success-soft);
+  color: var(--ds-color-success);
+}
+
+.task-status-tag[data-tone="warning"] {
+  background: var(--ds-color-warning-soft);
+  color: var(--ds-color-warning);
+}
+
+.task-status-tag[data-tone="error"] {
+  background: var(--ds-color-error-soft);
+  color: var(--ds-color-error);
+}
+
+.task-status-tag[data-tone="running"] {
+  background: var(--ds-color-secondary);
+  color: var(--ink);
+}
+
+.task-status-tag[data-tone="neutral"] {
+  background: var(--ds-color-secondary);
+  color: var(--ink-mute);
+}
+
+/* ==========================================================================
+   知识图谱面板
+   工具栏 + 左侧筛选 + 中间画布 + 右侧节点详情；画布自己裁剪，不溢出到邻栏。
+   ========================================================================== */
+
+.kg-panel {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.kg-panel-toolbar {
+  display: flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--line-soft);
+  padding: 10px 16px;
+}
+
+.kg-panel-toolbar-info {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.kg-panel-toolbar-info strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.kg-panel-toolbar-info span {
+  color: var(--ink-mute);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.kg-panel-toolbar-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.kg-panel-center {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px;
+  color: var(--ink-mute);
+  font-size: 13px;
+}
+
+.kg-panel-body {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+/* 左侧筛选：固定窄栏，自身滚动。 */
+.kg-panel-filter {
+  display: flex;
+  width: 216px;
+  min-width: 216px;
+  flex: 0 0 216px;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-right: 1px solid var(--line-soft);
+  padding: 12px 10px 16px;
+}
+
+.kg-panel-filter h4 {
+  margin: 4px 0 6px;
+  color: var(--ink-mute);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.kg-panel-filter ul {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.kg-panel-filter-row {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--ds-radius-small);
+  background: transparent;
+  padding: 5px 6px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--ds-motion-fast) ease;
+}
+
+.kg-panel-filter-row:hover {
+  background: var(--ds-color-hover);
+}
+
+/* 隐藏的类型保留在原位并划线，方便一键恢复。 */
+.kg-panel-filter-row[data-hidden="true"] {
+  opacity: 0.45;
+}
+
+.kg-panel-filter-row[data-hidden="true"] .kg-panel-filter-label {
+  text-decoration: line-through;
+}
+
+.kg-panel-filter-dot {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.kg-panel-filter-label {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kg-panel-filter-row em,
+.kg-panel-legend-row em {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+  font-size: 11px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.kg-panel-legend-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+}
+
+.kg-panel-legend-line {
+  width: 24px;
+  flex: 0 0 auto;
+  border-top-width: 2px;
+  border-top-style: solid;
+}
+
+.kg-panel-hint {
+  margin: 12px 0 0;
+  color: var(--ink-faint);
+  font-size: 11px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+/* 画布区：撑满剩余空间并裁剪，图谱插件与画布都不会溢出。 */
+.kg-panel-canvas {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+/* 右侧详情：固定窄栏，自身滚动。 */
+.kg-panel-inspector {
+  width: 268px;
+  min-width: 268px;
+  flex: 0 0 268px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-left: 1px solid var(--line-soft);
+  padding: 14px;
+}
+
+.kg-panel-inspector-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.kg-panel-inspector-head h4 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.kg-panel-detail {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+
+.kg-panel-detail-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 10px;
+  border-top: 1px solid var(--line-soft);
+  padding: 8px 0;
+}
+
+.kg-panel-detail-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.kg-panel-detail-row dt {
+  color: var(--ink-faint);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.kg-panel-detail-row dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
 /* ==========================================================================
    工作区外壳：对话栏 + 分隔条 + 工作区面板
    两栏都是 flex 项：工作区面板始终 flex: 1 1 auto 并携带 min-width: 0，

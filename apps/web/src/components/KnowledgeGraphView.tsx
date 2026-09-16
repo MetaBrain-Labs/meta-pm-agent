@@ -682,7 +682,9 @@ export const KnowledgeGraphView = forwardRef<
   useEffect(() => cleanup, [cleanup]);
 
   return (
-    <div className={`relative w-full bg-white ${className}`}>
+    // overflow-hidden 是必需的：G6 画布尺寸由容器在创建时决定，容器变窄后
+    // 在重算完成前画布会大于容器，缺少裁剪就会溢出到相邻栏和下方卡片上。
+    <div className={`relative w-full overflow-hidden bg-white ${className}`}>
       <div ref={containerRef} className="absolute inset-0" />
       {!graphReady && (
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-white">

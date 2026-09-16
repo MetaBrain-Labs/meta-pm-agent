@@ -85,6 +85,13 @@ interface DocumentPlanningPageProps {
    * 嵌入工作区面板时隐藏本页标题栏并占满容器；独立路由下保持整页布局。
    */
   embedded?: boolean;
+  /**
+   * 是否隐藏知识图谱画布。
+   *
+   * 嵌入工作区「交付文档」面板时置 true：图谱有自己的「知识图谱」入口，
+   * 交付文档只负责 PRD 任务。独立路由 /documents/:workspaceId 仍展示完整页面。
+   */
+  hideGraph?: boolean;
 }
 
 const STAGE_LABELS: Record<DocumentWorkflowStage, string> = {
@@ -109,6 +116,7 @@ export function DocumentPlanningPage({
   onBack,
   onOpenEvidenceThread,
   embedded = false,
+  hideGraph = false,
 }: DocumentPlanningPageProps) {
   const [kgData, setKgData] = useState<WorkspaceKnowledgeGraphData | null>(
     null,
@@ -396,35 +404,44 @@ export function DocumentPlanningPage({
           {loading ? (
             <PageLoadingState />
           ) : (
-            <div className="grid grid-cols-1 2xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.55fr)] gap-4">
-              <section className="min-h-[620px] rounded border border-gray-200 bg-white overflow-hidden 2xl:sticky 2xl:top-0 2xl:self-start">
-                <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
-                  <div>
-                    <Text strong>当前知识图谱</Text>
-                    <Text type="secondary" className="ml-2 text-xs">
-                      {kgData
-                        ? `${kgData.nodes.length} 节点 / ${kgData.relations.length} 关系`
-                        : "未加载"}
-                    </Text>
+            <div
+              className={
+                hideGraph
+                  ? "grid grid-cols-1 gap-4"
+                  : "grid grid-cols-1 2xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.55fr)] gap-4"
+              }
+            >
+              {/* 图谱画布；在交付文档面板内隐藏，避免与「知识图谱」入口重复。 */}
+              {!hideGraph && (
+                <section className="min-h-[620px] rounded border border-gray-200 bg-white overflow-hidden 2xl:sticky 2xl:top-0 2xl:self-start">
+                  <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+                    <div>
+                      <Text strong>当前知识图谱</Text>
+                      <Text type="secondary" className="ml-2 text-xs">
+                        {kgData
+                          ? `${kgData.nodes.length} 节点 / ${kgData.relations.length} 关系`
+                          : "未加载"}
+                      </Text>
+                    </div>
+                    {kgData?.updatedAt && (
+                      <Text type="secondary" className="text-xs">
+                        v{kgData.version}
+                      </Text>
+                    )}
                   </div>
-                  {kgData?.updatedAt && (
-                    <Text type="secondary" className="text-xs">
-                      v{kgData.version}
-                    </Text>
+                  {graphReady ? (
+                    <KnowledgeGraphView
+                      nodes={kgData?.nodes ?? []}
+                      relations={kgData?.relations ?? []}
+                      onNodeSelect={setSelectedNode}
+                    />
+                  ) : (
+                    <div className="h-[620px] flex items-center justify-center">
+                      <Empty description="当前工作区还没有可用于生成文档的知识图谱" />
+                    </div>
                   )}
-                </div>
-                {graphReady ? (
-                  <KnowledgeGraphView
-                    nodes={kgData?.nodes ?? []}
-                    relations={kgData?.relations ?? []}
-                    onNodeSelect={setSelectedNode}
-                  />
-                ) : (
-                  <div className="h-[620px] flex items-center justify-center">
-                    <Empty description="当前工作区还没有可用于生成文档的知识图谱" />
-                  </div>
-                )}
-              </section>
+                </section>
+              )}
 
               <aside className="flex flex-col gap-4">
                 {error && (
@@ -486,11 +503,14 @@ export function DocumentPlanningPage({
                   />
                 )}
 
-                <NodeDetailPanel
-                  node={selectedNode}
-                  totalNodes={kgData?.nodes.length ?? 0}
-                  onClose={() => setSelectedNode(null)}
-                />
+                {/* 节点详情依赖图谱选择；隐藏图谱时一并隐藏，避免出现空面板。 */}
+                {!hideGraph && (
+                  <NodeDetailPanel
+                    node={selectedNode}
+                    totalNodes={kgData?.nodes.length ?? 0}
+                    onClose={() => setSelectedNode(null)}
+                  />
+                )}
 
                 <section className="rounded border border-gray-200 bg-white p-4">
                   <div className="flex items-start justify-between gap-3">

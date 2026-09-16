@@ -72,25 +72,33 @@ export function QuestionFormView({
   const [answers, setAnswers] =
     useState<Record<string, string | string[]>>(initial);
   const [index, setIndex] = useState(0);
+  /**
+   * 是否忽略全部选填问题。
+   *
+   * 只影响本题的呈现顺序：勾选后浏览范围收窄到必填题，必填答完即可提交。
+   * 答案结构与提交格式完全不变——被跳过的选填题在提交文本里仍是 (skipped)，
+   * 与用户逐题留空的效果一致，因此后端/Agent 不需要任何改动。
+   */
+  const [skipOptional, setSkipOptional] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
 
-  /**
-   * 换题后把内容区滚回顶部。
-   *
-   * 选项较多时内容区会滚动；如果停留在上一题的滚动位置，进入新题会先看到
-   * 选项中段而不是题目本身，需要用户再手动滚动才能看全。
-   */
+  /** 换题后把内容区滚回顶部。 */
   useEffect(() => {
     const body = bodyRef.current;
     if (body) body.scrollTop = 0;
   }, [index]);
 
   const locked = !interactive || !onSubmit || submittedAnswers !== undefined;
-  const total = form.questions.length;
+  /** 勾选忽略选填后，只浏览必填题；全部选填时回退到完整列表。 */
+  const requiredOnly = form.questions.filter((item) => item.required);
+  const browsable =
+    skipOptional && requiredOnly.length > 0 ? requiredOnly : form.questions;
+  const total = browsable.length;
   const safeIndex = Math.min(index, Math.max(0, total - 1));
-  const question = form.questions[safeIndex];
+  const question = browsable[safeIndex];
+  const hasOptional = requiredOnly.length < form.questions.length;
 
-  /** 第一个未作答的必填题下标；没有则为 -1。 */
+  /** 第一个未作答的必填题在原列表中的下标；没有则为 -1。 */
   const firstMissingIndex = form.questions.findIndex(
     (item) => item.required && isEmptyAnswer(answers[item.id]),
   );
@@ -103,6 +111,14 @@ export function QuestionFormView({
   /** 已提交或历史回放时退化为只读摘要。 */
   const lockedAnswers = submittedAnswers ?? answers;
 
+  /** 跳到某个必填题在浏览范围内对应的步数。 */
+  function goToMissingRequired() {
+    const target = form.questions[firstMissingIndex];
+    if (!target) return;
+    const position = browsable.findIndex((item) => item.id === target.id);
+    setIndex(position === -1 ? 0 : position);
+  }
+
   function update(id: string, value: string | string[]) {
     if (locked) return;
     setAnswers((prev) => ({ ...prev, [id]: value }));
@@ -112,11 +128,17 @@ export function QuestionFormView({
     if (locked || !onSubmit || total === 0) return;
     // 必填项没答完时跳到第一个缺口，让用户知道差哪一题。
     if (!requiredReady) {
-      setIndex(firstMissingIndex);
+      goToMissingRequired();
       return;
     }
     if (form.requireAnyAnswer && !hasAnyAnswer) return;
     onSubmit(formatFormAnswers(form, answers), answers);
+  }
+
+  /** 切换「忽略选填」后重置到第一题，避免停在越界的步数上。 */
+  function handleToggleSkipOptional(next: boolean) {
+    setSkipOptional(next);
+    setIndex(0);
   }
 
   function handleSecondaryAction() {
@@ -187,12 +209,15 @@ export function QuestionFormView({
             问题 {safeIndex + 1} / {total}
           </span>
           <em>{question.required ? "必填" : "选填"}</em>
+          {skipOptional && hasOptional && (
+            <em className="hitl-form-progress-note">已忽略选填</em>
+          )}
           {!requiredReady && (
             <Button
               type="link"
               size="small"
               className="hitl-form-jump"
-              onClick={() => setIndex(firstMissingIndex)}
+              onClick={goToMissingRequired}
             >
               跳到未答问题
             </Button>
@@ -223,46 +248,62 @@ export function QuestionFormView({
       </div>
 
       <footer className="hitl-form-foot">
-        <Button
-          icon={<LeftOutlined />}
-          disabled={safeIndex === 0}
-          onClick={() => setIndex(Math.max(0, safeIndex - 1))}
-        >
-          上一个
-        </Button>
-
-        {isLastQuestion ? (
-          <Tooltip
-            title={
-              ready
-                ? "提交后 Agent 会带着这些答案继续执行"
-                : "还有必填问题未回答"
-            }
+        <div className="hitl-form-foot-nav">
+          <Button
+            icon={<LeftOutlined />}
+            disabled={safeIndex === 0}
+            onClick={() => setIndex(Math.max(0, safeIndex - 1))}
           >
+            上一个
+          </Button>
+
+          {isLastQuestion ? (
+            <Tooltip
+              title={
+                ready
+                  ? "提交后 Agent 会带着这些答案继续执行"
+                  : "还有必填问题未回答"
+              }
+            >
+              <Button
+                type="primary"
+                icon={<SendOutlined />}
+                disabled={!ready}
+                onClick={handleSubmit}
+              >
+                {form.submitLabel ?? "发送"}
+              </Button>
+            </Tooltip>
+          ) : (
             <Button
               type="primary"
-              icon={<SendOutlined />}
-              disabled={!ready}
-              onClick={handleSubmit}
+              icon={<RightOutlined />}
+              iconPosition="end"
+              onClick={() => setIndex(Math.min(total - 1, safeIndex + 1))}
             >
-              {form.submitLabel ?? "发送"}
+              下一个
             </Button>
-          </Tooltip>
-        ) : (
-          <Button
-            type="primary"
-            icon={<RightOutlined />}
-            iconPosition="end"
-            onClick={() => setIndex(Math.min(total - 1, safeIndex + 1))}
-          >
-            下一个
-          </Button>
-        )}
+          )}
 
-        {form.secondarySubmitLabel && (
-          <Button className="hitl-form-secondary" onClick={handleSecondaryAction}>
-            {form.secondarySubmitLabel}
-          </Button>
+          {form.secondarySubmitLabel && (
+            <Button onClick={handleSecondaryAction}>
+              {form.secondarySubmitLabel}
+            </Button>
+          )}
+        </div>
+
+        {/*
+          只有存在选填题时才提供该开关。勾选后浏览范围收窄到必填题，
+          必填答完即可提交；被跳过的选填题在提交文本里记为 (skipped)。
+        */}
+        {hasOptional && (
+          <Checkbox
+            className="hitl-form-skip"
+            checked={skipOptional}
+            onChange={(event) => handleToggleSkipOptional(event.target.checked)}
+          >
+            忽略所有选填（共 {form.questions.length - requiredOnly.length} 题）
+          </Checkbox>
         )}
       </footer>
     </section>

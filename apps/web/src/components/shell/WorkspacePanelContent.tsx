@@ -24,52 +24,42 @@ interface Props {
   panelId: WorkspacePanelId;
   /** 项目概览面板；由页面注入。 */
   overview?: PanelRenderer;
+  /** 任务历史面板；数据来自当前会话，由聊天页注入。 */
+  tasks?: PanelRenderer;
+  /** 知识图谱面板；数据来自当前工作区，由聊天页注入。 */
+  graph?: PanelRenderer;
   /** 交付文档面板；仅在挂载时构建，避免未打开面板时启动后台任务。 */
   documents?: PanelRenderer;
 }
 
-/** 尚未接入真实数据的面板空态标题。 */
-const EMPTY_TITLES: Record<"tasks" | "graph", string> = {
-  tasks: "任务历史面板尚未接入",
-  graph: "知识图谱面板尚未接入",
-};
-
 export function WorkspacePanelContent({
   panelId,
   overview,
+  tasks,
+  graph,
   documents,
 }: Props) {
   // 未注入实现时保持明确空态，避免渲染出半截面板。
-  const renderPanel =
+  const candidate =
     (panelId === "overview" ? overview : null) ??
+    (panelId === "tasks" ? tasks : null) ??
+    (panelId === "graph" ? graph : null) ??
     (panelId === "documents" ? documents : null);
-  if (renderPanel) {
-    return <div className="h-full min-h-0">{renderPanel()}</div>;
+  /*
+   * 注册链路异常时兜底：这里必须确认拿到的是函数。
+   * 若上游误把 setState 当回调传，存下来的会是渲染结果而不是渲染函数，
+   * 直接调用会抛 `renderPanel is not a function` 并让整个面板白屏。
+   */
+  if (typeof candidate === "function") {
+    return <div className="h-full min-h-0">{candidate()}</div>;
   }
-
-  if (panelId === "overview" || panelId === "documents") {
-    return (
-      <div className="workspace-panel-section">
-        <SectionHeader
-          title="面板尚未接入"
-          description="该面板将在后续阶段接入现有数据，本轮只完成了外壳与导航。"
-        />
-      </div>
-    );
-  }
-
-  const tasksOrGraph: "tasks" | "graph" = panelId;
 
   return (
     <div className="workspace-panel-section">
       <SectionHeader
-        title={EMPTY_TITLES[tasksOrGraph]}
-        description="该面板将在后续阶段接入现有数据，本轮只完成了外壳与导航。"
+        title="面板暂时不可用"
+        description="该面板的渲染函数未正确注册，请刷新页面重试。"
       />
-      <p className="workspace-panel-note">
-        当前对话中的 Agent 过程、知识图谱更新与问题表单仍保留在对话栏中，不受
-        本次布局调整影响。
-      </p>
     </div>
   );
 }

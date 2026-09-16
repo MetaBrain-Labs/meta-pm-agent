@@ -25,6 +25,7 @@ import { ConfigModal } from "./components/modals/ConfigModal";
 import { ProjectCreateModal } from "./components/modals/ProjectCreateModal";
 import { TextValueModal } from "./components/modals/TextValueModal";
 import { useAppShell } from "./hooks/useAppShell";
+import { useRegisteredPanelRenderer } from "./hooks/useRegisteredPanelRenderer";
 import { ThreadChatPage } from "./pages/chat/ThreadChatPage";
 import { DocumentPlanningPage } from "./pages/documents/DocumentPlanningPage";
 import { WorkspacePage } from "./pages/workplace/WorkspacePage";
@@ -35,7 +36,17 @@ import { APP_THEME } from "./theme/app-theme";
  */
 export default function App() {
   const app = useAppShell();
-  const inProject = app.route.name !== "workspace" && Boolean(app.activeWorkspaceId);
+  /**
+   * 任务历史与知识图谱面板的渲染函数。
+   *
+   * 两者数据都只存在于聊天页面（当前会话消息、工作区图谱），因此由聊天页登记
+   * 渲染函数，外壳只负责把它放进面板容器，无需把状态提升到这一层。
+   * 登记契约见 useRegisteredPanelRenderer：不能把 setState 直接当回调传。
+   */
+  const [tasksPanel, handleTasksPanelChange] = useRegisteredPanelRenderer();
+  const [graphPanel, handleGraphPanelChange] = useRegisteredPanelRenderer();
+  const inProject =
+    app.route.name !== "workspace" && Boolean(app.activeWorkspaceId);
 
   return (
     <ConfigProvider theme={APP_THEME} locale={zhCN}>
@@ -85,6 +96,8 @@ export default function App() {
                     onThreadMessageStarted={app.handleThreadMessageStarted}
                     onThreadTitleChange={app.handleThreadTitleChange}
                     onBack={app.handleBackToWorkspaceList}
+                    onTasksPanelChange={handleTasksPanelChange}
+                    onGraphPanelChange={handleGraphPanelChange}
                   />
                 ) : null
               }
@@ -104,9 +117,12 @@ export default function App() {
                       }
                     />
                   )}
+                  tasks={tasksPanel ?? undefined}
+                  graph={graphPanel ?? undefined}
                   documents={() => (
                     <DocumentPlanningPage
                       embedded
+                      hideGraph
                       workspaceId={app.activeWorkspaceId ?? ""}
                       workspaceName={app.activeWorkspaceName}
                       onBack={app.handleBackToWorkspaceList}

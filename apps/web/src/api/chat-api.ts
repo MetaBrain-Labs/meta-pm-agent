@@ -297,22 +297,43 @@ export interface KnowledgeGraphRelationData {
 }
 
 /**
+ * 图谱读取超时上限。
+ *
+ * 图谱接口偶尔会长时间不返回（大图谱、后端繁忙）。加上限是为了让失败变成
+ * 可显示的错误，而不是让界面永远停在"正在读取"。
+ */
+const KNOWLEDGE_GRAPH_TIMEOUT_MS = 15_000;
+
+/**
  * 获取指定工作区的产品知识图谱数据。
  * 返回 hasData 供前端判断按钮是否可用，以及生成的 markdown 供下载。
  */
 export async function fetchProductKnowledgeGraph(
   workspaceId: string,
 ): Promise<WorkspaceKnowledgeGraphData> {
-  const response = await fetch(
-    `/api/workspaces/${workspaceId}/knowledge-graph`,
-  );
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), KNOWLEDGE_GRAPH_TIMEOUT_MS);
 
-  if (!response.ok) {
-    throw new Error(`Server error: ${response.status}`);
+  try {
+    const response = await fetch(
+      `/api/workspaces/${encodeURIComponent(workspaceId)}/knowledge-graph`,
+      { signal: controller.signal },
+    );
+
+    if (!response.ok) {
+      throw new Error(`Server error: ${response.status}`);
+    }
+
+    const data = (await response.json()) as WorkspaceKnowledgeGraphData;
+    return data;
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("知识图谱读取超时，请稍后重试");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
-
-  const data = (await response.json()) as WorkspaceKnowledgeGraphData;
-  return data;
 }
 
 /** 将 API JSON 错误正文转为可直接展示的异常。 */

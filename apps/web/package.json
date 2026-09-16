@@ -11,7 +11,9 @@
     "test:layout": "node scripts/check-layout.mjs",
     "test:cover": "node scripts/check-project-cover.mjs",
     "test:split": "node scripts/check-split-persistence.mjs",
-    "test:ui": "node scripts/check-layout.mjs && node scripts/check-project-cover.mjs && node scripts/check-split-persistence.mjs"
+    "test:tasks": "node scripts/check-task-history.mjs",
+    "test:panels": "node scripts/check-panel-renderer.mjs",
+    "test:ui": "node scripts/check-layout.mjs && node scripts/check-project-cover.mjs && node scripts/check-split-persistence.mjs && node scripts/check-task-history.mjs && node scripts/check-panel-renderer.mjs"
   },
   "dependencies": {
     "@repo/shared": "workspace:*",
