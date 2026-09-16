@@ -1,17 +1,19 @@
 /**
- * 知识图谱面板
+ * 知识图谱工作区
  *
- * 项目面板的「知识图谱」入口：复用共享画布展示当前工作区图谱，并提供类型筛选、
- * 节点详情、全屏与导出。图谱不再挂在交付文档面板里。
+ * 图谱画布本身就是工作区：画布铺满剩余空间，筛选与详情作为浮动面板叠在画布上，
+ * 而不是把画布塞进卡片里。
  *
  * Responsibilities:
- * - 把工作区图谱交给共享 KnowledgeGraphView 渲染
- * - 提供节点类型筛选、关系类型图例与选中节点详情
- * - 提供全屏、PNG 导出与 Markdown 导出
+ * - 把工作区图谱交给共享 KnowledgeGraphView 渲染（不重写数据与 G6 逻辑）
+ * - 顶部显示实体类型 / 关系类型数量与全屏
+ * - 左上浮动面板做类型筛选，可折叠
+ * - 右侧浮动 Inspector 显示节点或关系详情，点击空白关闭
  *
  * Notes:
- * - 筛选只作用于展示副本，关系两端都可见时才保留，不写回业务图谱。
- * - 不新增接口：图谱数据由页面已有的同一次请求提供。
+ * - 只改展示层：节点/关系模型、图谱接口与图谱更新逻辑都不变。
+ * - 筛选只作用于展示副本，关系两端都可见时才保留。
+ * - 类型清单来自项目真实 schema（NODE/RELATION 常量表），不写死示例。
  */
 
 import {
@@ -25,8 +27,10 @@ import {
 import { Button, Empty, Spin, Tooltip, message } from "antd";
 import {
   CameraOutlined,
+  CaretRightOutlined,
   CloseOutlined,
   DownloadOutlined,
+  ExpandOutlined,
   FullscreenExitOutlined,
   FullscreenOutlined,
   ReloadOutlined,
@@ -69,9 +73,16 @@ export function KnowledgeGraphPanel({
   onRefresh,
 }: Props) {
   const graphRef = useRef<KnowledgeGraphViewHandle>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   const [selectedNode, setSelectedNode] =
     useState<KnowledgeGraphNodeData | null>(null);
-  const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set());
+  const [selectedRelation, setSelectedRelation] =
+    useState<KnowledgeGraphRelationData | null>(null);
+  const [hiddenNodeTypes, setHiddenNodeTypes] = useState<Set<string>>(new Set());
+  const [hiddenRelationTypes, setHiddenRelationTypes] = useState<Set<string>>(
+    new Set(),
+  );
+  const [filterOpen, setFilterOpen] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
 
@@ -86,57 +97,92 @@ export function KnowledgeGraphPanel({
     return () => document.removeEventListener("fullscreenchange", syncFullscreen);
   }, []);
 
-  // 换工作区时清空筛选与选中，避免把上一个项目的筛选条件带过来。
+  // 全屏切换后几何大改，等布局稳定再让图谱重新适配。
   useEffect(() => {
-    setHiddenTypes(new Set());
+    const frame = requestAnimationFrame(() => graphRef.current?.fitView());
+    return () => cancelAnimationFrame(frame);
+  }, [isFullscreen, filterOpen]);
+
+  // 换工作区时清空筛选与选中，避免把上一个项目的条件带过来。
+  useEffect(() => {
+    setHiddenNodeTypes(new Set());
+    setHiddenRelationTypes(new Set());
     setSelectedNode(null);
+    setSelectedRelation(null);
   }, [workspaceId]);
 
-  const availableTypes = useMemo(
+  /** 项目真实 schema 中的类型清单，按类型名排序保证稳定。 */
+  const nodeTypes = useMemo(
     () => [...new Set(nodes.map((node) => node.type))].sort(),
     [nodes],
   );
+  const relationTypes = useMemo(
+    () => [...new Set(relations.map((relation) => relation.type))].sort(),
+    [relations],
+  );
+
   const filteredNodes = useMemo(
-    () => nodes.filter((node) => !hiddenTypes.has(node.type)),
-    [hiddenTypes, nodes],
+    () => nodes.filter((node) => !hiddenNodeTypes.has(node.type)),
+    [hiddenNodeTypes, nodes],
   );
   const visibleNodeIds = useMemo(
     () => new Set(filteredNodes.map((node) => node.id)),
     [filteredNodes],
   );
-  // 关系两端都必须可见，否则会出现指向不存在节点的边。
+  /** 关系两端都必须可见，且关系类型未被隐藏。 */
   const filteredRelations = useMemo(
     () =>
       relations.filter(
         (relation) =>
+          !hiddenRelationTypes.has(relation.type) &&
           visibleNodeIds.has(relation.source) &&
           visibleNodeIds.has(relation.target),
       ),
-    [relations, visibleNodeIds],
-  );
-  const availableRelationTypes = useMemo(
-    () => [...new Set(filteredRelations.map((item) => item.type))].sort(),
-    [filteredRelations],
+    [hiddenRelationTypes, relations, visibleNodeIds],
   );
 
-  const toggleType = useCallback((type: string) => {
-    setHiddenTypes((current) => {
-      const next = new Set(current);
-      if (next.has(type)) next.delete(type);
-      else next.add(type);
-      return next;
-    });
+  const toggleNodeType = useCallback((type: string) => {
+    setHiddenNodeTypes((current) => toggleInSet(current, type));
     setSelectedNode(null);
   }, []);
+  const toggleRelationType = useCallback((type: string) => {
+    setHiddenRelationTypes((current) => toggleInSet(current, type));
+    setSelectedRelation(null);
+  }, []);
+
+  const hiddenCount =
+    nodes.length - filteredNodes.length + (relations.length - filteredRelations.length);
+  const hasFilter = hiddenNodeTypes.size > 0 || hiddenRelationTypes.size > 0;
+
+  const handleResetFilter = useCallback(() => {
+    setHiddenNodeTypes(new Set());
+    setHiddenRelationTypes(new Set());
+  }, []);
+
+  /** 节点与关系互斥选中：Inspector 同一时间只呈现一个对象。 */
+  const handleNodeSelect = useCallback((node: KnowledgeGraphNodeData | null) => {
+    setSelectedNode(node);
+    if (node) setSelectedRelation(null);
+  }, []);
+  const handleRelationSelect = useCallback(
+    (relation: KnowledgeGraphRelationData | null) => {
+      setSelectedRelation(relation);
+      if (relation) setSelectedNode(null);
+    },
+    [],
+  );
 
   const handleToggleFullscreen = useCallback(() => {
-    if (!graphRef.current) {
-      void messageApi.warning("图谱尚未渲染完成");
+    const root = rootRef.current;
+    if (!root) return;
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => undefined);
       return;
     }
-    if (isFullscreen) graphRef.current.exitFullscreen();
-    else graphRef.current.requestFullscreen();
-  }, [isFullscreen, messageApi]);
+    void root.requestFullscreen().catch(() => {
+      void messageApi.warning("当前环境不支持全屏");
+    });
+  }, [messageApi]);
 
   const handleDownloadImage = useCallback(async () => {
     try {
@@ -171,30 +217,29 @@ export function KnowledgeGraphPanel({
     }
   }, [data?.markdown, messageApi, workspaceId]);
 
-  const hiddenCount = nodes.length - filteredNodes.length;
+  const hasGraph = nodes.length > 0;
 
   return (
-    <div className="kg-panel">
+    <div className="kg-workspace" ref={rootRef}>
       {contextHolder}
 
-      {/* 工具栏：规模与操作，筛选状态可见可撤销。 */}
-      <header className="kg-panel-toolbar">
-        <div className="kg-panel-toolbar-info">
-          <strong>知识图谱</strong>
-          <span>
-            {nodes.length} 节点 · {relations.length} 关系
-            {hiddenCount > 0 && ` · 已隐藏 ${hiddenCount}`}
-            {data?.version ? ` · v${data.version}` : ""}
-          </span>
-        </div>
-        <div className="kg-panel-toolbar-actions">
-          {hiddenTypes.size > 0 && (
-            <Button
-              type="link"
-              size="small"
-              onClick={() => setHiddenTypes(new Set())}
-            >
-              全部显示
+      {/* 顶栏：类型数量 + 全屏。轻量一条，不抢画布空间。 */}
+      <header className="kg-topbar">
+        <span className="kg-topbar-title">知识图谱</span>
+        <span className="kg-topbar-metrics">
+          <Metric label="实体类型" value={nodeTypes.length} />
+          <Metric label="关系类型" value={relationTypes.length} />
+          <span className="kg-topbar-sep" aria-hidden="true" />
+          <Metric label="实体" value={nodes.length} />
+          <Metric label="关系" value={relations.length} />
+          {hiddenCount > 0 && (
+            <em className="kg-topbar-hidden">已隐藏 {hiddenCount}</em>
+          )}
+        </span>
+        <div className="kg-topbar-actions">
+          {hasFilter && (
+            <Button type="link" size="small" onClick={handleResetFilter}>
+              重置筛选
             </Button>
           )}
           {onRefresh && (
@@ -209,23 +254,13 @@ export function KnowledgeGraphPanel({
               />
             </Tooltip>
           )}
-          <Tooltip title={isFullscreen ? "退出全屏" : "全屏查看"}>
-            <Button
-              type="text"
-              shape="circle"
-              aria-label={isFullscreen ? "退出全屏" : "全屏查看"}
-              icon={
-                isFullscreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />
-              }
-              onClick={handleToggleFullscreen}
-            />
-          </Tooltip>
           <Tooltip title="下载图谱图片">
             <Button
               type="text"
               shape="circle"
               aria-label="下载图谱图片"
               icon={<CameraOutlined />}
+              disabled={!hasGraph}
               onClick={() => void handleDownloadImage()}
             />
           </Tooltip>
@@ -235,138 +270,220 @@ export function KnowledgeGraphPanel({
               shape="circle"
               aria-label="下载 Markdown"
               icon={<DownloadOutlined />}
+              disabled={!hasGraph}
               onClick={handleDownloadMarkdown}
+            />
+          </Tooltip>
+          <Tooltip title={isFullscreen ? "退出全屏" : "全屏"}>
+            <Button
+              type="text"
+              shape="circle"
+              aria-label={isFullscreen ? "退出全屏" : "全屏"}
+              icon={
+                isFullscreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />
+              }
+              disabled={!hasGraph}
+              onClick={handleToggleFullscreen}
             />
           </Tooltip>
         </div>
       </header>
 
-      {error ? (
-        // 失败必须显式呈现：只转圈会让用户以为一直在加载。
-        <div className="kg-panel-center">
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description={`知识图谱读取失败：${error}`}
-          />
-          {onRefresh && (
-            <Button onClick={onRefresh} loading={loading}>
-              重试
-            </Button>
-          )}
-        </div>
-      ) : nodes.length === 0 && (loading || !attempted) ? (
-        // 尚未拿到结果时显示加载态，避免把"还没读"误报成"没有数据"。
-        <div className="kg-panel-center">
-          <Spin />
-          <span>正在读取知识图谱…</span>
-        </div>
-      ) : nodes.length === 0 ? (
-        <div className="kg-panel-center">
-          <Empty description="当前项目还没有知识图谱数据，完成一次任务后会自动写入。" />
-        </div>
-      ) : (
-        <div className="kg-panel-body">
-          {/* 筛选：点击类型名切换显示；隐藏项保留在原位，便于恢复。 */}
-          <aside className="kg-panel-filter scrollbar-none-thin">
-            <h4>实体类型</h4>
-            <ul>
-              {availableTypes.map((type) => {
-                const hidden = hiddenTypes.has(type);
-                const color = getKnowledgeGraphNodeColor(type);
-                const count = nodes.filter((node) => node.type === type).length;
-                return (
-                  <li key={type}>
-                    <button
-                      type="button"
-                      className="kg-panel-filter-row"
-                      data-hidden={hidden ? "true" : "false"}
-                      title={`点击${hidden ? "显示" : "隐藏"} ${NODE_TYPE_LABELS[type] ?? type}`}
-                      onClick={() => toggleType(type)}
-                    >
-                      <span
-                        className="kg-panel-filter-dot"
-                        style={{ color, borderColor: color, background: `${color}18` }}
-                        aria-hidden="true"
-                      >
-                        {NODE_TYPE_ICONS[type] ?? NODE_TYPE_ICONS.Custom}
-                      </span>
-                      <span className="kg-panel-filter-label">
-                        {NODE_TYPE_LABELS[type] ?? type}
-                      </span>
-                      <em>{count}</em>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-
-            {availableRelationTypes.length > 0 && (
-              <>
-                <h4>关系类型</h4>
-                <ul>
-                  {availableRelationTypes.map((type) => (
-                    <li key={type} className="kg-panel-legend-row">
-                      <span
-                        className="kg-panel-legend-line"
-                        style={{ borderColor: getKnowledgeGraphRelationColor(type) }}
-                        aria-hidden="true"
-                      />
-                      <span className="kg-panel-filter-label">
-                        {RELATION_TYPE_LABELS[type] ?? type}
-                      </span>
-                      <em>
-                        {
-                          filteredRelations.filter(
-                            (relation) => relation.type === type,
-                          ).length
-                        }
-                      </em>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
-
-            <p className="kg-panel-hint">
-              拖拽平移 · 滚轮缩放 · 点击节点聚焦 · 悬停节点或边查看说明
-            </p>
-          </aside>
-
-          {/* 画布自己裁剪，不溢出到工具栏或详情。 */}
-          <div className="kg-panel-canvas">
-            <KnowledgeGraphView
-              ref={graphRef}
-              nodes={filteredNodes}
-              relations={filteredRelations}
-              onNodeSelect={setSelectedNode}
-              className="h-full"
+      {/* 画布区：铺满剩余空间，浮动面板叠在上面。 */}
+      <div className="kg-canvas-area">
+        {error ? (
+          <div className="kg-canvas-center">
+            <Empty
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={`知识图谱读取失败：${error}`}
             />
-          </div>
-
-          <aside className="kg-panel-inspector scrollbar-none-thin">
-            {selectedNode ? (
-              <>
-                <header className="kg-panel-inspector-head">
-                  <h4>节点详情</h4>
-                  <Button
-                    type="text"
-                    size="small"
-                    aria-label="关闭节点详情"
-                    icon={<CloseOutlined />}
-                    onClick={() => setSelectedNode(null)}
-                  />
-                </header>
-                <NodeDetail node={selectedNode} />
-              </>
-            ) : (
-              <p className="kg-panel-hint">
-                点击画布中的节点后，这里显示该节点信息。
-              </p>
+            {onRefresh && (
+              <Button onClick={onRefresh} loading={loading}>
+                重试
+              </Button>
             )}
+          </div>
+        ) : !hasGraph && (loading || !attempted) ? (
+          <div className="kg-canvas-center">
+            <Spin />
+            <span>正在读取知识图谱…</span>
+          </div>
+        ) : !hasGraph ? (
+          <div className="kg-canvas-center">
+            <Empty description="当前项目还没有知识图谱数据，完成一次任务后会自动写入。" />
+          </div>
+        ) : (
+          <KnowledgeGraphView
+            ref={graphRef}
+            nodes={filteredNodes}
+            relations={filteredRelations}
+            onNodeSelect={handleNodeSelect}
+            onRelationSelect={handleRelationSelect}
+            className="h-full"
+          />
+        )}
+
+        {/* 浮动筛选面板：可折叠，不做 Drawer。 */}
+        {hasGraph && (
+          <div className="kg-float kg-filter" data-collapsed={filterOpen ? "false" : "true"}>
+            <button
+              type="button"
+              className="kg-float-head"
+              aria-expanded={filterOpen}
+              onClick={() => setFilterOpen((open) => !open)}
+            >
+              <CaretRightOutlined
+                className="kg-float-caret"
+                data-open={filterOpen ? "true" : "false"}
+                aria-hidden="true"
+              />
+              <span>图谱筛选</span>
+              {hasFilter && <em>已筛</em>}
+            </button>
+
+            {filterOpen && (
+              <div className="kg-float-body scrollbar-none-thin">
+                <h4>实体类型</h4>
+                <ul>
+                  {nodeTypes.map((type) => {
+                    const hidden = hiddenNodeTypes.has(type);
+                    const color = getKnowledgeGraphNodeColor(type);
+                    return (
+                      <li key={type}>
+                        <button
+                          type="button"
+                          className="kg-type-row"
+                          data-hidden={hidden ? "true" : "false"}
+                          title={`点击${hidden ? "显示" : "隐藏"} ${NODE_TYPE_LABELS[type] ?? type}`}
+                          onClick={() => toggleNodeType(type)}
+                        >
+                          <span
+                            className="kg-type-dot"
+                            style={{
+                              color,
+                              borderColor: color,
+                              background: `${color}18`,
+                            }}
+                            aria-hidden="true"
+                          >
+                            {NODE_TYPE_ICONS[type] ?? NODE_TYPE_ICONS.Custom}
+                          </span>
+                          <span className="kg-type-label">
+                            {NODE_TYPE_LABELS[type] ?? type}
+                          </span>
+                          <em>
+                            {nodes.filter((node) => node.type === type).length}
+                          </em>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+
+                {relationTypes.length > 0 && (
+                  <>
+                    <h4>关系类型</h4>
+                    <ul>
+                      {relationTypes.map((type) => {
+                        const hidden = hiddenRelationTypes.has(type);
+                        return (
+                          <li key={type}>
+                            <button
+                              type="button"
+                              className="kg-type-row"
+                              data-hidden={hidden ? "true" : "false"}
+                              title={`点击${hidden ? "显示" : "隐藏"} ${RELATION_TYPE_LABELS[type] ?? type}`}
+                              onClick={() => toggleRelationType(type)}
+                            >
+                              <span
+                                className="kg-type-line"
+                                style={{
+                                  borderColor: getKnowledgeGraphRelationColor(type),
+                                }}
+                                aria-hidden="true"
+                              />
+                              <span className="kg-type-label">
+                                {RELATION_TYPE_LABELS[type] ?? type}
+                              </span>
+                              <em>
+                                {
+                                  relations.filter(
+                                    (relation) => relation.type === type,
+                                  ).length
+                                }
+                              </em>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </>
+                )}
+
+                <p className="kg-float-hint">
+                  拖拽平移 · 滚轮缩放 · 点击节点或关系查看详情
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 浮动 Inspector：节点或关系详情，点击空白关闭。 */}
+        {hasGraph && (selectedNode || selectedRelation) && (
+          <aside className="kg-float kg-inspector scrollbar-none-thin">
+            <header className="kg-inspector-head">
+              <h4>{selectedNode ? "节点详情" : "关系详情"}</h4>
+              <Button
+                type="text"
+                size="small"
+                aria-label="关闭详情"
+                icon={<CloseOutlined />}
+                onClick={() => {
+                  setSelectedNode(null);
+                  setSelectedRelation(null);
+                }}
+              />
+            </header>
+            {selectedNode ? (
+              <NodeDetail node={selectedNode} />
+            ) : selectedRelation ? (
+              <RelationDetail
+                relation={selectedRelation}
+                nodes={nodes}
+                onSelectNode={(nodeId) => {
+                  const node = nodes.find((item) => item.id === nodeId);
+                  if (node) handleNodeSelect(node);
+                }}
+              />
+            ) : null}
           </aside>
-        </div>
-      )}
+        )}
+
+        {/* 全屏时需要显式入口退出，浏览器 Esc 之外也能操作。 */}
+        {isFullscreen && (
+          <Tooltip title="退出全屏">
+            <Button
+              className="kg-fullscreen-exit"
+              type="text"
+              shape="circle"
+              aria-label="退出全屏"
+              icon={<ExpandOutlined />}
+              onClick={handleToggleFullscreen}
+            />
+          </Tooltip>
+        )}
+      </div>
     </div>
+  );
+}
+
+/** 顶栏的一项计数。 */
+function Metric({ label, value }: { label: string; value: number }) {
+  return (
+    <span className="kg-topbar-metric">
+      {label}
+      <em>{value}</em>
+    </span>
   );
 }
 
@@ -391,15 +508,102 @@ function NodeDetail({ node }: { node: KnowledgeGraphNodeData }) {
   if (node.source_task_id) rows.push(["来源任务", node.source_task_id]);
 
   return (
-    <dl className="kg-panel-detail">
+    <dl className="kg-detail">
       {rows.map(([label, value]) => (
-        <div key={label} className="kg-panel-detail-row">
+        <div key={label} className="kg-detail-row">
           <dt>{label}</dt>
           <dd>{value}</dd>
         </div>
       ))}
     </dl>
   );
+}
+
+/** 关系详情：源实体、目标实体、关系类型与描述。 */
+function RelationDetail({
+  relation,
+  nodes,
+  onSelectNode,
+}: {
+  relation: KnowledgeGraphRelationData;
+  nodes: KnowledgeGraphNodeData[];
+  onSelectNode: (nodeId: string) => void;
+}) {
+  const source = nodes.find((node) => node.id === relation.source);
+  const target = nodes.find((node) => node.id === relation.target);
+
+  return (
+    <dl className="kg-detail">
+      <div className="kg-detail-row">
+        <dt>源实体</dt>
+        <dd>
+          <NodeRef node={source} fallback={relation.source} onSelect={onSelectNode} />
+        </dd>
+      </div>
+      <div className="kg-detail-row">
+        <dt>目标实体</dt>
+        <dd>
+          <NodeRef node={target} fallback={relation.target} onSelect={onSelectNode} />
+        </dd>
+      </div>
+      <div className="kg-detail-row">
+        <dt>关系类型</dt>
+        <dd>
+          <span className="kg-relation-type">
+            <span
+              className="kg-type-line"
+              style={{ borderColor: getKnowledgeGraphRelationColor(relation.type) }}
+              aria-hidden="true"
+            />
+            {RELATION_TYPE_LABELS[relation.type] ?? relation.type}
+          </span>
+        </dd>
+      </div>
+      {relation.description && (
+        <div className="kg-detail-row">
+          <dt>关系描述</dt>
+          <dd>{relation.description}</dd>
+        </div>
+      )}
+      {relation.source_task_id && (
+        <div className="kg-detail-row">
+          <dt>来源任务</dt>
+          <dd>{relation.source_task_id}</dd>
+        </div>
+      )}
+    </dl>
+  );
+}
+
+/** 关系端点：可点击跳转到该节点的详情。 */
+function NodeRef({
+  node,
+  fallback,
+  onSelect,
+}: {
+  node?: KnowledgeGraphNodeData;
+  fallback: string;
+  onSelect: (nodeId: string) => void;
+}) {
+  if (!node) return <span title={fallback}>{formatDisplayId(fallback)}</span>;
+  return (
+    <button
+      type="button"
+      className="kg-node-ref"
+      title={node.name}
+      onClick={() => onSelect(node.id)}
+    >
+      {node.name}
+    </button>
+  );
+}
+
+/** 在集合里切换某个成员。 */
+function toggleInSet(current: Set<string>, value: string): Set<string> {
+  const next = new Set(current);
+  if (next.has(value)) next.delete(value);
+  else next.add(value);
+  return next;
 }
 
 /** 通过临时链接触发浏览器下载。 */
