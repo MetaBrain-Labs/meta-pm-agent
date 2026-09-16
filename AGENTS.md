@@ -53,6 +53,9 @@ User-facing UI copy and final prose may be localized. Internal comments may be C
 
 ## Web Structure
 
+- Read root `DESIGM.md` before changing Web UI. Reuse `apps/web/src/theme/design-tokens.ts`, the Ant Design 6 theme, and existing shared UI components; keep visual changes within the requested scope.
+- Run local browser previews only when the preview environment and browser access permissions are confirmed available. Otherwise skip local preview access, use applicable non-browser checks, and report the visual-verification limitation. Do not repeatedly probe unavailable previews, retry denied access, or bypass restrictions through alternate ports, URLs, browser surfaces, or indirect tools.
+
 - Keep `apps/web/src/App.tsx` as the provider and page-composition shell. Top-level state/navigation belongs in `hooks/useAppShell.ts`; do not add page JSX, API clients, or SSE readers to `App.tsx`.
 - Put browser API calls in `src/api/`, shared constants in `src/constants/`, DTO restoration in `src/mappers/`, route pages in `src/pages/`, history/path helpers in `src/router/`, reusable hooks in `src/hooks/`, and stream/markdown/form helpers in `src/utils/`.
 - Put shared components in `src/components/` and reusable modal shells in `src/components/modals/`. Keep page-specific orchestration in its page folder.

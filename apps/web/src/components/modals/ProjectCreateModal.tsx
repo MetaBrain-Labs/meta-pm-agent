@@ -12,8 +12,11 @@
  */
 
 import { useEffect, useState } from "react";
-import { Button, Form, Input, Modal, Space, type FormInstance } from "antd";
+import { Button, Form, Input, Space, type FormInstance } from "antd";
 import { LocalDirectoryBrowserModal } from "./LocalDirectoryBrowserModal";
+import { AppModal } from "./AppModal";
+import { SectionHeader } from "../ui/SectionHeader";
+import { Surface } from "../ui/Surface";
 
 /** 项目创建和路径修改表单的交互参数。 */
 interface ProjectCreateModalProps {
@@ -45,32 +48,25 @@ export function ProjectCreateModal({
     if (!open) setDirectoryBrowserOpen(false);
   }, [open]);
   return (
-    <Modal
-      mask={{ enabled: true, blur: true, closable: true }}
-      centered
+    <AppModal
+      mask={{ enabled: true, blur: false, closable: true }}
       width={610}
       open={open}
       title={null}
       footer={null}
       closable={false}
       className="project-create-modal"
-      styles={{
-        mask: {
-          backdropFilter: "blur(8px)",
-          background: "rgba(0,0,0,0.3)",
-        },
-      }}
     >
-      <div className="project-modal-head">
-        <h2>{mode === "create" ? "添加本地项目" : "修改本地路径"}</h2>
-        <p>
-          {mode === "create"
+      <SectionHeader
+        title={mode === "create" ? "添加本地项目" : "修改本地路径"}
+        description={
+          mode === "create"
             ? "关联本地目录，读取项目背景并保存上下文与生成的 PRD"
-            : "复制应用生成的上下文和 PRD 到新目录，保留原文件；后续产物保存到新目录"}
-        </p>
-      </div>
+            : "复制应用生成的上下文和 PRD 到新目录，保留原文件；后续产物保存到新目录"
+        }
+      />
       <Form form={form} layout="vertical" className="project-form">
-        <div className="project-form-panel">
+        <Surface tone="muted" bordered={false} className="project-form-panel">
           <Form.Item
             label="项目名称"
             name="name"
@@ -103,7 +99,7 @@ export function ProjectCreateModal({
           <div className="project-location-note">
             点击“浏览”选择文件夹后将自动填写完整路径，也可以直接输入路径。
           </div>
-        </div>
+        </Surface>
         {locationHint && (
           <div className="project-form-error">请输入项目位置</div>
         )}
@@ -127,6 +123,6 @@ export function ProjectCreateModal({
         }}
         onCancel={() => setDirectoryBrowserOpen(false)}
       />
-    </Modal>
+    </AppModal>
   );
 }

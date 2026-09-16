@@ -12,6 +12,7 @@ import { Alert, Button, Spin, Tag, Tooltip } from "antd";
 import { FileTextOutlined, ReloadOutlined } from "@ant-design/icons";
 import type { LocalStorageEntry } from "@repo/shared";
 import { useWorkspaceLocalStorage } from "../hooks/useWorkspaceLocalStorage";
+import { Surface } from "./ui/Surface";
 
 /** 面板消费工作区身份、项目展示信息以及页面拥有的运行和刷新状态。 */
 interface WorkspaceLocalStoragePanelProps {
@@ -86,7 +87,7 @@ export function WorkspaceLocalStoragePanel({
   const loading = !status && !error;
 
   return (
-    <section className="storage-panel" aria-label="当前项目本地数据">
+    <Surface as="section" className="storage-panel" aria-label="当前项目本地数据">
       <header className="storage-panel-head">
         <div className="storage-panel-identity">
           <strong className="storage-panel-name">{projectName || "当前项目"}</strong>
@@ -141,7 +142,7 @@ export function WorkspaceLocalStoragePanel({
           重新同步
         </Button>
       </footer>
-    </section>
+    </Surface>
   );
 }
 

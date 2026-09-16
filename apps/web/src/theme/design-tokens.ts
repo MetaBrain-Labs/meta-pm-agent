@@ -1,0 +1,83 @@
+/**
+ * 前端设计变量
+ *
+ * Responsibilities:
+ * - 为 Ant Design、Tailwind 和现有样式提供唯一的视觉变量来源。
+ * - 在首屏渲染前同步 CSS 变量，避免主题与页面样式各自维护颜色。
+ *
+ * Notes:
+ * - 仅定义展示规则，不读取或修改业务状态；图谱类型配色由图谱组件管理。
+ */
+
+/** 工作区的颜色、尺寸、字体、阴影和动效尺度。尺寸单位为 px。 */
+export const DESIGN_TOKENS = {
+  color: {
+    page: "#fafafa",
+    surface: "#ffffff",
+    secondary: "#f7f7f7",
+    hover: "#f2f2f2",
+    active: "#ebebeb",
+    text: "#171717",
+    textSoft: "#404040",
+    textSecondary: "#737373",
+    textWeak: "#8a8a8a",
+    textDisabled: "#a3a3a3",
+    border: "#e5e5e5",
+    divider: "#ededed",
+    borderHover: "#b8b8b8",
+    primary: "#171717",
+    primaryHover: "#333333",
+    primaryActive: "#000000",
+    onPrimary: "#ffffff",
+    focusOutline: "rgba(23, 23, 23, 0.10)",
+    legacyAccent: "#756d80",
+    success: "#287653",
+    successSoft: "#edf6f0",
+    warning: "#a36518",
+    warningSoft: "#fbf3e8",
+    error: "#bf4141",
+    errorSoft: "#fbeeee",
+    mask: "rgba(0, 0, 0, 0.24)",
+  },
+  radius: { small: 6, base: 8, large: 12, pill: 999 },
+  spacing: { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32, spacious: 48 },
+  controlHeight: { small: 32, base: 38, large: 44 },
+  typography: {
+    sans: '"Source Han Sans CN", "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, system-ui, sans-serif',
+    mono: '"SF Mono", Consolas, Menlo, monospace',
+    readingDisplay: '"LXGW WenKai Lite", "KaiTi", "STKaiti", sans-serif',
+    size: { small: 12, base: 14, body: 16, title: 20, heading: 24, display: 32 },
+    lineHeight: 1.6, headingLineHeight: 1.4,
+    weight: { regular: 400, medium: 500, strong: 600 },
+  },
+  shadow: {
+    surface: "none",
+    popup: "0 4px 16px rgba(0, 0, 0, 0.06), 0 1px 4px rgba(0, 0, 0, 0.04)",
+    focus: "0 0 0 2px rgba(23, 23, 23, 0.10)",
+    errorFocus: "0 0 0 2px rgba(191, 65, 65, 0.10)",
+    warningFocus: "0 0 0 2px rgba(163, 101, 24, 0.10)",
+  },
+  motion: { fast: 120, base: 160, slow: 200 },
+} as const;
+
+/** 将视觉变量写入指定根元素；应用入口调用一次，不承担主题切换或数据持久化。 */
+export function applyDesignTokens(root: HTMLElement): void {
+  const { color, radius, spacing, controlHeight, typography, shadow, motion } = DESIGN_TOKENS;
+  const groups = { color, radius, spacing, control: controlHeight, fontSize: typography.size, shadow, motion };
+  for (const [group, values] of Object.entries(groups)) {
+    for (const [name, value] of Object.entries(values)) {
+      const cssGroup = group.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+      const cssName = name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+      const unit = typeof value === "number" ? (group === "motion" ? "ms" : "px") : "";
+      root.style.setProperty(`--ds-${cssGroup}-${cssName}`, `${value}${unit}`);
+    }
+  }
+  root.style.setProperty("--ds-font-sans", typography.sans);
+  root.style.setProperty("--ds-font-mono", typography.mono);
+  root.style.setProperty("--ds-font-reading-display", typography.readingDisplay);
+  root.style.setProperty("--ds-line-height", String(typography.lineHeight));
+  root.style.setProperty("--ds-heading-line-height", String(typography.headingLineHeight));
+  for (const [name, value] of Object.entries(typography.weight)) {
+    root.style.setProperty(`--ds-font-weight-${name}`, String(value));
+  }
+}

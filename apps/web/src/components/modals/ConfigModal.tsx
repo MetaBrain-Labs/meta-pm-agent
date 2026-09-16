@@ -8,7 +8,8 @@
  * - 渲染只读基础信息和模型列表管理面板
  */
 
-import { Modal } from "antd";
+import { AppModal } from "./AppModal";
+import { SectionHeader } from "../ui/SectionHeader";
 import { ModelProfilesPanel } from "../settings/ModelProfilesPanel";
 
 type ConfigTab = "workspace" | "models";
@@ -34,9 +35,8 @@ export function ConfigModal({
   const title = activeTab === "workspace" ? "当前工作区" : "模型使用列表";
 
   return (
-    <Modal
-      centered
-      mask={{ enabled: true, blur: true, closable: true }}
+    <AppModal
+      mask={{ enabled: true, blur: false, closable: true }}
       width={1080}
       open={open}
       onCancel={onClose}
@@ -44,10 +44,6 @@ export function ConfigModal({
       footer={null}
       closable={false}
       styles={{
-        mask: {
-          backdropFilter: "blur(8px)",
-          background: "rgba(0,0,0,0.3)",
-        },
         body: { maxHeight: "82vh", overflow: "auto" },
       }}
     >
@@ -70,7 +66,7 @@ export function ConfigModal({
           </button>
         </aside>
         <section className="settings-modal-content">
-          <h3>{title}</h3>
+          <SectionHeader title={title} level={3} />
           {activeTab === "models" ? (
             <ModelProfilesPanel />
           ) : (
@@ -85,6 +81,6 @@ export function ConfigModal({
           )}
         </section>
       </div>
-    </Modal>
+    </AppModal>
   );
 }
