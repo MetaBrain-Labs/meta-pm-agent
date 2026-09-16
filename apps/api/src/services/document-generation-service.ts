@@ -61,6 +61,7 @@ import {
 } from "../repositories/model-profile-repository";
 import { createChat } from "./chat-service";
 import { getWorkspaceKnowledgeGraph } from "./product-knowledge-graph-service";
+import { exportWorkspacePrd } from "./workspace-local-storage-service";
 
 /**
  * 文档任务状态响应。
@@ -670,7 +671,7 @@ async function executeDocumentGenerationRun(
 
     const awaitingInput =
       result.qualityScore.disposition === "awaiting_input";
-    await completeDocumentGenerationRun({
+    await saveGeneratedDocument({
       runId: run.id,
       workspaceId: run.workspaceId,
       kind: run.kind,
@@ -690,6 +691,13 @@ async function executeDocumentGenerationRun(
       errorMessage: compactErrorMessage(error),
     });
   }
+}
+
+/** 先保存权威文档，再尝试磁盘导出；本地失败不反转 completed 或 awaiting_input。 */
+export async function saveGeneratedDocument(input: Parameters<typeof completeDocumentGenerationRun>[0]): Promise<DocumentArtifactDto> {
+  const artifact = await completeDocumentGenerationRun(input);
+  await exportWorkspacePrd(input.workspaceId, artifact);
+  return artifact;
 }
 
 /**

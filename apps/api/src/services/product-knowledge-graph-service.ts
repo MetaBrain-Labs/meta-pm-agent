@@ -21,6 +21,7 @@ import type {
   KnowledgeGraphRelation,
   ProductKnowledgeGraph,
 } from "@repo/shared";
+import { getActiveLocalUserWorkspace } from "../repositories/workspace-repository";
 import {
   clearProductKnowledgeGraphByWorkspaceId,
   getProductKnowledgeGraphByWorkspaceId,
@@ -96,7 +97,9 @@ export async function clearWorkspaceKnowledgeGraph(
   workspaceId: string | undefined,
 ): Promise<void> {
   if (!workspaceId) return;
-  await clearProductContextResourceSnapshot(workspaceId);
+  const workspace = await getActiveLocalUserWorkspace(workspaceId);
+  if (!workspace) return;
+  await clearProductContextResourceSnapshot(workspaceId, workspace.localPath);
   await clearOptionalProductContextSnapshot(workspaceId);
   await clearProductKnowledgeGraphByWorkspaceId(workspaceId);
 }
@@ -278,10 +281,13 @@ async function persistProductContextSnapshots({
     "conversationId" | "requestFormId" | "advanceVersion"
   >): Promise<void> {
   try {
+    const workspace = await getActiveLocalUserWorkspace(workspaceId);
+    if (!workspace?.localPath) throw new Error("Workspace has no local project directory.");
     const contextKnowledgeGraph =
       createProductContextSnapshotKnowledgeGraph(knowledgeGraph);
     await writeProductContextResourceSnapshot({
       workspaceId,
+      localPath: workspace.localPath,
       conversationId,
       requestFormId,
       knowledgeGraph: contextKnowledgeGraph,

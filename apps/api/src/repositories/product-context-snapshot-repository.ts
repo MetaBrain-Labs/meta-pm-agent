@@ -11,7 +11,7 @@
  * - clearProductContextSnapshotByWorkspaceId()：清理当前 workspace 快照
  *
  * Notes:
- * - 表结构由 packages/database/sql/product-context-snapshot.sql 手动创建。
+ * - 表结构由 packages/database/sql/20260914_runtime_tables.sql 初始化。
  */
 
 import { randomUUID } from "node:crypto";
@@ -35,6 +35,8 @@ export interface ProductContextSnapshotRow {
   context: unknown;
   version: number;
   updatedAt: string;
+  conversationId?: string;
+  requestFormId?: string;
 }
 
 /**
@@ -98,12 +100,16 @@ export async function getProductContextSnapshotByWorkspaceId(
       context_json: unknown;
       version: number;
       updated_at: Date;
+      conversation_id: string | null;
+      request_form_id: string | null;
     }>
   >`
     SELECT
       "context_json",
       "version",
-      "updated_at"
+      "updated_at",
+      "conversation_id",
+      "request_form_id"
     FROM "product_context_snapshot"
     WHERE "workspace_id" = ${workspaceId}
     LIMIT 1
@@ -115,6 +121,8 @@ export async function getProductContextSnapshotByWorkspaceId(
   return {
     context: row.context_json,
     version: Number(row.version),
+    ...(row.conversation_id ? { conversationId: row.conversation_id } : {}),
+    ...(row.request_form_id ? { requestFormId: row.request_form_id } : {}),
     updatedAt:
       row.updated_at instanceof Date
         ? row.updated_at.toISOString()

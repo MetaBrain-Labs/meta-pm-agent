@@ -217,6 +217,17 @@ export async function getDocumentArtifactByRunId(
   return rows[0] ? mapArtifactRow(rows[0]) : null;
 }
 
+/** 查询工作区最近已保存的 PRD，避免新运行尚无产物时隐藏已有导出。 */
+export async function getLatestWorkspacePrdArtifact(workspaceId: string): Promise<DocumentArtifactDto | null> {
+  const rows = await prisma.$queryRaw<DocumentArtifactRow[]>`
+    SELECT * FROM "document_artifact"
+    WHERE "workspace_id" = ${workspaceId} AND "kind" = 'prd'
+    ORDER BY "updated_at" DESC, "version" DESC
+    LIMIT 1
+  `;
+  return rows[0] ? mapArtifactRow(rows[0]) : null;
+}
+
 /**
  * 为等待补充证据的旧 artifact 补齐源图谱版本，并返回最终保存的版本。
  *

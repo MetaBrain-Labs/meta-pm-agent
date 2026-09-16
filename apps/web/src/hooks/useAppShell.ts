@@ -353,6 +353,9 @@ export function useAppShell() {
         setCreationError(null);
         setProjectModalOpen(false);
         projectForm.resetFields();
+        if (updatedWorkspace.localStorageWarnings?.length) {
+          Modal.warning({ title: "路径已更新，部分本地文件未同步", content: updatedWorkspace.localStorageWarnings.join(" ") });
+        }
         return;
       }
 

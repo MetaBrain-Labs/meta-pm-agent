@@ -219,7 +219,11 @@ The Vite server proxies `/api` to port `3001`.
 
 ## Configuration Notes
 
-- Product context is restored from selected workspace overview files, `resources/product-contexts/`, the optional context-snapshot table, and the durable workspace graph.
+- Product context is restored from selected workspace overview files, `<localPath>/resources/product-contexts/<workspaceId>.json`, the optional context-snapshot table, and the durable workspace graph. A stale local snapshot cannot override newer archived database context.
+- Generated PRDs are exported after database persistence to `<localPath>/resources/documents/<workspaceId>/prd/<artifactId>.md`, including artifacts awaiting additional evidence. Local export failure does not fail the document run or disable viewing/downloads.
+- Project and document pages show current local storage paths and synchronization status. `GET /api/workspaces/:id/local-storage` checks current files; `POST /api/workspaces/:id/local-storage/sync` copies missing context and the latest PRD without overwriting different content. Synchronization is blocked while project tasks are running.
+- Changing a local path copies this workspace's generated context and PRD history, preserves source files, and reports partial failures or conflicts. Old central snapshots are copied lazily and retired per workspace; `PRODUCT_CONTEXT_RESOURCE_DIR` only locates that legacy directory. Local context snapshots omit graph nodes and relations and require the database for full restoration.
+- Generated directories receive a local `.gitignore` if one does not already exist; project-root Git settings and existing ignore files are preserved.
 - Conversation Agent receives `web_search` only when enabled by the user. Executors that require external evidence receive search through runtime policy.
 - `TAVILY_API_KEY` enables Tavily. Without it, search uses supported public indexes and returns structured errors instead of terminating the SSE stream.
 - `LANGGRAPH_CHECKPOINT_DATABASE_URL` overrides `DATABASE_URL` for workflow checkpoints. If neither is available, the runtime falls back to in-memory checkpoints.
