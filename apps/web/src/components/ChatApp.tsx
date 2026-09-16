@@ -30,17 +30,20 @@ import {
   Tooltip,
   message,
 } from "antd";
-import BorderBeam from "antd/es/border-beam";
 import {
   ApartmentOutlined,
   ArrowDownOutlined,
   ArrowLeftOutlined,
   CaretRightOutlined,
   ClearOutlined,
+  FileTextOutlined,
   PartitionOutlined,
   SearchOutlined,
   SendOutlined,
   StopOutlined,
+  ThunderboltOutlined,
+  UnorderedListOutlined,
+  WarningOutlined,
 } from "@ant-design/icons";
 import type {
   HumanInTheLoopResume,
@@ -74,10 +77,10 @@ import {
 const { TextArea } = Input;
 
 const EXAMPLE_QUERIES = [
-  "帮我梳理这个产品的核心需求",
-  "为当前项目拆一版 MVP 计划",
-  "生成一份迭代风险清单",
-  "把今天的讨论整理成待办事项",
+  { icon: <FileTextOutlined />, label: "帮我梳理这个产品的核心需求" },
+  { icon: <ThunderboltOutlined />, label: "为当前项目拆一版 MVP 计划" },
+  { icon: <WarningOutlined />, label: "生成一份迭代风险清单" },
+  { icon: <UnorderedListOutlined />, label: "把今天的讨论整理成待办事项" },
 ];
 
 interface Props {
@@ -459,6 +462,106 @@ export function ChatApp({
     setProcessUserScrolled(false);
   };
 
+  /** 输入区在欢迎页与消息页复用同一份表单，避免两处结构漂移。 */
+  const composerForm = (
+    <form onSubmit={handleSubmit} className="chat-composer">
+      <TextArea
+        value={input}
+        onChange={(event) => setInput(event.target.value)}
+        onKeyDown={handleKeyDown}
+        rows={1}
+        placeholder={disabledReason || "输入消息"}
+        disabled={isLoading || Boolean(disabledReason)}
+        autoSize={{ minRows: 2, maxRows: 7 }}
+      />
+
+      <div className="chat-composer-bar">
+        <Tooltip
+          title={webSearchEnabled ? "联网搜索已开启" : "开启联网搜索"}
+        >
+          <Button
+            type={webSearchEnabled ? "primary" : "text"}
+            shape="circle"
+            icon={<SearchOutlined />}
+            aria-label="联网搜索"
+            aria-pressed={webSearchEnabled}
+            disabled={isLoading || Boolean(disabledReason)}
+            onClick={() => setWebSearchEnabled((enabled) => !enabled)}
+          />
+        </Tooltip>
+        <Tooltip
+          title={
+            kgLoading
+              ? "正在加载知识图谱"
+              : kgData?.hasData === false
+                ? "暂无知识图谱数据"
+                : "查看知识图谱"
+          }
+        >
+          <Button
+            type="text"
+            shape="circle"
+            icon={<ApartmentOutlined />}
+            disabled={!kgEnabled}
+            loading={kgLoading}
+            onClick={handleOpenKgModal}
+          />
+        </Tooltip>
+        <ModelProfileSelector
+          profiles={modelProfiles}
+          selectedProfileId={selectedModelProfileId}
+          disabled={isLoading}
+          onChange={onModelProfileChange}
+        />
+        <div className="chat-composer-actions">
+          {isLoading ? (
+            <Tooltip title="停止生成">
+              <Button
+                type="primary"
+                shape="circle"
+                danger
+                icon={<StopOutlined />}
+                onClick={onStop}
+              />
+            </Tooltip>
+          ) : (
+            <Tooltip title="发送">
+              <Button
+                type="primary"
+                shape="circle"
+                htmlType="submit"
+                icon={<SendOutlined />}
+                disabled={!input.trim() || Boolean(disabledReason)}
+              />
+            </Tooltip>
+          )}
+        </div>
+      </div>
+    </form>
+  );
+
+  /** 推荐任务卡片：点击直接以该问题发起对话。 */
+  const promptSuggestions = (
+    <div className="chat-suggestions">
+      {EXAMPLE_QUERIES.map((query) => (
+        <button
+          key={query.label}
+          type="button"
+          disabled={isLoading || Boolean(disabledReason)}
+          onClick={() => handleExampleClick(query.label)}
+        >
+          <span className="chat-suggestion-icon" aria-hidden="true">
+            {query.icon}
+          </span>
+          <span className="chat-suggestion-label">{query.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+
+  const showWelcome = messages.length === 0 && !isMessagesLoading;
+  const showMessagesLoading = isMessagesLoading && messages.length === 0;
+
   const scrollToActiveThinking = useCallback(
     (agentType: string) => {
       const container =
@@ -611,97 +714,7 @@ export function ChatApp({
                     setUserScrolled(false);
                   }}
                 />
-                <BorderBeam
-                  color={[
-                    { color: "#1677ff", percent: 0 },
-                    { color: "#36cfc9", percent: 54 },
-                    { color: "#95de64", percent: 100 },
-                  ]}
-                  outset={0}
-                >
-                  <div className="chat-composer-border-beam">
-                    <form onSubmit={handleSubmit} className="chat-composer">
-                      <TextArea
-                        value={input}
-                        onChange={(event) => setInput(event.target.value)}
-                        onKeyDown={handleKeyDown}
-                        rows={1}
-                        placeholder={disabledReason || "输入消息"}
-                        disabled={isLoading || Boolean(disabledReason)}
-                        autoSize={{ minRows: 3, maxRows: 7 }}
-                      />
-
-                      <div className="chat-composer-bar">
-                        <Tooltip
-                          title={
-                            webSearchEnabled ? "联网搜索已开启" : "开启联网搜索"
-                          }
-                        >
-                          <Button
-                            type={webSearchEnabled ? "primary" : "text"}
-                            shape="circle"
-                            icon={<SearchOutlined />}
-                            aria-label="联网搜索"
-                            aria-pressed={webSearchEnabled}
-                            disabled={isLoading || Boolean(disabledReason)}
-                            onClick={() =>
-                              setWebSearchEnabled((enabled) => !enabled)
-                            }
-                          />
-                        </Tooltip>
-                        <Tooltip
-                          title={
-                            kgLoading
-                              ? "正在加载知识图谱"
-                              : kgData?.hasData === false
-                                ? "暂无知识图谱数据"
-                                : "查看知识图谱"
-                          }
-                        >
-                          <Button
-                            type="text"
-                            shape="circle"
-                            icon={<ApartmentOutlined />}
-                            disabled={!kgEnabled}
-                            loading={kgLoading}
-                            onClick={handleOpenKgModal}
-                          />
-                        </Tooltip>
-                        <ModelProfileSelector
-                          profiles={modelProfiles}
-                          selectedProfileId={selectedModelProfileId}
-                          disabled={isLoading}
-                          onChange={onModelProfileChange}
-                        />
-                        <div className="chat-composer-actions">
-                          {isLoading ? (
-                            <Tooltip title="停止生成">
-                              <Button
-                                type="primary"
-                                shape="circle"
-                                danger
-                                icon={<StopOutlined />}
-                                onClick={onStop}
-                              />
-                            </Tooltip>
-                          ) : (
-                            <Tooltip title="发送">
-                              <Button
-                                type="primary"
-                                shape="circle"
-                                htmlType="submit"
-                                icon={<SendOutlined />}
-                                disabled={
-                                  !input.trim() || Boolean(disabledReason)
-                                }
-                              />
-                            </Tooltip>
-                          )}
-                        </div>
-                      </div>
-                    </form>
-                  </div>
-                </BorderBeam>
+                <div className="chat-composer-dock">{composerForm}</div>
               </div>
             </Splitter.Panel>
 
@@ -803,29 +816,20 @@ export function ChatApp({
                 onScroll={handleScroll}
                 className="chat-scroll scrollbar-none items-center"
               >
-                {messages.length === 0 && !isMessagesLoading && (
-                  <div className="flex flex-col w-full items-center justify-center gap-8">
-                    <span className="font-bold text-2xl">今天想推进什么？</span>
-                    <span className="font-bold text-[#3e3e3e]">
-                      围绕需求、计划、文档和风险继续推进项目。
-                    </span>
-                    <div className="chat-suggestions">
-                      {EXAMPLE_QUERIES.map((query) => (
-                        <button
-                          key={query}
-                          type="button"
-                          disabled={isLoading || Boolean(disabledReason)}
-                          onClick={() => handleExampleClick(query)}
-                        >
-                          {query}
-                        </button>
-                      ))}
-                    </div>
+                {/* 空会话把标题、推荐任务与输入框收在同一个容器里，避免首屏被拆散。 */}
+                {showWelcome && (
+                  <div className="chat-welcome">
+                    <header className="chat-welcome-head">
+                      <h1>今天想推进什么？</h1>
+                      <p>围绕需求、计划、文档和风险继续推进项目。</p>
+                    </header>
+                    {promptSuggestions}
+                    {composerForm}
                   </div>
                 )}
 
-                {isMessagesLoading && messages.length === 0 && (
-                  <div className="flex flex-col w-full min-h-[70vh] items-center justify-center gap-8">
+                {showMessagesLoading && (
+                  <div className="chat-welcome chat-welcome-skeleton">
                     <div className="flex w-full justify-end">
                       <div className="w-[40%]">
                         <Skeleton active />
@@ -891,95 +895,9 @@ export function ChatApp({
                 setUserScrolled(false);
               }}
             />
-            <BorderBeam
-              color={[
-                { color: "#1677ff", percent: 0 },
-                { color: "#36cfc9", percent: 54 },
-                { color: "#95de64", percent: 100 },
-              ]}
-              outset={0}
-            >
-              <div className="chat-composer-border-beam">
-                <form onSubmit={handleSubmit} className="chat-composer">
-                  <TextArea
-                    value={input}
-                    onChange={(event) => setInput(event.target.value)}
-                    onKeyDown={handleKeyDown}
-                    rows={1}
-                    placeholder={disabledReason || "输入消息"}
-                    disabled={isLoading || Boolean(disabledReason)}
-                    autoSize={{ minRows: 3, maxRows: 7 }}
-                  />
-
-                  <div className="chat-composer-bar">
-                    <Tooltip
-                      title={
-                        webSearchEnabled ? "联网搜索已开启" : "开启联网搜索"
-                      }
-                    >
-                      <Button
-                        type={webSearchEnabled ? "primary" : "text"}
-                        shape="circle"
-                        icon={<SearchOutlined />}
-                        aria-label="联网搜索"
-                        aria-pressed={webSearchEnabled}
-                        disabled={isLoading || Boolean(disabledReason)}
-                        onClick={() =>
-                          setWebSearchEnabled((enabled) => !enabled)
-                        }
-                      />
-                    </Tooltip>
-                    <Tooltip
-                      title={
-                        kgLoading
-                          ? "正在加载知识图谱"
-                          : kgData?.hasData === false
-                            ? "暂无知识图谱数据"
-                            : "查看知识图谱"
-                      }
-                    >
-                      <Button
-                        type="text"
-                        shape="circle"
-                        icon={<ApartmentOutlined />}
-                        disabled={!kgEnabled}
-                        loading={kgLoading}
-                        onClick={handleOpenKgModal}
-                      />
-                    </Tooltip>
-                    <ModelProfileSelector
-                      profiles={modelProfiles}
-                      selectedProfileId={selectedModelProfileId}
-                      disabled={isLoading}
-                      onChange={onModelProfileChange}
-                    />
-                    <div className="chat-composer-actions">
-                      {isLoading ? (
-                        <Tooltip title="停止生成">
-                          <Button
-                            type="primary"
-                            shape="circle"
-                            danger
-                            icon={<StopOutlined />}
-                            onClick={onStop}
-                          />
-                        </Tooltip>
-                      ) : (
-                        <Tooltip title="发送">
-                          <Button
-                            type="primary"
-                            shape="circle"
-                            htmlType="submit"
-                            icon={<SendOutlined />}
-                            disabled={!input.trim() || Boolean(disabledReason)}
-                          />
-                        </Tooltip>
-                      )}
-                    </div>
-                  </div>
-                </form>
-              </div>
-            </BorderBeam>
+            {!showWelcome && (
+              <div className="chat-composer-dock">{composerForm}</div>
+            )}
           </>
         )}
       </div>

@@ -23,6 +23,7 @@ import {
   MenuFoldOutlined,
   MenuOutlined,
   MenuUnfoldOutlined,
+  MessageOutlined,
   RightOutlined,
   SettingOutlined,
 } from "@ant-design/icons";
@@ -34,7 +35,8 @@ type MenuItem = Required<MenuProps>["items"][number];
 
 const TEXT = {
   appName: "问渠",
-  emptyConversation: "还未有对话历史，创建一个新对话开始构建一款新产品吧！",
+  emptyThreads: "暂无对话",
+  emptyThreadsHint: "创建新对话后，最近记录会显示在这里。",
   expand: "展开侧边栏",
   collapse: "收起侧边栏",
   newConversation: "创建新对话",
@@ -123,8 +125,8 @@ export function Sidebar({
       collapsed={collapsed}
       onCollapse={onToggle}
       trigger={null}
-      width={304}
-      collapsedWidth={72}
+      width={272}
+      collapsedWidth={68}
       className={`app-sidebar chat-sidebar h-screen !bg-white ${
         collapsed ? "is-collapsed" : "is-expanded"
       }`}
@@ -178,6 +180,7 @@ export function Sidebar({
             <Button
               icon={<EditOutlined />}
               block
+              className="chat-nav-create"
               loading={creating}
               disabled={creating || !activeWorkspaceId}
               onClick={onNew}
@@ -187,8 +190,9 @@ export function Sidebar({
             <Button
               icon={<FolderOpenOutlined />}
               block
-              className={documentButtonClassName}
-              type={activeMode === "documents" ? "primary" : "default"}
+              className={["chat-nav-document", documentButtonClassName]
+                .filter(Boolean)
+                .join(" ")}
               disabled={!activeWorkspaceId}
               onClick={onDocuments}
             >
@@ -201,11 +205,18 @@ export function Sidebar({
       {!collapsed && (
         <div className="chat-history-head">
           <h2>{TEXT.conversationHistory}</h2>
-          {threads.length === 0 && <p>{TEXT.emptyConversation}</p>}
         </div>
       )}
 
       <div className="chat-history scrollbar-none">
+        {!collapsed && threads.length === 0 && (
+          <div className="chat-empty-threads">
+            <MessageOutlined />
+            <strong>{TEXT.emptyThreads}</strong>
+            <p>{TEXT.emptyThreadsHint}</p>
+          </div>
+        )}
+
         {!collapsed && threads.length > 0 && (
           <>
             <div className="chat-history-date">{TEXT.today}</div>
