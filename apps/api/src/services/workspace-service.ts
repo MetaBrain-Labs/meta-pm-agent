@@ -9,7 +9,7 @@
  * - 阻止运行中工作流对应的路径变更或移除
  *
  * Notes:
- * - 本服务永远不会创建、移动或删除用户本地文件。
+ * - 仅复制应用生成的产物，保留用户资料与原目录，不移动或递归删除文件。
  */
 import { constants } from "node:fs";
 import { access, realpath, stat } from "node:fs/promises";
@@ -25,6 +25,7 @@ import {
 import { listActiveConversations } from "../repositories/chat-repository";
 import { getActiveDocumentGenerationRun } from "../repositories/document-generation-repository";
 import { isChatRunActive } from "./chat-run-registry";
+import { copyWorkspaceLocalResources, synchronizeWorkspaceLocalStorage } from "./workspace-local-storage-service";
 
 /** 可映射为 HTTP 状态码的工作区业务错误。 */
 export class WorkspaceServiceError extends Error {
@@ -75,6 +76,17 @@ export async function updateWorkspace(
   });
   if (!updated) {
     throw new WorkspaceServiceError("项目不存在或已被移除。", 404);
+  }
+  if (input.localPath !== undefined && existing.localPath !== nextPath) {
+    // 关联路径先落库；磁盘复制失败只影响同步提示，不能撤销已保存的项目设置。
+    const warnings = await copyWorkspaceLocalResources(workspaceId, existing.localPath!, nextPath);
+    try {
+      const status = await synchronizeWorkspaceLocalStorage(updated);
+      warnings.push(...status.warnings);
+    } catch {
+      warnings.push("路径已更新，暂时无法补导出数据库产物，请稍后重新同步。");
+    }
+    return { ...updated, localStorageWarnings: [...new Set(warnings)] };
   }
   return updated;
 }
@@ -136,7 +148,7 @@ async function assertPathAvailable(
 }
 
 /** 路径变更或项目移除前拒绝仍在执行的聊天与 PRD。 */
-async function assertWorkspaceHasNoActiveRuns(
+export async function assertWorkspaceHasNoActiveRuns(
   workspaceId: string,
   action: string,
 ): Promise<void> {

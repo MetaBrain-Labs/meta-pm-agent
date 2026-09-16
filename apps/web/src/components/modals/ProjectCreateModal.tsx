@@ -65,8 +65,8 @@ export function ProjectCreateModal({
         <h2>{mode === "create" ? "添加本地项目" : "修改本地路径"}</h2>
         <p>
           {mode === "create"
-            ? "关联 API 所在机器上的已有本地目录"
-            : "更新关联路径，不会移动或修改任何本地文件"}
+            ? "关联本地目录，读取项目背景并保存上下文与生成的 PRD"
+            : "复制应用生成的上下文和 PRD 到新目录，保留原文件；后续产物保存到新目录"}
         </p>
       </div>
       <Form form={form} layout="vertical" className="project-form">

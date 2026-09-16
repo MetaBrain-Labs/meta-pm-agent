@@ -61,6 +61,7 @@ import {
   type DocumentWorkflowStage,
 } from "../../api/document-api";
 import { ModelProfileSelector } from "../../components/ModelProfileSelector";
+import { WorkspaceLocalStoragePanel } from "../../components/WorkspaceLocalStoragePanel";
 import { TodoCard } from "../../components/TodoCard";
 import {
   KnowledgeGraphView,
@@ -539,6 +540,7 @@ export function DocumentPlanningPage({
                   }
                 />
 
+                <WorkspaceLocalStoragePanel workspaceId={workspaceId} refreshKey={`${artifact?.id ?? ""}:${artifact?.updatedAt ?? ""}`} disabled={runActive} />
                 {artifact && (
                   <section className="rounded border border-gray-200 bg-white p-4">
                     <div className="flex items-center justify-between gap-3 mb-3">

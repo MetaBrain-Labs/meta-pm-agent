@@ -421,6 +421,8 @@ export interface WorkspaceInfo {
   id: string;
   name: string;
   localPath?: string | null;
+  /** 本次路径修改的复制提示，不作为持久化状态。 */
+  localStorageWarnings?: string[];
   createdAt: string;
   updatedAt: string;
 }

@@ -1,8 +1,8 @@
 /**
  * 产品上下文 resources 快照服务
  *
- * 负责把运行时 ProductKnowledgeGraph 快照保存到仓库根目录的 resources/product-contexts
- * 下，并在工作流启动时优先读取该目录中的最新上下文。该层由后端代码读写，
+ * 负责把运行时 ProductKnowledgeGraph 快照保存到项目的 resources/product-contexts
+ * 下，并兼容旧集中目录。该层由后端代码读写，
  * 不向模型暴露任意文件系统工具。
  *
  * Responsibilities:
@@ -14,13 +14,17 @@
  * - 该目录保存运行时数据，生成的 JSON 文件不应提交到 Git。
  */
 
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
 import {
   ProductKnowledgeGraphSchema,
   type ProductKnowledgeGraph,
 } from "@repo/shared";
+import {
+  copyLocalFile, localFileId, readLocalFile, removeLocalFile,
+  workspaceLocalPaths, writeLocalFile,
+} from "./workspace-local-file-service";
 
 const DEFAULT_RESOURCE_CONTEXT_DIR = fileURLToPath(
   new URL("../../../../resources/product-contexts/", import.meta.url),
@@ -43,13 +47,28 @@ export interface ProductContextResourceSnapshot {
  */
 export async function readProductContextResourceSnapshot(
   workspaceId: string,
+  localPath?: string | null,
 ): Promise<ProductContextResourceSnapshot | null> {
-  const filePath = getWorkspaceSnapshotPath(workspaceId);
-
   try {
-    const raw = await readFile(filePath, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    return parseProductContextResourceSnapshot(parsed, workspaceId);
+    if (localPath) {
+      const paths = workspaceLocalPaths(localPath, workspaceId);
+      const raw = await readLocalFile(localPath, paths.context);
+      // 已存在但损坏的项目快照直接降级数据库，不恢复集中目录中的旧副本。
+      if (raw !== null) return parseProductContextResourceSnapshot(JSON.parse(raw), workspaceId);
+      if (await readLocalFile(localPath, paths.retired) !== null) return null;
+    }
+    const legacyRoot = getResourceContextDirectory();
+    const raw = await readLocalFile(legacyRoot, getWorkspaceSnapshotPath(workspaceId));
+    if (raw === null) return null;
+    const snapshot = parseProductContextResourceSnapshot(JSON.parse(raw), workspaceId);
+    if (snapshot && localPath) {
+      try {
+        await copyProductContextResourceSnapshot(localPath, snapshot);
+      } catch {
+        // 本地复制失败时仍允许本次使用有效旧快照，状态接口会显示缺失。
+      }
+    }
+    return snapshot;
   } catch {
     return null;
   }
@@ -63,15 +82,14 @@ export async function writeProductContextResourceSnapshot({
   conversationId,
   requestFormId,
   knowledgeGraph,
+  localPath,
 }: {
   workspaceId: string;
   conversationId?: string;
   requestFormId?: string;
   knowledgeGraph: ProductKnowledgeGraph;
+  localPath?: string | null;
 }): Promise<void> {
-  const dir = getResourceContextDirectory();
-  await mkdir(dir, { recursive: true });
-
   const snapshot: ProductContextResourceSnapshot = {
     version: 1,
     workspaceId,
@@ -80,11 +98,31 @@ export async function writeProductContextResourceSnapshot({
     updatedAt: new Date().toISOString(),
     knowledgeGraph,
   };
-  await writeFile(
-    getWorkspaceSnapshotPath(workspaceId),
-    `${JSON.stringify(snapshot, null, 2)}\n`,
-    "utf8",
-  );
+  const root = localPath || getResourceContextDirectory();
+  const target = localPath ? workspaceLocalPaths(localPath, workspaceId).context : getWorkspaceSnapshotPath(workspaceId);
+  await writeLocalFile(root, target, `${JSON.stringify(snapshot, null, 2)}\n`);
+  if (localPath) await retireLegacySnapshot(localPath, workspaceId);
+}
+
+/** 无覆盖复制有效快照，成功后记住集中目录副本已退役。 */
+export async function copyProductContextResourceSnapshot(localPath: string, snapshot: ProductContextResourceSnapshot): Promise<void> {
+  const target = workspaceLocalPaths(localPath, snapshot.workspaceId).context;
+  const existing = await readLocalFile(localPath, target);
+  // 快照格式和更新时间差异不能造成同一份业务上下文的复制冲突。
+  if (existing !== null) {
+    const parsed = parseProductContextResourceSnapshot(JSON.parse(existing), snapshot.workspaceId);
+    if (!parsed || !isDeepStrictEqual(parsed.knowledgeGraph, snapshot.knowledgeGraph)) {
+      throw new Error("目标已有不同内容，未覆盖；请保留或移开该文件后重新同步。");
+    }
+  } else {
+    await copyLocalFile(localPath, target, `${JSON.stringify(snapshot, null, 2)}\n`);
+  }
+  await retireLegacySnapshot(localPath, snapshot.workspaceId);
+}
+
+/** 保留退役标记，快照被清空或意外删除后不会读回旧集中副本。 */
+export async function retireLegacySnapshot(localPath: string, workspaceId: string): Promise<void> {
+  await copyLocalFile(localPath, workspaceLocalPaths(localPath, workspaceId).retired, "1\n");
 }
 
 /**
@@ -92,24 +130,26 @@ export async function writeProductContextResourceSnapshot({
  */
 export async function clearProductContextResourceSnapshot(
   workspaceId: string,
+  localPath?: string | null,
 ): Promise<void> {
-  try {
-    await rm(getWorkspaceSnapshotPath(workspaceId), { force: true });
-  } catch {
-    // resources 快照不存在时无需阻断清理数据库图谱。
+  if (localPath) {
+    await retireLegacySnapshot(localPath, workspaceId);
+    await removeLocalFile(localPath, workspaceLocalPaths(localPath, workspaceId).context);
+  } else {
+    await removeLocalFile(getResourceContextDirectory(), getWorkspaceSnapshotPath(workspaceId));
   }
 }
 
 /**
  * 解析并校验 resources 快照，避免损坏文件污染运行时。
  */
-function parseProductContextResourceSnapshot(
+export function parseProductContextResourceSnapshot(
   value: unknown,
   workspaceId: string,
 ): ProductContextResourceSnapshot | null {
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
-  if (record.workspaceId !== workspaceId) return null;
+  if (record.version !== 1 || record.workspaceId !== workspaceId) return null;
 
   const graphResult = ProductKnowledgeGraphSchema.safeParse(
     record.knowledgeGraph,
@@ -136,7 +176,7 @@ function parseProductContextResourceSnapshot(
 }
 
 /**
- * 获取 resources 上下文目录，允许部署环境通过环境变量改写位置。
+ * 获取旧集中上下文目录，环境变量仅定位旧数据和无项目根目录的兼容调用。
  */
 function getResourceContextDirectory(): string {
   return path.resolve(
@@ -148,12 +188,5 @@ function getResourceContextDirectory(): string {
  * 生成当前工作区快照文件路径。
  */
 function getWorkspaceSnapshotPath(workspaceId: string): string {
-  return path.join(getResourceContextDirectory(), `${safeFileName(workspaceId)}.json`);
-}
-
-/**
- * 收敛文件名字符，避免工作区 ID 被误用为路径片段。
- */
-function safeFileName(value: string): string {
-  return value.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return path.join(getResourceContextDirectory(), `${localFileId(workspaceId)}.json`);
 }

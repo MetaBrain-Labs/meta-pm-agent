@@ -15,6 +15,7 @@
 
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type {
   KnowledgeGraphDecisionInput,
   KnowledgeGraphEntity,
@@ -29,6 +30,7 @@ import { getConversationWorkspace } from "../repositories/chat-repository";
 import { getProductContextSnapshotByWorkspaceId } from "../repositories/product-context-snapshot-repository";
 import { getProductKnowledgeGraphByWorkspaceId } from "../repositories/product-knowledge-graph-repository";
 import { readProductContextResourceSnapshot } from "./product-context-resource-service";
+import { assertLocalFileBoundary } from "./workspace-local-file-service";
 
 const MAX_CONTEXT_CHARS = 24_000;
 
@@ -73,6 +75,7 @@ export async function loadProductRuntimeContextForConversation(
   }
   const graphContext = await loadProductKnowledgeGraphForWorkspace(
     workspace.workspaceId,
+    workspace.localPath,
   );
 
   return {
@@ -88,14 +91,17 @@ export async function loadProductRuntimeContextForConversation(
  */
 async function loadProductKnowledgeGraphForWorkspace(
   workspaceId: string,
+  localPath?: string | null,
 ): Promise<{
   knowledgeGraph: ProductKnowledgeGraph | null;
   contextSource: OrchestratorContextSource;
 }> {
   const persistedGraph =
     await loadPersistedKnowledgeGraphFromDatabase(workspaceId);
-  const resourceSnapshot = await readProductContextResourceSnapshot(workspaceId);
-  if (resourceSnapshot) {
+  const resourceSnapshot = await readProductContextResourceSnapshot(workspaceId, localPath);
+  const dbSnapshot = await loadProductContextSnapshotFromDatabase(workspaceId);
+  // 本地保存失败可能留下旧快照，不能让旧副本覆盖数据库中已归档的新上下文。
+  if (resourceSnapshot && (!dbSnapshot || isDeepStrictEqual(resourceSnapshot.knowledgeGraph, dbSnapshot))) {
     return {
       knowledgeGraph: mergeProductContextSnapshotWithPersistedGraph(
         resourceSnapshot.knowledgeGraph,
@@ -105,7 +111,6 @@ async function loadProductKnowledgeGraphForWorkspace(
     };
   }
 
-  const dbSnapshot = await loadProductContextSnapshotFromDatabase(workspaceId);
   if (dbSnapshot) {
     return {
       knowledgeGraph: mergeProductContextSnapshotWithPersistedGraph(
@@ -344,7 +349,7 @@ async function loadProductContextForWorkspace(
     // 候选文件必须位于用户选择的工作区内，避免相对路径逃逸到工作区之外。
     if (!isInsideDirectory(filePath, workspace.localPath)) continue;
 
-    const content = await readTextFileIfExists(filePath);
+    const content = await readTextFileIfExists(filePath, workspace.localPath);
     if (!content) continue;
 
     sections.push(`## ${relativeFile}\n${content}`);
@@ -357,8 +362,9 @@ async function loadProductContextForWorkspace(
 /**
  * 读取文件内容，文件不存在时返回 null 而非抛出异常。
  */
-async function readTextFileIfExists(filePath: string): Promise<string | null> {
+async function readTextFileIfExists(filePath: string, root: string): Promise<string | null> {
   try {
+    await assertLocalFileBoundary(root, filePath);
     await access(filePath);
     return await readFile(filePath, "utf8");
   } catch {

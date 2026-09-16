@@ -16,6 +16,7 @@ import { Avatar, Button, Menu } from "antd";
 import type { MenuProps } from "antd";
 import type { ThreadInfo, WorkspaceInfo } from "../../types";
 import { DEFAULT_CHAT_TITLE } from "../../constants/app";
+import { WorkspaceLocalStoragePanel } from "../../components/WorkspaceLocalStoragePanel";
 import {
   DeleteOutlined,
   EditOutlined,
@@ -198,6 +199,7 @@ export function WorkspacePage({
           />
         </section>
         {error && <div className="workspace-error">{error}</div>}
+        {activeWorkspace && <WorkspaceLocalStoragePanel workspaceId={activeWorkspace.id} refreshKey={activeWorkspace.localPath ?? ""} />}
         {threads.length > 0 && (
           <div className="workspace-recent">
             最近对话：{threads[0]?.title || DEFAULT_CHAT_TITLE}

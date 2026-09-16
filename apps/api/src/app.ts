@@ -13,6 +13,7 @@ import { cors } from "hono/cors";
 import "./env";
 import { createChatRoutes } from "./controllers/chat";
 import { createLocalDirectoryRoutes } from "./controllers/local-directory-controller";
+import { createWorkspaceLocalStorageRoutes } from "./controllers/workspace-local-storage-controller";
 
 /**
  * 创建并配置 Hono 应用实例，挂载 CORS、健康检查和聊天路由。
@@ -55,6 +56,7 @@ export function createApp() {
 
   app.route("/api", createChatRoutes());
   app.route("/api/local-directories", createLocalDirectoryRoutes());
+  app.route("/api/workspaces", createWorkspaceLocalStorageRoutes());
 
   return app;
 }
