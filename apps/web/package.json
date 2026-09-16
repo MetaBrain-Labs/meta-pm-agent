@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "start": "vite preview",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:layout": "node scripts/check-layout.mjs"
   },
   "dependencies": {
     "@repo/shared": "workspace:*",

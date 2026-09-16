@@ -81,6 +81,10 @@ interface DocumentPlanningPageProps {
   workspaceName: string;
   onBack: () => void;
   onOpenEvidenceThread: (thread: ThreadInfo, autoStart: boolean) => void;
+  /**
+   * 嵌入工作区面板时隐藏本页标题栏并占满容器；独立路由下保持整页布局。
+   */
+  embedded?: boolean;
 }
 
 const STAGE_LABELS: Record<DocumentWorkflowStage, string> = {
@@ -104,6 +108,7 @@ export function DocumentPlanningPage({
   workspaceName,
   onBack,
   onOpenEvidenceThread,
+  embedded = false,
 }: DocumentPlanningPageProps) {
   const [kgData, setKgData] = useState<WorkspaceKnowledgeGraphData | null>(
     null,
@@ -344,47 +349,55 @@ export function DocumentPlanningPage({
   const statusTag = useMemo(() => renderRunStatus(run), [run]);
 
   return (
-    <Content className="h-screen overflow-hidden bg-transparent">
+    <Content
+      className={
+        embedded
+          ? "h-full min-h-0 overflow-hidden bg-transparent"
+          : "h-screen overflow-hidden bg-transparent"
+      }
+    >
       {contextHolder}
       <div className="h-full flex flex-col">
-        <header className="shrink-0 px-6 py-4 border-b border-gray-200 bg-white">
-          <div className="flex items-center justify-between gap-4">
-            <div className="min-w-0 flex items-center gap-3">
-              <Tooltip title="返回工作区">
-                <Button
-                  type="text"
-                  icon={<ArrowLeftOutlined />}
-                  onClick={onBack}
-                />
-              </Tooltip>
-              <div className="min-w-0">
-                <Title level={4} className="!m-0 truncate">
-                  策划产出文档
-                </Title>
-                <Text type="secondary" className="block truncate">
-                  {workspaceName}
-                </Text>
+        {!embedded && (
+          <header className="shrink-0 px-6 py-4 border-b border-gray-200 bg-white">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0 flex items-center gap-3">
+                <Tooltip title="返回工作区">
+                  <Button
+                    type="text"
+                    icon={<ArrowLeftOutlined />}
+                    onClick={onBack}
+                  />
+                </Tooltip>
+                <div className="min-w-0">
+                  <Title level={4} className="!m-0 truncate">
+                    策划产出文档
+                  </Title>
+                  <Text type="secondary" className="block truncate">
+                    {workspaceName}
+                  </Text>
+                </div>
               </div>
+              <Space size="small">
+                {statusTag}
+                <Tooltip title="刷新图谱和文档任务">
+                  <Button
+                    icon={<ReloadOutlined />}
+                    loading={loading}
+                    onClick={() => void handleRefresh()}
+                  />
+                </Tooltip>
+              </Space>
             </div>
-            <Space size="small">
-              {statusTag}
-              <Tooltip title="刷新图谱和文档任务">
-                <Button
-                  icon={<ReloadOutlined />}
-                  loading={loading}
-                  onClick={() => void handleRefresh()}
-                />
-              </Tooltip>
-            </Space>
-          </div>
-        </header>
+          </header>
+        )}
 
         <main className="min-h-0 flex-1 overflow-y-auto scrollbar-none-thin px-6 py-5">
           {loading ? (
             <PageLoadingState />
           ) : (
-            <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.55fr)] gap-4">
-              <section className="min-h-[620px] rounded border border-gray-200 bg-white overflow-hidden xl:sticky xl:top-0 xl:self-start">
+            <div className="grid grid-cols-1 2xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.55fr)] gap-4">
+              <section className="min-h-[620px] rounded border border-gray-200 bg-white overflow-hidden 2xl:sticky 2xl:top-0 2xl:self-start">
                 <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
                   <div>
                     <Text strong>当前知识图谱</Text>

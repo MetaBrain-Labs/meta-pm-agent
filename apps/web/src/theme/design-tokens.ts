@@ -42,6 +42,15 @@ export const DESIGN_TOKENS = {
   radius: { small: 6, base: 8, large: 12, pill: 999 },
   spacing: { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32, spacious: 48 },
   controlHeight: { small: 32, base: 38, large: 44 },
+  /** 桌面多栏骨架尺寸；只描述栏宽与顶栏高度，不固定整个页面宽度。 */
+  layout: {
+    sidebar: 240,
+    sidebarCollapsed: 64,
+    conversationMin: 360,
+    conversation: 420,
+    conversationMax: 440,
+    workspaceHeader: 56,
+  },
   typography: {
     sans: '"Source Han Sans CN", "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, system-ui, sans-serif',
     mono: '"SF Mono", Consolas, Menlo, monospace',
@@ -62,8 +71,17 @@ export const DESIGN_TOKENS = {
 
 /** 将视觉变量写入指定根元素；应用入口调用一次，不承担主题切换或数据持久化。 */
 export function applyDesignTokens(root: HTMLElement): void {
-  const { color, radius, spacing, controlHeight, typography, shadow, motion } = DESIGN_TOKENS;
-  const groups = { color, radius, spacing, control: controlHeight, fontSize: typography.size, shadow, motion };
+  const { color, radius, spacing, controlHeight, layout, typography, shadow, motion } = DESIGN_TOKENS;
+  const groups = {
+    color,
+    radius,
+    spacing,
+    control: controlHeight,
+    layout,
+    fontSize: typography.size,
+    shadow,
+    motion,
+  };
   for (const [group, values] of Object.entries(groups)) {
     for (const [name, value] of Object.entries(values)) {
       const cssGroup = group.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);

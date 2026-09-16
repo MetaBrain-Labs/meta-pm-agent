@@ -153,500 +153,924 @@ h3.ds-section-title { font-size: var(--ds-font-size-body); }
 }
 .ds-section-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--ds-spacing-sm); }
 
+/* ==========================================================================
+   应用外壳：全局侧边栏 + 内容区
+   使用 flex 列系统，各栏显式声明 flex 与 min-width: 0，避免内容撑破分栏。
+   布局只用分隔线与留白区分区域，不使用阴影、渐变或玻璃拟态。
+   ========================================================================== */
+
 .app-shell {
-  position: relative;
-  background: var(--canvas);
-}
-
-.app-shell > .ant-layout {
-  min-width: 0;
-  overflow: hidden;
-}
-
-.app-sidebar {
-  flex-shrink: 0;
-  overflow: hidden;
-  border-right: 1px solid var(--line-soft);
-  box-shadow: none;
-}
-
-.app-sidebar .ant-layout-sider-children {
   display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.app-sidebar.is-collapsed {
-  min-width: 68px !important;
-  max-width: 68px !important;
-  width: 68px !important;
-  flex: 0 0 68px !important;
-}
-
-.app-sidebar.is-expanded {
-  min-width: 272px !important;
-  max-width: 272px !important;
-  width: 272px !important;
-  flex: 0 0 272px !important;
-}
-
-.sidebar-toggle,
-.sidebar-create {
-  width: 38px !important;
-  height: 38px !important;
-  min-width: 38px !important;
-  padding: 0 !important;
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-}
-
-/* 工作台首页：左侧项目列表 + 右侧当前项目本地数据 */
-.workspace-shell {
-  display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
   width: 100%;
   height: 100vh;
   min-height: 0;
+  /* 外壳永不产生横向滚动：任何子内容都必须自己裁剪。 */
+  overflow: clip;
+  background: var(--canvas);
+}
+
+/* 内容区自身不滚动；由各页面决定内部滚动区域。 */
+.app-shell-main {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 页面级容器统一填满内容区，不设固定宽度。 */
+.app-shell-main > * {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.app-sidebar {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 0 0 var(--ds-layout-sidebar);
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--line-soft);
   background: var(--surface);
 }
 
-.workspace-sidebar {
+.app-shell[data-sidebar-collapsed="true"] .app-sidebar {
+  flex-basis: var(--ds-layout-sidebar-collapsed);
+}
+
+/* 覆盖态下侧栏由 Drawer 承载，不再占据分栏宽度。 */
+.app-shell[data-overlay="true"] .app-sidebar {
+  flex: 1 1 auto;
+}
+
+/* 侧栏可滚动区：会话很多或窗口很矮时，导航内容整体滚动。 */
+.app-sidebar-scroll {
   display: flex;
   min-height: 0;
+  flex: 1 1 auto;
   flex-direction: column;
-  border-right: 1px solid var(--line-soft);
-  background: #fafafa;
-  padding: 8px;
-}
-
-.workspace-sidebar-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 12px 8px;
-}
-
-.workspace-sidebar-head h2 {
-  margin: 0;
-  color: var(--ink-faint);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-}
-
-.workspace-sidebar-count {
-  border-radius: 999px;
-  background: var(--surface-subtle);
-  padding: 1px 7px;
-  color: var(--ink-mute);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1.6;
-}
-
-.workspace-project-list {
-  display: flex;
-  min-height: 0;
-  flex: 1;
-  flex-direction: column;
-  gap: 2px;
   overflow-y: auto;
-  scrollbar-width: none;
+  overscroll-behavior: contain;
 }
 
-.workspace-project-list::-webkit-scrollbar {
-  display: none;
-}
-
-.project-item {
-  position: relative;
+/* 底部固定行：用户区域与收起按钮始终可见。 */
+.app-sidebar-foot {
   display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px 10px;
+}
+
+.app-sidebar[data-collapsed="true"] .app-sidebar-foot {
+  justify-content: center;
+  align-items: center;
+  flex-direction: column;
+  padding: 6px 0 10px;
+}
+
+.app-sidebar-toggle {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--ds-radius-small);
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background-color var(--ds-motion-fast) ease, color var(--ds-motion-fast) ease;
+}
+
+.app-sidebar-toggle:hover {
+  background: var(--ds-color-hover);
+  color: var(--ink);
+}
+
+/* 全局导航：内容自然撑开，由 .app-sidebar-scroll 统一承担滚动。 */
+.app-nav {
+  display: flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  flex-direction: column;
+}
+
+.app-nav-brand {
+  display: flex;
+  height: 52px;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  width: 100%;
-  border-radius: 6px;
-  padding: 8px 6px 8px 12px;
-  cursor: pointer;
-  transition: background-color var(--ds-motion-fast) ease;
+  padding: 0 12px;
 }
 
-.project-item::before {
-  content: "";
-  position: absolute;
-  top: 8px;
-  bottom: 8px;
-  left: 0;
-  width: 2px;
-  border-radius: 2px;
-  background: transparent;
+.app-nav-brand.is-collapsed {
+  justify-content: center;
+  padding: 0;
 }
 
-.project-item:hover {
-  background: var(--surface-subtle);
-}
-
-.project-item.is-active {
-  background: var(--primary-soft);
-}
-
-.project-item.is-active::before {
-  background: var(--primary);
-}
-
-.project-item:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: -2px;
-}
-
-.project-item-body {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.project-item-title {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-}
-
-.project-item-name {
-  min-width: 0;
-  overflow: hidden;
+.app-nav-brand-name {
   color: var(--ink);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1;
 }
 
-.project-item-badge {
-  flex-shrink: 0;
-  border-radius: 4px;
-  background: var(--ds-color-active);
+.app-nav-brand-version {
+  align-self: center;
+  border: 1px solid var(--line);
+  border-radius: var(--ds-radius-small);
   padding: 0 5px;
-  color: var(--primary);
+  color: var(--ink-faint);
   font-size: 10px;
-  font-weight: 600;
   line-height: 16px;
 }
 
-.project-item-path {
-  display: block;
+.app-nav-actions {
+  padding: 4px 10px 10px;
+}
+
+.app-nav-action {
+  display: flex;
   width: 100%;
+  height: var(--ds-control-base);
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--ds-radius-base);
+  background: var(--surface);
+  padding: 0 12px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color var(--ds-motion-fast) ease, border-color var(--ds-motion-fast) ease;
+}
+
+.app-nav-action:hover:not(:disabled) {
+  background: var(--ds-color-hover);
+  border-color: var(--ds-color-border-hover);
+}
+
+.app-nav-action:disabled {
+  color: var(--ink-faint);
+  cursor: not-allowed;
+}
+
+.app-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 8px;
+}
+
+.app-nav.is-collapsed .app-nav-group {
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0;
+}
+
+.app-nav-row {
+  display: flex;
+  width: 100%;
+  height: 34px;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-radius: var(--ds-radius-small);
+  background: transparent;
+  padding: 0 10px;
+  color: var(--ink-mute);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--ds-motion-fast) ease, color var(--ds-motion-fast) ease;
+}
+
+.app-nav-row:hover:not(:disabled) {
+  background: var(--ds-color-hover);
+  color: var(--ink);
+}
+
+.app-nav-row[data-active="true"] {
+  background: var(--ds-color-active);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.app-nav-row:disabled {
+  color: var(--ink-faint);
+  cursor: not-allowed;
+}
+
+.app-nav-row-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  font-size: 15px;
+}
+
+.app-nav-row-label {
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.app-nav-row-hint {
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   color: var(--ink-faint);
-  font-family: var(--mono);
   font-size: 11px;
+  text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.project-item-path.is-muted {
+.app-nav-icon-button {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--ds-radius-small);
+  background: transparent;
+  color: var(--ink-mute);
+  font-size: 15px;
+  cursor: pointer;
+  transition: background-color var(--ds-motion-fast) ease, color var(--ds-motion-fast) ease;
+}
+
+.app-nav-icon-button:hover:not(:disabled) {
+  background: var(--ds-color-hover);
+  color: var(--ink);
+}
+
+.app-nav-icon-button[data-active="true"] {
+  background: var(--ds-color-active);
+  color: var(--ink);
+}
+
+.app-nav-icon-button:disabled {
   color: var(--ink-faint);
-  font-family: var(--body);
+  cursor: not-allowed;
+}
+
+.app-nav-section {
+  flex: 0 0 auto;
+  padding: 10px 10px 6px;
+}
+
+/* 会话列表在导航内部自然撑开；外层滚动容器负责整体滚动。 */
+.app-nav-threads {
+  min-height: 0;
+  flex: 0 0 auto;
+  overflow: visible;
+  padding: 0 8px 8px;
+}
+
+.app-nav-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 20px 12px;
+  color: var(--ink-faint);
+  text-align: left;
+}
+
+.app-nav-empty strong {
+  color: var(--ink-mute);
   font-size: 12px;
+  font-weight: 600;
 }
 
-.project-item-more {
+.app-nav-empty p {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.app-nav-thread-group {
+  padding-top: 6px;
+}
+
+.app-nav-thread-date {
+  margin: 0;
+  padding: 6px 10px 4px;
+  color: var(--ink-faint);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.app-thread {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: var(--ds-radius-small);
+  transition: background-color var(--ds-motion-fast) ease;
+}
+
+.app-thread:hover,
+.app-thread:focus-within {
+  background: var(--ds-color-hover);
+}
+
+.app-thread[data-active="true"] {
+  background: var(--ds-color-active);
+}
+
+.app-thread-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  padding: 7px 10px;
+  color: var(--ink-mute);
+  font-size: 13px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.app-thread[data-active="true"] .app-thread-title {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.app-thread-more {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
   flex-shrink: 0;
-  color: var(--ink-faint) !important;
+  align-items: center;
+  justify-content: center;
+  margin-right: 4px;
+  border: 0;
+  border-radius: var(--ds-radius-small);
+  background: transparent;
+  color: var(--ink-faint);
+  font-size: 13px;
   opacity: 0;
-  transition: opacity var(--ds-motion-fast) ease;
+  cursor: pointer;
+  transition: opacity var(--ds-motion-fast) ease, background-color var(--ds-motion-fast) ease;
 }
 
-.project-item:hover .project-item-more,
-.project-item:focus-within .project-item-more,
-.project-item.is-active .project-item-more {
+.app-thread:hover .app-thread-more,
+.app-thread:focus-within .app-thread-more,
+.app-thread[data-active="true"] .app-thread-more {
   opacity: 1;
 }
 
-.project-item-more:hover {
-  background: rgba(15, 23, 42, 0.06) !important;
-  color: var(--ink) !important;
+.app-thread-more:hover {
+  background: var(--ds-color-active);
+  color: var(--ink);
 }
 
-.workspace-empty-list {
+.app-nav-user {
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 40px 16px;
-  color: var(--ink-faint);
-  text-align: center;
-}
-
-.workspace-empty-list .anticon {
-  font-size: 20px;
-}
-
-.workspace-empty-list strong {
-  color: var(--ink-mute);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.workspace-empty-list span {
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.workspace-sidebar-nav {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  border: 0;
-  border-top: 1px solid var(--line-soft);
-  border-radius: 6px;
-  background: transparent;
-  padding: 12px;
-  color: var(--ink-soft);
-  font-size: 13px;
-  font-weight: 600;
-  text-align: left;
-  cursor: pointer;
-  transition: background-color var(--ds-motion-fast) ease;
-}
-
-.workspace-sidebar-nav:hover {
-  background: var(--surface-subtle);
-}
-
-.workspace-sidebar-nav-icon {
-  color: var(--ink-mute);
-  font-size: 15px;
-}
-
-.workspace-sidebar-nav-label {
-  flex: 1;
   min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  padding: 0 10px;
 }
 
-.workspace-sidebar-nav-arrow {
-  color: var(--ink-faint);
-  font-size: 11px;
-  transition: transform var(--ds-motion-fast) ease;
-}
-
-.workspace-sidebar-nav:hover .workspace-sidebar-nav-arrow {
-  color: var(--ink-mute);
-  transform: translateX(2px);
-}
-
-.workspace-main {
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  background: var(--surface-muted);
-  padding: 40px 48px 64px;
-}
-
-.workspace-content {
+.app-nav-user-chip {
   display: flex;
   width: 100%;
-  max-width: 1000px;
-  flex-direction: column;
-  gap: 32px;
-  margin: 0 auto;
-}
-
-.workspace-header {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.workspace-logo {
-  flex-shrink: 0;
-  box-shadow: var(--shadow-card);
-}
-
-.workspace-header-text {
-  display: flex;
   min-width: 0;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.workspace-header-title {
-  display: flex;
+  flex: 1 1 auto;
   align-items: center;
   gap: 8px;
-}
-
-.workspace-header-title h1 {
-  margin: 0;
-  color: var(--ink);
-  font-size: 24px;
-  font-weight: 700;
-  line-height: 1.2;
-}
-
-.workspace-version {
-  border: 1px solid var(--line-soft);
-  border-radius: 4px;
-  background: var(--surface);
-  padding: 1px 6px;
-  color: var(--ink-faint);
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 16px;
-}
-
-.workspace-header-text p {
-  margin: 0;
+  border: 0;
+  border-radius: var(--ds-radius-small);
+  background: transparent;
+  padding: 6px 8px;
   color: var(--ink-mute);
   font-size: 13px;
-}
-
-.workspace-body {
-  display: flex;
-  flex-direction: column;
-  gap: 32px;
-}
-
-.workspace-section {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.workspace-section-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.workspace-section-head h2 {
-  margin: 0;
-  color: var(--ink);
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.workspace-section-meta {
-  color: var(--ink-faint);
-  font-size: 12px;
-}
-
-.workspace-add-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: var(--surface);
-  padding: 20px 24px;
-}
-
-.workspace-add-row p {
-  max-width: 560px;
-  margin: 0;
-  color: var(--ink-mute);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.workspace-empty-panel {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  border: 1px dashed var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  padding: 28px 24px;
-  color: var(--ink-mute);
-  font-size: 13px;
-}
-
-.workspace-error {
-  border: 1px solid var(--danger-soft);
-  border-radius: 8px;
-  background: #fff5f5;
-  padding: 12px 16px;
-  color: var(--danger);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.workspace-recent {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: var(--surface);
-  padding: 12px 16px;
-  color: var(--ink-mute);
-  font-size: 13px;
-  text-align: left;
   cursor: pointer;
-  transition: border-color var(--ds-motion-fast) ease;
+  transition: background-color var(--ds-motion-fast) ease, color var(--ds-motion-fast) ease;
 }
 
-.workspace-recent:hover {
-  border-color: var(--line);
+.app-sidebar[data-collapsed="true"] .app-nav-user {
+  padding: 0;
 }
 
-.workspace-recent-label {
+.app-sidebar[data-collapsed="true"] .app-nav-user-chip {
+  width: auto;
+  flex: 0 0 auto;
+  justify-content: center;
+  padding: 4px;
+}
+
+/* 收起态只保留头像，名称与设置图标由外层宽度决定隐藏。 */
+.app-sidebar[data-collapsed="true"] .app-nav-user-name,
+.app-sidebar[data-collapsed="true"] .app-nav-user-icon {
+  display: none;
+}
+
+.app-nav-user-chip:hover {
+  background: var(--ds-color-hover);
+  color: var(--ink);
+}
+
+.app-nav-user-avatar {
   flex-shrink: 0;
-  color: var(--ink-faint);
+  background: var(--ds-color-secondary) !important;
+  color: var(--ink-mute) !important;
   font-size: 12px;
 }
 
-.workspace-recent-title {
+.app-nav-user-name {
   min-width: 0;
   flex: 1;
   overflow: hidden;
-  color: var(--ink);
-  font-weight: 600;
+  text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.workspace-recent-arrow {
+.app-nav-user-icon {
   flex-shrink: 0;
-  color: var(--ink-faint);
-  font-size: 11px;
+  font-size: 13px;
 }
 
-/* 当前项目本地保存状态面板 */
-.storage-panel {
-  overflow: hidden;
+.app-sidebar-toggle-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
 }
 
-.storage-panel-head {
+/* ==========================================================================
+   项目列表首页
+   ========================================================================== */
+
+.workspace-page {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* 内容占满可用宽度，只限制上限并居中，避免超宽屏被无限拉长。 */
+.workspace-page-content {
+  width: 100%;
+  max-width: 1200px;
+  align-self: center;
+  padding: 40px 40px 64px;
+}
+
+.workspace-page-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  padding: 16px 20px 12px;
+  padding-bottom: 20px;
+}
+
+.workspace-page-head h1 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.workspace-page-head p {
+  margin: 6px 0 0;
+  color: var(--ink-mute);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.workspace-page-search {
+  max-width: 360px;
+  margin-bottom: 20px;
+}
+
+.workspace-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.project-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--ds-radius-base);
+  background: var(--surface);
+  padding: 14px;
+  cursor: pointer;
+  transition: border-color var(--ds-motion-fast) ease, background-color var(--ds-motion-fast) ease;
+}
+
+.project-card:hover {
+  border-color: var(--line);
+  background: var(--ds-color-secondary);
+}
+
+.project-card[data-active="true"] {
+  border-color: var(--ds-color-border-hover);
+}
+
+.project-card-mark {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--ds-radius-small);
+  background: var(--ds-color-secondary);
+  color: var(--ink-mute);
+  font-size: 15px;
+}
+
+.project-card-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.project-card-name {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 项目名与本地路径都可能很长；必须能裁剪，不能撑宽网格。 */
+.project-card-path {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  margin-top: 3px;
+  color: var(--ink-faint);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-card-meta {
+  display: block;
+  margin-top: 8px;
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
+.project-card-more {
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--ds-motion-fast) ease;
+}
+
+.project-card:hover .project-card-more,
+.project-card:focus-within .project-card-more {
+  opacity: 1;
+}
+
+.workspace-page-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 56px 24px;
+  text-align: center;
+}
+
+.workspace-page-empty .anticon {
+  color: var(--ink-faint);
+  font-size: 22px;
+}
+
+.workspace-page-empty strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.workspace-page-empty span {
+  color: var(--ink-mute);
+  font-size: 13px;
+}
+
+.workspace-page-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.workspace-page-error {
+  border: 1px solid var(--ds-color-error);
+  border-radius: var(--ds-radius-base);
+  background: var(--ds-color-error-soft);
+  padding: 10px 12px;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+/* ==========================================================================
+   工作区外壳：对话栏 + 分隔条 + 工作区面板
+   两栏都是 flex 项：工作区面板始终 flex: 1 1 auto 并携带 min-width: 0，
+   不使用任何固定宽度或 max-width 限制。
+   ========================================================================== */
+
+.workspace-root {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.workspace-shell {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+/* 对话栏宽度由 WorkspaceSplit 通过 flex-basis 写入。 */
+.workspace-shell > .workspace-conversation {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-grow: 0;
+  flex-shrink: 0;
+  transition: flex-basis var(--ds-motion-base) ease;
+}
+
+/* 拖动中不跟随过渡，否则指针与分栏之间会有明显延迟。 */
+body[data-resizing="col"] .workspace-shell > .workspace-conversation,
+body[data-resizing="col"] .workspace-panel-slot {
+  transition: none;
+}
+
+/* 收起时不卸载内容：保留草稿、滚动位置与待回答问题。 */
+.workspace-shell[data-conversation-collapsed="true"] > .workspace-conversation {
+  display: none;
+}
+
+/* 无对话栏时（交付文档独立路由）面板直接占满剩余空间。 */
+.workspace-shell[data-has-conversation="false"] .workspace-panel {
+  flex: 1 1 auto;
+}
+
+.workspace-panel-fallback {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 5;
+}
+
+/* 面板插槽负责占据剩余宽度；分隔条挂在插槽之前。 */
+.workspace-panel-slot {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  transition: flex-basis var(--ds-motion-base) ease;
+}
+
+.workspace-panel {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+/* --------------------------------------------------------------------------
+   可拖动分隔条：1px 视觉线 + 居中握把，命中区域比视觉线宽，便于抓住。
+   -------------------------------------------------------------------------- */
+
+.workspace-splitter {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: 7px;
+  min-width: 7px;
+  flex: 0 0 7px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+/* 1px 分隔线；hover / 拖动时加深，作为唯一的可拖动提示。 */
+.workspace-splitter::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: 3px;
+  width: 1px;
+  background: var(--line-soft);
+  transition: background-color var(--ds-motion-fast) ease;
+}
+
+.workspace-splitter:hover::before,
+.workspace-splitter:focus-visible::before,
+.workspace-splitter[data-dragging="true"]::before {
+  background: var(--ds-color-border-hover);
+}
+
+/* 握把只在 hover、聚焦或拖动时出现，避免静态界面出现多余装饰。 */
+.workspace-splitter-grip {
+  position: relative;
+  width: 3px;
+  height: 36px;
+  border-radius: var(--ds-radius-pill);
+  background: var(--ds-color-border-hover);
+  opacity: 0;
+  transition: opacity var(--ds-motion-fast) ease;
+}
+
+.workspace-splitter:hover .workspace-splitter-grip,
+.workspace-splitter:focus-visible .workspace-splitter-grip,
+.workspace-splitter[data-dragging="true"] .workspace-splitter-grip {
+  opacity: 1;
+}
+
+/* 拖动越过收起阈值：握把变长并着色，提示松手即收起。 */
+.workspace-splitter[data-collapse-pending="true"] .workspace-splitter-grip {
+  height: 72px;
+  opacity: 1;
+  background: var(--ds-color-primary);
+}
+
+/* 拖动中的实时宽度提示：浮在分隔条右上方，不参与布局。 */
+.workspace-splitter-value {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 8px);
+  transform: translateY(-50%);
+  border-radius: var(--ds-radius-small);
+  background: var(--ds-color-primary);
+  padding: 2px 6px;
+  color: var(--ds-color-on-primary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.workspace-splitter:focus-visible {
+  outline: 2px solid var(--ds-color-primary);
+  outline-offset: -3px;
+}
+
+/* 拖动期间锁定全局光标与文本选择，避免划过内容时选中文字。 */
+body[data-resizing="col"] {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body[data-resizing="col"] * {
+  cursor: col-resize !important;
+}
+
+.workspace-panel-header {
+  display: flex;
+  height: var(--ds-layout-workspace-header);
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 16px;
+  border-bottom: 1px solid var(--line-soft);
+  padding: 0 16px;
+}
+
+.workspace-panel-name {
+  max-width: 200px;
+  flex-shrink: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-tabs {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+}
+
+.workspace-tab {
+  flex-shrink: 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  padding: 6px 10px;
+  color: var(--ink-mute);
+  font-size: 13px;
+  line-height: 20px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--ds-motion-fast) ease, border-color var(--ds-motion-fast) ease;
+}
+
+.workspace-tab:hover {
+  color: var(--ink);
+}
+
+.workspace-tab[data-active="true"] {
+  border-bottom-color: var(--ds-color-primary);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.workspace-panel-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.workspace-panel-body {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: clip;
+  overscroll-behavior: contain;
+}
+
+/* 面板内容作为二级区域，不再叠加卡片容器。 */
+.workspace-panel-section {
+  padding: 24px;
+}
+
+.workspace-panel-section .ds-section-header {
+  margin-bottom: 16px;
+}
+
+/* 项目概览中的本地保存状态：用分隔线接入面板，不再自带卡片外框。 */
+.workspace-panel-section .storage-panel {
+  border: 0;
+  border-top: 1px solid var(--line-soft);
+  border-radius: 0;
+  padding: 16px 0 0;
+}
+
+.storage-panel-head {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .storage-panel-identity {
-  display: flex;
+  /* 块级容器：flex 子项的最小内容宽度不会再把长路径算进栏宽。 */
+  display: block;
   min-width: 0;
-  flex-direction: column;
-  gap: 6px;
 }
 
 .storage-panel-name {
+  display: block;
+  overflow-wrap: anywhere;
   color: var(--ink);
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 1.3;
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .storage-panel-dir {
@@ -654,21 +1078,23 @@ h3.ds-section-title { font-size: var(--ds-font-size-body); }
   min-width: 0;
   align-items: baseline;
   gap: 8px;
+  margin-top: 4px;
 }
 
 .storage-panel-dir-label {
-  flex-shrink: 0;
+  flex: 0 0 auto;
   color: var(--ink-faint);
-  font-size: 12px;
+  font-size: 11px;
 }
 
+/* 长路径必须能被裁剪：display:block 去掉 flex 子项的最小内容宽度约束。 */
 .storage-path {
   display: block;
   min-width: 0;
   overflow: hidden;
   color: var(--ink-mute);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -681,15 +1107,21 @@ h3.ds-section-title { font-size: var(--ds-font-size-body); }
 .storage-artifacts {
   display: flex;
   flex-direction: column;
+  gap: 2px;
+  margin-top: 12px;
 }
 
 .storage-artifact {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) auto;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
-  border-top: 1px solid var(--line-faint);
-  padding: 12px 20px;
+  gap: 10px;
+  border-top: 1px solid var(--line-soft);
+  padding: 8px 0;
+}
+
+.storage-artifact:first-child {
+  border-top: 0;
 }
 
 .storage-artifact-icon {
@@ -698,131 +1130,292 @@ h3.ds-section-title { font-size: var(--ds-font-size-body); }
 }
 
 .storage-artifact-body {
-  display: flex;
+  display: block;
   min-width: 0;
-  flex-direction: column;
-  gap: 2px;
 }
 
 .storage-artifact-title {
-  color: var(--ink-soft);
+  display: block;
+  color: var(--ink);
   font-size: 13px;
-  font-weight: 600;
 }
 
 .storage-artifact-hint {
+  display: block;
+  overflow: hidden;
+  margin-top: 2px;
   color: var(--ink-faint);
-  font-size: 12px;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .storage-status-tag {
-  margin: 0 !important;
-  font-size: 11px;
-  line-height: 18px;
+  justify-self: end;
+  margin: 0;
 }
 
 .storage-loading {
   display: flex;
   align-items: center;
-  gap: 10px;
-  border-top: 1px solid var(--line-faint);
-  padding: 20px;
-  color: var(--ink-faint);
+  gap: 8px;
+  padding: 8px 0;
+  color: var(--ink-mute);
   font-size: 12px;
 }
 
 .storage-warnings {
-  padding: 0 20px 12px;
+  margin-top: 12px;
 }
 
+/* 说明文案与操作按钮分列两侧；说明可换行，按钮固定不被压缩。 */
 .storage-panel-foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
+  gap: 12px;
+  margin-top: 12px;
   border-top: 1px solid var(--line-soft);
-  background: #fcfcfd;
-  padding: 10px 20px;
+  padding-top: 12px;
 }
 
 .storage-panel-note {
+  min-width: 0;
+  flex: 1 1 320px;
+  max-width: 560px;
+  color: var(--ink-faint);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.workspace-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0 0 24px;
+}
+
+.workspace-fact {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+}
+
+.workspace-fact dt {
   color: var(--ink-faint);
   font-size: 12px;
-  line-height: 1.5;
 }
 
-.project-create-modal .ant-modal-content {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 32px;
+.workspace-fact dd {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
-.project-form-panel {
-  padding: 30px 32px 28px;
+.workspace-fact dd.is-muted {
+  color: var(--ink-faint);
 }
 
-.project-form-panel .ant-form-item {
-  margin-bottom: 22px;
+.workspace-panel-note {
+  margin: 0;
+  max-width: 640px;
+  color: var(--ink-mute);
+  font-size: 13px;
+  line-height: 1.7;
+  text-wrap: pretty;
 }
 
-.project-form-panel .ant-form-item-label {
-  padding: 0 !important;
+/* ==========================================================================
+   对话栏
+   ========================================================================== */
+
+.conversation-pane {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--canvas);
 }
 
-.project-form-panel .ant-input-group-addon {
-  border-color: var(--primary) !important;
-  background: #ffffff !important;
-  padding: 0 !important;
+.conversation-header {
+  display: flex;
+  height: var(--ds-layout-workspace-header);
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid var(--line-soft);
+  padding: 0 8px;
 }
 
-.project-form-panel .ant-input-group-addon .ant-btn {
-  width: 110px;
-  color: var(--primary) !important;
-  font-weight: 700;
+.conversation-header-title {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
 }
 
-.project-form-divider {
-  height: 1px;
-  margin: 10px 0 28px;
-  background: var(--line-soft);
+.conversation-header-project {
+  flex-shrink: 0;
+  overflow: hidden;
+  max-width: 42%;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.project-location-note {
-  margin-top: -10px;
-  color: #a2a8b0;
-  font-size: 14px;
-}
-
-.project-location-note button {
-  border: 0;
-  background: transparent;
-  color: var(--primary);
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.project-form-error {
-  margin-top: 12px;
-  text-align: right;
-  color: #ff2b2b;
+.conversation-header-divider {
+  color: var(--ink-faint);
   font-size: 12px;
 }
 
-.project-modal-actions {
+.conversation-header-thread {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-mute);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-body {
+  position: relative;
   display: flex;
-  justify-content: center;
-  gap: 10px;
-  margin-top: 28px;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  overflow: hidden;
 }
 
-.project-modal-actions .ant-btn {
-  width: 112px;
-  height: 40px !important;
+.conversation-scroll {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 20px 16px 12px;
 }
 
-.hidden-file-input {
-  display: none;
+/* 运行指示按分隔线呈现，避免在外壳里再叠加一层卡片。 */
+.conversation-activity {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: -4px 0 0;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--canvas);
+  padding: 4px 2px 8px;
+  color: var(--ink-mute);
+  font-size: 12px;
 }
+
+.conversation-activity-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--ds-color-primary);
+}
+
+.conversation-composer-dock {
+  width: 100%;
+  min-width: 0;
+  flex: 0 0 auto;
+  padding: 0 16px 16px;
+}
+
+/* 空会话欢迎容器：标题、推荐任务与输入提示作为一个整体垂直居中。 */
+.chat-welcome {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 14px;
+  margin: auto;
+  padding-block: 16px;
+}
+
+.chat-welcome-head h1 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.chat-welcome-head p {
+  margin: 8px 0 0;
+  color: var(--ink-mute);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.chat-welcome-skeleton {
+  gap: 20px;
+}
+
+.chat-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat-suggestions button {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--ds-radius-base);
+  background: var(--surface);
+  padding: 8px 12px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--ds-motion-base) ease, border-color var(--ds-motion-base) ease;
+}
+
+.chat-suggestions button:hover:not(:disabled) {
+  border-color: var(--line);
+  background: var(--ds-color-secondary);
+}
+
+.chat-suggestions button:disabled {
+  color: var(--ink-faint);
+  cursor: not-allowed;
+}
+
+.chat-suggestion-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   设置弹窗
+   ========================================================================== */
 
 .settings-modal-body {
   height: min(600px, 100%);
@@ -893,460 +1486,6 @@ h3.ds-section-title { font-size: var(--ds-font-size-body); }
   font-weight: 600;
 }
 
-.chat-sidebar {
-  background: #ffffff !important;
-}
-
-.chat-brand {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 64px;
-  padding: 0 12px 0 20px;
-}
-
-.chat-brand.is-collapsed {
-  justify-content: center;
-  padding: 0;
-}
-
-.chat-brand-mark {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.chat-brand-mark span {
-  width: 28px;
-  height: 28px;
-  border-radius: 5px;
-  background: #c6c8cc;
-}
-
-.chat-brand-mark strong {
-  color: var(--ink);
-  font-size: 18px;
-  font-weight: 600;
-  line-height: 1;
-}
-
-.chat-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 4px 12px 16px;
-}
-
-.chat-nav.is-collapsed {
-  align-items: center;
-  padding: 12px 0;
-}
-
-.chat-nav .ant-btn {
-  justify-content: flex-start;
-  height: 44px !important;
-  border: 0 !important;
-  border-radius: 9px !important;
-  background: transparent !important;
-  color: var(--ink) !important;
-  box-shadow: none !important;
-  padding: 0 12px !important;
-  font-size: 14px;
-  font-weight: 500;
-}
-
-/* 「创建新对话」是主操作，用品牌浅底表达动作而不是导航选中态。 */
-.chat-nav .ant-btn.chat-nav-create {
-  background: var(--ds-color-secondary) !important;
-  color: var(--primary) !important;
-  font-weight: 600;
-}
-
-.chat-nav .ant-btn.chat-nav-create:hover:not(:disabled) {
-  background: var(--ds-color-hover) !important;
-}
-
-.chat-nav .ant-btn.chat-nav-create:disabled {
-  background: var(--surface-subtle) !important;
-  color: var(--ink-faint) !important;
-}
-
-.chat-nav .ant-btn.chat-nav-document {
-  background: transparent !important;
-  color: var(--ink-soft) !important;
-}
-
-.chat-nav .ant-btn.chat-nav-document:hover:not(:disabled) {
-  background: var(--surface-subtle) !important;
-}
-
-.chat-nav .ant-btn.sidebar-nav-active {
-  background: var(--primary) !important;
-  color: #ffffff !important;
-}
-
-.chat-nav .ant-btn.sidebar-nav-active .anticon {
-  color: #ffffff !important;
-}
-
-.chat-nav .ant-btn .anticon {
-  color: inherit !important;
-  font-size: 18px;
-}
-
-.chat-nav .ant-btn.chat-nav-create .anticon {
-  color: var(--primary) !important;
-}
-
-.chat-nav .ant-btn.chat-nav-create:disabled .anticon {
-  color: var(--ink-faint) !important;
-}
-
-/* 对话历史 Empty State：无卡片边框，只用轻量图标与次要文案 */
-.chat-empty-threads {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 28px 20px;
-  color: var(--ink-faint);
-  text-align: center;
-}
-
-.chat-empty-threads .anticon {
-  font-size: 18px;
-}
-
-.chat-empty-threads strong {
-  color: var(--ink-mute);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.chat-empty-threads p {
-  max-width: 190px;
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.6;
-  text-wrap: pretty;
-}
-
-.chat-history-head {
-  padding: 4px 20px 8px;
-}
-
-.chat-history-head h2 {
-  margin: 0;
-  color: var(--ink-faint);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-}
-
-.chat-history-head p {
-  max-width: 256px;
-  margin: 18px 0 0;
-  color: #536171;
-  font-size: 16px;
-  line-height: 1.5;
-}
-
-.chat-history {
-  min-height: 0;
-  flex: 1;
-  overflow-y: auto;
-  padding: 0 12px 16px;
-}
-
-.chat-history-date {
-  margin: 6px 8px 8px;
-  color: var(--ink-faint);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.chat-thread {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  min-height: 40px;
-  gap: 10px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  padding: 0 10px;
-  color: var(--ink-mute);
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-  transition: background-color var(--ds-motion-fast) ease;
-}
-
-.chat-thread span {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-thread:hover {
-  background: var(--surface-subtle);
-}
-
-.chat-thread.is-active {
-  background: var(--primary-soft);
-  color: var(--ink);
-}
-
-.chat-thread .anticon {
-  color: #ff2b2b;
-}
-
-.chat-workspace {
-  display: flex;
-  min-height: 0;
-  flex: 1;
-  flex-direction: column;
-  background: #fafafa;
-}
-
-.chat-topbar {
-  display: flex;
-  height: 68px;
-  align-items: center;
-  border-bottom: 1px solid var(--line-soft);
-  background: #fafafa;
-  padding: 0 16px 0 12px;
-}
-
-.chat-topbar-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  color: var(--ink);
-}
-
-.chat-topbar-title span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.chat-canvas {
-  /* 消息、欢迎容器和输入框共用宽度，左右留白同时容纳导航刻度。 */
-  --chat-content-max-width: 1018px;
-  --chat-content-gutter: 32px;
-  position: relative;
-  display: flex;
-  min-height: 0;
-  flex: 1;
-  flex-direction: column;
-  align-items: center;
-  background: #fafafa;
-}
-
-.chat-canvas.is-split {
-  align-items: stretch;
-}
-
-.chat-splitter {
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  animation: chat-splitter-enter var(--ds-motion-base) ease;
-}
-
-.chat-splitter .ant-splitter-panel {
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  transition:
-    flex-basis var(--ds-motion-base) ease,
-    opacity var(--ds-motion-base) ease;
-}
-
-.chat-main-column,
-.chat-process-column {
-  position: relative;
-  display: flex;
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  flex-direction: column;
-  background: #fafafa;
-}
-
-.chat-main-column {
-  align-items: center;
-}
-
-.chat-main-column.is-split {
-  --chat-content-max-width: 760px;
-}
-
-.chat-process-column {
-  border-left: 1px solid var(--line-soft);
-  background: #ffffff;
-  animation: chat-process-enter var(--ds-motion-base) ease;
-}
-
-.chat-process-scroll {
-  display: flex;
-  min-height: 0;
-  flex: 1;
-  flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
-  padding: 24px;
-}
-
-.chat-process-empty {
-  display: flex;
-  min-height: 140px;
-  align-items: center;
-  justify-content: center;
-  border: 1px dashed var(--line);
-  border-radius: 8px;
-  background: var(--surface-muted);
-  color: var(--ink-faint);
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.chat-main-column.is-split .assistant-bubble {
-  max-width: 100%;
-}
-
-.chat-scroll {
-  display: flex;
-  width: 100%;
-  min-height: 0;
-  flex: 1;
-  flex-direction: column;
-  gap: 18px;
-  overflow-y: auto;
-  padding-block: 32px 24px;
-  padding-inline: max(
-    var(--chat-content-gutter),
-    calc((100% - var(--chat-content-max-width)) / 2)
-  );
-}
-
-/* 空会话欢迎容器：标题、推荐任务与输入框作为一个整体垂直居中 */
-.chat-welcome {
-  display: flex;
-  width: 100%;
-  max-width: 960px;
-  flex-direction: column;
-  gap: 18px;
-  margin: auto;
-  padding-block: clamp(24px, 6vh, 72px);
-}
-
-.chat-welcome-head h1 {
-  margin: 0;
-  color: var(--ink);
-  font-size: 28px;
-  font-weight: 600;
-  line-height: 1.3;
-}
-
-.chat-welcome-head p {
-  margin: 10px 0 0;
-  color: var(--ink-mute);
-  font-size: 15px;
-  font-weight: 400;
-  line-height: 1.6;
-}
-
-.chat-welcome-skeleton {
-  gap: 24px;
-}
-
-.chat-suggestions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  width: 100%;
-  margin-top: 10px;
-  margin-bottom: 10px;
-}
-
-.chat-suggestions button {
-  display: flex;
-  min-height: 52px;
-  align-items: center;
-  gap: 10px;
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
-  background: #ffffff;
-  padding: 8px 16px;
-  color: var(--ink-soft);
-  font-size: 14px;
-  line-height: 1.4;
-  text-align: left;
-  cursor: pointer;
-  transition:
-    background-color var(--ds-motion-base) ease,
-    border-color var(--ds-motion-base) ease,
-    transform var(--ds-motion-base) ease;
-}
-
-.chat-suggestions button:hover {
-  border-color: var(--line);
-  background: #fcfdff;
-  transform: translateY(-1px);
-}
-
-.chat-suggestions button:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: -1px;
-}
-
-.chat-suggestions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.chat-suggestions button:disabled:hover {
-  border-color: var(--line-soft);
-  background: #ffffff;
-  transform: none;
-}
-
-.chat-suggestion-icon {
-  flex-shrink: 0;
-  color: var(--ink-faint);
-  font-size: 16px;
-  transition: color var(--ds-motion-base) ease;
-}
-
-.chat-suggestions button:hover .chat-suggestion-icon {
-  color: var(--primary);
-}
-
-.chat-suggestion-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-composer-dock {
-  position: relative;
-  width: min(
-    var(--chat-content-max-width),
-    calc(100% - var(--chat-content-gutter) - var(--chat-content-gutter))
-  );
-  margin-bottom: 24px;
-}
-
 .chat-composer {
   width: 100%;
   border: 1px solid var(--line);
@@ -1383,24 +1522,6 @@ h3.ds-section-title { font-size: var(--ds-font-size-body); }
 .chat-composer .ant-input-focused {
   border: 0 !important;
   box-shadow: none !important;
-}
-
-@keyframes chat-splitter-enter {
-  0% {
-    opacity: 0.78;
-  }
-  100% {
-    opacity: 1;
-  }
-}
-
-@keyframes chat-process-enter {
-  0% {
-    opacity: 0;
-  }
-  100% {
-    opacity: 1;
-  }
 }
 
 .chat-composer-bar {
@@ -1498,89 +1619,61 @@ h3.ds-section-title { font-size: var(--ds-font-size-body); }
   display: block;
 }
 
-@media (max-width: 1180px) {
-  .workspace-content {
-    margin: 0;
+/* 窄视口：压缩装饰性信息，宽度分配仍由外壳的 flex 规则决定。 */
+@media (max-width: 1279px) {
+  .workspace-panel-name {
+    display: none;
   }
 
-  .workspace-main {
-    padding: 32px 32px 56px;
-  }
-
-  .workspace-add-row,
-  .workspace-empty-panel {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
+  .workspace-panel-header {
+    gap: 10px;
+    padding: 0 12px;
   }
 }
 
-@media (max-width: 900px) {
-  .workspace-shell {
-    grid-template-columns: 260px minmax(0, 1fr);
+@media (max-width: 899px) {
+  .app-sidebar {
+    border-right: 0;
   }
 
-  .workspace-main {
-    padding: 24px 24px 48px;
-  }
-
-  .app-sidebar.is-expanded {
-    min-width: 280px !important;
-    max-width: 280px !important;
-    width: 280px !important;
-    flex-basis: 280px !important;
+  .workspace-page-content {
+    padding: 32px 24px 56px;
   }
 
   .chat-welcome {
     gap: 24px;
-    padding-block: 32px;
+    padding-block: 24px;
   }
 
-  .chat-process-column {
-    border-left: 0;
-    border-top: 1px solid var(--line-soft);
-  }
-
-  .chat-process-scroll {
-    padding: 18px;
+  .workspace-panel-header {
+    padding: 0 10px;
   }
 }
 
 @media (max-width: 720px) {
-  .workspace-shell {
-    grid-template-columns: 1fr;
-    height: auto;
+  .workspace-page-content {
+    padding: 24px 16px 40px;
   }
 
-  .workspace-sidebar {
-    border-right: 0;
-    border-bottom: 1px solid var(--line-soft);
+  .workspace-page-head {
+    flex-direction: column;
+    align-items: stretch;
   }
 
-  .workspace-project-list {
-    max-height: 200px;
+  .conversation-scroll {
+    padding: 16px 12px 8px;
   }
 
-  .workspace-main {
-    padding: 24px 20px 40px;
-  }
-
-  .storage-artifact {
-    grid-template-columns: 16px minmax(0, 1fr);
-  }
-
-  .storage-status-tag {
-    grid-column: 2;
-    justify-self: start;
+  .conversation-composer-dock {
+    padding: 0 12px 12px;
   }
 
   .chat-suggestions {
-    grid-template-columns: 1fr;
     margin-bottom: 4px;
   }
 
   .chat-welcome-head h1 {
-    font-size: 24px;
+    font-size: 22px;
   }
 
   .settings-modal-body {
@@ -1593,18 +1686,18 @@ h3.ds-section-title { font-size: var(--ds-font-size-body); }
   }
 }
 
+/* 回到最新消息：以对话栏底部为基准，不依赖视口或魔法数字。 */
 .scroll-to-bottom {
   position: absolute !important;
   inset-inline-end: auto !important;
   right: auto !important;
-  bottom: 200px !important;
+  bottom: 12px !important;
   left: 50% !important;
   border-radius: 50% !important;
   opacity: 0;
   pointer-events: none;
   transform: translate(-50%, 10px) scale(0.9);
   background: var(--surface-muted) !important;
-  backdrop-filter: blur(8px);
   box-shadow: none !important;
   transition:
     opacity var(--ds-motion-base) ease,
@@ -1892,8 +1985,7 @@ h3.ds-section-title { font-size: var(--ds-font-size-body); }
 
 /* 尊重系统减少动态效果的偏好，加载文案仍保持可见。 */
 @media (prefers-reduced-motion: reduce) {
-  .chat-splitter, .chat-process-column { animation: none; }
-  .chat-splitter .ant-splitter-panel, .scroll-to-bottom { transition: none; }
+  .scroll-to-bottom { transition: none; }
   .loading-dots::after { animation: none; content: "..."; }
   @keyframes qf-pulse { from, to { opacity: 1; } }
   @keyframes qf-bounce { from, to { opacity: 1; } }

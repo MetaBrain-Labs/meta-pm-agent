@@ -340,6 +340,7 @@ export function ThreadChatPage({
     <ChatApp
       workspaceId={workspaceId}
       workspaceName={workspaceName}
+      threadTitle={thread?.title ?? null}
       messages={messages}
       isLoading={isLoading}
       isMessagesLoading={isMessagesLoading}

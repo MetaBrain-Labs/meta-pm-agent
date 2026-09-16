@@ -640,6 +640,45 @@ export const KnowledgeGraphView = forwardRef<
     return () => cancelAnimationFrame(animationFrame);
   }, [active, cleanup, createGraph, nodes, relations]);
 
+  /**
+   * 容器尺寸变化（分栏拖动、Inspector 开合、窗口缩放）后同步画布尺寸。
+   * 只调用 G6 的 resize，不重建实例，保留用户当前的缩放、平移与选中状态。
+   */
+  useEffect(() => {
+    if (!active || nodes.length === 0) return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    let frame: number | null = null;
+    const syncSize = () => {
+      frame = null;
+      const graph = graphRef.current;
+      if (!graph || container.clientWidth === 0 || container.clientHeight === 0) {
+        return;
+      }
+      const [width, height] = graph.getSize();
+      if (width === container.clientWidth && height === container.clientHeight) {
+        return;
+      }
+      try {
+        graph.resize();
+      } catch (error) {
+        console.error("[kg-graph] Failed to resize G6 graph:", error);
+      }
+    };
+
+    // 尺寸变化合并到同一帧，避免拖动分栏时每个像素都触发重排。
+    const observer = new ResizeObserver(() => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(syncSize);
+    });
+    observer.observe(container);
+    return () => {
+      observer.disconnect();
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
+  }, [active, nodes.length]);
+
   useEffect(() => cleanup, [cleanup]);
 
   return (
