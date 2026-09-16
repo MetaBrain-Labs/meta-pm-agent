@@ -49,7 +49,25 @@ interface Props {
   streaming: boolean;
   viewMode?: MessageBubbleViewMode;
   nextUserContent?: string;
-  onFormSubmit?: (text: string, hitlResume?: HumanInTheLoopResume) => void;
+  /**
+   * 已本地提交过的表单 ID。
+   *
+   * 提交后的只读态由上层持有，因为交互中的 Question Form 已经移到输入框位置，
+   * 上层需要用它判断"还有没有待回答的问题"。
+   */
+  submittedFormIds: Set<string>;
+  /** 表单提交回调；由上层登记 submittedFormIds 后转发。 */
+  onFormSubmitted?: (
+    formId: string,
+    text: string,
+    hitlResume?: HumanInTheLoopResume,
+  ) => void;
+  /**
+   * 是否把交互中的 HITL 表单渲染在消息流里。
+   *
+   * 默认 false：交互中的表单由输入框位置承担，消息流只保留正文与只读结果。
+   */
+  renderInteractiveHitl?: boolean;
   /**
    * 重试回调。
    *
@@ -72,12 +90,11 @@ export const MessageBubble = memo(function MessageBubble({
   streaming,
   viewMode = "combined",
   nextUserContent,
-  onFormSubmit,
+  submittedFormIds,
+  onFormSubmitted,
+  renderInteractiveHitl = false,
   onRetry,
 }: Props) {
-  const [locallySubmitted, setLocallySubmitted] = useState<Set<string>>(
-    () => new Set(),
-  );
   const showMainContent = viewMode !== "process";
   const showProcessContent = viewMode !== "main";
 
@@ -184,17 +201,10 @@ export const MessageBubble = memo(function MessageBubble({
     !message.interrupted;
   const handleFormSubmit = useCallback(
     (formId: string, text: string, hitlResume?: HumanInTheLoopResume) => {
-      if (!onFormSubmit) return;
-
-      // 表单提交后立即进入本地只读态，避免等待历史消息恢复期间重复提交。
-      setLocallySubmitted((prev) => {
-        const next = new Set(prev);
-        next.add(formId);
-        return next;
-      });
-      onFormSubmit(text, hitlResume);
+      // 提交后由上层登记只读态，避免等待历史恢复期间重复提交。
+      onFormSubmitted?.(formId, text, hitlResume);
     },
-    [onFormSubmit],
+    [onFormSubmitted],
   );
   /** 把稳定的回调引用收敛为本条消息的重试动作。 */
   const handleRetry = useCallback(() => {
@@ -367,7 +377,7 @@ export const MessageBubble = memo(function MessageBubble({
             isLastAssistant={isLast}
             streaming={streaming}
             nextUserContent={nextUserContent}
-            locallySubmitted={locallySubmitted}
+            submittedFormIds={submittedFormIds}
             onSubmitForm={handleFormSubmit}
           />
         </div>
@@ -428,29 +438,40 @@ export const MessageBubble = memo(function MessageBubble({
         <WorkflowCompletionCard content={message.workflowCompletion.content} />
       )}
 
-      {showMainContent && message.humanInterrupt && (
+      {/*
+       * 交互中的 HITL 表单移到输入框位置（由上层渲染），这里只在历史回放或
+       * 明确要求时渲染，避免同一个表单在消息流和输入区出现两次。
+       */}
+      {showMainContent && message.humanInterrupt && renderInteractiveHitl && (
         <HumanInterruptBlock
           interrupt={message.humanInterrupt.interrupt}
           isLastAssistant={isLast}
           streaming={streaming}
           nextUserContent={nextUserContent}
-          locallySubmitted={locallySubmitted}
+          submittedFormIds={submittedFormIds}
           onSubmitForm={handleFormSubmit}
         />
       )}
 
+      {/*
+       * 交互中的表单统一由输入区渲染；这里只在历史回放或输入区判定失效时渲染，
+       * 避免同一个表单在消息流和输入区出现两次。
+       */}
       {showMainContent && message.questionForm && !message.humanInterrupt && (
         <div>
           {message.questionForm.state === "generating" ? (
-            <QFGenerating label="正在生成问题表单" />
+            renderInteractiveHitl ? (
+              <QFGenerating label="正在生成问题表单" />
+            ) : null
           ) : (
             <ProseBlock
               text={message.questionForm.content || ""}
               isLastAssistant={isLast}
               streaming={streaming}
               nextUserContent={nextUserContent}
-              locallySubmitted={locallySubmitted}
+              submittedFormIds={submittedFormIds}
               onSubmitForm={handleFormSubmit}
+              renderInteractiveForm={renderInteractiveHitl}
             />
           )}
         </div>
@@ -747,14 +768,14 @@ function HumanInterruptBlock({
   isLastAssistant,
   streaming,
   nextUserContent,
-  locallySubmitted,
+  submittedFormIds,
   onSubmitForm,
 }: {
   interrupt: HumanInTheLoopInterrupt;
   isLastAssistant: boolean;
   streaming: boolean;
   nextUserContent?: string;
-  locallySubmitted: Set<string>;
+  submittedFormIds: Set<string>;
   onSubmitForm: (
     formId: string,
     text: string,
@@ -770,7 +791,7 @@ function HumanInterruptBlock({
       isLastAssistant={isLastAssistant}
       streaming={streaming}
       nextUserContent={nextUserContent}
-      locallySubmitted={locallySubmitted}
+      submittedFormIds={submittedFormIds}
       onSubmitForm={onSubmitForm}
       hitlThreadId={interrupt.threadId}
     />
@@ -779,8 +800,10 @@ function HumanInterruptBlock({
 
 /**
  * 从 HITLRequest 风格 payload 中读取 Question Form 原文。
+ *
+ * 导出供上层在输入区渲染同一个表单，避免两处各写一份解析。
  */
-function getQuestionFormFromInterrupt(
+export function getQuestionFormFromInterrupt(
   interrupt: HumanInTheLoopInterrupt,
 ): string | null {
   const action = interrupt.value.actionRequests.find(

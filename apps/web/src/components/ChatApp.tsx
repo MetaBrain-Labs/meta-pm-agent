@@ -37,9 +37,15 @@ import {
   type WorkspaceKnowledgeGraphData,
 } from "../api/chat-api";
 import { MessageBubble } from "./MessageBubble";
+import { QuestionFormView } from "./QuestionForm";
 import { ConversationPane } from "./shell/ConversationPane";
 import { ConversationComposer } from "./shell/ConversationComposer";
 import { useMessageNavigation } from "../hooks/useMessageNavigation";
+import {
+  formatHumanInTheLoopResume,
+  type QuestionForm,
+} from "../utils/question-form";
+import { findPendingQuestionForm } from "../utils/pending-question-form";
 import { KnowledgeGraphModal } from "./modals/KnowledgeGraphModal";
 import {
   LangGraphModal,
@@ -101,6 +107,18 @@ export function ChatApp({
   const [userScrolled, setUserScrolled] = useState(false);
   const [langGraphModalOpen, setLangGraphModalOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // MessageBubble 使用 React.memo：传给它的回调必须在多次渲染间保持同一引用，
+  // 最新状态统一经 ref 读取，避免 memo 命中时使用过期的闭包值。
+  const onSendRef = useRef(onSend);
+  const webSearchEnabledRef = useRef(webSearchEnabled);
+
+  useEffect(() => {
+    onSendRef.current = onSend;
+  }, [onSend]);
+  useEffect(() => {
+    webSearchEnabledRef.current = webSearchEnabled;
+  }, [webSearchEnabled]);
 
   // 知识图谱弹窗数据；进入工作区不主动加载，仅在需要时读取。
   const [kgData, setKgData] = useState<WorkspaceKnowledgeGraphData | null>(
@@ -209,6 +227,61 @@ export function ChatApp({
     setUserScrolled(!isAtBottom());
   }, [isAtBottom]);
 
+  /**
+   * 已本地提交的表单 ID。
+   *
+   * 提交后立即登记，避免等待历史恢复期间重复提交；同时让输入区判定"没有待回答
+   * 的问题"，从而把输入框还给用户。
+   */
+  const [submittedFormIds, setSubmittedFormIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const markFormSubmitted = useCallback((formId: string) => {
+    setSubmittedFormIds((prev) => {
+      if (prev.has(formId)) return prev;
+      const next = new Set(prev);
+      next.add(formId);
+      return next;
+    });
+  }, []);
+  const handleFormSubmitted = useCallback(
+    (
+      formId: string,
+      text: string,
+      hitlResume?: HumanInTheLoopResume,
+    ) => {
+      markFormSubmitted(formId);
+      onSendRef.current(text, {
+        webSearchEnabled: webSearchEnabledRef.current,
+        hitlResume,
+      });
+      setUserScrolled(false);
+    },
+    [markFormSubmitted],
+  );
+
+  /**
+   * 待回答的 HITL 表单。
+   *
+   * 运行时暂停等待补充信息时，表单替换输入框占据底部；用户答完提交后输入框
+   * 自动恢复，这样不会出现"既要回答又要打字"的双重入口。
+   */
+  const pendingForm = useMemo(
+    () =>
+      findPendingQuestionForm(messages, submittedFormIds, {
+        streaming: isLoading,
+      }),
+    [isLoading, messages, submittedFormIds],
+  );
+  /**
+   * 消息流是否渲染交互态表单。
+   *
+   * 表单的宿主只有一个：存在待回答表单时由输入区承担，消息流不再重复渲染；
+   * 只有在"正文里有表单但输入区判定它已失效"这种极端情况下才回落到消息流，
+   * 保证任何情况下用户都能看到并回答问题。
+   */
+  const renderInteractiveHitl = !pendingForm;
+
   const lastAgentIdx = (() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i]!.role === "agent") return i;
@@ -263,31 +336,12 @@ export function ChatApp({
     [disabledReason, isLoading, messages, onSend, webSearchEnabled],
   );
 
-  // MessageBubble 使用 React.memo：传给它的回调必须在多次渲染间保持同一引用，
-  // 最新状态统一经 ref 读取，避免 memo 命中时使用过期的闭包值。
-  const onSendRef = useRef(onSend);
-  const webSearchEnabledRef = useRef(webSearchEnabled);
+  // retryAssistantMessage 的重试回调同样需要稳定引用（见文件顶部的 ref 说明）。
   const retryAssistantMessageRef = useRef(retryAssistantMessage);
 
   useEffect(() => {
-    onSendRef.current = onSend;
-  }, [onSend]);
-  useEffect(() => {
-    webSearchEnabledRef.current = webSearchEnabled;
-  }, [webSearchEnabled]);
-  useEffect(() => {
     retryAssistantMessageRef.current = retryAssistantMessage;
   }, [retryAssistantMessage]);
-
-  const handleSendFormAnswer = useCallback(
-    (text: string, hitlResume?: HumanInTheLoopResume) => {
-      onSendRef.current(text, {
-        webSearchEnabled: webSearchEnabledRef.current,
-        hitlResume,
-      });
-    },
-    [],
-  );
 
   const handleRetryMessage = useCallback((messageId: string) => {
     retryAssistantMessageRef.current(messageId);
@@ -414,7 +468,9 @@ export function ChatApp({
             message.role === "agent"
           }
           nextUserContent={nextUserContentByAssistantId.get(message.id)}
-          onFormSubmit={handleSendFormAnswer}
+          submittedFormIds={submittedFormIds}
+          onFormSubmitted={handleFormSubmitted}
+          renderInteractiveHitl={renderInteractiveHitl}
           onRetry={handleRetryMessage}
         />
       ))}
@@ -435,7 +491,32 @@ export function ChatApp({
     </>
   );
 
-  const composer = (
+  /**
+   * 待回答的 HITL 表单。
+   *
+   * 运行时暂停等待补充信息时，表单替换输入框占据底部；用户答完提交后输入框
+   * 自动恢复，这样不会出现"既要回答又要打字"的双重入口。
+   */
+  const composer = pendingForm ? (
+    <QuestionFormView
+      form={pendingForm.form}
+      interactive
+      onSubmit={(text, answers) => {
+        handleFormSubmitted(
+          pendingForm.form.id,
+          text,
+          pendingForm.threadId
+            ? formatHumanInTheLoopResume(
+                pendingForm.threadId,
+                pendingForm.form,
+                answers,
+                text,
+              )
+            : undefined,
+        );
+      }}
+    />
+  ) : (
     <ConversationComposer
       value={input}
       onChange={setInput}

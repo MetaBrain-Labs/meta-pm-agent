@@ -1,27 +1,29 @@
 /**
  * 本地项目列表页
  *
- * 展示已关联的本地目录项目，并提供项目重命名、路径修改、软移除和本地设置
- * 入口。页面只负责布局与交互反馈，业务动作全部由上层回调驱动。
+ * 展示已关联的本地目录项目，并提供打开、重命名、路径迁移、在资源管理器打开和
+ * 从列表移除。页面只负责布局与交互反馈，业务动作全部由上层回调驱动。
  *
  * Responsibilities:
- * - 展示 active 项目网格与项目搜索
- * - 提供新建项目、重命名、修改本地路径和从列表移除
- * - 展示当前项目的本地保存状态与最近对话入口
+ * - 展示项目封面网格与项目搜索
+ * - 提供新建项目入口与项目行操作菜单
+ * - 展示当前项目本地保存状态与最近对话入口
  *
  * Notes:
  * - 从列表移除项目不会删除磁盘目录或关联业务数据。
  * - 全局侧边栏由应用外壳提供，本页不再自带导航栏。
+ * - 封面配色只用于识别，使用低饱和 tint，不引入高饱和色块。
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import { Button, Dropdown, Input, Tooltip } from "antd";
 import type { MenuProps } from "antd";
 import {
+  DeleteOutlined,
   EditOutlined,
   EllipsisOutlined,
-  FolderOutlined,
   FolderOpenOutlined,
+  FolderOutlined,
   PlusOutlined,
   RightOutlined,
   SearchOutlined,
@@ -29,29 +31,22 @@ import {
 import type { ThreadInfo, WorkspaceInfo } from "../../types";
 import { DEFAULT_CHAT_TITLE } from "../../constants/app";
 import { WorkspaceLocalStoragePanel } from "../../components/WorkspaceLocalStoragePanel";
+import { getProjectCoverStyle } from "../../utils/project-cover";
+import { canRevealLocalPath, revealLocalPath } from "../../utils/reveal-path";
 
 type MenuItem = Required<MenuProps>["items"][number];
 
 const TEXT = {
   title: "项目列表",
-  description:
-    "关联 API 服务所在机器上的已有目录，产品上下文与 PRD 会同步保存到该目录。",
   searchPlaceholder: "搜索项目",
   emptyList: "暂无项目",
-  emptyListHint: "添加第一个本地项目后会显示在这里",
+  emptyListHint: "新建第一个本地项目后会显示在这里",
   emptySearch: "没有匹配的项目",
   addProject: "新建项目",
   noPath: "未关联本地路径",
   recentThread: "最近对话",
+  localSettings: "本地设置",
 } as const;
-
-/** 项目卡片操作项，点击卡片右上角图标弹出。 */
-const projectActionItems: MenuItem[] = [
-  { key: "rename", icon: <EditOutlined />, label: "项目重命名" },
-  { key: "migrate", icon: <FolderOpenOutlined />, label: "修改本地路径" },
-  { type: "divider" },
-  { key: "remove", label: "从列表中移除", danger: true },
-];
 
 interface WorkspacePageProps {
   workspaces: WorkspaceInfo[];
@@ -71,7 +66,7 @@ interface WorkspacePageProps {
 }
 
 /**
- * 项目列表页：项目网格 + 当前项目本地数据。
+ * 项目列表页：项目封面网格 + 当前项目本地数据。
  */
 export function WorkspacePage({
   workspaces,
@@ -96,80 +91,71 @@ export function WorkspacePage({
     workspaces[0] ??
     null;
   const activeThread = threads[0] ?? null;
-
-  /** 分发项目卡片操作，key 直接对应上层回调。 */
-  const handleProjectAction = (workspaceId: string, action: string) => {
-    switch (action) {
-      case "rename":
-        onWorkspaceRename?.(workspaceId);
-        break;
-      case "migrate":
-        onWorkspaceMigrate?.(workspaceId);
-        break;
-      case "remove":
-        onWorkspaceRemove?.(workspaceId);
-        break;
-    }
-  };
+  const revealSupported = canRevealLocalPath();
 
   return (
     <div className="workspace-page">
       <div className="workspace-page-content">
         <header className="workspace-page-head">
-          <div>
-            <h1>{TEXT.title}</h1>
-            <p>{TEXT.description}</p>
-          </div>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            loading={creatingWorkspace}
-            onClick={onNewWorkspace}
-          >
-            {TEXT.addProject}
-          </Button>
-        </header>
-
-        {workspaces.length > 0 && (
-          <div className="workspace-page-search">
+          <h1>{TEXT.title}</h1>
+          <div className="workspace-page-head-actions">
             <Input
               allowClear
               value={keyword}
               prefix={<SearchOutlined aria-hidden="true" />}
               placeholder={TEXT.searchPlaceholder}
               aria-label={TEXT.searchPlaceholder}
+              className="workspace-page-search"
               onChange={(event) => setKeyword(event.target.value)}
             />
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              loading={creatingWorkspace}
+              onClick={onNewWorkspace}
+            >
+              {TEXT.addProject}
+            </Button>
           </div>
-        )}
+        </header>
+
+        {error && <div className="workspace-page-error">{error}</div>}
 
         {workspaces.length === 0 ? (
           <div className="workspace-page-empty">
             <FolderOutlined />
             <strong>{TEXT.emptyList}</strong>
             <span>{TEXT.emptyListHint}</span>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={onNewWorkspace}
+            >
+              {TEXT.addProject}
+            </Button>
           </div>
         ) : visibleWorkspaces.length === 0 ? (
           <div className="workspace-page-empty">
             <strong>{TEXT.emptySearch}</strong>
           </div>
         ) : (
-          <div className="workspace-card-grid">
+          <div className="project-grid">
             {visibleWorkspaces.map((workspace) => (
               <ProjectCard
                 key={workspace.id}
                 workspace={workspace}
                 active={activeWorkspace?.id === workspace.id}
+                revealSupported={revealSupported}
                 onOpen={() => onOpenWorkspace(workspace.id)}
-                onAction={(action) => handleProjectAction(workspace.id, action)}
+                onRename={() => onWorkspaceRename?.(workspace.id)}
+                onMigrate={() => onWorkspaceMigrate?.(workspace.id)}
+                onRemove={() => onWorkspaceRemove?.(workspace.id)}
               />
             ))}
           </div>
         )}
 
-        <div className="workspace-page-foot">
-          {error && <div className="workspace-page-error">{error}</div>}
-
+        <section className="workspace-page-foot">
           <div className="ds-section-header">
             <div className="ds-section-header-copy">
               <h2 className="ds-section-title">当前项目</h2>
@@ -190,7 +176,7 @@ export function WorkspacePage({
                 </Button>
               )}
               <Button type="text" onClick={onLocalSettings}>
-                本地设置
+                {TEXT.localSettings}
               </Button>
             </div>
           </div>
@@ -203,73 +189,92 @@ export function WorkspacePage({
               projectPath={activeWorkspace.localPath}
             />
           )}
-        </div>
+        </section>
       </div>
     </div>
   );
 }
 
 /**
- * 项目卡片：名称、本地路径与卡片操作菜单。
+ * 项目卡片：封面、名称、更新时间与更多操作。
  *
- * 选中态只用细边框区分，不使用高饱和主题色或大面积封面。
+ * 封面只提供识别辅助，选中态用细边框表达，不使用高饱和主题色。
  */
 function ProjectCard({
   workspace,
   active,
+  revealSupported,
   onOpen,
-  onAction,
+  onRename,
+  onMigrate,
+  onRemove,
 }: {
   workspace: WorkspaceInfo;
   active: boolean;
+  revealSupported: boolean;
   onOpen: () => void;
-  onAction: (action: string) => void;
+  onRename: () => void;
+  onMigrate: () => void;
+  onRemove: () => void;
 }) {
+  const actionItems: MenuItem[] = [
+    {
+      key: "rename",
+      icon: <EditOutlined />,
+      label: "项目重命名",
+      onClick: onRename,
+    },
+    {
+      key: "migrate",
+      icon: <FolderOpenOutlined />,
+      label: "项目路径迁移",
+      onClick: onMigrate,
+    },
+    {
+      key: "reveal",
+      icon: <FolderOpenOutlined />,
+      label: "在资源管理器中打开",
+      // 缺少宿主能力时保留入口但明确禁用原因，不伪装成可用功能。
+      disabled: !revealSupported || !workspace.localPath,
+      onClick: () => void revealLocalPath(workspace.localPath),
+    },
+    { type: "divider" },
+    {
+      key: "remove",
+      icon: <DeleteOutlined />,
+      label: "从列表中移除",
+      danger: true,
+      onClick: onRemove,
+    },
+  ];
+
   return (
     <div
-      role="button"
-      tabIndex={0}
-      aria-current={active ? "true" : undefined}
       className="project-card"
       data-active={active ? "true" : "false"}
-      onClick={onOpen}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onOpen();
-        }
-      }}
+      style={getProjectCoverStyle(workspace.id) as CSSProperties}
     >
-      <span className="project-card-mark" aria-hidden="true">
-        <FolderOutlined />
-      </span>
-
-      <div className="project-card-body">
-        <div className="project-card-name">
+      <button
+        type="button"
+        className="project-card-open"
+        aria-current={active ? "true" : undefined}
+        onClick={onOpen}
+      >
+        <span className="project-cover" aria-hidden="true">
+          <FolderOutlined />
+        </span>
+        <span className="project-card-name">
           {workspace.name || "未命名项目"}
-        </div>
-        {workspace.localPath ? (
-          <Tooltip title={workspace.localPath} placement="bottomLeft">
-            <span className="project-card-path">{workspace.localPath}</span>
-          </Tooltip>
-        ) : (
-          <span className="project-card-path">{TEXT.noPath}</span>
-        )}
+        </span>
         <span className="project-card-meta">
           更新于 {formatUpdatedAt(workspace.updatedAt)}
         </span>
-      </div>
+      </button>
 
       <Dropdown
         trigger={["click"]}
-        menu={{
-          items: projectActionItems,
-          onClick: ({ key, domEvent }) => {
-            // 卡片操作不再触发卡片本身的打开动作。
-            domEvent.stopPropagation();
-            onAction(key);
-          },
-        }}
+        placement="bottomRight"
+        menu={{ items: actionItems }}
       >
         <Button
           type="text"
@@ -277,9 +282,18 @@ function ProjectCard({
           className="project-card-more"
           aria-label={`${workspace.name || "未命名项目"} 的项目操作`}
           icon={<EllipsisOutlined />}
-          onClick={(event) => event.stopPropagation()}
         />
       </Dropdown>
+
+      {workspace.localPath ? (
+        <Tooltip title={workspace.localPath} placement="bottomLeft">
+          <span className="project-card-path" tabIndex={0}>
+            {workspace.localPath}
+          </span>
+        </Tooltip>
+      ) : (
+        <span className="project-card-path is-muted">{TEXT.noPath}</span>
+      )}
     </div>
   );
 }

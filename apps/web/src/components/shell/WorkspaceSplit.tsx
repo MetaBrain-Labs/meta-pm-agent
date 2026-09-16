@@ -26,7 +26,13 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { SPLIT_LAYOUT_STORAGE_KEY } from "../../constants/app";
+import {
+  DEFAULT_CONVERSATION_WIDTH,
+  MIN_CONVERSATION_WIDTH,
+  readSplitLayout,
+  writeSplitLayout,
+  type StoredSplitLayout,
+} from "../../utils/split-layout-store";
 
 /**
  * 对话栏宽度尺度。
@@ -34,11 +40,11 @@ import { SPLIT_LAYOUT_STORAGE_KEY } from "../../constants/app";
  * 这些是设计参考值，不是硬上限：向右拖动的唯一约束是工作区面板的可用下限，
  * 也就是拖动上限随容器宽度变化（resolveConversationWidth 计算），不再写死。
  */
-export const CONVERSATION_DEFAULT_WIDTH = 400;
+export const CONVERSATION_DEFAULT_WIDTH = DEFAULT_CONVERSATION_WIDTH;
 /** 手动调整时的软下限；空间不足时可以进一步收窄到硬下限。 */
 export const CONVERSATION_MIN_WIDTH = 360;
 /** 硬下限：低于该宽度对话栏不再可用，此时改为收起。 */
-export const CONVERSATION_HARD_MIN_WIDTH = 300;
+export const CONVERSATION_HARD_MIN_WIDTH = MIN_CONVERSATION_WIDTH;
 /** 拖到该宽度以内直接收起，避免先挤成一个不可用的窄栏。 */
 const COLLAPSE_THRESHOLD_WIDTH = 340;
 /** 工作区面板可用下限；低于该宽度时优先收起对话栏。 */
@@ -71,14 +77,6 @@ export function resolveConversationWidth(
   return Math.max(CONVERSATION_HARD_MIN_WIDTH, max);
 }
 
-/** 本地缓存的对话栏布局偏好。 */
-interface StoredSplitLayout {
-  width: number;
-  collapsed: boolean;
-  /** 用户是否手动调整过宽度；未调整时宽度跟随可用空间。 */
-  pinned: boolean;
-}
-
 /** 对话栏控制接口，供外壳头部按钮收起或展开对话栏。 */
 interface ConversationSplitControl {
   collapsed: boolean;
@@ -106,45 +104,6 @@ function clampConversationWidth(width: number): number {
   return Math.max(CONVERSATION_HARD_MIN_WIDTH, Math.round(width));
 }
 
-/**
- * 读取本地缓存的布局；旧版本或异常数据一律回退到默认值。
- * 缺少 pinned 字段的历史数据按「未手动调整」处理，保持跟随可用空间。
- */
-function readStoredLayout(): StoredSplitLayout {
-  const fallback: StoredSplitLayout = {
-    width: CONVERSATION_DEFAULT_WIDTH,
-    collapsed: false,
-    pinned: false,
-  };
-  try {
-    const raw = localStorage.getItem(SPLIT_LAYOUT_STORAGE_KEY);
-    if (!raw) return fallback;
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return fallback;
-    const candidate = parsed as {
-      conversationWidth?: unknown;
-      collapsed?: unknown;
-      pinned?: unknown;
-    };
-    return {
-      width: clampConversationWidth(Number(candidate.conversationWidth)),
-      collapsed: candidate.collapsed === true,
-      pinned: candidate.pinned === true,
-    };
-  } catch {
-    return fallback;
-  }
-}
-
-/** 写入本地缓存；存储异常时保持当前会话内的布局不变。 */
-function writeStoredLayout(layout: StoredSplitLayout): void {
-  try {
-    localStorage.setItem(SPLIT_LAYOUT_STORAGE_KEY, JSON.stringify(layout));
-  } catch {
-    // 忽略存储异常，不影响当前布局。
-  }
-}
-
 interface Props {
   /** 对话栏内容；为空时不渲染对话栏，面板直接占满剩余空间。 */
   conversation: ReactNode | null;
@@ -160,23 +119,42 @@ export function WorkspaceSplit({
   onCollapsedChange,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [stored] = useState<StoredSplitLayout>(readStoredLayout);
-  const [width, setWidth] = useState(stored.width);
-  const [collapsed, setCollapsed] = useState(stored.collapsed);
+  /**
+   * 布局是唯一可信来源：宽度、收起状态与「是否手动调整过」放在同一份状态里，
+   * 每次变更立即写回本地，因此刷新、切换会话或切换面板后都能恢复。
+   */
+  const [layout, setLayout] = useState<StoredSplitLayout>(readSplitLayout);
   const [dragging, setDragging] = useState(false);
   /** 拖动已越过收起阈值，松手后收起；用于给出视觉提示。 */
   const [collapsePending, setCollapsePending] = useState(false);
   /** 容器当前宽度，仅用于渲染可访问的最大值提示。 */
   const [containerWidth, setContainerWidth] = useState(0);
-  /** 用户是否手动调整过宽度；未调整时宽度始终跟随可用空间。 */
-  const [widthPinned, setWidthPinned] = useState(stored.pinned);
 
+  const { width, collapsed, pinned } = layout;
   const hasConversation = conversation !== null;
-  // ResizeObserver 回调不参与渲染，读取最新状态需要 ref。
-  const widthPinnedRef = useRef(widthPinned);
-  widthPinnedRef.current = widthPinned;
-  const widthRef = useRef(width);
-  widthRef.current = width;
+  /** ResizeObserver 回调不参与渲染，通过 ref 读取最新布局。 */
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+
+  /** 统一的布局更新入口：更新状态并同步写入本地存储。 */
+  const updateLayout = useCallback(
+    (patch: Partial<StoredSplitLayout>) => {
+      setLayout((current) => {
+        const next = { ...current, ...patch };
+        if (
+          next.width === current.width &&
+          next.collapsed === current.collapsed &&
+          next.pinned === current.pinned
+        ) {
+          return current;
+        }
+        writeSplitLayout(next);
+        return next;
+      });
+    },
+    [],
+  );
+
   /** 面板可用宽度 = 容器宽度 - 对话栏宽度 - 分隔条。 */
   const fitsWorkspace = useCallback(
     (nextWidth: number) =>
@@ -189,18 +167,17 @@ export function WorkspaceSplit({
     (nextWidth: number) => {
       const clamped = clampConversationWidth(nextWidth);
       if (!fitsWorkspace(clamped)) return;
-      setWidth(clamped);
-      setWidthPinned(true);
+      updateLayout({ width: clamped, pinned: true });
     },
-    [fitsWorkspace],
+    [fitsWorkspace, updateLayout],
   );
 
   const setCollapsedState = useCallback(
     (next: boolean) => {
-      setCollapsed(next);
+      updateLayout({ collapsed: next });
       onCollapsedChange?.(next);
     },
-    [onCollapsedChange],
+    [onCollapsedChange, updateLayout],
   );
 
   // 视口变化后重新校验：放不下时收起对话栏，否则在可用空间内收敛宽度。
@@ -217,19 +194,18 @@ export function WorkspaceSplit({
           ? current
           : container.clientWidth,
       );
-      // 用户调过宽度就沿用当前值；否则回到默认值，窗口变宽时自动恢复。
-      const desired = widthPinnedRef.current
-        ? widthRef.current
+      // 布局状态通过 ref 读取，避免把 ResizeObserver 反复重建。
+      const current = layoutRef.current;
+      // 用户调过宽度就沿用保存值；否则回到默认值，窗口变宽时自动恢复。
+      const desired = current.pinned
+        ? current.width
         : CONVERSATION_DEFAULT_WIDTH;
-      const next = resolveConversationWidth(
-        container.clientWidth,
-        desired,
-      );
+      const next = resolveConversationWidth(container.clientWidth, desired);
       if (next === null) {
-        setCollapsed(true);
+        updateLayout({ collapsed: true });
         return;
       }
-      setWidth(next);
+      if (next !== current.width) updateLayout({ width: next });
     };
 
     const observer = new ResizeObserver(() => {
@@ -246,31 +222,14 @@ export function WorkspaceSplit({
       observer.disconnect();
       if (timer !== null) clearTimeout(timer);
     };
-  }, [hasConversation]);
+  }, [hasConversation, updateLayout]);
 
   // 对话栏不存在时强制展开，避免上次的收起状态影响独立文档页。
   useEffect(() => {
-    if (!hasConversation && collapsed) setCollapsed(false);
-  }, [collapsed, hasConversation]);
+    if (!hasConversation && collapsed) updateLayout({ collapsed: false });
+  }, [collapsed, hasConversation, updateLayout]);
 
   const persistedCollapsed = hasConversation ? collapsed : false;
-
-  // 展开时立即按当前可用空间校正宽度；收起期间容器变宽也不会留下过窄的对话栏。
-  useLayoutEffect(() => {
-    if (!hasConversation || collapsed) return;
-    const container = containerRef.current;
-    if (!container) return;
-    const desired = widthPinnedRef.current
-      ? widthRef.current
-      : CONVERSATION_DEFAULT_WIDTH;
-    const next = resolveConversationWidth(container.clientWidth, desired);
-    if (next !== null) setWidth(next);
-  }, [collapsed, hasConversation]);
-
-  useEffect(() => {
-    if (!hasConversation) return;
-    writeStoredLayout({ width, collapsed, pinned: widthPinned });
-  }, [collapsed, hasConversation, width, widthPinned]);
 
   /**
    * 拖动分隔条。
@@ -287,7 +246,7 @@ export function WorkspaceSplit({
     if (!container) return;
 
     const startX = event.clientX;
-    const startWidth = widthRef.current;
+    const startWidth = layoutRef.current.width;
     const pendingCollapseRef = { current: false };
     handle.setPointerCapture(event.pointerId);
     setDragging(true);
@@ -309,8 +268,11 @@ export function WorkspaceSplit({
         pendingCollapseRef.current = false;
         setCollapsePending(false);
       }
-      setWidth(Math.min(next, maxByContainer));
-      setWidthPinned(true);
+      // 每次移动都立即写回本地，刷新后宽度就是最后一次拖动结果。
+      updateLayout({
+        width: Math.min(next, maxByContainer),
+        pinned: true,
+      });
     };
     const handleUp = () => {
       handle.removeEventListener("pointermove", handleMove);
@@ -343,13 +305,13 @@ export function WorkspaceSplit({
     if (!hasConversation) return;
     if (event.key === "ArrowLeft") {
       event.preventDefault();
-      setCollapsed(false);
+      updateLayout({ collapsed: false });
       applyWidth(width - KEYBOARD_STEP);
       return;
     }
     if (event.key === "ArrowRight") {
       event.preventDefault();
-      setCollapsed(false);
+      updateLayout({ collapsed: false });
       applyWidth(width + KEYBOARD_STEP);
       return;
     }

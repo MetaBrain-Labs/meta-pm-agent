@@ -8,7 +8,10 @@
     "build": "tsc && vite build",
     "start": "vite preview",
     "lint": "eslint",
-    "test:layout": "node scripts/check-layout.mjs"
+    "test:layout": "node scripts/check-layout.mjs",
+    "test:cover": "node scripts/check-project-cover.mjs",
+    "test:split": "node scripts/check-split-persistence.mjs",
+    "test:ui": "node scripts/check-layout.mjs && node scripts/check-project-cover.mjs && node scripts/check-split-persistence.mjs"
   },
   "dependencies": {
     "@repo/shared": "workspace:*",

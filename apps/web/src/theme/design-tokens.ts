@@ -39,6 +39,23 @@ export const DESIGN_TOKENS = {
     errorSoft: "#fbeeee",
     mask: "rgba(0, 0, 0, 0.24)",
   },
+  /**
+   * 项目封面底色。
+   *
+   * 刻意压低彩度并提升明度：每个色的 RGB 通道极差不超过 10/255，渲染后是
+   * 近白的可辨识底色，而不是大面积色块，因此不会破坏整体黑白视觉体系。
+   * 图谱类型配色不受此表影响。
+   */
+  cover: [
+    { tint: "#eef0f4", ink: "#4f5665" },
+    { tint: "#edeef7", ink: "#4e5370" },
+    { tint: "#f0edf5", ink: "#5f5473" },
+    { tint: "#f3edf2", ink: "#715367" },
+    { tint: "#f6efec", ink: "#74584b" },
+    { tint: "#f4f2eb", ink: "#66623f" },
+    { tint: "#eaf2ed", ink: "#436452" },
+    { tint: "#e9f2f3", ink: "#44646b" },
+  ],
   radius: { small: 6, base: 8, large: 12, pill: 999 },
   spacing: { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32, spacious: 48 },
   controlHeight: { small: 32, base: 38, large: 44 },
@@ -90,6 +107,12 @@ export function applyDesignTokens(root: HTMLElement): void {
       root.style.setProperty(`--ds-${cssGroup}-${cssName}`, `${value}${unit}`);
     }
   }
+  // 封面底色是数组，单独展开为可索引的 CSS 变量。
+  DESIGN_TOKENS.cover.forEach((entry, index) => {
+    root.style.setProperty(`--ds-cover-tint-${index}`, entry.tint);
+    root.style.setProperty(`--ds-cover-ink-${index}`, entry.ink);
+  });
+  root.style.setProperty("--ds-cover-count", String(DESIGN_TOKENS.cover.length));
   root.style.setProperty("--ds-font-sans", typography.sans);
   root.style.setProperty("--ds-font-mono", typography.mono);
   root.style.setProperty("--ds-font-reading-display", typography.readingDisplay);

@@ -20,6 +20,7 @@ import { AppShell } from "./components/shell/AppShell";
 import { AppSidebar, SidebarUserArea } from "./components/shell/AppSidebar";
 import { WorkspacePanelContent } from "./components/shell/WorkspacePanelContent";
 import { WorkspaceShell } from "./components/shell/WorkspaceShell";
+import { ProjectOverviewPanel } from "./components/shell/ProjectOverviewPanel";
 import { ConfigModal } from "./components/modals/ConfigModal";
 import { ProjectCreateModal } from "./components/modals/ProjectCreateModal";
 import { TextValueModal } from "./components/modals/TextValueModal";
@@ -90,10 +91,19 @@ export default function App() {
               panel={() => (
                 <WorkspacePanelContent
                   panelId={app.workspacePanel}
-                  workspaceId={app.activeWorkspaceId}
-                  workspaceName={app.activeWorkspaceName}
-                  workspacePath={app.activeWorkspace?.localPath}
-                  threadCount={app.threads.length}
+                  overview={() => (
+                    <ProjectOverviewPanel
+                      workspaceId={app.activeWorkspaceId ?? ""}
+                      workspaceName={app.activeWorkspaceName}
+                      workspacePath={app.activeWorkspace?.localPath}
+                      threadCount={app.threads.length}
+                      lastConversationAt={app.threads[0]?.updatedAt ?? null}
+                      onPanelChange={app.handleWorkspacePanelChange}
+                      onNewConversation={() =>
+                        app.handleOpenWorkspace(app.activeWorkspaceId ?? "")
+                      }
+                    />
+                  )}
                   documents={() => (
                     <DocumentPlanningPage
                       embedded
