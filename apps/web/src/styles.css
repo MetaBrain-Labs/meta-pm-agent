@@ -3077,7 +3077,144 @@ body[data-resizing="col"] * {
   padding: 0 16px 16px;
 }
 
-/* 空会话欢迎容器：标题、推荐任务与输入提示作为一个整体垂直居中。 */
+/*
+ * 空会话：欢迎内容 + 输入区 + 快捷任务作为一个整体居中。
+ *
+ * 视觉中心略高于几何中心（下方多留一点空间），因此 padding-bottom 大于
+ * padding-top；不使用大 margin 硬推位置。
+ */
+.conversation-empty {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 32px 20px 72px;
+}
+
+.conversation-empty-inner {
+  display: flex;
+  width: 100%;
+  max-width: 720px;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 26px;
+}
+
+.conversation-welcome {
+  min-width: 0;
+}
+
+.conversation-welcome h1 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+
+.conversation-welcome p {
+  margin: 8px 0 0;
+  color: var(--ink-mute);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* 输入区在空会话里是核心交互，不贴底、两侧对齐内容宽度。 */
+.conversation-empty-composer {
+  min-width: 0;
+  width: 100%;
+}
+
+/* 快捷任务：2 × 2 网格，轻背景细边框，不用高饱和色。 */
+.quick-actions {
+  min-width: 0;
+}
+
+.quick-actions h2 {
+  margin: 0 0 10px;
+  color: var(--ink-faint);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+}
+
+.quick-actions-grid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.quick-action {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 12px 14px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--ds-motion-fast) ease,
+    border-color var(--ds-motion-fast) ease;
+}
+
+.quick-action:hover:not(:disabled) {
+  border-color: var(--line);
+  background: var(--ds-color-secondary);
+}
+
+.quick-action:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.quick-action-label {
+  min-width: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.quick-action-hint {
+  min-width: 0;
+  color: var(--ink-faint);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * 窄栏降级。
+ *
+ * 对话栏默认宽度约 400px，若按视口宽度判断会一直命中单列，因此这里以「容器」
+ * 为准：只有当容器本身窄到放不下两列时才降为单列（Container Query）。
+ */
+.quick-actions {
+  container-type: inline-size;
+}
+
+@container (max-width: 320px) {
+  .quick-actions-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 720px) {
+  .conversation-empty {
+    padding: 24px 16px 48px;
+  }
+}
+
+/* 恢复历史消息时的骨架占位容器。 */
 .chat-welcome {
   display: flex;
   width: 100%;
@@ -3087,62 +3224,8 @@ body[data-resizing="col"] * {
   padding-block: 16px;
 }
 
-.chat-welcome-head h1 {
-  margin: 0;
-  color: var(--ink);
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 1.35;
-}
-
-.chat-welcome-head p {
-  margin: 8px 0 0;
-  color: var(--ink-mute);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
 .chat-welcome-skeleton {
   gap: 20px;
-}
-
-.chat-suggestions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.chat-suggestions button {
-  display: flex;
-  min-height: 38px;
-  align-items: center;
-  border: 1px solid var(--line-soft);
-  border-radius: var(--ds-radius-base);
-  background: var(--surface);
-  padding: 8px 12px;
-  color: var(--ink-soft);
-  font-size: 13px;
-  line-height: 1.5;
-  text-align: left;
-  cursor: pointer;
-  transition: background-color var(--ds-motion-base) ease, border-color var(--ds-motion-base) ease;
-}
-
-.chat-suggestions button:hover:not(:disabled) {
-  border-color: var(--line);
-  background: var(--ds-color-secondary);
-}
-
-.chat-suggestions button:disabled {
-  color: var(--ink-faint);
-  cursor: not-allowed;
-}
-
-.chat-suggestion-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* ==========================================================================
@@ -3220,17 +3303,17 @@ body[data-resizing="col"] * {
 
 .chat-composer {
   width: 100%;
-  border: 1px solid var(--line);
-  border-radius: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
   background: #ffffff;
-  padding: 12px 14px 6px;
+  padding: 10px 12px 6px;
   transition:
     border-color var(--ds-motion-base) ease,
     box-shadow var(--ds-motion-base) ease;
 }
 
 .chat-composer:focus-within {
-  border-color: var(--primary);
+  border-color: var(--line);
   box-shadow: var(--ds-shadow-focus);
 }
 
@@ -3241,8 +3324,11 @@ body[data-resizing="col"] * {
   padding: 2px 2px 0;
   resize: none;
   color: var(--ink);
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.6;
+  /* 到达行数上限后输入框内部滚动，Composer 不再继续长高。 */
+  max-height: 132px;
+  overflow-y: auto;
 }
 
 .chat-composer .ant-input::placeholder {
@@ -3325,19 +3411,671 @@ body[data-resizing="col"] * {
   font-size: 13px;
 }
 
+/* 最终回答：执行过程退到次级之后，这里是对话的视觉主体。 */
 .assistant-bubble {
   border: 1px solid var(--line-soft);
-  border-radius: 18px 18px 18px 6px;
+  border-radius: 14px 14px 14px 6px;
   background: var(--surface);
-  padding: 16px;
+  padding: 14px 16px;
   color: var(--ink);
   font-family: var(--body);
   font-size: 14px;
-  line-height: 1.65;
+  line-height: 1.7;
 }
 
 .assistant-bubble.is-loading {
   color: var(--ink-mute);
+}
+
+/* ==========================================================================
+   对话执行时间线
+   一次请求的所有 Agent 收在一个分组里；一级只有状态、描述与 Agent 名，
+   Token / Cost / 工具参数等进入展开后的运行详情。容器保持白色 + 细灰边，
+   状态色只出现在圆点、图标与极浅标签上。
+   ========================================================================== */
+
+.exec-run {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  margin-bottom: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--ds-radius-base);
+  background: var(--surface);
+}
+
+/* 分组头：整行可点，展开/折叠步骤列表。 */
+.exec-run-head {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  padding: 8px 10px;
+  color: var(--ink);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* 单步分组：头部就是这一步，状态圆点也在头部。 */
+.exec-run.is-single .exec-run-head {
+  padding: 9px 10px;
+}
+
+/* 没有可展开内容时不做成可点，caret 也隐藏。 */
+.exec-run-head:disabled {
+  cursor: default;
+}
+
+.exec-caret[data-hidden="true"] {
+  visibility: hidden;
+}
+
+/* 单步分组的运行详情：直接跟在头部下方，不再重复标题。 */
+.exec-run-detail {
+  min-width: 0;
+  border-top: 1px solid var(--line-soft);
+  padding: 8px 10px 10px 34px;
+}
+
+/* 运行详情里的缩进来自容器，这里不再叠加左侧竖线。 */
+.exec-run-detail .exec-detail {
+  gap: 10px;
+  margin: 0;
+  border-left: 0;
+  padding-left: 0;
+}
+
+.exec-run-title {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * 单步分组的 Agent 名：靠右对齐，与左侧执行描述形成两端布局。
+ * margin-left:auto 让它被推到最右；描述过长时先压缩描述（flex 收缩）。
+ */
+.exec-run-agent {
+  min-width: 0;
+  flex: 0 1 auto;
+  margin-left: auto;
+  overflow: hidden;
+  padding-left: 8px;
+  color: var(--ink-faint);
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 右侧尾部：步数、运行指示、耗时、提示。 */
+.exec-run-tail {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  margin-left: 8px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 没有 Agent 名时，尾部自己靠右。 */
+.exec-run-title + .exec-run-tail {
+  margin-left: auto;
+}
+
+.exec-run-count {
+  flex-shrink: 0;
+  color: var(--ink-mute);
+}
+
+.exec-run-tail .ant-spin {
+  font-size: 11px;
+  color: var(--ink-mute);
+}
+
+.exec-run-meta {
+  min-width: 0;
+  flex-shrink: 0;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 折叠态摘要：一行说明当前进度或完成情况。 */
+.exec-run-summary {
+  margin: 0;
+  overflow: hidden;
+  padding: 0 10px 8px 28px;
+  color: var(--ink-mute);
+  font-size: 12px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exec-run-summary[data-tone="running"] {
+  color: var(--ink-soft);
+}
+
+/* 展开的步骤列表：靠缩进与分隔线建立层级，不再层层套卡片。 */
+.exec-steps {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  margin: 0;
+  border-top: 1px solid var(--line-soft);
+  padding: 4px 10px 8px 28px;
+  list-style: none;
+}
+
+.exec-step {
+  position: relative;
+  min-width: 0;
+  padding: 6px 0;
+}
+
+/* 时间线竖线：用一条细线表达顺序，替代每步一个边框。 */
+.exec-step::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -14px;
+  width: 1px;
+  background: var(--line-soft);
+}
+
+.exec-step:first-child::before {
+  top: 12px;
+}
+
+.exec-step:last-child::before {
+  bottom: calc(100% - 12px);
+}
+
+.exec-step-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.exec-status-icon {
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+
+.exec-status-icon[data-status="completed"] {
+  color: var(--ds-color-success);
+}
+
+.exec-status-icon[data-status="failed"] {
+  color: var(--ds-color-error);
+}
+
+.exec-status-ring {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border: 1.5px solid var(--line);
+  border-radius: 50%;
+}
+
+.exec-status-spin {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--ds-color-primary);
+}
+
+.exec-step-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exec-step[data-status="waiting"] .exec-step-title {
+  color: var(--ink-mute);
+}
+
+/* 运行详情入口：默认折叠，弱化为文字按钮。 */
+.exec-step-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--ink-faint);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.exec-step-toggle:hover {
+  color: var(--ink);
+}
+
+/* 步骤副行：Agent 名（弱化）+ 耗时。 */
+.exec-step-meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding-left: 22px;
+  color: var(--ink-faint);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.exec-step-agent {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exec-dot {
+  color: var(--line);
+}
+
+.exec-step-hint {
+  color: var(--ink-mute);
+}
+
+.exec-step-failed {
+  color: var(--ds-color-error);
+}
+
+/* 折线指示：指向右侧内容。 */
+.exec-caret {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--ink-faint);
+  transform: rotate(0deg);
+  transition: transform var(--ds-motion-fast) ease;
+}
+
+.exec-caret[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+/* 运行详情：二级信息区，缩进在步骤之下。 */
+.exec-detail {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  margin: 6px 0 2px 22px;
+  border-left: 2px solid var(--line-soft);
+  padding-left: 10px;
+}
+
+.exec-metrics {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+}
+
+.exec-metric {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 11px;
+}
+
+.exec-metric dt {
+  color: var(--ink-faint);
+}
+
+.exec-metric dd {
+  margin: 0;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.exec-block {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.exec-block h4 {
+  margin: 0;
+  color: var(--ink-mute);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.exec-block p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
+.exec-disclosure {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--ink-mute);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.exec-disclosure:hover {
+  color: var(--ink);
+}
+
+/* 长文本（执行过程、工具参数）在自身区域内滚动，不撑高对话。 */
+.exec-pre {
+  max-height: 200px;
+  overflow: auto;
+  margin: 0;
+  border-radius: var(--ds-radius-small);
+  background: var(--ds-color-secondary);
+  padding: 8px 10px;
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 工具调用：紧凑列表，一行一个工具。 */
+.exec-tools {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.exec-tool {
+  min-width: 0;
+}
+
+.exec-tool-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.exec-tool-icon {
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
+.exec-tool-icon[data-status="completed"] {
+  color: var(--ds-color-success);
+}
+
+.exec-tool-icon[data-status="failed"] {
+  color: var(--ds-color-error);
+}
+
+.exec-tool-name {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exec-tool-state {
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+}
+
+.exec-tool[data-status="failed"] .exec-tool-state {
+  color: var(--ds-color-error);
+}
+
+/* SubAgent 说明行：跟在轨迹行下方，弱化处理。 */
+.exec-subagent-desc {
+  margin: 2px 0 0 17px;
+  color: var(--ink-faint);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+/* 规划 / 审查详情：二级折叠区，与时间线同一视觉层级。 */
+.exec-extra {
+  min-width: 0;
+  margin-bottom: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--ds-radius-base);
+  background: var(--surface);
+}
+
+.exec-extra > summary {
+  padding: 8px 10px;
+  color: var(--ink-mute);
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.exec-extra > summary::-webkit-details-marker {
+  display: none;
+}
+
+.exec-extra > summary::before {
+  content: "›";
+  display: inline-block;
+  width: 12px;
+  color: var(--ink-faint);
+  transition: transform var(--ds-motion-fast) ease;
+}
+
+.exec-extra[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.exec-extra > summary:hover {
+  color: var(--ink);
+}
+
+.exec-extra-body {
+  min-width: 0;
+  border-top: 1px solid var(--line-soft);
+  padding: 8px 10px;
+}
+
+/* ==========================================================================
+   对话内联折叠原语
+   执行时间线与结构化卡片共用同一套二级/三级信息外观：没有容器边框，
+   靠缩进、留白与一条细分隔线表达层级，避免「卡片套卡片」。
+   ========================================================================== */
+
+.conv-fold {
+  min-width: 0;
+}
+
+.conv-fold-head {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: transparent;
+  padding: 2px 0;
+  color: var(--ink-mute);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.conv-fold-head:hover {
+  color: var(--ink);
+}
+
+.conv-fold-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+.conv-fold-title {
+  min-width: 0;
+  flex: 0 0 auto;
+  color: var(--ink-soft);
+  font-weight: 500;
+}
+
+.conv-fold-hint {
+  min-width: 0;
+  flex: 0 0 auto;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.conv-fold-body {
+  min-width: 0;
+  margin-top: 4px;
+  padding-left: 17px;
+}
+
+/* 非折叠内联块：与折叠块同一排版，用于已在时间线里的内容。 */
+.conv-block {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.conv-block-head {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.conv-block-head h4 {
+  margin: 0;
+  color: var(--ink-mute);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.conv-block-head span {
+  color: var(--ink-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.conv-block-body {
+  min-width: 0;
+}
+
+/*
+ * 内联形态下的结构化列表：去掉 antd 默认的外框与缩进，
+ * 让内容直接落在运行详情里，而不是再出现一层卡片。
+ */
+.conv-fold-body .ant-list,
+.conv-fold .ant-list {
+  border: 0;
+  background: transparent;
+}
+
+.conv-fold-body .ant-list-item,
+.conv-fold .ant-list-item {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.conv-fold-body .ant-typography,
+.conv-fold .ant-typography {
+  margin-bottom: 0;
+  font-size: 12px;
+}
+
+.conv-fold-body .ant-tag,
+.conv-fold .ant-tag {
+  font-size: 10px;
+  line-height: 18px;
+}
+
+/* 知识图谱更新事件：独立一行，不夹在折叠详情里。 */
+.kg-updated {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--ds-radius-base);
+  background: var(--surface);
+  padding: 10px 12px;
+}
+
+.kg-updated-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--ink-mute);
+  font-size: 15px;
+}
+
+.kg-updated-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.kg-updated-copy strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.kg-updated-copy span {
+  color: var(--ink-faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.kg-updated-link {
+  flex: 0 0 auto;
+  color: var(--ink-mute);
+  font-size: 12px;
+  text-decoration: underline;
+  text-decoration-color: var(--line);
+  text-underline-offset: 3px;
+}
+
+.kg-updated-link:hover {
+  color: var(--ink);
 }
 
 .ant-btn .anticon {
@@ -3398,14 +4136,6 @@ body[data-resizing="col"] * {
 
   .conversation-composer-dock {
     padding: 0 12px 12px;
-  }
-
-  .chat-suggestions {
-    margin-bottom: 4px;
-  }
-
-  .chat-welcome-head h1 {
-    font-size: 22px;
   }
 
   .settings-modal-body {

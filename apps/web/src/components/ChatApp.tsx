@@ -91,11 +91,17 @@ interface Props {
   kgRefresh?: () => Promise<void>;
 }
 
-const EXAMPLE_QUERIES = [
-  "帮我梳理这个产品的核心需求",
-  "为当前项目拆一版 MVP 计划",
-  "生成一份迭代风险清单",
-  "把今天的讨论整理成待办事项",
+/**
+ * 空会话的快捷任务。
+ *
+ * 文案与行为沿用原有推荐问题：点击即以该问题发起对话，走同一条发送路径。
+ * 这里只补充一行说明，让卡片不再像表单选项。
+ */
+const EXAMPLE_QUERIES: Array<{ label: string; hint: string }> = [
+  { label: "帮我梳理这个产品的核心需求", hint: "明确目标、用户与范围" },
+  { label: "为当前项目拆一版 MVP 计划", hint: "形成阶段性执行方案" },
+  { label: "生成一份迭代风险清单", hint: "识别关键风险与依赖" },
+  { label: "把今天的讨论整理成待办事项", hint: "提炼讨论后的行动事项" },
 ];
 
 export function ChatApp({
@@ -202,11 +208,20 @@ export function ChatApp({
     pauseAutoScroll,
   );
 
+  /*
+   * 流式期间只在用户位于底部附近时跟随滚动。
+   *
+   * userScrolled 由滚动事件维护：离开底部即暂停跟随，滚回底部自动恢复，
+   * 因此用户主动上滚查看历史时不会被强行拉回。
+   */
   useEffect(() => {
-    if (!userScrolled) {
-      scrollToBottom();
-    }
+    if (!userScrolled) scrollToBottom();
   }, [messages, userScrolled, scrollToBottom]);
+
+  // 新一轮发送时重新跟随：否则"上滚看历史 → 再发送"会永久停止自动滚动。
+  useEffect(() => {
+    if (isLoading) setUserScrolled(false);
+  }, [isLoading]);
 
   const handleScroll = useCallback(() => {
     setUserScrolled(!isAtBottom());
@@ -348,6 +363,13 @@ export function ChatApp({
 
   const showWelcome = messages.length === 0 && !isMessagesLoading;
   const showMessagesLoading = isMessagesLoading && messages.length === 0;
+  /**
+   * 空会话（New Conversation）与 Active Conversation 的布局在这里分流。
+   *
+   * 只有真正没有消息且不在恢复中时才算空会话；一旦发出第一条消息，
+   * showWelcome 立即为 false，布局自动切回「消息区 + 贴底输入框」。
+   */
+  const isEmptyConversation = showWelcome && !pendingForm;
 
   const scrollToActiveThinking = useCallback((agentType: string) => {
     const container = containerRef.current;
@@ -399,28 +421,6 @@ export function ChatApp({
   const messageList = (
     <>
       {activityBar}
-
-      {/* 空会话把标题、推荐任务与输入提示收在同一个容器里，避免首屏被拆散。 */}
-      {showWelcome && (
-        <div className="chat-welcome">
-          <header className="chat-welcome-head">
-            <h1>今天想推进什么？</h1>
-            <p>围绕需求、计划、文档和风险继续推进项目。</p>
-          </header>
-          <div className="chat-suggestions">
-            {EXAMPLE_QUERIES.map((query) => (
-              <button
-                key={query}
-                type="button"
-                disabled={isLoading || Boolean(disabledReason)}
-                onClick={() => handleExampleClick(query)}
-              >
-                <span className="chat-suggestion-label">{query}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
 
       {showMessagesLoading && (
         <div className="chat-welcome chat-welcome-skeleton">
@@ -508,6 +508,9 @@ export function ChatApp({
       onSubmit={doSubmit}
       isLoading={isLoading}
       disabledReason={disabledReason}
+      placeholder={
+        isEmptyConversation ? "输入需求，让问渠帮你推进项目..." : undefined
+      }
       webSearchEnabled={webSearchEnabled}
       onToggleWebSearch={() => setWebSearchEnabled((enabled) => !enabled)}
       knowledgeGraphEnabled={Boolean(workspaceId)}
@@ -528,6 +531,35 @@ export function ChatApp({
     />
   );
 
+  /** 空会话的欢迎区：只保留标题与一行说明。 */
+  const welcome = (
+    <header className="conversation-welcome">
+      <h1>今天想推进什么？</h1>
+      <p>从需求、规划、文档或风险开始。</p>
+    </header>
+  );
+
+  /** 空会话的快捷任务：2 × 2 网格，点击沿用原有发送路径。 */
+  const quickActions = (
+    <section className="quick-actions" aria-label="常用任务">
+      <h2>常用任务</h2>
+      <div className="quick-actions-grid">
+        {EXAMPLE_QUERIES.map((action) => (
+          <button
+            key={action.label}
+            type="button"
+            className="quick-action"
+            disabled={isLoading || Boolean(disabledReason)}
+            onClick={() => handleExampleClick(action.label)}
+          >
+            <span className="quick-action-label">{action.label}</span>
+            <span className="quick-action-hint">{action.hint}</span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+
   const conversation = (
     <ConversationPane
       workspaceName={workspaceName}
@@ -541,6 +573,9 @@ export function ChatApp({
         scrollToBottom();
         setUserScrolled(false);
       }}
+      empty={isEmptyConversation}
+      welcome={welcome}
+      quickActions={quickActions}
       composer={composer}
     >
       {messageList}

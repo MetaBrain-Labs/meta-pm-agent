@@ -39,9 +39,20 @@ interface Props {
   onBack: () => void;
   showScrollToBottom: boolean;
   onScrollToBottom: () => void;
+  /**
+   * 是否为空会话。
+   *
+   * 空会话不使用「messages 撑满 + 输入框贴底」的 Active 布局，而是把欢迎内容、
+   * 输入区与快捷任务作为一个整体居中；发送第一条消息后自动切回 Active 布局。
+   */
+  empty?: boolean;
+  /** 空会话中的欢迎区（标题、说明等）。 */
+  welcome?: ReactNode;
+  /** 空会话中的快捷任务区，位于输入区下方。 */
+  quickActions?: ReactNode;
   /** 消息与过程内容。 */
   children: ReactNode;
-  /** 底部固定输入区。 */
+  /** 输入区；空会话时参与居中，否则固定在底部。 */
   composer: ReactNode;
 }
 
@@ -54,6 +65,9 @@ export function ConversationPane({
   onBack,
   showScrollToBottom,
   onScrollToBottom,
+  empty = false,
+  welcome,
+  quickActions,
   children,
   composer,
 }: Props) {
@@ -96,31 +110,47 @@ export function ConversationPane({
         </Tooltip>
       </header>
 
-      <div className="conversation-body">
-        <div
-          ref={scrollRef}
-          onScroll={onScroll}
-          className="conversation-scroll scrollbar-none"
-        >
-          {children}
+      {/*
+       * 空会话：单独一套布局。输入区参与居中，成为页面的视觉中心，
+       * 而不是被 flex:1 的消息区推到视口最底部。
+       */}
+      {empty ? (
+        <div className="conversation-empty">
+          <div className="conversation-empty-inner">
+            {welcome}
+            <div className="conversation-empty-composer">{composer}</div>
+            {quickActions}
+          </div>
         </div>
-        <ChatMessageNavigation
-          entries={messageNavigation.entries}
-          activeId={messageNavigation.activeId}
-          onNavigate={messageNavigation.scrollToMessage}
-        />
-        <FloatButton
-          icon={
-            <ArrowDownOutlined
-              style={{ color: "var(--ds-color-on-primary)" }}
+      ) : (
+        <>
+          <div className="conversation-body">
+            <div
+              ref={scrollRef}
+              onScroll={onScroll}
+              className="conversation-scroll scrollbar-none"
+            >
+              {children}
+            </div>
+            <ChatMessageNavigation
+              entries={messageNavigation.entries}
+              activeId={messageNavigation.activeId}
+              onNavigate={messageNavigation.scrollToMessage}
             />
-          }
-          className={`scroll-to-bottom w-8! h-8! ${showScrollToBottom ? "is-visible" : ""}`}
-          onClick={onScrollToBottom}
-        />
-      </div>
+            <FloatButton
+              icon={
+                <ArrowDownOutlined
+                  style={{ color: "var(--ds-color-on-primary)" }}
+                />
+              }
+              className={`scroll-to-bottom w-8! h-8! ${showScrollToBottom ? "is-visible" : ""}`}
+              onClick={onScrollToBottom}
+            />
+          </div>
 
-      <div className="conversation-composer-dock">{composer}</div>
+          <div className="conversation-composer-dock">{composer}</div>
+        </>
+      )}
     </div>
   );
 }

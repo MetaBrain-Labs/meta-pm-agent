@@ -21,9 +21,12 @@ import {
 } from "@ant-design/icons";
 import type { UserInputItem } from "../types";
 import { parseUserInputBlock } from "../utils/user-input";
+import { InlineDisclosure } from "./ui/InlineDisclosure";
 
 interface Props {
   raw: string;
+  /** 嵌入执行时间线的运行详情时使用内联折叠外观。 */
+  inline?: boolean;
 }
 
 const TYPE_CONFIG: Record<
@@ -54,10 +57,27 @@ const TYPE_CONFIG: Record<
 
 /**
  * 展示 Conversation Agent 整理后的用户输入，默认折叠明细。
+ *
+ * `inline` 用于嵌入执行时间线的运行详情：去掉外层 Collapse 与卡片边框，
+ * 只保留一致的折叠外观。
  */
-export function UserInputCard({ raw }: Props) {
+export function UserInputCard({ raw, inline = false }: Props) {
   const items = parseUserInputBlock(raw);
   if (!items) return null;
+
+  const hint = `${items.length} 条`;
+
+  if (inline) {
+    return (
+      <InlineDisclosure
+        title="用户输入整理"
+        icon={<FileTextOutlined />}
+        hint={hint}
+      >
+        <UserInputItems items={items} />
+      </InlineDisclosure>
+    );
+  }
 
   return (
     <div className="mb-2">
@@ -93,75 +113,80 @@ export function UserInputCard({ raw }: Props) {
                     color: "var(--primary)",
                   }}
                 >
-                  {items.length} 条
+                  {hint}
                 </Tag>
               </div>
             ),
-            children: (
-              <List
-                size="small"
-                dataSource={items}
-                renderItem={(item) => {
-                  const config = TYPE_CONFIG[item.type];
-                  return (
-                    <List.Item
-                      style={{
-                        alignItems: "flex-start",
-                        borderBottom: "1px solid var(--line-soft)",
-                        gap: 10,
-                        paddingLeft: 0,
-                        paddingRight: 0,
-                      }}
-                    >
-                      <span
-                        className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[11px]"
-                        style={{
-                          background: "var(--surface-muted)",
-                          color: "var(--ink-faint)",
-                          fontFamily: "var(--sans)",
-                          fontWeight: 700,
-                        }}
-                      >
-                        {item.index}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="mb-1">
-                          <Tag
-                            icon={config.icon}
-                            style={{
-                              marginInlineEnd: 0,
-                              border: "none",
-                              borderRadius: 6,
-                              background: config.background,
-                              color: config.color,
-                              fontFamily: "var(--sans)",
-                              fontSize: 11,
-                              fontWeight: 700,
-                            }}
-                          >
-                            {item.type}
-                          </Tag>
-                        </div>
-                        <div
-                          className="font-reading-compact wrap-break-word"
-                          style={{
-                            color: "var(--ink-soft)",
-                            fontFamily: "var(--body)",
-                            fontSize: 14,
-                            lineHeight: 1.65,
-                          }}
-                        >
-                          {item.content}
-                        </div>
-                      </div>
-                    </List.Item>
-                  );
-                }}
-              />
-            ),
+            children: <UserInputItems items={items} />,
           },
         ]}
       />
     </div>
+  );
+}
+
+/** 输入项明细列表；折叠外壳之外的部分。 */
+function UserInputItems({ items }: { items: UserInputItem[] }) {
+  return (
+    <List
+      size="small"
+      dataSource={items}
+      renderItem={(item) => {
+        const config = TYPE_CONFIG[item.type];
+        return (
+          <List.Item
+            style={{
+              alignItems: "flex-start",
+              borderBottom: "1px solid var(--line-soft)",
+              gap: 10,
+              paddingLeft: 0,
+              paddingRight: 0,
+            }}
+          >
+            <span
+              className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[11px]"
+              style={{
+                background: "var(--surface-muted)",
+                color: "var(--ink-faint)",
+                fontFamily: "var(--sans)",
+                fontWeight: 700,
+              }}
+            >
+              {item.index}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="mb-1">
+                <Tag
+                  icon={config.icon}
+                  style={{
+                    marginInlineEnd: 0,
+                    border: "none",
+                    borderRadius: 6,
+                    background: config.background,
+                    color: config.color,
+                    fontFamily: "var(--sans)",
+                    fontSize: 11,
+                    fontWeight: 700,
+                  }}
+                >
+                  {item.type}
+                </Tag>
+              </div>
+              <div
+                className="font-reading-compact wrap-break-word"
+                style={{
+                  color: "var(--ink-soft)",
+                  fontFamily: "var(--body)",
+                  fontSize: 14,
+                  lineHeight: 1.65,
+                }}
+              >
+                {item.content}
+              </div>
+            </div>
+          </List.Item>
+        );
+      }}
+    />
   );
 }

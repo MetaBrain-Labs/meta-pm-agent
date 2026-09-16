@@ -7,10 +7,10 @@
  * Responsibilities:
  * - 解析 request-analysis tagged block
  * - 渲染业务模型、约束和缺失信息
- * - 保持结构化分析卡片默认折叠
+ * - 保持结构化分析卡片默认折叠；inline 模式供执行时间线复用
  */
 
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Collapse, Empty, List, Progress, Space, Tag, Typography } from "antd";
 import {
   ApartmentOutlined,
@@ -19,19 +19,35 @@ import {
   QuestionCircleOutlined,
 } from "@ant-design/icons";
 import type { RequestAnalysis } from "../types";
+import { InlineDisclosure } from "./ui/InlineDisclosure";
 
 interface Props {
   raw?: string;
   analysis?: RequestAnalysis;
+  /** 嵌入执行时间线的运行详情时使用内联折叠外观。 */
+  inline?: boolean;
 }
 
 /**
  * 展示 Request Agent 的结构化分析结果，默认折叠明细。
  */
-export function RequestAnalysisCard({ raw, analysis }: Props) {
-  const [open, setOpen] = useState(false);
+export function RequestAnalysisCard({ raw, analysis, inline = false }: Props) {
   const data = analysis ?? parseRequestAnalysisBlock(raw ?? "");
   if (!data) return null;
+
+  const hint = `${data.business_model.length} 条业务`;
+
+  if (inline) {
+    return (
+      <InlineDisclosure
+        title="Request Agent 分析"
+        icon={<ApartmentOutlined />}
+        hint={hint}
+      >
+        <RequestAnalysisBody data={data} />
+      </InlineDisclosure>
+    );
+  }
 
   return (
     <Collapse
@@ -44,10 +60,7 @@ export function RequestAnalysisCard({ raw, analysis }: Props) {
         {
           key: "1",
           label: (
-            <div
-              className="flex items-center gap-2"
-              onClick={() => setOpen(!open)}
-            >
+            <div className="flex items-center gap-2">
               <ApartmentOutlined style={{ color: "var(--success)" }} />
               <span
                 style={{
@@ -70,12 +83,21 @@ export function RequestAnalysisCard({ raw, analysis }: Props) {
                   color: "var(--success)",
                 }}
               >
-                {data.business_model.length} 条业务
+                {hint}
               </Tag>
             </div>
           ),
-          children: (
-            <>
+          children: <RequestAnalysisBody data={data} />,
+        },
+      ]}
+    />
+  );
+}
+
+/** 业务模型、缺失信息与分类明细；折叠外壳之外的部分。 */
+function RequestAnalysisBody({ data }: { data: RequestAnalysis }) {
+  return (
+    <>
               {data.business_model.length === 0 ? (
                 <Empty
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -247,13 +269,10 @@ export function RequestAnalysisCard({ raw, analysis }: Props) {
                   )}
                 </Space>
               )}
-            </>
-          ),
-        },
-      ]}
-    />
+    </>
   );
 }
+
 
 /**
  * 渲染业务模型中的单个字段块，保证结构化内容有稳定视觉层级。

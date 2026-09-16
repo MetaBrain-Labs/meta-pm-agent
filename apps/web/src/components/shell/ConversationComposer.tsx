@@ -34,6 +34,8 @@ interface Props {
   onSubmit: () => void;
   isLoading: boolean;
   disabledReason?: string | null;
+  /** 空会话使用的引导文案；有 disabledReason 时以后者为准。 */
+  placeholder?: string;
   webSearchEnabled: boolean;
   onToggleWebSearch: () => void;
   knowledgeGraphEnabled: boolean;
@@ -53,6 +55,7 @@ export function ConversationComposer({
   onSubmit,
   isLoading,
   disabledReason,
+  placeholder,
   webSearchEnabled,
   onToggleWebSearch,
   knowledgeGraphEnabled,
@@ -86,9 +89,13 @@ export function ConversationComposer({
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={handleKeyDown}
         rows={1}
-        placeholder={disabledReason || "输入消息"}
+        placeholder={disabledReason || placeholder || "输入消息"}
         disabled={disabled}
-        autoSize={{ minRows: 2, maxRows: 7 }}
+        /*
+         * 普通状态保持紧凑，输入多行时自然增高；到上限后由输入框内部滚动，
+         * 避免 Composer 随内容无限增长，把对话区挤掉。
+         */
+        autoSize={{ minRows: 1, maxRows: 5 }}
       />
 
       <div className="chat-composer-bar">
