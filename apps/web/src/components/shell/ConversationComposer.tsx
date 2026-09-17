@@ -95,7 +95,7 @@ export function ConversationComposer({
          * 普通状态保持紧凑，输入多行时自然增高；到上限后由输入框内部滚动，
          * 避免 Composer 随内容无限增长，把对话区挤掉。
          */
-        autoSize={{ minRows: 1, maxRows: 5 }}
+        autoSize={{ minRows: 4, maxRows: 5 }}
       />
 
       <div className="chat-composer-bar">

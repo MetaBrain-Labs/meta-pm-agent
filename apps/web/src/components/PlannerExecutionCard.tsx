@@ -12,6 +12,7 @@
 
 import { useMemo, type ReactNode } from "react";
 import { formatDisplayId } from "../utils/display-id";
+import { TypedText } from "./ui/TypedText";
 import { Collapse, Empty, List, Space, Tag } from "antd";
 import {
   CheckCircleOutlined,
@@ -286,9 +287,15 @@ function PlanOverview({ plan }: { plan: TaskExecutionPlan }) {
           </div>
           <div className="min-w-0 space-y-2">
             {plan.assumptions.map((assumption, index) => (
-              <div key={`${assumption}-${index}`} className="font-reading-compact max-w-full whitespace-pre-wrap rounded bg-white/70 px-2 py-1 text-[var(--ink-soft)]">
-                {assumption}
-              </div>
+              /*
+               * 规划假设常写成 `Gap: … | Assumption: … | Impact: …`：
+               * 前缀是结构标记（界面字体），后面的解释是自然语言（内容字体）。
+               */
+              <TypedText
+                key={`${assumption}-${index}`}
+                text={assumption}
+                className="font-reading-compact max-w-full whitespace-pre-wrap rounded bg-white/70 px-2 py-1 text-[var(--ink-soft)]"
+              />
             ))}
           </div>
         </div>

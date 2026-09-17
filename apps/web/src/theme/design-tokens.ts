@@ -69,6 +69,22 @@ export const DESIGN_TOKENS = {
     workspaceHeader: 56,
   },
   typography: {
+    /**
+     * 双字体系统。
+     *
+     * ui：思源黑体，负责「结构与强调」——导航、标题、控件、表格、标签、状态、
+     * Agent / 任务 / 模型名、路径、ID、时间、Token、Cost 等元信息。这些内容
+     * 需要高辨识度与紧凑排版，始终使用本字体。
+     *
+     * content：霞鹜文楷 Lite，负责「内容与阅读」——对话正文、Markdown 正文、
+     * 文档正文、较长说明与帮助文案。回退链保留思源黑体，缺字时不会跳字体。
+     *
+     * 文楷只有 Regular 字重：≥500 的内容一律回到 ui 字体，见 styles.css 中的
+     * `.font-*` 规则（同时用 font-synthesis: none 禁止合成粗体）。
+     */
+    ui: '"Source Han Sans CN", "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, system-ui, sans-serif',
+    content:
+      '"LXGW WenKai Lite", "Source Han Sans CN", "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, system-ui, sans-serif',
     sans: '"Source Han Sans CN", "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, system-ui, sans-serif',
     mono: '"SF Mono", Consolas, Menlo, monospace',
     readingDisplay: '"LXGW WenKai Lite", "KaiTi", "STKaiti", sans-serif',
@@ -132,6 +148,8 @@ export function applyDesignTokens(root: HTMLElement): void {
   });
   root.style.setProperty("--ds-cover-count", String(DESIGN_TOKENS.cover.length));
   root.style.setProperty("--ds-font-sans", typography.sans);
+  root.style.setProperty("--ds-font-ui", typography.ui);
+  root.style.setProperty("--ds-font-content", typography.content);
   root.style.setProperty("--ds-font-mono", typography.mono);
   root.style.setProperty("--ds-font-reading-display", typography.readingDisplay);
   root.style.setProperty("--ds-line-height", String(typography.lineHeight));

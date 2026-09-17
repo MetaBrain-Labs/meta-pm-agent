@@ -15,7 +15,7 @@
  * - 不读取路由、不加载面板数据；面板内容以渲染函数注入。
  */
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button, Drawer, Tooltip } from "antd";
 import {
   CloseOutlined,
@@ -194,6 +194,20 @@ function WorkspacePanelFrame({
   toggle?: ReactNode;
   children: ReactNode;
 }) {
+  const activeTabRef = useRef<HTMLButtonElement>(null);
+
+  /*
+   * Tabs 在窄栏下会横向溢出。容器隐藏了滚动条，因此这里保证选中项始终可见：
+   * 切换面板或容器变窄后把当前项滚入视野，用户不会"看不到自己在哪一页"。
+   * `block: "nearest"` 避免带动外层纵向滚动。
+   */
+  useEffect(() => {
+    activeTabRef.current?.scrollIntoView({
+      block: "nearest",
+      inline: "nearest",
+    });
+  }, [activePanel]);
+
   return (
     <section className="workspace-panel" aria-label="工作区">
       <header className="workspace-panel-header">
@@ -209,6 +223,7 @@ function WorkspacePanelFrame({
                 type="button"
                 role="tab"
                 id={`workspace-tab-${panel.id}`}
+                ref={active ? activeTabRef : undefined}
                 aria-selected={active}
                 aria-controls="workspace-panel-body"
                 className="workspace-tab"
