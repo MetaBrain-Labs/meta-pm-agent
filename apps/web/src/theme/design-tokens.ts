@@ -56,7 +56,7 @@ export const DESIGN_TOKENS = {
     { tint: "#eaf2ed", ink: "#436452" },
     { tint: "#e9f2f3", ink: "#44646b" },
   ],
-  radius: { small: 6, base: 8, large: 12, pill: 999 },
+  radius: { button: 4, small: 6, base: 8, large: 12, pill: 999 },
   spacing: { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32, spacious: 48 },
   controlHeight: { small: 32, base: 38, large: 44 },
   /** 桌面多栏骨架尺寸；只描述栏宽与顶栏高度，不固定整个页面宽度。 */

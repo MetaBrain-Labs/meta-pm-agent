@@ -36,8 +36,8 @@ const CATEGORY_LABELS: Record<PromptCategory, string> = {
   document: "文档",
 };
 
-/** 提示词编辑器高度：固定高度保证超长提示词只在编辑器内部滚动。 */
-const EDITOR_HEIGHT = 300;
+/** 编辑器最小高度：整列高度不足时由编辑器内部滚动，而不是把设置弹窗撑高。 */
+const EDITOR_MIN_HEIGHT = 220;
 
 interface PromptConfigPanelProps {
   /** 当前工作区；为空时提示先创建工作区。 */
@@ -232,10 +232,10 @@ export function PromptConfigPanel({
                     : "text-[var(--ink-mute)] hover:bg-[var(--ds-color-hover)]"
                 }`}
               >
-                <span className="text-[13px] font-medium leading-5">
+                <span className="break-words text-[13px] font-medium leading-5">
                   {prompt.name}
                 </span>
-                <span className="line-clamp-2 text-[11px] leading-4 text-[var(--ink-faint)]">
+                <span className="line-clamp-2 break-words text-[11px] leading-4 text-[var(--ink-faint)]">
                   {prompt.description}
                 </span>
                 <span className="flex items-center gap-1.5">
@@ -251,7 +251,7 @@ export function PromptConfigPanel({
       </ul>
 
       {/* 右列：详情与编辑器。 */}
-      <section className="flex min-w-0 flex-1 flex-col gap-3">
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
         {selected ? (
           <>
             <header className="flex flex-col gap-1.5">
@@ -274,84 +274,103 @@ export function PromptConfigPanel({
                   </span>
                 ) : null}
               </div>
-              <p className="profile-list-desc">{selected.description}</p>
+              <p className="profile-list-desc break-words">{selected.description}</p>
             </header>
 
             {selected.requiredTokens.length > 0 ? (
-              <p className="profile-notice">
+              /*
+               * 必填标记用可换行的等宽 chip 列表：长标记名在这种情况下不能撑宽
+               * 设置面板，同时让用户能逐字对照。
+               */
+              <div className="profile-notice">
                 <InfoCircleOutlined aria-hidden="true" />
-                <span>
-                  保存内容必须保留必要标记：
-                  {selected.requiredTokens.map((token) => (
-                    <code
-                      key={token}
-                      className="mx-1 font-mono text-[var(--ds-font-size-caption)]"
-                    >
-                      {token}
-                    </code>
-                  ))}
-                </span>
-              </p>
+                <div className="min-w-0">
+                  <span>保存内容必须保留必要标记：</span>
+                  <span className="mt-1.5 flex flex-wrap gap-1">
+                    {selected.requiredTokens.map((token) => (
+                      <code
+                        key={token}
+                        className="rounded-[var(--ds-radius-small)] bg-[var(--ds-color-secondary)] px-1.5 py-0.5 font-mono text-[var(--ds-font-size-caption)] text-[var(--ink-mute)]"
+                      >
+                        {token}
+                      </code>
+                    ))}
+                  </span>
+                </div>
+              </div>
             ) : null}
 
             {selected.storedOverrideIgnored ? (
-              <p className="profile-notice">
+              <div className="profile-notice">
                 <InfoCircleOutlined aria-hidden="true" />
-                已保存的自定义内容未通过校验，运行时会回退内置默认。请重新保存或恢复默认。
-              </p>
+                <span className="min-w-0">
+                  已保存的自定义内容未通过校验，运行时会回退内置默认。请重新保存或恢复默认。
+                </span>
+              </div>
             ) : null}
 
-            <Input.TextArea
-              value={draft ?? ""}
-              onChange={(event) => setDraft(event.target.value)}
-              readOnly={!canWrite}
-              spellCheck={false}
-              aria-label={`${selected.name} 提示词内容`}
-              style={{
-                height: EDITOR_HEIGHT,
-                resize: "none",
-                fontFamily: "var(--ds-font-mono)",
-                fontSize: "var(--ds-font-size-control)",
-                lineHeight: 1.7,
-              }}
-            />
+            {/*
+             * 编辑器占满详情列的剩余高度：超长提示词只在编辑器内部滚动，
+             * 设置弹窗高度不随提示词长度变化。
+             */}
+            <div
+              className="flex min-h-0 min-w-0 flex-1 flex-col"
+              style={{ minHeight: EDITOR_MIN_HEIGHT }}
+            >
+              <Input.TextArea
+                value={draft ?? ""}
+                onChange={(event) => setDraft(event.target.value)}
+                readOnly={!canWrite}
+                spellCheck={false}
+                aria-label={`${selected.name} 提示词内容`}
+                style={{
+                  height: "100%",
+                  resize: "none",
+                  fontFamily: "var(--ds-font-mono)",
+                  fontSize: "var(--ds-font-size-control)",
+                  lineHeight: 1.7,
+                }}
+              />
+            </div>
 
             <div className="flex flex-wrap items-center gap-2">
               {!canWrite ? (
-                <span className="profile-list-desc">
+                <span className="profile-list-desc min-w-0 break-words">
                   当前身份只能查看提示词内容。如需修改，请由服务端配置提示词配置权限。
                 </span>
               ) : null}
-              <div className="ml-auto flex items-center gap-2">
-                {canWrite ? (
-                  <Button
-                    size="small"
-                    disabled={!dirty || busy}
-                    onClick={handleDiscard}
-                  >
-                    取消
-                  </Button>
-                ) : null}
-                {canWrite ? (
-                  <Button
-                    size="small"
-                    type="primary"
-                    loading={saving}
-                    disabled={!dirty || busy}
-                    onClick={() => void handleSave()}
-                  >
-                    保存修改
-                  </Button>
-                ) : null}
+              {/*
+               * 动作区沿用项目既有约定：主操作放在最右并使用 primary，
+               * 其余动作是与弹窗底部一致的无强调边框按钮。
+               */}
+              <div className="ml-auto flex flex-wrap items-center gap-2">
                 {canReset ? (
                   <Button
-                    size="small"
                     loading={resetting}
                     disabled={!selected.customized || busy}
                     onClick={handleReset}
                   >
                     恢复默认
                   </Button>
+                ) : null}
+                {canWrite ? (
+                  <>
+                    <span className="mx-1 h-5 w-px bg-[var(--line-soft)]" aria-hidden="true" />
+                    <Button
+                      disabled={!dirty || busy}
+                      onClick={handleDiscard}
+                    >
+                      取消
+                    </Button>
+                    <Button
+                      type="primary"
+                      loading={saving}
+                      disabled={!dirty || busy}
+                      onClick={() => void handleSave()}
+                    >
+                      保存修改
+                    </Button>
+                  </>
                 ) : null}
               </div>
             </div>

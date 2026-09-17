@@ -95,6 +95,12 @@ export const APP_THEME = {
   },
   components: {
     Button: {
+      /*
+       * 按钮圆角独立于输入类控件的 8px：按钮是成组出现的短标签，
+       * 4px 更贴近项目克制的灰阶语言，默认尺寸与小尺寸保持同一圆角。
+       */
+      borderRadius: r.button,
+      borderRadiusSM: r.button,
       fontWeight: t.weight.medium,
       defaultShadow: shadow.surface,
       primaryShadow: shadow.surface,
