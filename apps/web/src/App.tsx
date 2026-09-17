@@ -20,6 +20,7 @@ import { AppShell } from "./components/shell/AppShell";
 import { AppSidebar, SidebarUserArea } from "./components/shell/AppSidebar";
 import { WorkspacePanelContent } from "./components/shell/WorkspacePanelContent";
 import { WorkspaceShell } from "./components/shell/WorkspaceShell";
+import { WorkspaceLoadingGate } from "./components/shell/WorkspaceLoadingGate";
 import { WorkspaceSyncStatus } from "./components/shell/WorkspaceSyncStatus";
 import { ProjectOverviewPanel } from "./components/shell/ProjectOverviewPanel";
 import { ConfigModal } from "./components/modals/ConfigModal";
@@ -78,10 +79,15 @@ export default function App() {
           }
         >
           {inProject ? (
-            <WorkspaceShell
-              workspaceName={app.activeWorkspaceName}
-              activePanel={app.workspacePanel}
-              onPanelChange={app.handleWorkspacePanelChange}
+            /*
+             * 切换项目时先遮住旧工作区内容：新项目的 Header 配上上一个项目的
+             * 正文会让人以为数据串了。同一项目内的面板切换不受影响。
+             */
+            <WorkspaceLoadingGate workspaceId={app.activeWorkspaceId ?? ""}>
+              <WorkspaceShell
+                workspaceName={app.activeWorkspaceName}
+                activePanel={app.workspacePanel}
+                onPanelChange={app.handleWorkspacePanelChange}
               /*
                * 项目本地同步是工作区级状态，统一放在 Header 右侧：
                * 平时只是一个轻量内联状态，点击后才展开详情浮层。
@@ -151,7 +157,8 @@ export default function App() {
                   )}
                 />
               )}
-            />
+              />
+            </WorkspaceLoadingGate>
           ) : (
             <WorkspacePage
               workspaces={app.workspaces}

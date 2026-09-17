@@ -23,7 +23,6 @@ import {
   Modal,
   Select,
   Space,
-  Spin,
   Tabs,
   Tag,
   Tooltip,
@@ -65,6 +64,7 @@ import {
   type DocumentWorkflowStage,
 } from "../../api/document-api";
 import { ModelProfileSelector } from "../../components/ModelProfileSelector";
+import { GlobalLoader } from "../../components/ui/GlobalLoader";
 import { TodoCard } from "../../components/TodoCard";
 import {
   KnowledgeGraphView,
@@ -831,7 +831,13 @@ export function DocumentPlanningPage({
                             PRD 工作流独立运行，页面切换不会中断后台任务。
                           </Text>
                         </div>
-                        {runActive && <Spin size="small" />}
+                        {/*
+                          运行中的任务状态由「当前阶段」表达，这里只补一个局部
+                          加载指示：它不是通用 Loading，而是"工作流正在跑"。
+                        */}
+                        {runActive && (
+                          <GlobalLoader scope="inline" loading label="运行中" />
+                        )}
                       </div>
                       <div className="mt-3 flex flex-col gap-2 text-sm">
                         <InfoRow label="任务 ID" value={run?.id ?? "-"} />
@@ -1200,16 +1206,16 @@ function getEvidenceBlockerGroups(
 /**
  * 嵌入式 G6 知识图谱画布。
  */
+/**
+ * 文档工作区首次初始化。
+ *
+ * 此时知识图谱、Document Agent 任务与产物状态都还没准备好，整个交付文档
+ * 模块不可用，属于工作区级加载。
+ */
 function PageLoadingState() {
   return (
-    <div className="min-h-[620px] rounded border border-gray-200 bg-white flex flex-col items-center justify-center gap-4">
-      <Spin size="large" />
-      <div className="text-center">
-        <Text strong>正在加载策划产出文档数据</Text>
-        <Text type="secondary" className="block mt-1 text-xs">
-          正在读取当前知识图谱和 Document Agent 任务状态...
-        </Text>
-      </div>
+    <div className="doc-init-state">
+      <GlobalLoader scope="workspace" loading label="正在初始化文档工作区..." />
     </div>
   );
 }
@@ -1388,11 +1394,14 @@ function ScoringResultPanel({
             独立评审；可重写问题最多修订三轮，缺少新证据时直接保留草案。
           </Text>
         </div>
-        {scoringActive ? (
-          <Spin size="small" />
-        ) : (
+        {/*
+          「n / 3 轮」是真实业务进度：评分进行中也要继续显示，
+          不能用通用 Loading 把它藏起来。这里只补一个运行指示。
+        */}
+        <div className="flex items-center gap-2">
+          {scoringActive && <GlobalLoader scope="inline" loading label="" />}
           <Tag>{attempts.length}/3 轮</Tag>
-        )}
+        </div>
       </div>
 
       {qualityScore && (

@@ -90,6 +90,14 @@ export function ProjectOverviewPanel({
     document: null,
   });
   const [loading, setLoading] = useState(true);
+  /**
+   * 各事件源的取数是否已经结束。
+   *
+   * 「最近更新」的会话事件来自 props（同步可知），图谱与文档事件来自接口；
+   * 因此不能只按 `timeline.length` 判断是否显示骨架——列表里已经有会话事件时
+   * 那个条件永远为假。按来源分别记录，才能给"还没回来的那些事件"显示占位。
+   */
+  const [settled, setSettled] = useState({ graph: false, document: false });
   const [loadError, setLoadError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [messageApi, contextHolder] = message.useMessage();
@@ -108,12 +116,14 @@ export function ProjectOverviewPanel({
     const failed = [graph, document].filter(
       (result) => result.status === "rejected",
     ).length;
+    setSettled({ graph: true, document: true });
     setLoadError(failed === 2 ? "项目概览数据加载失败" : failed === 1 ? "部分概览数据暂不可用" : null);
   }, [workspaceId]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setSettled({ graph: false, document: false });
     load()
       .catch((error) => {
         if (cancelled) return;
@@ -185,6 +195,44 @@ export function ProjectOverviewPanel({
       .filter((event) => !Number.isNaN(new Date(event.at).getTime()))
       .sort((left, right) => new Date(right.at).getTime() - new Date(left.at).getTime());
   }, [artifact, graph, lastConversationAt]);
+
+  /**
+   * 最近更新的展示行。
+   *
+   * 已解析出的事件直接显示；尚未返回的事件源先用骨架占住同一行几何，
+   * 数据到达后就地替换，不产生布局位移。
+   */
+  const timelineRows = useMemo(() => {
+    const byKey = new Map(timeline.map((event) => [event.key, event]));
+    const rows: Array<
+      | { kind: "event"; event: (typeof timeline)[number] }
+      | { kind: "placeholder"; key: string }
+    > = [];
+
+    if (byKey.has("conversation")) {
+      rows.push({ kind: "event", event: byKey.get("conversation")! });
+    }
+    if (!settled.graph) {
+      rows.push({ kind: "placeholder", key: "graph" });
+    } else if (byKey.has("graph")) {
+      rows.push({ kind: "event", event: byKey.get("graph")! });
+    }
+    if (!settled.document) {
+      rows.push({ kind: "placeholder", key: "artifact" });
+    } else if (byKey.has("artifact")) {
+      rows.push({ kind: "event", event: byKey.get("artifact")! });
+    }
+
+    // 会话事件还没排进来时（无更新时间）也补一行占位，避免区块空白。
+    const known = timeline.filter(
+      (event) => event.key !== "graph" && event.key !== "artifact",
+    );
+    if (known.length === 0 && rows.length === 0) {
+      rows.push({ kind: "placeholder", key: "conversation" });
+    }
+
+    return rows;
+  }, [settled, timeline]);
 
   /** 生成 PRD 后跳到交付文档面板，复用现有工作台展示进度。 */
   const handleGeneratePrd = useCallback(async () => {
@@ -271,7 +319,13 @@ export function ProjectOverviewPanel({
       {/* 第三层：关键维度 + 快捷操作 */}
       <section className="overview-block" aria-label="关键维度">
         <h3>关键维度</h3>
-        {dimensions.length > 0 ? (
+        {/*
+          结构已知（一排标签 + 一行统计），因此读取期间显示骨架，
+          而不是一句"正在读取…"的文案。
+        */}
+        {loading && dimensions.length === 0 ? (
+          <OverviewSkeleton variant="chips" />
+        ) : dimensions.length > 0 ? (
           <>
             <div className="overview-chips">
               {dimensions.map((dimension) => (
@@ -289,7 +343,7 @@ export function ProjectOverviewPanel({
           </>
         ) : (
           <p className="overview-note">
-            {loading ? "正在读取当前知识状态…" : "还没有实体，先在对话中补充项目信息。"}
+            还没有实体，先在对话中补充项目信息。
           </p>
         )}
       </section>
@@ -329,7 +383,9 @@ export function ProjectOverviewPanel({
       {/* 第四层：最近交付文档 */}
       <section className="overview-block" aria-label="最近交付文档">
         <h3>最近交付文档</h3>
-        {artifact ? (
+        {loading && !artifact ? (
+          <OverviewSkeleton variant="row" />
+        ) : artifact ? (
           <div className="overview-delivery">
             <FileTextOutlined aria-hidden="true" />
             <div className="overview-delivery-body">
@@ -359,28 +415,48 @@ export function ProjectOverviewPanel({
       {/* 第五层：最近更新 */}
       <section className="overview-block" aria-label="最近更新">
         <h3>最近更新</h3>
-        {timeline.length > 0 ? (
+        {timelineRows.length > 0 ? (
           <ol className="overview-timeline">
-            {timeline.map((event) => (
-              <li key={event.key}>
-                <span className="overview-timeline-time">
-                  {formatDateTime(event.at)}
-                </span>
-                <span className="overview-timeline-body">
-                  <strong>{event.label}</strong>
-                  {/* 说明单独成行、置于浅底容器内，与标题形成两级层级。 */}
-                  <span className="overview-timeline-detail">
-                    <em>{event.detail}</em>
-                    <RightOutlined aria-hidden="true" />
+            {timelineRows.map((row) =>
+              /*
+               * 事件行与占位行共用同一套几何：数据到达时就地替换，
+               * 已解析出的事件（例如会话活动）不会因为其它事件在加载而消失。
+               */
+              row.kind === "event" ? (
+                <li key={row.event.key}>
+                  <span className="overview-timeline-time">
+                    {formatDateTime(row.event.at)}
                   </span>
-                </span>
-              </li>
-            ))}
+                  <span className="overview-timeline-body">
+                    <strong>{row.event.label}</strong>
+                    {/* 说明单独成行、置于浅底容器内，与标题形成两级层级。 */}
+                    <span className="overview-timeline-detail">
+                      <em>{row.event.detail}</em>
+                      <RightOutlined aria-hidden="true" />
+                    </span>
+                  </span>
+                </li>
+              ) : (
+                <li key={`placeholder-${row.key}`} className="is-placeholder">
+                  <span className="overview-timeline-time">
+                    <span
+                      className="overview-skeleton-line"
+                      style={{ width: 88 }}
+                    />
+                  </span>
+                  <span className="overview-timeline-body">
+                    <span
+                      className="overview-skeleton-line"
+                      style={{ width: "44%" }}
+                    />
+                    <span className="overview-skeleton-bar" />
+                  </span>
+                </li>
+              ),
+            )}
           </ol>
         ) : (
-          <p className="overview-note">
-            {loading ? "正在读取最近变化…" : "暂无可用时间记录。"}
-          </p>
+          <p className="overview-note">暂无可用时间记录。</p>
         )}
       </section>
     </div>
@@ -402,6 +478,11 @@ function Metric({
   hint?: string;
   loading: boolean;
 }) {
+  /*
+   * 加载态只保留骨架，不再叠一个 spinner：
+   * 同一张卡里同时出现"占位条 + 转圈图标"会显得多余，也让人分不清哪里在加载。
+   * 结构已知 → 一律用骨架（见 theme/README 的加载约定）。
+   */
   const content = loading ? (
     <span className="overview-metric-skeleton" aria-hidden="true" />
   ) : value === null ? (
@@ -418,11 +499,45 @@ function Metric({
           {icon}
         </span>
       </span>
-      <span className="overview-metric-value">
-        {content}
-        {loading && <LoadingOutlined aria-label="加载中" />}
-      </span>
+      <span className="overview-metric-value">{content}</span>
       {hint && <span className="overview-metric-hint">{hint}</span>}
+    </div>
+  );
+}
+
+/**
+ * 概览区块骨架。
+ *
+ * 每个区块的最终结构已知（标签行 / 单行卡片），因此读取期间用骨架占住同样的
+ * 几何，而不是显示一句话或通用转圈：Loading → Ready 不产生布局位移，也不会
+ * 出现"卡片里同时有占位条和转圈"的混乱。
+ *
+ * 「最近更新」不用这个组件：它的时间线里可能已经有同步可知的事件，
+ * 需要逐行判断是否占位，见 timelineRows。
+ */
+function OverviewSkeleton({ variant }: { variant: "chips" | "row" }) {
+  if (variant === "chips") {
+    return (
+      <div className="overview-skeleton" aria-hidden="true">
+        <div className="overview-skeleton-chips">
+          {[64, 52, 60, 56, 48, 58, 44].map((width, index) => (
+            <span key={index} className="overview-skeleton-chip" style={{ width }} />
+          ))}
+        </div>
+        <span className="overview-skeleton-line" style={{ width: 168 }} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="overview-skeleton" aria-hidden="true">
+      <div className="overview-skeleton-row">
+        <span className="overview-skeleton-block" style={{ width: 28, height: 28 }} />
+        <span className="overview-skeleton-stack">
+          <span className="overview-skeleton-line" style={{ width: "58%" }} />
+          <span className="overview-skeleton-line" style={{ width: "34%" }} />
+        </span>
+      </div>
     </div>
   );
 }

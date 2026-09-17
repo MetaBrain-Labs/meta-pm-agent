@@ -2804,12 +2804,18 @@ body[data-resizing="col"] * {
   color: var(--ink-faint);
 }
 
+/*
+ * 数值占位。
+ * 高度按真实数值行高计算（26px × 1.2 ≈ 31px），宽度覆盖两到三位数字，
+ * 这样 Loading → Ready 时卡片高度不变，整排卡片不会跳动。
+ */
 .overview-metric-skeleton {
   display: inline-block;
-  width: 32px;
-  height: 22px;
+  width: 44px;
+  height: 31px;
   border-radius: var(--ds-radius-small);
   background: var(--ds-color-secondary);
+  animation: overview-skeleton-pulse 1.6s ease-in-out infinite;
 }
 
 .overview-metric-hint {
@@ -2971,6 +2977,23 @@ body[data-resizing="col"] * {
 
 .overview-timeline li:first-child {
   border-top: 0;
+}
+
+/*
+ * 占位行：时间与说明都还没返回，因此不显示时间线圆点与连接线，
+ * 只保留与真实行一致的网格与分隔线，数据到达后原地替换。
+ */
+.overview-timeline li.is-placeholder::before,
+.overview-timeline li.is-placeholder::after {
+  display: none;
+}
+
+.overview-timeline li.is-placeholder .overview-timeline-time,
+.overview-timeline li.is-placeholder .overview-timeline-body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
 }
 
 /* 时间线标记：小圆点 + 连接线，替代额外容器。 */
@@ -5462,4 +5485,211 @@ body {
 
 .typed-body {
   font-family: var(--reading);
+}
+/* ==========================================================================
+   统一加载反馈
+   两套资产按「加载层级」分工，业务代码只表达 scope：
+   - workspace：品牌级，整块区域不可用
+   - section：局部，原内容保持可交互
+   - inline：极小区域，轻量指示器
+   Wrapper 固定尺寸，动画自身的 path morph 不影响外部盒模型。
+   ========================================================================== */
+
+.loader {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  text-align: center;
+}
+
+.loader-art {
+  display: block;
+  flex: 0 0 auto;
+  /* 资产自带 viewBox，按原始比例等比缩放，不拉伸。 */
+  object-fit: contain;
+  user-select: none;
+}
+
+/* 文案用界面字体：加载状态属于 UI 信息，不使用内容字体。 */
+.loader-label {
+  max-width: 32ch;
+  color: var(--ink-mute);
+  font-family: var(--ui);
+  font-size: var(--ds-font-size-small);
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+
+/* 品牌级：占满可用区域并居中，保持原始横向比例。 */
+.loader-workspace {
+  height: 100%;
+  gap: 18px;
+  padding: 32px;
+}
+
+.loader-workspace .loader-art {
+  width: min(220px, 46%);
+  height: auto;
+}
+
+/* 局部：默认不改变父级布局，只在自己的区域内居中。 */
+.loader-section {
+  gap: 10px;
+  padding: 12px;
+}
+
+.loader-section .loader-art {
+  height: auto;
+}
+
+/* 极小区域：不套用 SVG 资产，保留轻量指示器。 */
+.loader-inline {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  text-align: left;
+}
+
+.loader-inline .loader-label {
+  font-size: var(--ds-font-size-caption);
+}
+
+/* 三点的轻量指示器；三点固定尺寸，不引起 Layout Shift。 */
+.loader-dots {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+}
+
+.loader-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: loader-dot 1s ease-in-out infinite;
+}
+
+.loader-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.loader-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes loader-dot {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+/* 减少动态效果时，轻量指示器保持静态可见，不做闪烁。 */
+@media (prefers-reduced-motion: reduce) {
+  .loader-dots i {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
+/* 文档工作区初始化：占住与内容一致的主要区域高度，避免 Loading → Ready 抖动。 */
+.doc-init-state {
+  display: flex;
+  min-height: 620px;
+  align-items: center;
+  justify-content: center;
+}
+/* 工作区加载门：占住内容区全高，避免被 Header 挤成一条。 */
+.workspace-loading-gate {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  background: var(--canvas);
+}
+/* ==========================================================================
+   项目概览骨架
+   结构已知的区块在读取期间用骨架占位：几何与最终内容一致，
+   Loading → Ready 不产生布局位移，也不出现"占位条 + 转圈"混用。
+   ========================================================================== */
+
+.overview-skeleton {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 骨架统一底色与轻微脉冲；脉冲由 prefers-reduced-motion 关闭。 */
+.overview-skeleton-line,
+.overview-skeleton-chip,
+.overview-skeleton-block,
+.overview-skeleton-bar {
+  display: block;
+  border-radius: var(--ds-radius-small);
+  background: var(--ds-color-secondary);
+  animation: overview-skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+/* 行内文字占位：高度对齐所在文本行，避免换行时抖动。 */
+.overview-skeleton-line {
+  height: 12px;
+}
+
+.overview-skeleton-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* chip 占位与真实标签同高（含边框）。 */
+.overview-skeleton-chip {
+  height: 28px;
+}
+
+.overview-skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--ds-radius-base);
+  padding: 10px 12px;
+}
+
+.overview-skeleton-stack {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 时间线说明条的占位，与 .overview-timeline-detail 同形。 */
+.overview-skeleton-bar {
+  height: 30px;
+  border-radius: 6px;
+}
+
+@keyframes overview-skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* 减少动态效果时保持静态底色，不做脉冲。 */
+@media (prefers-reduced-motion: reduce) {
+  .overview-skeleton-line,
+  .overview-skeleton-chip,
+  .overview-skeleton-block,
+  .overview-skeleton-bar,
+  .overview-metric-skeleton {
+    animation: none;
+  }
 }

@@ -22,7 +22,8 @@ import {
   useState,
 } from "react";
 import { Graph } from "@antv/g6";
-import { Button, Spin, Typography } from "antd";
+import { Button, Typography } from "antd";
+import { GlobalLoader } from "./ui/GlobalLoader";
 import type {
   KnowledgeGraphNodeData,
   KnowledgeGraphRelationData,
@@ -916,11 +917,17 @@ export const KnowledgeGraphView = forwardRef<
         </div>
       ) : (
         !graphReady && (
+          /*
+           * 图谱首次整体初始化（取数 + 构建 + 布局 + 渲染）属于工作区级加载：
+           * 此时整块画布不可用，因此使用品牌级加载动画。中途不切换动画，
+           * 只按阶段调整文案。
+           */
           <div className="kg-canvas-notice">
-            <Spin size="large" />
-            <Text type="secondary">
-              正在渲染知识图谱，节点较多请耐心等待...
-            </Text>
+            <GlobalLoader
+              scope="workspace"
+              loading
+              label="正在加载知识图谱..."
+            />
           </div>
         )
       )}
