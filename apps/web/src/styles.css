@@ -26,6 +26,25 @@
   font-display: swap;
 }
 
+/*
+ * 字体族静态兜底。
+ *
+ * --ds-font-* 由 design-tokens.ts 在入口运行时注入。这里给出同名兜底值，
+ * 保证脚本尚未执行时也不会回退到浏览器默认的衬线字体；注入后以后者为准
+ * （两者取值相同，见 design-tokens.ts 的 typography）。
+ */
+:root {
+  --ds-font-ui: "Source Han Sans CN", "PingFang SC", "Microsoft YaHei",
+    -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --ds-font-content: "LXGW WenKai Lite", "Source Han Sans CN", "PingFang SC",
+    "Microsoft YaHei", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --ds-font-sans: var(--ds-font-ui);
+  --ds-font-mono: "SF Mono", Consolas, Menlo, monospace;
+  --ds-font-weight-medium: 500;
+  --ds-font-weight-strong: 600;
+  --ds-line-height: 1.6;
+}
+
 :root {
   /* 兼容旧页面变量，实际值由 design-tokens.ts 在入口安装。 */
   --surface: var(--ds-color-surface);
@@ -52,8 +71,14 @@
   --shadow-soft: var(--ds-shadow-popup);
   --shadow-card: var(--ds-shadow-surface);
   --sans: var(--ds-font-sans);
-  --body: var(--sans);
-  --reading: var(--sans);
+  /* 界面字体：思源黑体。所有控件与元信息默认走这条链。 */
+  --ui: var(--ds-font-ui);
+  --body: var(--ui);
+  /*
+   * 内容字体：霞鹜文楷 Lite。阅读型内容（对话正文、Markdown、文档正文、
+   * 长说明）使用它；回退链里保留思源黑体，避免缺字时字体跳变。
+   */
+  --reading: var(--ds-font-content);
   --mono: var(--ds-font-mono);
 }
 
@@ -798,6 +823,7 @@ h3.ds-section-title { font-size: var(--ds-font-size-body); }
 }
 
 .workspace-page-empty span {
+  font-family: var(--reading);
   color: var(--ink-mute);
   font-size: var(--ds-font-size-control);
 }
@@ -1158,11 +1184,13 @@ h3.ds-section-title { font-size: var(--ds-font-size-body); }
   padding: 14px;
 }
 
+/* 问题描述是自然语言，用内容字体；标签、进度与提示保持界面字体。 */
 .hitl-form-description {
   margin: 0;
+  font-family: var(--reading);
   color: var(--ink-mute);
   font-size: var(--ds-font-size-small);
-  line-height: 1.6;
+  line-height: 1.75;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -1200,15 +1228,18 @@ h3.ds-section-title { font-size: var(--ds-font-size-body); }
   overflow-wrap: anywhere;
 }
 
+/* 帮助说明是解释性自然语言 → 内容字体。 */
 .hitl-form-help {
   margin: 0;
+  font-family: var(--reading);
   color: var(--ink-mute);
   font-size: var(--ds-font-size-small);
-  line-height: 1.6;
+  line-height: 1.75;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
+/* 「补充内容会随答案一起发送」属于界面提示，保持界面字体。 */
 .hitl-form-hint {
   margin: 0;
   color: var(--ink-faint);
@@ -1339,6 +1370,7 @@ h3.ds-section-title { font-size: var(--ds-font-size-body); }
   padding-top: 0;
 }
 
+/* 题目文字是 UI 结构 → 界面字体。 */
 .hitl-answer dt {
   color: var(--ink-mute);
   font-size: var(--ds-font-size-small);
@@ -1346,11 +1378,13 @@ h3.ds-section-title { font-size: var(--ds-font-size-body); }
   overflow-wrap: anywhere;
 }
 
+/* 用户填写的自然语言答案 → 内容字体。 */
 .hitl-answer dd {
   margin: 0;
+  font-family: var(--reading);
   color: var(--ink);
   font-size: var(--ds-font-size-control);
-  line-height: 1.6;
+  line-height: 1.75;
   overflow-wrap: anywhere;
 }
 /* ==========================================================================
@@ -1573,11 +1607,13 @@ h3.ds-section-title { font-size: var(--ds-font-size-body); }
   font-size: var(--ds-font-size-caption);
 }
 
+/* 请求摘要、规划假设等自然语言段落 → 内容字体。 */
 .task-block-text {
   margin: 0;
+  font-family: var(--reading);
   color: var(--ink-soft);
   font-size: var(--ds-font-size-control);
-  line-height: 1.7;
+  line-height: 1.8;
   overflow-wrap: anywhere;
   text-wrap: pretty;
 }
@@ -2139,6 +2175,7 @@ h3.ds-section-title { font-size: var(--ds-font-size-body); }
 
 .kg-float-hint {
   margin: 6px;
+  font-family: var(--reading);
   color: var(--ink-faint);
   font-size: var(--ds-font-size-micro);
   line-height: 1.7;
@@ -2413,19 +2450,23 @@ body[data-resizing="col"] * {
   cursor: col-resize !important;
 }
 
+/*
+ * 项目名与 Tabs 之间的间距可压缩，避免窄栏下把 Tabs 挤出滚动条。
+ * 项目名在更窄的容器里由媒体查询收起，见文件末尾的断点区。
+ */
 .workspace-panel-header {
   display: flex;
   height: var(--ds-layout-workspace-header);
   flex: 0 0 auto;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   border-bottom: 1px solid var(--line-soft);
   padding: 0 16px;
 }
 
 .workspace-panel-name {
   max-width: 200px;
-  flex-shrink: 0;
+  flex: 0 1 auto;
   overflow: hidden;
   color: var(--ink);
   font-size: var(--ds-font-size-control);
@@ -2434,42 +2475,63 @@ body[data-resizing="col"] * {
   white-space: nowrap;
 }
 
+/*
+ * 面板 Tabs：分段控件（segmented control）。
+ * 容器是一块浅底圆角，选中项是白底浮起的胶囊；不使用下划线指示条。
+ * 内容超出时不出现滚动条：容器隐藏滚动条，选中项由脚本滚入视野。
+ */
 .workspace-tabs {
   display: flex;
   min-width: 0;
-  flex: 1;
+  flex: 0 1 auto;
   align-items: center;
   gap: 2px;
+  border-radius: var(--ds-radius-base);
+  background: var(--surface-muted);
+  padding: 3px;
   overflow-x: auto;
+  scrollbar-width: none;
+  scroll-behavior: smooth;
+  overscroll-behavior-x: contain;
+}
+
+.workspace-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .workspace-tab {
   flex-shrink: 0;
   border: 0;
-  border-bottom: 2px solid transparent;
+  border-radius: var(--ds-radius-small);
   background: transparent;
-  padding: 6px 10px;
+  padding: 5px 12px;
   color: var(--ink-mute);
   font-size: var(--ds-font-size-control);
   line-height: 20px;
   white-space: nowrap;
   cursor: pointer;
-  transition: color var(--ds-motion-fast) ease, border-color var(--ds-motion-fast) ease;
+  transition:
+    background-color var(--ds-motion-fast) ease,
+    color var(--ds-motion-fast) ease,
+    box-shadow var(--ds-motion-fast) ease;
 }
 
 .workspace-tab:hover {
   color: var(--ink);
 }
 
+/* 选中项：白底胶囊 + 极弱阴影，与浅底容器形成层级。 */
 .workspace-tab[data-active="true"] {
-  border-bottom-color: var(--ds-color-primary);
+  background: var(--surface);
+  box-shadow: var(--ds-shadow-popup);
   color: var(--ink);
   font-weight: 500;
 }
 
 .workspace-panel-actions {
   display: flex;
-  flex-shrink: 0;
+  min-width: 0;
+  flex: 0 0 auto;
   align-items: center;
   gap: 4px;
 }
@@ -2642,6 +2704,7 @@ body[data-resizing="col"] * {
   min-width: 0;
 }
 
+/* 项目名称是页面级标题 → 界面字体（思源黑体 semibold）。 */
 .overview-identity h2 {
   margin: 0;
   color: var(--ink);
@@ -2651,12 +2714,17 @@ body[data-resizing="col"] * {
   overflow-wrap: anywhere;
 }
 
+/*
+ * 项目副标题：未关联时是一句说明文案，已关联时是本地路径。
+ * 两者合用一个元素，因此使用内容字体；路径本身仍靠等宽感表达会与文案冲突，
+ * 所以这里不做等宽处理，长路径交给 overflow-wrap 折行。
+ */
 .overview-identity p {
   margin: 6px 0 0;
   color: var(--ink-mute);
-  font-family: var(--mono);
+  font-family: var(--reading);
   font-size: var(--ds-font-size-small);
-  line-height: 1.6;
+  line-height: 1.7;
   overflow-wrap: anywhere;
 }
 
@@ -2764,6 +2832,7 @@ body[data-resizing="col"] * {
 }
 
 .overview-note {
+  font-family: var(--reading);
   margin: 8px 0 0;
   color: var(--ink-mute);
   font-size: var(--ds-font-size-small);
@@ -3126,6 +3195,7 @@ body[data-resizing="col"] * {
   min-width: 0;
 }
 
+/* 欢迎语主标题是页面标题 → 界面字体；下面那句引导语是自然语言 → 内容字体。 */
 .conversation-welcome h1 {
   margin: 0;
   color: var(--ink);
@@ -3137,9 +3207,10 @@ body[data-resizing="col"] * {
 
 .conversation-welcome p {
   margin: 8px 0 0;
+  font-family: var(--reading);
   color: var(--ink-mute);
   font-size: var(--ds-font-size-control);
-  line-height: 1.6;
+  line-height: 1.7;
 }
 
 /* 输入区在空会话里是核心交互，不贴底、两侧对齐内容宽度。 */
@@ -3780,6 +3851,7 @@ body[data-resizing="col"] * {
   gap: 4px;
 }
 
+/* 「预期产出 / 执行结果 / 工具调用」是结构标签 → 界面字体。 */
 .exec-block h4 {
   margin: 0;
   color: var(--ink-mute);
@@ -3789,9 +3861,10 @@ body[data-resizing="col"] * {
 
 .exec-block p {
   margin: 0;
+  font-family: var(--reading);
   color: var(--ink-soft);
   font-size: var(--ds-font-size-small);
-  line-height: 1.65;
+  line-height: 1.7;
   overflow-wrap: anywhere;
   text-wrap: pretty;
 }
@@ -4290,10 +4363,16 @@ body[data-resizing="col"] * {
   }
 }
 
+/*
+ * Markdown 正文：内容字体。
+ * 标题与表格切回界面字体（结构与密集数据需要辨识度），代码保持等宽。
+ */
 .markdown-content {
   font-family: var(--reading);
   font-size: var(--ds-font-size-body);
-  line-height: 1.8;
+  line-height: 1.85;
+  /* 文楷无粗体字重：禁止合成粗体，由 strong/b 规则切回界面字体表达强调。 */
+  font-synthesis: none;
 }
 
 .chat-message-area {
@@ -4320,8 +4399,12 @@ body[data-resizing="col"] * {
   transform: translateY(-50%);
 }
 
+/*
+ * Markdown 内需要界面字体的元素：标题、表格、强调与表头。
+ * strong/b 见下方内容强调规则（文楷无粗体字重，改用界面字体表达）。
+ */
 .markdown-content :is(h1, h2, h3, h4, h5, h6, table) {
-  font-family: var(--sans);
+  font-family: var(--ui);
 }
 
 /*
@@ -4413,24 +4496,82 @@ body[data-resizing="col"] * {
 
 /* Ant Design 的颜色、边框、圆角及控件状态统一交给 app-theme.ts。 */
 
-/* 内容字体只覆盖内容区域，按钮、状态和导航继续使用界面字体。 */
-.font-reading,
-.font-reading .ant-typography {
+/*
+ * 内容语义类。
+ *
+ * 两层结构：
+ * 1) 容器本身用内容字体，覆盖"直接以类名标注的一段正文"（例如用户消息正文）；
+ * 2) 后代字体由上方的「内容语义选择器」规则精确指定，不再用一个过宽的
+ *    `.font-reading .ant-typography` 覆盖全部后代——否则未来放进容器里的
+ *    Typography.Title / Heading / Strong / UI Label 都会被继承成文楷。
+ */
+.font-reading {
   font-family: var(--reading) !important;
-  font-size: 16px !important;
-  line-height: 1.8 !important;
+  font-size: var(--ds-font-size-body) !important;
+  /* 文楷字形比思源黑体略松，正文行高相应放宽。 */
+  line-height: 1.85 !important;
   overflow-wrap: anywhere;
+  font-synthesis: none;
 }
 
-.font-reading-compact,
-.font-reading-compact .ant-typography {
+.font-reading-compact {
   font-family: var(--reading) !important;
-  font-size: 14px !important;
-  line-height: 1.6 !important;
+  font-size: var(--ds-font-size-base) !important;
+  line-height: 1.7 !important;
   overflow-wrap: anywhere;
+  font-synthesis: none;
 }
 
-:where(.font-reading, .font-reading-compact) :is(pre, code) {
+/*
+ * 内容区域内的强调：不生成文楷伪粗体，改用界面字体的真实字重表达。
+ * 覆盖 Markdown 的 strong/b 与 Tailwind 的 font-medium / semibold / bold。
+ */
+:where(.font-reading, .font-reading-compact, .markdown-content) :is(
+    strong,
+    b
+  ) {
+  font-family: var(--ui) !important;
+  font-weight: var(--ds-font-weight-strong);
+}
+
+:where(.font-reading, .font-reading-compact, .markdown-content) :is(
+    .font-semibold,
+    .font-bold
+  ) {
+  font-family: var(--ui) !important;
+  font-weight: var(--ds-font-weight-strong);
+}
+
+:where(.font-reading, .font-reading-compact, .markdown-content) .font-medium {
+  font-family: var(--ui) !important;
+  font-weight: var(--ds-font-weight-medium);
+}
+
+/*
+ * 标题与 UI 标签始终使用界面字体。
+ * 这些规则让"内容容器 + 标题"的任意组合都保持正确，而不是靠祖先字体继承。
+ */
+:where(.font-reading, .font-reading-compact, .markdown-content) :is(
+    h1,
+    h2,
+    h3,
+    h4,
+    h5,
+    h6,
+    th,
+    dt,
+    .ant-typography,
+    .ant-tag
+  ) {
+  font-family: var(--ui) !important;
+}
+
+/* 代码始终等宽，不切文楷。 */
+:where(.font-reading, .font-reading-compact, .markdown-content) :is(
+    pre,
+    code,
+    kbd
+  ) {
   font-family: var(--mono) !important;
 }
 
@@ -4441,10 +4582,45 @@ body[data-resizing="col"] * {
   overflow-wrap: anywhere;
 }
 
-/* 问题选项里的长文本必须换行，不能撑破对话栏；下拉弹层沿用同一规则。 */
-.question-form-options .ant-select-item-option-content {
+/*
+ * 字体合成兜底。
+ *
+ * 文楷与思源黑体都只有 Regular（思源另有 Bold），既没有真实斜体、也没有
+ * 中间字重。若不禁用合成，浏览器会把 Regular 强行倾斜成假斜体、或算法加粗，
+ * 在中文上非常明显。
+ *
+ * `font-synthesis: none` 是当前的简写形式（覆盖 weight / style / small-caps），
+ * 兼容面足够；同时补上长写属性，让只支持长写的实现也能生效。
+ */
+body {
+  font-synthesis: none;
+  font-synthesis-weight: none;
+  font-synthesis-style: none;
+}
+
+/*
+ * 内容区域的 em / i：不生成假斜体。
+ * 文楷没有真实 italic，因此保持 Regular 直立字形，emphasis 交给颜色表达，
+ * 而不是让浏览器把 Regular 强行倾斜、或切换到另一套不一致的字体。
+ */
+:where(.font-reading, .font-reading-compact, .markdown-content) :is(em, i) {
   font-family: var(--reading) !important;
-  font-size: 14px !important;
+  font-style: normal;
+  font-synthesis-style: none;
+  color: var(--ink-soft);
+}
+
+/*
+ * 问题选项里的长文本必须换行，不能撑破对话栏；下拉弹层沿用同一规则。
+ *
+ * 字体保持界面字体：Ant Design Select 属于 UI Control，选项即使内容是自然语言，
+ * 也优先保证控件一致性与扫描效率。长答案正文由 Radio / Checkbox 的选项标签承载，
+ * 那里才按语义使用内容字体。
+ */
+.question-form-options .ant-select-item-option-content,
+.question-form-options .ant-select-selection-item {
+  font-family: var(--ui) !important;
+  font-size: var(--ds-font-size-base) !important;
   line-height: 1.6 !important;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -5266,4 +5442,24 @@ body[data-resizing="col"] * {
   color: var(--ink);
   font-size: var(--ds-font-size-control);
   font-weight: 600;
+}
+
+/* ==========================================================================
+   混合内容字体分层
+   结构前缀（Assumption / Impact / Gap 等）用界面字体，正文用内容字体。
+   前缀不使用加粗：它在内容区是标记而不是强调。
+   ========================================================================== */
+
+.typed-label {
+  font-family: var(--ui);
+  font-weight: var(--ds-font-weight-medium);
+  color: var(--ink-mute);
+}
+
+.typed-label::after {
+  content: " ";
+}
+
+.typed-body {
+  font-family: var(--reading);
 }

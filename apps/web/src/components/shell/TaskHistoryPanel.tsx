@@ -26,6 +26,7 @@ import {
   NodeIndexOutlined,
 } from "@ant-design/icons";
 import type { Message, TaskExecutionNode } from "../../types";
+import { TypedText } from "../ui/TypedText";
 import {
   buildTaskRounds,
   findTaskResult,
@@ -237,7 +238,13 @@ function TaskRoundDetail({
         {round.plan?.assumptions.length ? (
           <ol className="task-assumptions">
             {round.plan.assumptions.map((assumption, index) => (
-              <li key={`${round.id}-assumption-${index}`}>{assumption}</li>
+              /*
+               * 假设文本形如 `Gap: … | Assumption: … | Impact: …`：
+               * 前缀是结构标记（界面字体），后面的解释是自然语言（内容字体）。
+               */
+              <li key={`${round.id}-assumption-${index}`}>
+                <TypedText text={assumption} />
+              </li>
             ))}
           </ol>
         ) : (

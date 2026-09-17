@@ -18,7 +18,9 @@
     "test:documents": "node scripts/check-document-workspace.mjs",
     "test:fallback": "node scripts/check-panel-fallback.mjs",
     "test:sync": "node scripts/check-workspace-sync.mjs",
-    "test:ui": "node scripts/check-layout.mjs && node scripts/check-project-cover.mjs && node scripts/check-split-persistence.mjs && node scripts/check-task-history.mjs && node scripts/check-panel-renderer.mjs && node scripts/check-conversation-timeline.mjs && node scripts/check-empty-conversation.mjs && node scripts/check-document-workspace.mjs && node scripts/check-panel-fallback.mjs && node scripts/check-workspace-sync.mjs"
+    "test:fonts": "node scripts/check-font-system.mjs",
+    "test:typed": "node scripts/check-typed-text.mjs",
+    "test:ui": "node scripts/check-layout.mjs && node scripts/check-project-cover.mjs && node scripts/check-split-persistence.mjs && node scripts/check-task-history.mjs && node scripts/check-panel-renderer.mjs && node scripts/check-conversation-timeline.mjs && node scripts/check-empty-conversation.mjs && node scripts/check-document-workspace.mjs && node scripts/check-panel-fallback.mjs && node scripts/check-workspace-sync.mjs && node scripts/check-font-system.mjs && node scripts/check-typed-text.mjs"
   },
   "dependencies": {
     "@repo/shared": "workspace:*",
