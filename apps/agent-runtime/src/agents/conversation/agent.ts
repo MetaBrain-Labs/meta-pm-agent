@@ -14,10 +14,15 @@
  * - createConversationAgentSystemPrompt()：根据模式构造 system prompt
  * - createChatOnlyAgent()：创建纯闲聊模式 Agent 实例
  * - 注入运行时日期上下文和知识图谱冲突检测
+ * - 通过 Prompt Resolver 解析工作区自定义提示词，未自定义时使用内置默认正文
  */
 
 import { createDeepAgent } from "deepagents";
-import type { AgentRuntimeTool, ModelUsageProfile } from "@repo/shared";
+import type {
+  AgentRuntimeTool,
+  ModelUsageProfile,
+  PromptOverrides,
+} from "@repo/shared";
 import { canAgentUseTool, createToolsForAgent } from "../common/tool-access";
 import { createChatModel } from "../common/model";
 import {
@@ -34,12 +39,14 @@ import {
   WEB_SEARCH_USAGE_PROMPT,
   buildRuntimeContextPrompt,
 } from "../common/web-search-prompt";
-import { DISCOVERY_PROMPT, CHAT_ONLY_PROMPT } from "./prompt";
+import { resolvePromptContent } from "../../prompts/resolver";
 
 export interface ConversationAgentOptions {
   enabledTools?: AgentRuntimeTool[];
   summaryRecorder?: AgentRunSummaryRecorder;
   modelProfile?: ModelUsageProfile;
+  /** 本轮生效的提示词快照；未提供或未自定义时使用内置默认正文。 */
+  promptOverrides?: PromptOverrides;
   /** 当设为 "chat" 时使用纯闲聊模式，不产生标记块或表单 */
   mode?: "project" | "chat";
 }
@@ -96,37 +103,47 @@ export function createConversationAgentSystemPrompt(
   return buildConversationPrompt({
     webSearchEnabled: options.mode === "chat" ? false : webSearchEnabled,
     mode: options.mode ?? "project",
+    promptOverrides: options.promptOverrides,
   });
 }
 
 interface ConversationPromptOptions {
   webSearchEnabled: boolean;
   mode?: "project" | "chat";
+  promptOverrides?: PromptOverrides;
 }
 
 /**
- * 根据本轮工具能力和模式生成 Conversation Agent 系统提示。
+ * 根据本轮工具能力、模式和生效提示词生成 Conversation Agent 系统提示。
+ *
+ * 提示词正文经 Prompt Resolver 解析（override 优先，否则内置默认），运行时日期和
+ * 联网搜索规范仍按既有顺序追加，自定义内容不会改变追加规则。
  */
 function buildConversationPrompt({
   webSearchEnabled,
   mode,
+  promptOverrides,
 }: ConversationPromptOptions): string {
   const runtimePrompt = buildRuntimeContextPrompt();
+  const body = resolvePromptContent(
+    mode === "chat" ? "conversation-agent-chat" : "conversation-agent-project",
+    promptOverrides,
+  );
 
   // 纯闲聊模式：只用简短提示
   if (mode === "chat") {
-    return `${CHAT_ONLY_PROMPT}
+    return `${body}
 
 ${runtimePrompt}`;
   }
 
   if (!webSearchEnabled) {
-    return `${DISCOVERY_PROMPT}
+    return `${body}
 
 ${runtimePrompt}`;
   }
 
-  return `${DISCOVERY_PROMPT}
+  return `${body}
 
 ${runtimePrompt}
 

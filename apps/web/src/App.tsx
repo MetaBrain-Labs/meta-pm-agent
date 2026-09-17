@@ -204,6 +204,7 @@ export default function App() {
           open={app.configModalOpen}
           activeTab={app.configTab}
           showWorkspace={app.configWorkspaceVisible}
+          workspaceId={app.activeWorkspaceId}
           workspaceRows={[
             ["名称", app.activeWorkspace?.name ?? "-"],
             ["本地路径", app.activeWorkspace?.localPath ?? "-"],

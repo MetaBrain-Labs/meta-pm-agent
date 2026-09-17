@@ -22,6 +22,7 @@ import type {
   OrchestratorContextSource,
   ProductKnowledgeGraph,
   ProductWorkflowResult,
+  PromptOverrides,
   RequestAnalysis,
   TaskExecutionPlan,
   ModelUsageProfile,
@@ -56,12 +57,18 @@ import {
   collectDownstreamTaskIds,
   selectReadyTasks,
 } from "../agents/product-workflow/dag";
+import {
+  PROMPT_OVERRIDES_RUN_CONFIG_KEY,
+  sanitizePromptOverrides,
+} from "../prompts/resolver";
 
 export interface WorkflowGraphInput {
   /** 服务端可信工作流用途；checkpoint 恢复时由图状态继续持有。 */
   workflowPurpose?: WorkflowPurpose;
   /** API 在本次请求或恢复前重新解析的会话当前模型快照。 */
   modelProfile?: ModelUsageProfile;
+  /** API 在本次请求或恢复前重新解析的工作区提示词快照。 */
+  promptOverrides?: PromptOverrides;
   workspaceId?: string;
   productContext?: string;
   contextSource?: OrchestratorContextSource;
@@ -308,8 +315,11 @@ function collectPriorCritiqueIssues(
 
 /**
  * 为 LangGraph 运行构造稳定线程配置，使中断后的同一轮对话可以从 checkpoint 恢复。
+ *
+ * 模型快照与提示词快照都放在 configurable 中，属于本次运行的不可变输入：它们不进入
+ * checkpoint 状态，因此恢复运行时会重新注入当前快照。
  */
-function createWorkflowRunConfig(
+export function createWorkflowRunConfig(
   input: WorkflowGraphInput,
   streamMode: "custom" | "values",
 ) {
@@ -326,6 +336,14 @@ function createWorkflowRunConfig(
         input.workflowThreadId ??
         `workflow:local:${Date.now()}:${Math.random().toString(36).slice(2)}`,
       ...(input.modelProfile ? { model_profile: input.modelProfile } : {}),
+      ...(input.promptOverrides &&
+      Object.keys(input.promptOverrides).length > 0
+        ? {
+            [PROMPT_OVERRIDES_RUN_CONFIG_KEY]: sanitizePromptOverrides(
+              input.promptOverrides,
+            ),
+          }
+        : {}),
       ...(input.retryFailure
         ? {
             retry_task_id: input.retryFailure.taskId,

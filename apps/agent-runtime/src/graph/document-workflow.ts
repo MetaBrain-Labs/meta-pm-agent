@@ -35,6 +35,7 @@ import type {
   KnowledgeGraphEntity,
   KnowledgeGraphRelation,
   ModelUsageProfile,
+  PromptOverrides,
 } from "@repo/shared";
 import {
   streamPrdDocumentAgent,
@@ -62,6 +63,11 @@ import {
   MODEL_PROFILE_RUN_CONFIG_KEY,
 } from "../agents/common/model-profile";
 import {
+  getPromptOverridesFromRunnableConfig,
+  PROMPT_OVERRIDES_RUN_CONFIG_KEY,
+  sanitizePromptOverrides,
+} from "../prompts/resolver";
+import {
   DocumentWorkflowGraphState,
   type DocumentCrossCheck,
   type DocumentSectionDossier,
@@ -80,6 +86,8 @@ export interface DocumentWorkflowInput {
   priorScoreAttempts?: DocumentScoreAttempt[];
   revisionFeedback?: string;
   modelProfile: ModelUsageProfile;
+  /** API 在启动本次 run 前解析的工作区提示词快照。 */
+  promptOverrides?: PromptOverrides;
   workflowThreadId?: string;
   signal?: AbortSignal;
 }
@@ -255,6 +263,14 @@ function createDocumentWorkflowRunConfig(input: DocumentWorkflowInput) {
           kind: input.kind,
         }),
       [MODEL_PROFILE_RUN_CONFIG_KEY]: input.modelProfile,
+      ...(input.promptOverrides &&
+      Object.keys(input.promptOverrides).length > 0
+        ? {
+            [PROMPT_OVERRIDES_RUN_CONFIG_KEY]: sanitizePromptOverrides(
+              input.promptOverrides,
+            ),
+          }
+        : {}),
     },
   };
 }
@@ -380,6 +396,7 @@ async function draftSectionNode(
       attemptNumber: state.scoreAttempts.length + 1,
       revisionFeedback: state.scoreFeedback,
       modelProfile: getModelProfileFromRunnableConfig(config),
+      promptOverrides: getPromptOverridesFromRunnableConfig(config),
       signal: config?.signal,
     }),
     (event) => {

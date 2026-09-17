@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { App, Form } from "antd";
 import type { ThreadInfo, WorkspaceInfo } from "../types";
+import type { ConfigTab } from "../components/modals/ConfigModal";
 import type { WorkspacePanelId } from "../components/shell/workspace-panels";
 import {
   createChatRecord,
@@ -74,7 +75,7 @@ export function useAppShell() {
   const [renameValue, setRenameValue] = useState("");
   const [savingRename, setSavingRename] = useState(false);
   const [configModalOpen, setConfigModalOpen] = useState(false);
-  const [configTab, setConfigTab] = useState<"workspace" | "models">("models");
+  const [configTab, setConfigTab] = useState<ConfigTab>("models");
   const [configWorkspaceVisible, setConfigWorkspaceVisible] = useState(false);
   const [projectLocationHint, setProjectLocationHint] = useState(false);
   const [workspaceDetailOpen, setWorkspaceDetailOpen] = useState(false);
@@ -305,14 +306,11 @@ export function useAppShell() {
     setWorkspacePanel(panelId);
   }, []);
 
-  const openConfigModal = useCallback(
-    (tab: "workspace" | "models") => {
-      setConfigWorkspaceVisible(tab === "workspace");
-      setConfigTab(tab);
-      setConfigModalOpen(true);
-    },
-    [],
-  );
+  const openConfigModal = useCallback((tab: ConfigTab) => {
+    setConfigWorkspaceVisible(tab === "workspace");
+    setConfigTab(tab);
+    setConfigModalOpen(true);
+  }, []);
 
   const openProjectModal = useCallback(() => {
     setProjectModalMode("create");

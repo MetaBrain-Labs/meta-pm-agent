@@ -6,7 +6,7 @@
  *
  * Responsibilities:
  * - 维护 API 路径到控制器的映射
- * - 保持聊天和文档生成入口在同一 Hono 子路由下
+ * - 保持聊天、文档生成、模型列表与提示词配置入口在同一 Hono 子路由下
  * - 避免在路由定义中混入业务逻辑
  */
 
@@ -41,6 +41,12 @@ import {
   selectConversationModelProfileHandler,
   updateModelProfileHandler,
 } from "./model-profile-controller";
+import {
+  getPromptConfigAccessHandler,
+  listWorkspacePromptsHandler,
+  resetWorkspacePromptHandler,
+  saveWorkspacePromptHandler,
+} from "./prompt-config-controller";
 
 /**
  * 创建聊天相关的路由组，将路径映射到对应的控制器处理器。
@@ -65,6 +71,13 @@ export function createChatRoutes() {
   routes.delete("/model-profiles/:id", deleteModelProfileHandler);
   routes.get("/chats/:id/model-profile", getConversationModelProfileHandler);
   routes.put("/chats/:id/model-profile", selectConversationModelProfileHandler);
+  routes.get("/prompt-config/access", getPromptConfigAccessHandler);
+  routes.get("/workspaces/:workspaceId/prompts", listWorkspacePromptsHandler);
+  routes.put("/workspaces/:workspaceId/prompts/:promptId", saveWorkspacePromptHandler);
+  routes.delete(
+    "/workspaces/:workspaceId/prompts/:promptId",
+    resetWorkspacePromptHandler,
+  );
   routes.get("/workspaces/:workspaceId/knowledge-graph", getWorkspaceKnowledgeGraphHandler);
   routes.get(
     "/workspaces/:workspaceId/document-generation/latest",

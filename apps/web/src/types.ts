@@ -63,6 +63,17 @@ export interface ModelUsageProfile {
 }
 
 /**
+ * 设置页提示词管理的前端契约。
+ *
+ * 直接复用共享包定义，避免前端再维护一份 default/override/effective 状态结构。
+ */
+export type {
+  PromptCategory,
+  PromptConfigAccess,
+  PromptSummary,
+} from "@repo/shared";
+
+/**
  * Executor 错误卡片携带的定点重试动作。
  */
 export interface WorkflowRetryAction {
