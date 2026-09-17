@@ -15,10 +15,12 @@ import { DocumentKindSchema } from "@repo/shared";
 
 /**
  * 启动文档生成任务的请求体。
+ *
+ * profileId 可省略：省略时使用用户记住的默认模型列表，显式传入则同时更新该默认值。
  */
 export const StartDocumentGenerationRequestSchema = z.object({
   kind: DocumentKindSchema,
-  profileId: z.string().trim().min(1),
+  profileId: z.string().trim().min(1).optional(),
 });
 
 /**

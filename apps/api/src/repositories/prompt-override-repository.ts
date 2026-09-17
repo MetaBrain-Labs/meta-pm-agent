@@ -17,6 +17,7 @@
 import { prisma } from "@repo/database";
 import { isConfigurablePromptId, sanitizePromptOverrides } from "@repo/agent-runtime";
 import type { PromptOverrides } from "@repo/shared";
+import { isMissingTableError } from "../utils/postgres-errors";
 
 interface PromptOverrideRow {
   prompt_id: string;
@@ -78,20 +79,9 @@ export async function loadWorkspacePromptOverrideMap(
   );
 }
 
-/** 识别 PostgreSQL 的 undefined_table（42P01）错误，用于区分未建表与真实故障。 */
+/** 识别未执行建表 SQL 的情况，用于区分「没有自定义」与真实故障。 */
 export function isMissingPromptOverrideTable(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const record = error as {
-    code?: string;
-    message?: string;
-    meta?: { code?: string; message?: string };
-  };
-  return (
-    record.code === "42P01" ||
-    record.meta?.code === "42P01" ||
-    record.message?.includes("prompt_override") === true ||
-    record.meta?.message?.includes("prompt_override") === true
-  );
+  return isMissingTableError(error, "prompt_override");
 }
 
 /** 写入或覆盖单条提示词；同一工作区同一 prompt id 只保留一份内容。 */

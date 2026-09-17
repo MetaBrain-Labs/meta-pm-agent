@@ -13,7 +13,7 @@
  * - v0.1 仅展示已经接入的 PRD 工作流。
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Button,
@@ -48,6 +48,7 @@ import {
 import {
   fetchProductKnowledgeGraph,
   fetchModelProfiles,
+  selectDefaultModelProfile,
   type KnowledgeGraphNodeData,
   type WorkspaceKnowledgeGraphData,
 } from "../../api/chat-api";
@@ -70,6 +71,7 @@ import {
 import { ModelProfileSelector } from "../../components/ModelProfileSelector";
 import { GlobalLoader } from "../../components/ui/GlobalLoader";
 import { TodoCard } from "../../components/TodoCard";
+import { SYSTEM_MODEL_PROFILE_ID } from "../../constants/app";
 import {
   KnowledgeGraphView,
   NODE_TYPE_LABELS,
@@ -155,8 +157,9 @@ export function DocumentPlanningPage({
   const [resuming, setResuming] = useState(false);
   const [blockersOpen, setBlockersOpen] = useState(false);
   const [modelProfiles, setModelProfiles] = useState<ModelUsageProfile[]>([]);
-  const [selectedModelProfileId, setSelectedModelProfileId] =
-    useState("system-default");
+  const [selectedModelProfileId, setSelectedModelProfileId] = useState(
+    SYSTEM_MODEL_PROFILE_ID,
+  );
   const [error, setError] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] =
     useState<KnowledgeGraphNodeData | null>(null);
@@ -170,6 +173,8 @@ export function DocumentPlanningPage({
     "all" | "done" | "running" | "idle"
   >("all");
   const [messageApi, contextHolder] = message.useMessage();
+  /** 用户是否在本页亲手切换过模型列表；用于区分「用户选择」与「服务端默认」。 */
+  const userSelectedModelProfileRef = useRef(false);
 
   const run = documentState.run;
   const artifact = documentState.artifact;
@@ -205,13 +210,31 @@ export function DocumentPlanningPage({
   }, [workspaceId]);
 
   const refreshModelProfiles = useCallback(async () => {
-    const profiles = await fetchModelProfiles();
+    const { profiles, defaultProfileId } = await fetchModelProfiles();
     setModelProfiles(profiles);
-    setSelectedModelProfileId((current) =>
-      profiles.some((profile) => profile.id === current)
+    /*
+     * 首次加载预选用户记住的默认列表；用户在本页亲手选过时保留该选择（列表被删则回退）。
+     */
+    setSelectedModelProfileId((current) => {
+      const preferred = userSelectedModelProfileRef.current
         ? current
-        : "system-default",
-    );
+        : defaultProfileId;
+      return profiles.some((profile) => profile.id === preferred)
+        ? preferred
+        : SYSTEM_MODEL_PROFILE_ID;
+    });
+  }, []);
+
+  /** 文档页的显式选择同样被记住，后续会话与文档运行都以它为默认。 */
+  const changeModelProfile = useCallback(async (profileId: string) => {
+    userSelectedModelProfileRef.current = true;
+    setSelectedModelProfileId(profileId);
+    try {
+      await selectDefaultModelProfile(profileId);
+    } catch {
+      // 记住默认失败不影响本轮生成：startDocumentGeneration 会带上当前选择。
+      console.error("[document] Failed to remember model profile:", profileId);
+    }
   }, []);
 
   const handleRefresh = useCallback(async () => {
@@ -1060,7 +1083,7 @@ export function DocumentPlanningPage({
                   profiles={modelProfiles}
                   selectedProfileId={selectedModelProfileId}
                   disabled={runActive || starting}
-                  onChange={setSelectedModelProfileId}
+                  onChange={(profileId) => void changeModelProfile(profileId)}
                 />
               </Space>
               {(runActive || awaitingInput) && (

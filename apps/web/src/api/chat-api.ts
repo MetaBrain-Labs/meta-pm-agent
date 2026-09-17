@@ -21,12 +21,37 @@ import type {
   ModelUsageProfile,
 } from "../types";
 import { mapPersistedMessageToMessage } from "../mappers/persisted-message";
+import { SYSTEM_MODEL_PROFILE_ID } from "../constants/app";
 
-/** 获取本地可用模型列表，首项始终为内置默认列表。 */
-export async function fetchModelProfiles(): Promise<ModelUsageProfile[]> {
+/** 获取本地可用模型列表与用户记住的默认列表，首项始终为内置默认列表。 */
+export async function fetchModelProfiles(): Promise<{
+  profiles: ModelUsageProfile[];
+  defaultProfileId: string;
+}> {
   const response = await fetch("/api/model-profiles");
   if (!response.ok) throw new Error(`Server error: ${response.status}`);
-  return ((await response.json()) as { profiles: ModelUsageProfile[] }).profiles;
+  const data = (await response.json()) as {
+    profiles: ModelUsageProfile[];
+    defaultProfileId?: string;
+  };
+  return {
+    profiles: data.profiles,
+    defaultProfileId: data.defaultProfileId ?? SYSTEM_MODEL_PROFILE_ID,
+  };
+}
+
+/** 记住用户选择的默认模型列表；选择内置默认表示清除记录。 */
+export async function selectDefaultModelProfile(
+  profileId: string,
+): Promise<string> {
+  const response = await fetch("/api/model-profiles/default", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ profileId }),
+  });
+  if (!response.ok) throw new Error(`Server error: ${response.status}`);
+  return ((await response.json()) as { defaultProfileId: string })
+    .defaultProfileId;
 }
 
 /** 新建本地模型使用列表。 */

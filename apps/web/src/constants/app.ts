@@ -24,3 +24,8 @@ export const DEFAULT_WORKSPACE_NAME = "\u672c\u5730\u5de5\u4f5c\u533a";
  */
 export const NO_WORKSPACE_MESSAGE =
   "\u8bf7\u5148\u65b0\u5efa\u6216\u9009\u62e9\u5de5\u4f5c\u533a";
+
+/**
+ * 内置默认模型使用列表 id，与 API 的 SYSTEM_MODEL_PROFILE_ID 保持一致。
+ */
+export const SYSTEM_MODEL_PROFILE_ID = "system-default";

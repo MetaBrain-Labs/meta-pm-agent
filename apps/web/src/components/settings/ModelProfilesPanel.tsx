@@ -126,7 +126,7 @@ export function ModelProfilesPanel() {
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      setProfiles(await fetchModelProfiles());
+      setProfiles((await fetchModelProfiles()).profiles);
     } catch (error) {
       message.error("模型使用列表加载失败，请确认已手动执行建表 SQL");
     } finally {

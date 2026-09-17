@@ -71,20 +71,14 @@ export function ModelProfileSelector({
 /**
  * 触发器上显示的名称。
  *
- * 优先展示当前实际使用的模型名（例如「Flash」）；配置里没有具体模型时才回退到
- * 列表名称。列表名可能带有「内置默认模型列表」这类实现导向的描述，不适合作为
- * 输入区的主要文案。
+ * 列表名是用户选择的身份标识（例如「Flash」），因此直接显示它；各档位实际使用哪个
+ * 模型在展开的菜单里已经逐条列出，不需要占用触发器文案。内置默认列表的实现导向名称
+ * （「内置默认模型列表」）在控件里过长，统一显示为「内置默认」。
  */
-function getProfileLabel(profile?: ModelUsageProfile): string {
+export function getProfileLabel(profile?: ModelUsageProfile): string {
   if (!profile) return "模型列表加载中";
-  if (profile.config.mode === "universal") {
-    return profile.config.model.customName || profile.name;
-  }
-  // 分类配置下各档位可能是同一模型，此时模型名比列表名更有信息量。
-  const names = new Set(
-    Object.values(profile.config.models).map((model) => model.customName),
-  );
-  return names.size === 1 ? [...names][0]! : profile.name;
+  if (profile.isSystem) return "内置默认";
+  return profile.name;
 }
 
 /** 下拉列表中的模式、组成和参数详情。 */

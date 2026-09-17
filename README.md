@@ -188,9 +188,9 @@ pnpm --filter @repo/database db:init
 
 #### Database schema note
 
-For an existing database, back it up first and run `pnpm --filter @repo/database db:upgrade`. This adds local soft-delete columns and missing runtime tables, creates the workspace prompt-override table, normalizes legacy DeepSeek model IDs, updates cached-token/PRD constraints, widens `message.type`, and defaults the legacy graph `content` column. It never removes local files or business data. Upgrades are repeatable and conflicting schemas fail rather than being overwritten.
+For an existing database, back it up first and run `pnpm --filter @repo/database db:upgrade`. This adds local soft-delete columns and missing runtime tables, creates the workspace prompt-override and user default model-profile tables, normalizes legacy DeepSeek model IDs, updates cached-token/PRD constraints, widens `message.type`, and defaults the legacy graph `content` column. It never removes local files or business data. Upgrades are repeatable and conflicting schemas fail rather than being overwritten.
 
-The SQL is tracked at `packages/database/sql/20260914_runtime_tables.sql` and `packages/database/sql/20260918_prompt_override.sql`. PostgresSaver initializes its own checkpoint tables independently.
+The SQL is tracked at `packages/database/sql/20260914_runtime_tables.sql`, `packages/database/sql/20260918_prompt_override.sql` and `packages/database/sql/20260919_user_default_model_profile.sql`. PostgresSaver initializes its own checkpoint tables independently.
 
 ### 4. Build
 

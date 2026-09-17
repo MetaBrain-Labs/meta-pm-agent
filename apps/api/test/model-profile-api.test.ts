@@ -10,6 +10,7 @@ import { Hono } from "hono";
 import {
   createModelProfileHandler,
   selectConversationModelProfileHandler,
+  selectDefaultModelProfileHandler,
 } from "../src/controllers/model-profile-controller";
 import { createWorkspaceHandler } from "../src/controllers/chat-controller";
 import {
@@ -18,11 +19,11 @@ import {
 } from "../src/services/chat-run-registry";
 import { StartDocumentGenerationRequestSchema } from "../src/schemas/document.schema";
 
-test("requires a model profile when starting Document generation", () => {
-  assert.equal(
-    StartDocumentGenerationRequestSchema.safeParse({ kind: "prd" }).success,
-    false,
-  );
+test("start-document generation accepts an omitted model profile", () => {
+  // 省略 profileId 表示使用用户记住的默认列表；显式传入时才覆盖默认值。
+  assert.deepEqual(StartDocumentGenerationRequestSchema.parse({ kind: "prd" }), {
+    kind: "prd",
+  });
   assert.deepEqual(
     StartDocumentGenerationRequestSchema.parse({
       kind: "prd",
@@ -30,6 +31,30 @@ test("requires a model profile when starting Document generation", () => {
     }),
     { kind: "prd", profileId: "system-default" },
   );
+  assert.equal(
+    StartDocumentGenerationRequestSchema.safeParse({ kind: "prd", profileId: "" })
+      .success,
+    false,
+  );
+});
+
+test("rejects a malformed default model profile before database access", async () => {
+  const app = new Hono();
+  app.put("/model-profiles/default", selectDefaultModelProfileHandler);
+
+  for (const profileId of [undefined, "", "not-a-uuid", 42]) {
+    const response = await app.request("/model-profiles/default", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profileId }),
+    });
+    assert.equal(response.status, 400, `${String(profileId)} must be rejected`);
+    // 校验错误指向 profileId，证明静态路由没有被 /model-profiles/:id 抢先匹配。
+    const body = (await response.json()) as {
+      error: { fieldErrors: Record<string, unknown> };
+    };
+    assert.deepEqual(Object.keys(body.error.fieldErrors), ["profileId"]);
+  }
 });
 
 test("rejects an invalid model profile before database access", async () => {

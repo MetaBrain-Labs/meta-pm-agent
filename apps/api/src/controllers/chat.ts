@@ -39,6 +39,7 @@ import {
   getConversationModelProfileHandler,
   listModelProfilesHandler,
   selectConversationModelProfileHandler,
+  selectDefaultModelProfileHandler,
   updateModelProfileHandler,
 } from "./model-profile-controller";
 import {
@@ -67,6 +68,8 @@ export function createChatRoutes() {
   routes.post("/chat/stop", stopChatHandler);
   routes.get("/model-profiles", listModelProfilesHandler);
   routes.post("/model-profiles", createModelProfileHandler);
+  // 静态路径必须先于 /model-profiles/:id 注册，避免 "default" 被当作列表 id。
+  routes.put("/model-profiles/default", selectDefaultModelProfileHandler);
   routes.put("/model-profiles/:id", updateModelProfileHandler);
   routes.delete("/model-profiles/:id", deleteModelProfileHandler);
   routes.get("/chats/:id/model-profile", getConversationModelProfileHandler);

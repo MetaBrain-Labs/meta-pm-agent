@@ -25,10 +25,12 @@ import {
   fetchChatModelProfile,
   fetchModelProfiles,
   selectChatModelProfile,
+  selectDefaultModelProfile,
 } from "../../api/chat-api";
 import {
   DEFAULT_CHAT_TITLE,
   NO_WORKSPACE_MESSAGE,
+  SYSTEM_MODEL_PROFILE_ID,
 } from "../../constants/app";
 import type {
   HumanInTheLoopResume,
@@ -80,8 +82,13 @@ export function ThreadChatPage({
   const [isMessagesLoading, setIsMessagesLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modelProfiles, setModelProfiles] = useState<ModelUsageProfile[]>([]);
-  const [selectedModelProfileId, setSelectedModelProfileId] =
-    useState("system-default");
+  const [selectedModelProfileId, setSelectedModelProfileId] = useState(
+    SYSTEM_MODEL_PROFILE_ID,
+  );
+  /** 服务端记住的用户默认列表；新会话（还没有 thread）以它为预选值。 */
+  const [defaultModelProfileId, setDefaultModelProfileId] = useState(
+    SYSTEM_MODEL_PROFILE_ID,
+  );
   /**
    * 图谱属于工作区：对话弹窗与「知识图谱」Tab 共用同一份数据。
    *
@@ -95,7 +102,11 @@ export function ThreadChatPage({
     refresh: refreshKnowledgeGraph,
     attempted: kgAttempted,
   } = useKnowledgeGraph(workspaceId, messages, { loadOnMount: true });
-  const selectedModelProfileIdRef = useRef("system-default");
+  const selectedModelProfileIdRef = useRef(SYSTEM_MODEL_PROFILE_ID);
+  /** 供 threadId 变化时的 effect 读取，避免把服务端默认写成内置默认。 */
+  const defaultModelProfileIdRef = useRef(SYSTEM_MODEL_PROFILE_ID);
+  /** 本次会话内用户是否亲手切换过列表；用于区分「用户选择」与「服务端默认」。 */
+  const userSelectedModelProfileRef = useRef(false);
   const workspaceIdRef = useRef<string | null>(workspaceId);
   const threadIdRef = useRef<string | null>(thread?.id ?? null);
   const requestFormIdRef = useRef<string | undefined>(thread?.requestFormId);
@@ -113,6 +124,10 @@ export function ThreadChatPage({
   }, [selectedModelProfileId]);
 
   useEffect(() => {
+    defaultModelProfileIdRef.current = defaultModelProfileId;
+  }, [defaultModelProfileId]);
+
+  useEffect(() => {
     if (creationError) {
       setError(creationError);
     }
@@ -127,19 +142,27 @@ export function ThreadChatPage({
     let cancelled = false;
     const reload = async () => {
       try {
-        const profiles = await fetchModelProfiles();
+        const { profiles, defaultProfileId } = await fetchModelProfiles();
         if (cancelled) return;
         setModelProfiles(profiles);
+        setDefaultModelProfileId(defaultProfileId);
         const currentThreadId = threadIdRef.current;
         if (currentThreadId) {
           const selected = await fetchChatModelProfile(currentThreadId);
           if (!cancelled) setSelectedModelProfileId(selected.id);
-        } else if (
-          !profiles.some(
-            (profile) => profile.id === selectedModelProfileIdRef.current,
-          )
-        ) {
-          setSelectedModelProfileId(profiles[0]?.id ?? "system-default");
+        } else {
+          /*
+           * 空白会话：用户本次已显式选择时保留它（列表被删则回退），
+           * 否则预选服务端记住的默认列表，而不是每次回到内置默认。
+           */
+          const preferred = userSelectedModelProfileRef.current
+            ? selectedModelProfileIdRef.current
+            : defaultProfileId;
+          setSelectedModelProfileId(
+            profiles.some((profile) => profile.id === preferred)
+              ? preferred
+              : SYSTEM_MODEL_PROFILE_ID,
+          );
         }
       } catch {
         if (!cancelled) {
@@ -161,7 +184,10 @@ export function ThreadChatPage({
 
   useEffect(() => {
     if (!threadId) {
-      setSelectedModelProfileId("system-default");
+      // 新建会话（还没有 thread）沿用服务端记住的默认列表；本次已显式选择时不覆盖。
+      if (!userSelectedModelProfileRef.current) {
+        setSelectedModelProfileId(defaultModelProfileIdRef.current);
+      }
       return;
     }
     let cancelled = false;
@@ -249,20 +275,37 @@ export function ThreadChatPage({
     setIsLoading(false);
   }, []);
 
-  /** 在空白会话仅预选，已有会话则立即持久化；失败时回滚 UI。 */
+  /**
+   * 切换模型列表。
+   *
+   * 已有会话立即持久化该会话的选择；空白会话（还没有 thread）先把选择记为默认，
+   * 使新建会话与文档运行都延续这次选择。
+   */
   const changeModelProfile = useCallback(
     async (profileId: string) => {
       if (isLoading || profileId === selectedModelProfileId) return;
       const previousId = selectedModelProfileId;
+      userSelectedModelProfileRef.current = true;
       setSelectedModelProfileId(profileId);
       const currentThreadId = threadIdRef.current;
-      if (!currentThreadId) return;
       try {
-        const selected = await selectChatModelProfile(currentThreadId, profileId);
-        setSelectedModelProfileId(selected.id);
+        if (currentThreadId) {
+          const selected = await selectChatModelProfile(
+            currentThreadId,
+            profileId,
+          );
+          setSelectedModelProfileId(selected.id);
+        } else {
+          await selectDefaultModelProfile(profileId);
+        }
+        setDefaultModelProfileId(profileId);
       } catch {
         setSelectedModelProfileId(previousId);
-        setError("模型列表切换失败；运行中只能在 HITL 或完成后切换");
+        setError(
+          currentThreadId
+            ? "模型列表切换失败；运行中只能在 HITL 或完成后切换"
+            : "模型列表切换失败，请重试",
+        );
       }
     },
     [isLoading, selectedModelProfileId],

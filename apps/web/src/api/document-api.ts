@@ -161,18 +161,20 @@ export interface DocumentEvidenceResolutionResponse {
 
 /**
  * 启动指定工作区的文档生成任务。
+ *
+ * 省略 profileId 时由服务端使用用户记住的默认模型列表。
  */
 export async function startDocumentGeneration(
   workspaceId: string,
   kind: DocumentKind,
-  profileId: string,
+  profileId?: string,
 ): Promise<DocumentGenerationStatusResponse> {
   const response = await fetch(
     `/api/workspaces/${encodeURIComponent(workspaceId)}/document-generation`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind, profileId }),
+      body: JSON.stringify(profileId ? { kind, profileId } : { kind }),
     },
   );
 

@@ -16,9 +16,10 @@
     "db:migrate": "node scripts/with-database-url.mjs prisma migrate dev",
     "db:upgrade-document-status": "node scripts/with-database-url.mjs prisma db execute --file sql/20260802_document_generation_awaiting_input.sql --schema prisma/schema.prisma",
     "db:upgrade-prompt-override": "node scripts/with-database-url.mjs prisma db execute --file sql/20260918_prompt_override.sql --schema prisma/schema.prisma",
+    "db:upgrade-model-profile-default": "node scripts/with-database-url.mjs prisma db execute --file sql/20260919_user_default_model_profile.sql --schema prisma/schema.prisma",
     "db:studio": "node scripts/with-database-url.mjs prisma studio",
     "db:init": "pnpm db:push && pnpm db:upgrade",
-    "db:upgrade": "pnpm db:upgrade-runtime && pnpm db:upgrade-prompt-override",
+    "db:upgrade": "pnpm db:upgrade-runtime && pnpm db:upgrade-prompt-override && pnpm db:upgrade-model-profile-default",
     "db:upgrade-runtime": "node scripts/with-database-url.mjs prisma db execute --file sql/20260914_runtime_tables.sql --schema prisma/schema.prisma"
   },
   "dependencies": {

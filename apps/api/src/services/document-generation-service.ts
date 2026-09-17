@@ -56,9 +56,11 @@ import {
   findDocumentEvidenceResolutionCycle,
 } from "../repositories/request-form-repository";
 import {
+  getDefaultModelProfile,
   getLocalModelProfile,
   ModelProfileNotFoundError,
   selectConversationModelProfile,
+  setDefaultModelProfileId,
 } from "../repositories/model-profile-repository";
 import { loadWorkspacePromptOverrideMap } from "../repositories/prompt-override-repository";
 import { createChat } from "./chat-service";
@@ -118,7 +120,8 @@ export async function startDocumentGeneration({
 }: {
   workspaceId: string;
   kind: DocumentKind;
-  profileId: string;
+  /** 省略时使用用户记住的默认列表；显式传入则同时更新默认值。 */
+  profileId?: string;
 }): Promise<DocumentGenerationStatusDto> {
   if (kind !== "prd") {
     throw new DocumentGenerationServiceError("当前仅支持生成 PRD。", 400);
@@ -126,12 +129,19 @@ export async function startDocumentGeneration({
 
   let modelProfile: ModelUsageProfile;
   try {
-    modelProfile = await getLocalModelProfile(profileId);
+    modelProfile = profileId
+      ? await getLocalModelProfile(profileId)
+      : await getDefaultModelProfile();
   } catch (error) {
     if (error instanceof ModelProfileNotFoundError) {
       throw new DocumentGenerationServiceError("模型使用列表不存在。", 404);
     }
     throw error;
+  }
+
+  // 用户在文档页显式选择的列表会被记住，后续新会话与新文档运行都以它为默认。
+  if (profileId) {
+    await setDefaultModelProfileId(profileId);
   }
 
   const existingRun = await getActiveDocumentGenerationRun(workspaceId, kind);

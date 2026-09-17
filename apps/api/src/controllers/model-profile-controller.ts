@@ -15,10 +15,12 @@ import {
   createLocalModelProfile,
   deleteLocalModelProfile,
   getConversationModelProfile,
+  getDefaultModelProfileId,
   listLocalModelProfiles,
   ModelProfileConflictError,
   ModelProfileNotFoundError,
   selectConversationModelProfile,
+  setDefaultModelProfileId,
   updateLocalModelProfile,
 } from "../repositories/model-profile-repository";
 import {
@@ -36,12 +38,32 @@ const MODEL_CATALOG = [
   },
 ];
 
-/** 返回本地模型列表和当前可配置模型目录。 */
+/** 返回本地模型列表、当前可配置模型目录与用户记住的默认列表。 */
 export async function listModelProfilesHandler(c: Context) {
   return c.json({
     profiles: await listLocalModelProfiles(),
     catalog: MODEL_CATALOG,
+    defaultProfileId: await getDefaultModelProfileId(),
   });
+}
+
+/**
+ * 记住用户选择的默认模型列表。
+ *
+ * 新会话、新文档运行都会以此默认值为起点；选择内置默认列表表示清除记录。
+ */
+export async function selectDefaultModelProfileHandler(c: Context) {
+  const parsed = SelectModelProfileRequestSchema.safeParse(
+    await readJsonBody(c.req.raw),
+  );
+  if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+
+  try {
+    await setDefaultModelProfileId(parsed.data.profileId);
+    return c.json({ defaultProfileId: await getDefaultModelProfileId() });
+  } catch (error) {
+    return mapModelProfileError(c, error);
+  }
 }
 
 /** 校验并创建自定义模型使用列表。 */

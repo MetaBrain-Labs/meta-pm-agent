@@ -239,7 +239,8 @@ export function ProjectOverviewPanel({
     if (starting || runActive) return;
     setStarting(true);
     try {
-      await startDocumentGeneration(workspaceId, "prd", "system-default");
+      // 不指定列表：服务端使用用户记住的默认模型列表，避免这里回落到内置默认。
+      await startDocumentGeneration(workspaceId, "prd");
       void messageApi.success("PRD 生成任务已进入后台。");
       onPanelChange?.(DOCUMENTS_PANEL);
     } catch (error) {
