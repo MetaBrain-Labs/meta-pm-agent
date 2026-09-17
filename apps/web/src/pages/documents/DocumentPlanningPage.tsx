@@ -32,14 +32,18 @@ import {
 import {
   ArrowLeftOutlined,
   CloseOutlined,
+  CommentOutlined,
   DownloadOutlined,
   PlusOutlined,
   EyeOutlined,
   ExclamationCircleOutlined,
+  FileSearchOutlined,
   FileTextOutlined,
   PauseCircleOutlined,
+  PlayCircleOutlined,
   ReloadOutlined,
   SearchOutlined,
+  WarningOutlined,
 } from "@ant-design/icons";
 import {
   fetchProductKnowledgeGraph,
@@ -482,6 +486,8 @@ export function DocumentPlanningPage({
                 <Tooltip title="返回工作区">
                   <Button
                     type="text"
+                    shape="circle"
+                    aria-label="返回工作区"
                     icon={<ArrowLeftOutlined />}
                     onClick={onBack}
                   />
@@ -499,6 +505,8 @@ export function DocumentPlanningPage({
                 {statusTag}
                 <Tooltip title="刷新图谱和文档任务">
                   <Button
+                    shape="circle"
+                    aria-label="刷新图谱和文档任务"
                     icon={<ReloadOutlined />}
                     loading={loading}
                     onClick={() => void handleRefresh()}
@@ -549,12 +557,16 @@ export function DocumentPlanningPage({
                         <Space wrap>
                           <Button
                             type="primary"
+                            icon={<CommentOutlined />}
                             loading={resolvingEvidence}
                             onClick={() => void handleResolveEvidence()}
                           >
                             解决证据阻断
                           </Button>
-                          <Button onClick={() => setBlockersOpen(true)}>
+                          <Button
+                            icon={<WarningOutlined />}
+                            onClick={() => setBlockersOpen(true)}
+                          >
                             查看阻断汇总（{evidenceBlockerGroups.length}）
                           </Button>
                           <Tooltip
@@ -567,6 +579,7 @@ export function DocumentPlanningPage({
                             }
                           >
                             <Button
+                              icon={<PlayCircleOutlined />}
                               loading={resuming}
                               disabled={!canResume}
                               onClick={() => void handleResume()}
@@ -741,6 +754,7 @@ export function DocumentPlanningPage({
                                   <Button
                                     type="text"
                                     size="small"
+                                    shape="circle"
                                     aria-label="查看完整 Markdown"
                                     icon={<EyeOutlined />}
                                     onClick={() =>
@@ -755,6 +769,7 @@ export function DocumentPlanningPage({
                                   <Button
                                     type="text"
                                     size="small"
+                                    shape="circle"
                                     aria-label="下载 Markdown"
                                     icon={<DownloadOutlined />}
                                     onClick={() =>
@@ -1081,7 +1096,14 @@ export function DocumentPlanningPage({
           width={720}
           open={blockersOpen}
           title="PRD 证据阻断汇总"
-          footer={<Button onClick={() => setBlockersOpen(false)}>关闭</Button>}
+          footer={
+            <Button
+              icon={<CloseOutlined />}
+              onClick={() => setBlockersOpen(false)}
+            >
+              关闭
+            </Button>
+          }
           onCancel={() => setBlockersOpen(false)}
         >
           {evidenceBlockerGroups.length > 0 ? (
@@ -1143,7 +1165,11 @@ export function DocumentPlanningPage({
                 >
                   下载 MD
                 </Button>
-                <Button type="primary" onClick={() => setPreviewDocument(null)}>
+                <Button
+                  type="primary"
+                  icon={<CloseOutlined />}
+                  onClick={() => setPreviewDocument(null)}
+                >
                   关闭
                 </Button>
               </Space>
@@ -1262,6 +1288,8 @@ function NodeDetailPanel({
         <Button
           type="text"
           size="small"
+          shape="circle"
+          aria-label="关闭详情"
           icon={<CloseOutlined />}
           onClick={onClose}
         />
@@ -1573,6 +1601,7 @@ function ScoringResultPanel({
                         <Button
                           size="small"
                           className="mt-2"
+                          icon={<FileSearchOutlined />}
                           onClick={() => setReviewDetail(review)}
                         >
                           查看完整评审
@@ -1603,7 +1632,14 @@ function ScoringResultPanel({
             ? `${reviewDetail.reviewerName} · 总分 ${reviewDetail.score}`
             : "完整评审"
         }
-        footer={<Button onClick={() => setReviewDetail(null)}>关闭</Button>}
+        footer={
+          <Button
+            icon={<CloseOutlined />}
+            onClick={() => setReviewDetail(null)}
+          >
+            关闭
+          </Button>
+        }
         onCancel={() => setReviewDetail(null)}
       >
         {reviewDetail && (

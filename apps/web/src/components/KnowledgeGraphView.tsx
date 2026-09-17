@@ -23,6 +23,7 @@ import {
 } from "react";
 import { Graph } from "@antv/g6";
 import { Button, Typography } from "antd";
+import { ReloadOutlined } from "@ant-design/icons";
 import { GlobalLoader } from "./ui/GlobalLoader";
 import type {
   KnowledgeGraphNodeData,
@@ -911,7 +912,7 @@ export const KnowledgeGraphView = forwardRef<
               {sizeProbe}
             </Text>
           )}
-          <Button size="small" onClick={handleRetry}>
+          <Button size="small" icon={<ReloadOutlined />} onClick={handleRetry}>
             重试
           </Button>
         </div>

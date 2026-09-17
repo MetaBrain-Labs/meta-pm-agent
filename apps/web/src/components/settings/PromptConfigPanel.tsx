@@ -17,7 +17,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { App, Button, Empty, Input, Spin } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import {
+  InfoCircleOutlined,
+  RollbackOutlined,
+  SaveOutlined,
+  UndoOutlined,
+} from "@ant-design/icons";
 import {
   fetchWorkspacePrompts,
   resetWorkspacePrompt,
@@ -342,10 +347,12 @@ export function PromptConfigPanel({
               {/*
                * 动作区沿用项目既有约定：主操作放在最右并使用 primary，
                * 其余动作是与弹窗底部一致的无强调边框按钮。
+               * 每个动作都配图标，靠图形差异替代纯文字排比的僵硬感。
                */}
               <div className="ml-auto flex flex-wrap items-center gap-2">
                 {canReset ? (
                   <Button
+                    icon={<RollbackOutlined />}
                     loading={resetting}
                     disabled={!selected.customized || busy}
                     onClick={handleReset}
@@ -357,6 +364,7 @@ export function PromptConfigPanel({
                   <>
                     <span className="mx-1 h-5 w-px bg-[var(--line-soft)]" aria-hidden="true" />
                     <Button
+                      icon={<UndoOutlined />}
                       disabled={!dirty || busy}
                       onClick={handleDiscard}
                     >
@@ -364,6 +372,7 @@ export function PromptConfigPanel({
                     </Button>
                     <Button
                       type="primary"
+                      icon={<SaveOutlined />}
                       loading={saving}
                       disabled={!dirty || busy}
                       onClick={() => void handleSave()}

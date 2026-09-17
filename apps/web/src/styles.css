@@ -4791,7 +4791,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 2px;
+  gap: 4px;
 }
 
 /* 状态：小圆点 + 文字，不使用整行底色。 */

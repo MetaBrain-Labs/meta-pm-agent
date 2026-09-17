@@ -25,6 +25,7 @@ import {
   CameraOutlined,
   CloseOutlined,
   DownloadOutlined,
+  EyeOutlined,
   FullscreenExitOutlined,
   FullscreenOutlined,
 } from "@ant-design/icons";
@@ -194,6 +195,7 @@ export const KnowledgeGraphModal: FC<Props> = ({
               <Button
                 type="link"
                 size="small"
+                icon={<EyeOutlined />}
                 onClick={() => setHiddenTypes(new Set())}
               >
                 全部显示
@@ -202,6 +204,8 @@ export const KnowledgeGraphModal: FC<Props> = ({
             <Tooltip title={isFullscreen ? "退出全屏" : "全屏查看"}>
               <Button
                 type="text"
+                shape="circle"
+                aria-label={isFullscreen ? "退出全屏" : "全屏查看"}
                 icon={
                   isFullscreen ? (
                     <FullscreenExitOutlined />
@@ -215,6 +219,8 @@ export const KnowledgeGraphModal: FC<Props> = ({
             <Tooltip title="下载图谱图片">
               <Button
                 type="text"
+                shape="circle"
+                aria-label="下载图谱图片"
                 icon={<CameraOutlined />}
                 onClick={handleDownloadGraph}
               />
@@ -222,6 +228,8 @@ export const KnowledgeGraphModal: FC<Props> = ({
             <Tooltip title="下载 Markdown">
               <Button
                 type="text"
+                shape="circle"
+                aria-label="下载 Markdown"
                 icon={<DownloadOutlined />}
                 onClick={handleDownloadMarkdown}
               />
@@ -329,7 +337,9 @@ export const KnowledgeGraphModal: FC<Props> = ({
                   <Button
                     type="text"
                     size="small"
-                    icon={<CloseOutlined className="text-[10px]" />}
+                    shape="circle"
+                    aria-label="关闭节点详情"
+                    icon={<CloseOutlined />}
                     onClick={() => setSelectedNode(null)}
                   />
                 </div>

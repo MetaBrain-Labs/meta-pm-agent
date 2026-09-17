@@ -26,6 +26,7 @@ import {
   Tooltip,
 } from "antd";
 import {
+  AimOutlined,
   CheckCircleFilled,
   DownOutlined,
   LeftOutlined,
@@ -217,6 +218,7 @@ export function QuestionFormView({
               type="link"
               size="small"
               className="hitl-form-jump"
+              icon={<AimOutlined />}
               onClick={goToMissingRequired}
             >
               跳到未答问题
@@ -286,7 +288,7 @@ export function QuestionFormView({
           )}
 
           {form.secondarySubmitLabel && (
-            <Button onClick={handleSecondaryAction}>
+            <Button icon={<SendOutlined />} onClick={handleSecondaryAction}>
               {form.secondarySubmitLabel}
             </Button>
           )}

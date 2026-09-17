@@ -316,6 +316,7 @@ function ProjectCard({
         <Button
           type="text"
           size="small"
+          shape="circle"
           className="project-card-more"
           aria-label={`${workspace.name || "未命名项目"} 的项目操作`}
           icon={<EllipsisOutlined />}

@@ -17,6 +17,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, Empty, Tag, Tooltip } from "antd";
 import {
+  AimOutlined,
   ApartmentOutlined,
   CheckCircleFilled,
   ClockCircleFilled,
@@ -202,6 +203,7 @@ function TaskRoundDetail({
               <Button
                 type="text"
                 size="small"
+                icon={<AimOutlined />}
                 onClick={() => onLocateMessage(round.messageId)}
               >
                 定位

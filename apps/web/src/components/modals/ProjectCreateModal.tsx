@@ -15,7 +15,7 @@
 
 import { useEffect, useState } from "react";
 import { Button, Form, Input, Space, type FormInstance } from "antd";
-import { FolderOpenOutlined } from "@ant-design/icons";
+import { CheckOutlined, CloseOutlined, FolderOpenOutlined } from "@ant-design/icons";
 import { LocalDirectoryBrowserModal } from "./LocalDirectoryBrowserModal";
 import { AppModal } from "./AppModal";
 
@@ -154,9 +154,12 @@ export function ProjectCreateModal({
         </Form>
 
         <footer className="project-modal-actions">
-          <Button onClick={onCancel}>{TEXT.cancel}</Button>
+          <Button icon={<CloseOutlined />} onClick={onCancel}>
+            {TEXT.cancel}
+          </Button>
           <Button
             type="primary"
+            icon={<CheckOutlined />}
             loading={creating}
             onClick={() => void onCreate()}
           >

@@ -29,6 +29,7 @@ import { GlobalLoader } from "../ui/GlobalLoader";
 import {
   CameraOutlined,
   CaretRightOutlined,
+  ClearOutlined,
   CloseOutlined,
   DownloadOutlined,
   ExpandOutlined,
@@ -239,7 +240,12 @@ export function KnowledgeGraphPanel({
         </span>
         <div className="kg-topbar-actions">
           {hasFilter && (
-            <Button type="link" size="small" onClick={handleResetFilter}>
+            <Button
+              type="link"
+              size="small"
+              icon={<ClearOutlined />}
+              onClick={handleResetFilter}
+            >
               重置筛选
             </Button>
           )}
@@ -299,7 +305,11 @@ export function KnowledgeGraphPanel({
               description={`知识图谱读取失败：${error}`}
             />
             {onRefresh && (
-              <Button onClick={onRefresh} loading={loading}>
+              <Button
+                icon={<ReloadOutlined />}
+                onClick={onRefresh}
+                loading={loading}
+              >
                 重试
               </Button>
             )}
@@ -445,6 +455,7 @@ export function KnowledgeGraphPanel({
               <Button
                 type="text"
                 size="small"
+                shape="circle"
                 aria-label="关闭详情"
                 icon={<CloseOutlined />}
                 onClick={() => {

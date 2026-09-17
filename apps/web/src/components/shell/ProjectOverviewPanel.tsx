@@ -398,6 +398,7 @@ export function ProjectOverviewPanel({
             <Button
               type="link"
               size="small"
+              icon={<RightOutlined />}
               onClick={() => onPanelChange?.(DOCUMENTS_PANEL)}
             >
               查看

@@ -28,7 +28,13 @@ import {
   Typography,
   message,
 } from "antd";
-import { InfoCircleOutlined, LockOutlined } from "@ant-design/icons";
+import {
+  DeleteOutlined,
+  EditOutlined,
+  InfoCircleOutlined,
+  LockOutlined,
+  PlusOutlined,
+} from "@ant-design/icons";
 import {
   createModelProfile,
   deleteModelProfile,
@@ -173,7 +179,11 @@ export function ModelProfilesPanel() {
         <p className="profile-list-desc">
           Chat 产品工作流按会话选择列表；Document 工作流在每次生成前选择列表。
         </p>
-        <Button type="primary" onClick={() => setDraft(createDraftProfile())}>
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          onClick={() => setDraft(createDraftProfile())}
+        >
           新建列表
         </Button>
       </div>
@@ -204,6 +214,7 @@ export function ModelProfilesPanel() {
                     <Button
                       size="small"
                       type="text"
+                      icon={<EditOutlined />}
                       onClick={() => setDraft(structuredClone(profile))}
                     >
                       编辑
@@ -214,7 +225,7 @@ export function ModelProfilesPanel() {
                       onConfirm={() => void remove(profile.id)}
                     >
                       {/* 浏览态用轻量危险文字按钮，确认步骤再强化危险感知。 */}
-                      <Button size="small" type="text" danger>
+                      <Button size="small" type="text" danger icon={<DeleteOutlined />}>
                         删除
                       </Button>
                     </Popconfirm>

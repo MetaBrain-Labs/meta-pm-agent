@@ -12,10 +12,14 @@
 import { Alert, Button, Empty, Input, Modal } from "antd";
 import { GlobalLoader } from "../ui/GlobalLoader";
 import {
+  ArrowRightOutlined,
   ArrowUpOutlined,
+  CheckOutlined,
+  CloseOutlined,
   FolderOutlined,
   HomeOutlined,
   HddOutlined,
+  ReloadOutlined,
   RightOutlined,
 } from "@ant-design/icons";
 import { useLocalDirectoryBrowser } from "../../hooks/useLocalDirectoryBrowser";
@@ -47,15 +51,20 @@ function DirectoryBrowserSession({ initialPath, onSelect, onCancel }: LocalDirec
       className="local-directory-modal"
       onCancel={onCancel}
       footer={[
-        <Button key="cancel" onClick={onCancel}>取消</Button>,
+        <Button key="cancel" icon={<CloseOutlined />} onClick={onCancel}>
+          取消
+        </Button>,
         <Button
           key="select"
           type="primary"
+          icon={<CheckOutlined />}
           disabled={!selectable}
           onClick={() => {
             if (selectable && browser.listing) onSelect(browser.listing.currentPath);
           }}
-        >选择此文件夹</Button>,
+        >
+          选择此文件夹
+        </Button>,
       ]}
     >
       <div className="local-directory">
@@ -87,6 +96,7 @@ function DirectoryBrowserSession({ initialPath, onSelect, onCancel }: LocalDirec
 
         <div className="local-directory-bar">
           <Button
+            shape="circle"
             icon={<ArrowUpOutlined />}
             aria-label="上一级"
             disabled={browser.loading || !browser.listing?.parentPath}
@@ -101,7 +111,10 @@ function DirectoryBrowserSession({ initialPath, onSelect, onCancel }: LocalDirec
             onPressEnter={() => browser.navigate(browser.pathInput.trim() || undefined)}
             placeholder="输入绝对路径可直接跳转"
           />
-          <Button onClick={() => browser.navigate(browser.pathInput.trim() || undefined)}>
+          <Button
+            icon={<ArrowRightOutlined />}
+            onClick={() => browser.navigate(browser.pathInput.trim() || undefined)}
+          >
             前往
           </Button>
         </div>
@@ -138,6 +151,7 @@ function DirectoryBrowserSession({ initialPath, onSelect, onCancel }: LocalDirec
               action={
                 <Button
                   size="small"
+                  icon={<ReloadOutlined />}
                   onClick={() => browser.navigate(browser.pathInput.trim() || undefined)}
                 >
                   重试

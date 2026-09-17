@@ -623,6 +623,8 @@ export const LangGraphModal: FC<Props> = ({ open, onClose, runtimeState }) => {
             <Tooltip title="重置视图">
               <Button
                 type="text"
+                shape="circle"
+                aria-label="重置视图"
                 icon={<ReloadOutlined />}
                 onClick={() => void fitGraphView()}
               />
@@ -630,12 +632,20 @@ export const LangGraphModal: FC<Props> = ({ open, onClose, runtimeState }) => {
             <Tooltip title="下载图片">
               <Button
                 type="text"
+                shape="circle"
+                aria-label="下载图片"
                 icon={<CameraOutlined />}
                 onClick={handleDownloadGraph}
               />
             </Tooltip>
             <Tooltip title="关闭">
-              <Button type="text" icon={<CloseOutlined />} onClick={onClose} />
+              <Button
+                type="text"
+                shape="circle"
+                aria-label="关闭"
+                icon={<CloseOutlined />}
+                onClick={onClose}
+              />
             </Tooltip>
           </Space>
         </div>
@@ -709,6 +719,8 @@ export const LangGraphModal: FC<Props> = ({ open, onClose, runtimeState }) => {
               <Button
                 type="text"
                 size="small"
+                shape="circle"
+                aria-label="关闭节点详情"
                 icon={<CloseOutlined />}
                 onClick={() => setSelectedNode(null)}
               />

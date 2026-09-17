@@ -23,6 +23,13 @@ export const APP_THEME = {
     colorPrimaryBorder: c.borderHover,
     colorPrimaryBorderHover: c.primaryHover,
     colorInfo: c.primary,
+    /*
+     * 信息 / 进行中标记（Tag color="processing" 等）必须与 success / warning / error
+     * 用同一套「极浅底 + 同色文字」。colorInfo 是本项目的近黑主色，只让它派生会得到
+     * 深灰底（#575757），标签会变成看不清文字的深色药丸，因此显式给出浅底与描边。
+     */
+    colorInfoBg: c.secondary,
+    colorInfoBorder: c.border,
     colorLink: c.primary,
     colorLinkHover: c.primaryHover,
     colorLinkActive: c.primaryActive,
@@ -101,6 +108,16 @@ export const APP_THEME = {
        */
       borderRadius: r.button,
       borderRadiusSM: r.button,
+      /*
+       * 文字按钮与纯图标按钮是次级动作，静息态用次级灰、hover 与按下回到主文字色，
+       * 与 .kg-updated-link / .doc-cell-muted 的「次级 → 加深」保持同一条语言；
+       * 纯图标按钮的图标略放大，避免细线在小尺寸按钮里糊成一团。
+       */
+      textTextColor: c.textSecondary,
+      textTextHoverColor: c.text,
+      textTextActiveColor: c.text,
+      onlyIconSize: t.size.body,
+      onlyIconSizeSM: t.size.base,
       fontWeight: t.weight.medium,
       defaultShadow: shadow.surface,
       primaryShadow: shadow.surface,
