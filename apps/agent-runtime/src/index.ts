@@ -28,8 +28,26 @@ export {
 export {
   createRequestAgent,
   formatRequestAnalysisBlock,
+  resolveRequestAgentSystemPrompt,
   runRequestAgent,
 } from "./agents/request/agent";
+export {
+  getPromptCatalogEntry,
+  isConfigurablePromptId,
+  PROMPT_CATALOG,
+  type PromptCatalogEntryShape,
+  type PromptId,
+} from "./prompts/catalog";
+export {
+  createPromptSummaries,
+  createPromptSummary,
+  getPromptOverridesFromRunnableConfig,
+  PROMPT_OVERRIDES_RUN_CONFIG_KEY,
+  resolvePrompt,
+  resolvePromptContent,
+  sanitizePromptOverrides,
+  type ResolvedPrompt,
+} from "./prompts/resolver";
 export {
   formatProductWorkflowBlock,
   formatProductWorkflowConfirmationQuestionForm,

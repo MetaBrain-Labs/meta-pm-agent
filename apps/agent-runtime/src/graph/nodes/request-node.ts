@@ -19,6 +19,7 @@ import {
 import { parseUserInputBlock } from "../../agents/request/user-input";
 import type { WorkflowGraphStateValue } from "../state";
 import { getModelProfileFromRunnableConfig } from "../../agents/common/model-profile";
+import { getPromptOverridesFromRunnableConfig } from "../../prompts/resolver";
 
 /**
  * 将 Conversation Agent 的 <user-input> block 解析成结构化独立语句。
@@ -62,6 +63,7 @@ export async function requestAgentNode(
 
   for await (const event of streamRequestAgent({
     modelProfile: getModelProfileFromRunnableConfig(config),
+    promptOverrides: getPromptOverridesFromRunnableConfig(config),
     productContext: state.productContext,
     userInput: state.userInput,
     signal: config?.signal,

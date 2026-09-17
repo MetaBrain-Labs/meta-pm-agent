@@ -17,6 +17,7 @@ export * from "./agent/product-workflow";
 export * from "./agent/document";
 export * from "./question-form";
 export * from "./model-usage-profile";
+export * from "./prompt-config";
 export * from "./stream-limits";
 export * from "./local-directory";
 export * from "./workspace-local-storage";

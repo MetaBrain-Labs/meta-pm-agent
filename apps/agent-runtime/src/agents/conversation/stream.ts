@@ -124,6 +124,7 @@ async function* streamAgentEvents(
   const baseAgentOptions = {
     enabledTools: options.enabledTools,
     modelProfile: options.modelProfile,
+    promptOverrides: options.promptOverrides,
     mode: options.mode,
   };
   const modelSelection = resolveConversationModel(baseAgentOptions);
@@ -1103,6 +1104,7 @@ async function* streamPlanningAfterUserInput(
     for await (const event of streamWorkflowGraph({
       workflowPurpose,
       modelProfile: options.modelProfile,
+      promptOverrides: options.promptOverrides,
       workspaceId: options.workspaceId,
       productContext: options.productContext,
       contextSource: options.contextSource,

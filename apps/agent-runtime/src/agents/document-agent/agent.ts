@@ -17,6 +17,7 @@ import type {
   KnowledgeGraphEntity,
   KnowledgeGraphRelation,
   ModelUsageProfile,
+  PromptOverrides,
 } from "@repo/shared";
 import {
   runDocumentAgent,
@@ -48,6 +49,8 @@ export interface PrdDocumentAgentInput {
   attemptNumber?: number;
   revisionFeedback?: string;
   modelProfile?: ModelUsageProfile;
+  /** 本次 run 启动时解析的工作区提示词快照。 */
+  promptOverrides?: PromptOverrides;
   signal?: AbortSignal;
 }
 
@@ -65,6 +68,7 @@ export async function* streamPrdDocumentAgent(
     skillFiles: skillBundle.files,
     subagents: [],
     modelProfile: input.modelProfile,
+    promptOverrides: input.promptOverrides,
     signal: input.signal,
   });
 

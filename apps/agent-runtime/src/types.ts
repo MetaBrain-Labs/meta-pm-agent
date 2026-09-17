@@ -22,6 +22,7 @@ import type {
   ProductWorkflowResult,
   ProductKnowledgeGraph,
   ModelUsageProfile,
+  PromptOverrides,
   TaskExecutionPlan,
   WorkflowRetryAction,
   WorkflowRetryRequest,
@@ -173,6 +174,8 @@ export interface ConversationStreamOptions {
   knowledgeGraph?: ProductKnowledgeGraph | null;
   /** API 在 SSE 开始前解析的不可变模型使用列表快照。 */
   modelProfile?: ModelUsageProfile;
+  /** API 在 SSE 开始前解析的不可变工作区提示词快照；本轮所有 Agent 共用同一份。 */
+  promptOverrides?: PromptOverrides;
   workflowAnswerResolution?: WorkflowAnswerResolution | null;
   /** API 从持久化消息组装的权威工作流恢复上下文，不属于 HTTP 请求契约。 */
   serverWorkflowRecoveryContext?: Readonly<WorkflowRecoveryContext>;

@@ -188,9 +188,9 @@ pnpm --filter @repo/database db:init
 
 #### 数据库结构说明
 
-已有数据库先备份，再执行 `pnpm --filter @repo/database db:upgrade`。该命令增量添加本地软删除字段和缺失运行时表、归一化旧 DeepSeek 模型 ID，并更新 token/PRD 约束、`message.type` 和历史图谱默认值。它不会删除本地文件或业务数据；可重复执行，结构冲突会报错而不会自动覆盖。
+已有数据库先备份，再执行 `pnpm --filter @repo/database db:upgrade`。该命令增量添加本地软删除字段和缺失运行时表、创建工作区提示词 override 表、归一化旧 DeepSeek 模型 ID，并更新 token/PRD 约束、`message.type` 和历史图谱默认值。它不会删除本地文件或业务数据；可重复执行，结构冲突会报错而不会自动覆盖。
 
-SQL 位于 `packages/database/sql/20260914_runtime_tables.sql`。LangGraph checkpoint 表由 PostgresSaver 独立初始化。
+SQL 位于 `packages/database/sql/20260914_runtime_tables.sql` 与 `packages/database/sql/20260918_prompt_override.sql`。LangGraph checkpoint 表由 PostgresSaver 独立初始化。
 
 ### 4. 构建
 

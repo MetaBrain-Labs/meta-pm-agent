@@ -12,7 +12,7 @@
 | 边框 / 分隔线 | `color.border / divider` | `#e5e5e5 / #ededed` |
 | 主强调色 | `color.primary` | `#171717` |
 | 成功 / 警告 / 错误 | `color.success / warning / error` | `#287653 / #a36518 / #bf4141` |
-| 圆角 | `radius.small / base / large` | `6 / 8 / 12px` |
+| 圆角 | `radius.button / small / base / large` | `4 / 6 / 8 / 12px` |
 | 间距 | `spacing.xs / sm / md / lg / xl / xxl / spacious` | `4 / 8 / 12 / 16 / 24 / 32 / 48px` |
 | 控件高度 | `controlHeight.small / base / large` | `32 / 38 / 44px` |
 | 字号 | `typography.size.micro / caption / small / control / base / body / title / heading / metric / display` | `10 / 11 / 12 / 13 / 14 / 16 / 20 / 24 / 26 / 32px` |

@@ -95,6 +95,7 @@ import {
 } from "../services/chat-run-registry";
 import { writeAbnormalWorkflowAbortReport } from "../process-crash-report";
 import { getConversationModelProfile } from "../repositories/model-profile-repository";
+import { loadWorkspacePromptOverrideMap } from "../repositories/prompt-override-repository";
 import {
   completeDocumentEvidenceResolutionItem,
   getDocumentEvidenceResolutionByConversationId,
@@ -658,6 +659,10 @@ export async function chatStreamHandler(c: Context) {
       const modelProfile = await getConversationModelProfile(
         parsed.data.chatId!,
       );
+      // 提示词 override 同样在启动 Agent 前解析一次：运行中的请求不受后续保存影响。
+      const promptOverrides = runtimeContext.workspaceId
+        ? await loadWorkspacePromptOverrideMap(runtimeContext.workspaceId)
+        : {};
       runtimeWorkspaceId = runtimeContext.workspaceId;
       if (
         parseLatestExistingGraphNewProjectAction(parsed.data.messages) ===
@@ -683,6 +688,7 @@ export async function chatStreamHandler(c: Context) {
           contextSource: runtimeContext.contextSource,
           knowledgeGraph: runtimeContext.knowledgeGraph,
           modelProfile,
+          promptOverrides,
           workflowAnswerResolution,
           serverWorkflowRecoveryContext:
             workflowAnswerResolution?.serverRecoveryContext,

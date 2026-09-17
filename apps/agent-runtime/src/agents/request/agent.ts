@@ -10,6 +10,7 @@
  * - 提供 streamRequestAgent() 流式分析入口
  * - 提供 runRequestAgent() 同步分析入口（含重试）
  * - 格式化 Request Agent 分析结果为展示 block
+ * - 通过 Prompt Resolver 解析工作区自定义提示词，未自定义时使用内置默认正文
  *
  * Notes:
  * - 最多重试 2 次，失败时通过 markdown text 事件输出错误信息
@@ -20,13 +21,14 @@ import { createDeepAgent } from "deepagents";
 import {
   RequestAnalysisSchema,
   type ModelUsageProfile,
+  type PromptOverrides,
   type RequestAnalysis,
 } from "@repo/shared";
 import { createChatModel } from "../common/model";
 import { createDefaultAgentMiddleware } from "../common/middleware";
 import { createDeepAgentToolAllowlistMiddleware } from "../common/deep-agent-tool-policy";
 import { calculateCost } from "../../config";
-import { REQUEST_AGENT_PROMPT } from "./prompt";
+import { resolvePromptContent } from "../../prompts/resolver";
 import {
   createAgentRunSummaryMiddleware,
   createAgentRunSummaryRecorder,
@@ -51,7 +53,16 @@ export interface RequestAgentInput {
   modelProfile?: ModelUsageProfile;
   productContext?: string;
   userInput: UserInputRecord[];
+  /** 本轮生效的提示词快照；未提供或未自定义时使用内置默认正文。 */
+  promptOverrides?: PromptOverrides;
   signal?: AbortSignal;
+}
+
+/** Request Agent 创建参数。 */
+export interface RequestAgentOptions {
+  summaryRecorder?: AgentRunSummaryRecorder;
+  modelProfile?: ModelUsageProfile;
+  promptOverrides?: PromptOverrides;
 }
 
 /**
@@ -77,11 +88,11 @@ export type RequestAgentStreamEvent =
 /**
  * 创建真正的 Request Agent，由 DeepAgent 承载 system prompt 和模型调用。
  */
-export function createRequestAgent(
-  summaryRecorder?: AgentRunSummaryRecorder,
-  modelProfile?: ModelUsageProfile,
-) {
-  const modelSelection = resolveAgentModelSelection(modelProfile, "request");
+export function createRequestAgent(options: RequestAgentOptions = {}) {
+  const modelSelection = resolveAgentModelSelection(
+    options.modelProfile,
+    "request",
+  );
   const model = createChatModel(
     {
       enableThinking: true,
@@ -93,7 +104,7 @@ export function createRequestAgent(
   );
   return createDeepAgent({
     model: model as any,
-    systemPrompt: REQUEST_AGENT_PROMPT,
+    systemPrompt: resolveRequestAgentSystemPrompt(options.promptOverrides),
     tools: [],
     name: "request-agent",
     skills: [],
@@ -103,9 +114,18 @@ export function createRequestAgent(
         allowedToolNames: [],
       }),
       ...createDefaultAgentMiddleware(),
-      ...createAgentRunSummaryMiddleware(summaryRecorder),
+      ...createAgentRunSummaryMiddleware(options.summaryRecorder),
     ] as any,
   });
+}
+
+/**
+ * 返回 Request Agent 当前生效的系统提示词，供运行和本地汇总复用同一份文本。
+ */
+export function resolveRequestAgentSystemPrompt(
+  promptOverrides?: PromptOverrides,
+): string {
+  return resolvePromptContent("request-agent-analysis", promptOverrides);
 }
 
 export async function runRequestAgent(
@@ -140,6 +160,7 @@ export async function* streamRequestAgent(
     input.modelProfile,
     "request",
   );
+  const systemPrompt = resolveRequestAgentSystemPrompt(input.promptOverrides);
 
   for (let attempt = 1; attempt <= REQUEST_AGENT_MAX_ATTEMPTS; attempt++) {
     const requestPayload = {
@@ -162,10 +183,14 @@ export async function* streamRequestAgent(
         attempt,
         maxAttempts: REQUEST_AGENT_MAX_ATTEMPTS,
         payload: requestPayload,
-        systemPrompt: REQUEST_AGENT_PROMPT,
+        systemPrompt,
       },
     });
-    const agent = createRequestAgent(summaryRecorder, input.modelProfile);
+    const agent = createRequestAgent({
+      summaryRecorder,
+      modelProfile: input.modelProfile,
+      promptOverrides: input.promptOverrides,
+    });
     let responseText = "";
 
     let run: AsyncIterable<[BaseMessage, unknown]>;

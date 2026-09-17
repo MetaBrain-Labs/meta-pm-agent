@@ -26,7 +26,11 @@ import {
   type FileData,
   type SubAgent,
 } from "deepagents";
-import type { DocumentTodo, ModelUsageProfile } from "@repo/shared";
+import type {
+  DocumentTodo,
+  ModelUsageProfile,
+  PromptOverrides,
+} from "@repo/shared";
 import { calculateCost } from "../../config";
 import {
   createAgentRunSummaryMiddleware,
@@ -48,7 +52,7 @@ import {
   getTextContent,
   getTokenUsage,
 } from "../../utils/message-adapter";
-import { PRD_DOCUMENT_AGENT_PROMPT } from "./prompt";
+import { resolvePromptContent } from "../../prompts/resolver";
 
 /**
  * Document Agent 暴露给 LangGraph/API 的流式事件。
@@ -101,6 +105,8 @@ export interface RunDocumentAgentOptions {
   skills?: string[];
   skillFiles?: Record<string, FileData>;
   modelProfile?: ModelUsageProfile;
+  /** 本轮生效的提示词快照；未提供或未自定义时使用内置默认正文。 */
+  promptOverrides?: PromptOverrides;
   signal?: AbortSignal;
 }
 
@@ -140,6 +146,11 @@ export async function* runDocumentAgent(
   );
   let tokenUsage: ReturnType<typeof getTokenUsage> = null;
   let responseText = "";
+  // 一次运行只解析一次生效提示词，保证同一轮内 Document Agent 看到一致的正文。
+  const systemPrompt = resolvePromptContent(
+    "document-agent-prd-structure",
+    options.promptOverrides,
+  );
   const skillFiles = options.skillFiles ?? {};
   const hasSkillFiles = Object.keys(skillFiles).length > 0;
   const allowedBuiltinToolNames =
@@ -163,7 +174,7 @@ export async function* runDocumentAgent(
       })),
       skills: options.skills ?? [],
       skillManifest: createSkillManifest(skillFiles),
-      systemPrompt: PRD_DOCUMENT_AGENT_PROMPT,
+      systemPrompt,
       visibleTools: [...VISIBLE_BUILTIN_TOOL_NAMES],
     },
   });
@@ -178,7 +189,7 @@ export async function* runDocumentAgent(
         },
         modelSelection,
       ) as any,
-      systemPrompt: PRD_DOCUMENT_AGENT_PROMPT,
+      systemPrompt,
       name: "document-agent-prd",
       skills: options.skills ?? [],
       subagents: options.subagents as any,

@@ -30,6 +30,7 @@ import type {
   KnowledgeGraphEntity,
   KnowledgeGraphRelation,
   ModelUsageProfile,
+  PromptOverrides,
 } from "@repo/shared";
 import {
   completeDocumentGenerationRun,
@@ -59,6 +60,7 @@ import {
   ModelProfileNotFoundError,
   selectConversationModelProfile,
 } from "../repositories/model-profile-repository";
+import { loadWorkspacePromptOverrideMap } from "../repositories/prompt-override-repository";
 import { createChat } from "./chat-service";
 import { getWorkspaceKnowledgeGraph } from "./product-knowledge-graph-service";
 import { exportWorkspacePrd } from "./workspace-local-storage-service";
@@ -167,7 +169,9 @@ export async function startDocumentGeneration({
     workflowThreadId,
   });
 
-  launchDocumentGenerationRun(run, graph, modelProfile);
+  // 提示词 override 在 run 启动前解析一次，整轮文档生成共用同一份快照。
+  const promptOverrides = await loadWorkspacePromptOverrideMap(workspaceId);
+  launchDocumentGenerationRun(run, graph, modelProfile, promptOverrides);
 
   return { run, artifact: null };
 }
@@ -417,7 +421,9 @@ export async function resumeDocumentGeneration({
   }
 
   const latestAttempt = run.scoringAttempts.at(-1);
-  launchDocumentGenerationRun(run, graph, modelProfile, {
+  // 恢复运行同样重新解析当前工作区提示词，使恢复后的新草稿使用最新自定义内容。
+  const promptOverrides = await loadWorkspacePromptOverrideMap(run.workspaceId);
+  launchDocumentGenerationRun(run, graph, modelProfile, promptOverrides, {
     priorScoreAttempts: run.scoringAttempts,
     revisionFeedback: latestAttempt
       ? createScoreRetryFeedback(latestAttempt)
@@ -482,6 +488,7 @@ function launchDocumentGenerationRun(
     version: number;
   },
   modelProfile: ModelUsageProfile,
+  promptOverrides: PromptOverrides,
   resume?: {
     priorScoreAttempts: DocumentScoreAttempt[];
     revisionFeedback: string;
@@ -497,6 +504,7 @@ function launchDocumentGenerationRun(
       run,
       graph,
       modelProfile,
+      promptOverrides,
       controller,
       resume,
     ),
@@ -557,6 +565,7 @@ async function executeDocumentGenerationRun(
     version: number;
   },
   modelProfile: ModelUsageProfile,
+  promptOverrides: PromptOverrides,
   controller: AbortController,
   resume?: {
     priorScoreAttempts: DocumentScoreAttempt[];
@@ -582,6 +591,7 @@ async function executeDocumentGenerationRun(
       priorScoreAttempts: resume?.priorScoreAttempts,
       revisionFeedback: resume?.revisionFeedback,
       modelProfile,
+      promptOverrides,
       workflowThreadId: resume?.workflowThreadId ?? run.workflowThreadId,
       signal: controller.signal,
     });
