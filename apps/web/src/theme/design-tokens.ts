@@ -118,11 +118,18 @@ export const DESIGN_TOKENS = {
     warningFocus: "0 0 0 2px rgba(163, 101, 24, 0.10)",
   },
   motion: { fast: 120, base: 160, slow: 200 },
+  /**
+   * 加载反馈时序。
+   *
+   * 短请求不闪 Loader：延迟超过 delay 才显示；一旦显示至少保留 minVisible，
+   * 避免"出现即消失"的闪烁。两个值集中在这里，不允许各页面自行写死毫秒数。
+   */
+  loading: { delay: 180, minVisible: 420 },
 } as const;
 
 /** 将视觉变量写入指定根元素；应用入口调用一次，不承担主题切换或数据持久化。 */
 export function applyDesignTokens(root: HTMLElement): void {
-  const { color, radius, spacing, controlHeight, layout, typography, shadow, motion } = DESIGN_TOKENS;
+  const { color, radius, spacing, controlHeight, layout, typography, shadow, motion, loading } = DESIGN_TOKENS;
   const groups = {
     color,
     radius,
@@ -132,6 +139,7 @@ export function applyDesignTokens(root: HTMLElement): void {
     fontSize: typography.size,
     shadow,
     motion,
+    loading,
   };
   for (const [group, values] of Object.entries(groups)) {
     for (const [name, value] of Object.entries(values)) {

@@ -24,7 +24,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Button, Empty, Spin, Tooltip, message } from "antd";
+import { Button, Empty, Tooltip, message } from "antd";
+import { GlobalLoader } from "../ui/GlobalLoader";
 import {
   CameraOutlined,
   CaretRightOutlined,
@@ -304,9 +305,17 @@ export function KnowledgeGraphPanel({
             )}
           </div>
         ) : !hasGraph && (loading || !attempted) ? (
+          /*
+           * 面板级取数：此时画布还没有任何内容，属于工作区级加载。
+           * 画布渲染阶段的加载由 KnowledgeGraphView 自己承担，
+           * 两者是同一个 scope 的前后阶段，不会同时出现。
+           */
           <div className="kg-canvas-center">
-            <Spin />
-            <span>正在读取知识图谱…</span>
+            <GlobalLoader
+              scope="workspace"
+              loading
+              label="正在加载知识图谱..."
+            />
           </div>
         ) : !hasGraph ? (
           <div className="kg-canvas-center">

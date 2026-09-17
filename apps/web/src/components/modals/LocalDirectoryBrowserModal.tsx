@@ -9,7 +9,8 @@
  * - 关闭后销毁浏览草稿及请求；允许选择没有子目录的文件夹。
  * - 只调整展示层：导航、加载与确认逻辑保持原有行为。
  */
-import { Alert, Button, Empty, Input, Modal, Spin } from "antd";
+import { Alert, Button, Empty, Input, Modal } from "antd";
+import { GlobalLoader } from "../ui/GlobalLoader";
 import {
   ArrowUpOutlined,
   FolderOutlined,
@@ -118,8 +119,16 @@ function DirectoryBrowserSession({ initialPath, onSelect, onCancel }: LocalDirec
 
         <div className="local-directory-list scrollbar-none-thin">
           {browser.loading ? (
+            /*
+              目录列表读取：Modal 已打开，只有列表区域在等待，属于局部加载；
+              Header 与关闭入口保持可用。
+            */
             <div className="local-directory-center">
-              <Spin />
+              <GlobalLoader
+                scope="section"
+                loading
+                label="正在读取目录..."
+              />
             </div>
           ) : browser.error ? (
             <Alert

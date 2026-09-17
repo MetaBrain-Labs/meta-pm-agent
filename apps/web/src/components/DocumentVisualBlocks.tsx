@@ -17,6 +17,7 @@
  */
 
 import { lazy, Suspense, useMemo, type ReactNode } from "react";
+import { GlobalLoader } from "./ui/GlobalLoader";
 import {
   Alert,
   Button,
@@ -26,7 +27,6 @@ import {
   Input,
   List,
   Select,
-  Spin,
   Statistic,
   Steps,
   Table,
@@ -77,8 +77,16 @@ export function DocumentVisualBlock({
     return (
       <Suspense
         fallback={
+          /*
+           * 图表模块按需加载：所属文档已经显示，只有这一块在准备，因此是局部
+           * 加载。容器保持原有 360px 高度，Loading → Ready 不改变布局。
+           */
           <div className="my-3 flex h-[360px] items-center justify-center rounded-md border border-[var(--line-soft)] bg-white">
-            <Spin size="small" />
+            <GlobalLoader
+              scope="section"
+              loading
+              label="正在渲染图表..."
+            />
           </div>
         }
       >

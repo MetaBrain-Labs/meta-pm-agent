@@ -16,7 +16,8 @@
  */
 
 import { useState } from "react";
-import { Button, Popover, Spin, Tooltip } from "antd";
+import { Button, Popover, Tooltip } from "antd";
+import { GlobalLoader } from "../ui/GlobalLoader";
 import {
   CheckCircleOutlined,
   ExclamationCircleOutlined,
@@ -159,7 +160,15 @@ export function WorkspaceSyncStatus({
         data-open={detailsOpen ? "true" : "false"}
         aria-label={`本地同步状态：${summary.label}`}
       >
-        {syncing ? <Spin size="small" indicator={<LoadingOutlined />} /> : <StatusIcon tone={summary.tone} />}
+        {/*
+          同步请求执行中才是加载；已同步 / 待同步 / 失败属于业务状态，
+          由图标与文案表达，不使用加载动画。
+        */}
+        {syncing ? (
+          <GlobalLoader scope="inline" loading label="" />
+        ) : (
+          <StatusIcon tone={summary.tone} />
+        )}
         <span>{summary.label}</span>
       </button>
     </Popover>

@@ -21,13 +21,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Collapse, Modal, Spin, Tag, Tooltip } from "antd";
+import { Collapse, Modal, Tag, Tooltip } from "antd";
+import { GlobalLoader } from "./ui/GlobalLoader";
 import {
   ApartmentOutlined,
   CaretRightOutlined,
   CheckCircleOutlined,
   ReloadOutlined,
-  LoadingOutlined,
   PartitionOutlined,
 } from "@ant-design/icons";
 import type {
@@ -271,12 +271,13 @@ export const MessageBubble = memo(function MessageBubble({
   if (viewMode === "process" && !hasVisibleProcessContent && streamActive) {
     return (
       <div className="flex w-full flex-col self-stretch">
-        <div className="mb-2 flex items-center gap-2 rounded-lg border border-[var(--line-soft)] bg-white px-4 py-3 text-[13px] font-bold text-[var(--ink-faint)]">
-          <Spin
-            indicator={<LoadingOutlined style={{ color: "var(--primary)" }} />}
-            size="small"
-          />
-          等待 Agent 过程
+        {/*
+          消息已提交但还没有任何业务状态到达：这是真实的空窗期，使用局部加载
+          指示。一旦 Agent Run / Planner / Executor / Tool / HITL 出现，这段
+          占位整体消失，由执行时间线接管。
+        */}
+        <div className="mb-2 flex items-center gap-2 rounded-lg border border-[var(--line-soft)] bg-white px-4 py-3">
+          <GlobalLoader scope="inline" loading label="等待 Agent 过程" />
         </div>
       </div>
     );
@@ -439,29 +440,24 @@ export const MessageBubble = memo(function MessageBubble({
         showLoadingPlaceholder &&
         !(showProcessContent && hasVisibleProcessContent) && (
           <>
+            {/*
+              等待第一个业务状态到达。真实状态一旦出现（正文、表单、DAG、
+              时间线），这里立刻被替换，不使用通用 Loader 代替业务信息。
+            */}
             {viewMode !== "main" && (
               <div className="assistant-bubble is-loading">
-                <Spin
-                  indicator={
-                    <LoadingOutlined style={{ color: "var(--primary)" }} />
-                  }
-                  size="small"
-                />{" "}
-                思考中
+                <GlobalLoader scope="inline" loading label="思考中" />
               </div>
             )}
             {viewMode === "main" && runningAgents.length > 0 && (
               <div className="assistant-bubble is-loading">
-                <Spin
-                  indicator={
-                    <LoadingOutlined
-                      style={{ color: getAgentColor(runningAgents[0]!) }}
-                    />
-                  }
-                  size="small"
-                />{" "}
-                {runningAgents.map((a) => getAgentLabel(a)).join("、")}
-                {runningAgents.length > 1 ? " 并行执行中" : " 执行中"}
+                <GlobalLoader
+                  scope="inline"
+                  loading
+                  label={`${runningAgents.map((a) => getAgentLabel(a)).join("、")}${
+                    runningAgents.length > 1 ? " 并行执行中" : " 执行中"
+                  }`}
+                />
               </div>
             )}
           </>
@@ -913,26 +909,6 @@ function QFGenerating({ label }: { label: string }) {
       </div>
     </div>
   );
-}
-
-/**
- * 根据 Agent 类型返回对应的视觉主题色，用于过程栏卡片左边框和标题强调。
- */
-function getAgentColor(agentType: string): string {
-  if (
-    agentType === "conversation" ||
-    agentType === "conversation_confirmation"
-  ) {
-    return "#1677ff";
-  }
-  if (agentType === "request") return "#722ed1";
-  if (agentType === "orchestrator") return "#0f766e";
-  if (agentType === "planner" || agentType === "product_director") {
-    return "#fa8c16";
-  }
-  if (agentType === "critique") return "#fa8c16";
-  if (agentType.startsWith("executor-")) return "#52c41a";
-  return "#8c8c8c";
 }
 
 /**
